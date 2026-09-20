@@ -1,0 +1,7 @@
+{
+  "source_parity_exit": 1,
+  "functional": "pass",
+  "baseline": "a19db9011282399785dc18efcfded904627bdcc2",
+  "source_parity": "fail",
+  "mac_reference": "not_run"
+}
