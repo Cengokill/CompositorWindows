@@ -36,7 +36,9 @@ try {
   Copy-Item -LiteralPath $binarySource -Destination $payload
  }
  New-Item -ItemType Directory -Path (Join-Path $payload 'models'),(Join-Path $payload 'shaders'),(Join-Path $payload 'licenses'),(Join-Path $payload 'sources') | Out-Null
- Copy-Item -LiteralPath (Join-Path $imaging 'model\birefnet-lite.onnx') -Destination (Join-Path $payload 'models')
+ $modelSource=Join-Path $imaging 'model\birefnet-lite.onnx'
+ if((Get-FileHash -LiteralPath $modelSource -Algorithm SHA256).Hash -ine $lock.model.onnx_sha256){throw 'Foreground model checksum mismatch'}
+ Copy-Item -LiteralPath $modelSource -Destination (Join-Path $payload 'models')
  Copy-Item -LiteralPath (Join-Path $packageRoot 'shaders\BrushCoverage.hlsl') -Destination (Join-Path $payload 'shaders')
  Copy-Item -LiteralPath (Join-Path $packageRoot 'LICENSE') -Destination (Join-Path $payload 'licenses\Compositor-MIT.txt')
  Copy-Item -Path (Join-Path $imaging 'notices\*') -Destination (Join-Path $payload 'licenses') -Recurse
@@ -54,20 +56,31 @@ try {
  }
  $source=Join-Path $output 'application-source'
  New-Item -ItemType Directory -Path $source | Out-Null
- foreach($dir in @('src','shaders','assets','scripts','docs','tests')){Copy-Item -LiteralPath (Join-Path $packageRoot $dir) -Destination $source -Recurse}
- # Build and test products are excluded from the distributable source snapshot.
- $sourceFiles=@(Get-ChildItem -LiteralPath $source -File -Recurse | Where-Object {$_.Extension -in @('.exe','.dll','.obj','.pdb','.ilk')})
- foreach($file in $sourceFiles){if(-not $file.FullName.StartsWith($source+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Source exclusion escaped snapshot'};Remove-Item -LiteralPath $file.FullName}
- foreach($file in @('CMakeLists.txt','CMakePresets.json','dependencies.lock.json','LICENSE','KNOWN-ISSUES.md','PARITY.md','PROGRESS.md','VALIDATION.md')){Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $source}
+ # Copy source without traversing isolated build trees or reparse points.
+ function Copy-ApplicationSource([string]$from,[string]$to){
+  New-Item -ItemType Directory -Path $to -Force | Out-Null
+  foreach($entry in Get-ChildItem -LiteralPath $from -Force){
+   if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){continue}
+   if($entry.PSIsContainer){if($entry.Name -notin @('build','ui-build','__pycache__','.git')){Copy-ApplicationSource $entry.FullName (Join-Path $to $entry.Name)}}
+   elseif($entry.Extension -notin @('.exe','.dll','.obj','.pdb','.ilk','.lib','.pch','.exp','.idb','.ifc','.res')){Copy-Item -LiteralPath $entry.FullName -Destination (Join-Path $to $entry.Name)}
+  }
+ }
+ foreach($dir in @('src','shaders','assets','scripts','docs','tests')){Copy-ApplicationSource (Join-Path $packageRoot $dir) (Join-Path $source $dir)}
+ foreach($file in @('CMakeLists.txt','CMakePresets.json','dependencies.lock.json','LICENSE','README.md','KNOWN-ISSUES.md','PARITY.md','PROGRESS.md','VALIDATION.md')){Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $source}
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'docs\source-package.md') -Destination (Join-Path $source 'VERIFICATION-INPUTS.md')
  foreach($dir in @('imaging','packaging')){New-Item -ItemType Directory -Path (Join-Path $source "dependencies\$dir") -Force | Out-Null;Copy-Item -LiteralPath (Join-Path $packageRoot "dependencies\$dir\lock.json") -Destination (Join-Path $source "dependencies\$dir")}
  Copy-Item -LiteralPath (Join-Path $imaging 'model-requirements.hashes.txt') -Destination (Join-Path $source 'dependencies\imaging')
  Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path $payload 'sources\CompositorWindows-source.zip') -CompressionLevel Optimal
  Copy-Item -LiteralPath (Join-Path $packageRoot 'KNOWN-ISSUES.md') -Destination (Join-Path $payload 'KNOWN-ISSUES.md')
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'docs\user-guide.md') -Destination (Join-Path $payload 'USER-GUIDE.md')
  & (Join-Path $PSScriptRoot 'update-initialize.ps1') -Root $portable -Version $Version -AllowTestKey
- [IO.File]::WriteAllText((Join-Path $portable 'README.txt'),"Compositor Windows $Version development build`r`nRun CompositorLauncher.exe. All image codecs, the offline foreground model and runtime DLLs are bundled.`r`nThis unsigned development build has unresolved parity requirements. Read versions\$Version\KNOWN-ISSUES.md.`r`nUpdate receipts use an explicitly local test key; there is no production update feed.`r`nLicenses and corresponding sources are in versions\$Version\licenses and sources.`r`n")
+ [IO.File]::WriteAllText((Join-Path $portable 'README.txt'),"Compositor Windows $Version development build`r`nRun CompositorLauncher.exe. All image codecs, the offline foreground model and runtime DLLs are bundled.`r`nEditing and shortcut instructions: versions\$Version\USER-GUIDE.md.`r`nThis unsigned development build has unresolved parity requirements. Read versions\$Version\KNOWN-ISSUES.md.`r`nUpdate receipts use an explicitly local test key; there is no production update feed.`r`nLicenses and corresponding sources are in versions\$Version\licenses and sources.`r`n")
  $files=@(Get-ChildItem -LiteralPath $portable -Recurse -File | ForEach-Object {[ordered]@{path=[IO.Path]::GetRelativePath($portable,$_.FullName).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})
  $revision=(& git -c "safe.directory=$($packageRoot.Replace('\','/'))" rev-parse HEAD).Trim()
- [ordered]@{schema=1;version=$Version;channel='development';createdUtc=[DateTime]::UtcNow.ToString('o');sourceRevision=$revision;sourceSnapshot='sources/CompositorWindows-source.zip';upstream='a19db9011282399785dc18efcfded904627bdcc2';signed=$false;files=$files} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-manifest.json') -Encoding utf8
+ $sourceStatus=@(& git -c "safe.directory=$($packageRoot.Replace('\','/'))" status --porcelain)
+ if($LASTEXITCODE){throw 'Cannot record package source status'}
+ $sourceDirty=$sourceStatus.Count -gt 0
+ [ordered]@{schema=1;version=$Version;channel='development';createdUtc=[DateTime]::UtcNow.ToString('o');sourceRevision=$revision;sourceDirty=$sourceDirty;sourceSnapshot="versions/$Version/sources/CompositorWindows-source.zip";upstream='a19db9011282399785dc18efcfded904627bdcc2';signed=$false;files=$files} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-manifest.json') -Encoding utf8
  Compress-Archive -LiteralPath $portable -DestinationPath (Join-Path $output "CompositorWindows-$Version-portable.zip") -CompressionLevel Optimal
  if(-not $PortableOnly){
   $makensis=Join-Path $packageRoot 'dependencies\packaging\nsis-3.12\makensis.exe'

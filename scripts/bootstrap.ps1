@@ -1,4 +1,4 @@
-param([switch]$Offline,[string]$Python)
+param([switch]$Offline,[string]$Python,[string]$RuntimeDirectory)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
 $taskVswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
@@ -24,7 +24,7 @@ $env:PATH = "$taskQt\bin;$env:PATH"
 $env:PATH = "$taskRoot\dependencies\imaging\install\bin;$taskRoot\dependencies\imaging\onnxruntime-win-x64-1.30.0\lib;$env:PATH"
 $env:QT_PLUGIN_PATH = Join-Path $taskQt 'plugins'
 $taskImaging = Join-Path $taskRoot 'dependencies\imaging'
-$taskRequired = @('install\bin\heif.dll','install\bin\libde265.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime.dll','model\birefnet-lite.onnx')
+$taskRequired = @('install\bin\heif.dll','install\bin\libde265.dll','install\lib\heif.lib','install\lib\de265.lib','install\include\libheif\heif.h','onnxruntime-win-x64-1.30.0\lib\onnxruntime.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime_providers_shared.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime.lib','onnxruntime-win-x64-1.30.0\include\onnxruntime_cxx_api.h','model\birefnet-lite.onnx')
 $taskMissing = @($taskRequired | Where-Object { -not (Test-Path -LiteralPath (Join-Path $taskImaging $_)) })
 if ($taskMissing.Count) {
     if ($Offline) { throw "Offline imaging dependencies missing: $($taskMissing -join ', '). Run bootstrap with network access and Python 3.12 to build the locked dependencies/model." }
@@ -34,6 +34,9 @@ if ($taskMissing.Count) {
     }
     & (Join-Path $PSScriptRoot 'bootstrap-imaging.ps1') -VsRoot $taskVS -Python $Python
     if ($LASTEXITCODE) { throw 'Imaging bootstrap failed.' }
+}
+if ($RuntimeDirectory) {
+    & (Join-Path $PSScriptRoot 'restore-imaging-runtime.ps1') -RuntimeDirectory $RuntimeDirectory
 }
 if ((Get-FileHash -LiteralPath (Join-Path $taskImaging 'model\birefnet-lite.onnx') -Algorithm SHA256).Hash -ine 'c0faf38f5504f2239f1e6481ce4ac166b17435b38ea35e480d811a47bc1aba80') { throw 'Foreground model SHA256 mismatch.' }
 & cmake --version

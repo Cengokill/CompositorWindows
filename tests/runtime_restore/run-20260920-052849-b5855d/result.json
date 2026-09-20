@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "positive_four_hashes": true,
+  "previous_bytes_preserved": true,
+  "idempotent_repeat": true,
+  "corrupt_fourth_rejected_before_copy": true,
+  "live_originals_unchanged": true,
+  "corrupt_error": "Locked runtime checksum mismatch: H:\\CompositorWindows\\windows\\tests\\runtime_restore\\run-20260920-052849-b5855d\\corrupt-payload\\onnxruntime_providers_shared.dll",
+  "helper_sha256": "41a11372a519f0988841d6419c8781e9bcf4ccbf843ab62d9b26063503505025",
+  "lock_sha256": "5777bae5dc30ea903244f14059198d5b13633e219e0be1fa45e9e395742adf66",
+  "restore_result": [
+    {
+      "target": "H:\\CompositorWindows\\windows\\tests\\runtime_restore\\run-20260920-052849-b5855d\\positive-workspace\\dependencies\\imaging\\install\\bin\\heif.dll",
+      "sha256": "172e241ed638c4ec250deb8e3fe35869087330463adc8f7ada791d1ba2844fba",
+      "status": "restored",
+      "preserved_previous_file": "H:\\CompositorWindows\\windows\\tests\\runtime_restore\\run-20260920-052849-b5855d\\positive-workspace\\dependencies\\imaging\\install\\bin\\heif.dll.before-runtime-04f1d73d0e18bc9d73b5c64a9de406a1f8ecf39fb16756fbb45052170e8cef06-833c83414950444e85e1a5f47baa5a7b.bak"
+    },
+    {
+      "target": "H:\\CompositorWindows\\windows\\tests\\runtime_restore\\run-20260920-052849-b5855d\\positive-workspace\\dependencies\\imaging\\install\\bin\\libde265.dll",
+      "sha256": "064ea0c514e8bbd53ba2a0a4f1febb4b7c35edc92fe654efa81d320ca25122b0",
+      "status": "restored",
+      "preserved_previous_file": null
+    },
+    {
+      "target": "H:\\CompositorWindows\\windows\\tests\\runtime_restore\\run-20260920-052849-b5855d\\positive-workspace\\dependencies\\imaging\\onnxruntime-win-x64-1.30.0\\lib\\onnxruntime.dll",
+      "sha256": "7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da",
+      "status": "restored",
+      "preserved_previous_file": null
+    },
+    {
+      "target": "H:\\CompositorWindows\\windows\\tests\\runtime_restore\\run-20260920-052849-b5855d\\positive-workspace\\dependencies\\imaging\\onnxruntime-win-x64-1.30.0\\lib\\onnxruntime_providers_shared.dll",
+      "sha256": "b9b7ab9e2a8b08ee7ae4a7ac1c8bfd44a741f17ad8d0f764953140a57de0b796",
+      "status": "restored",
+      "preserved_previous_file": null
+    }
+  ],
+  "original_runtime_hashes": [
+    {
+      "path": "install/bin/heif.dll",
+      "sha256": "172E241ED638C4EC250DEB8E3FE35869087330463ADC8F7ADA791D1BA2844FBA"
+    },
+    {
+      "path": "install/bin/libde265.dll",
+      "sha256": "064EA0C514E8BBD53BA2A0A4F1FEBB4B7C35EDC92FE654EFA81D320CA25122B0"
+    },
+    {
+      "path": "onnxruntime-win-x64-1.30.0/lib/onnxruntime.dll",
+      "sha256": "7E39E2BDBBA836D98071EF28620735BA36A47C554CF794585269AECC50FAB0DA"
+    },
+    {
+      "path": "onnxruntime-win-x64-1.30.0/lib/onnxruntime_providers_shared.dll",
+      "sha256": "B9B7AB9E2A8B08EE7AE4A7AC1C8BFD44A741F17AD8D0F764953140A57DE0B796"
+    }
+  ]
+}
