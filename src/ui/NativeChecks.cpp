@@ -14,12 +14,35 @@
 #include <QJsonArray>
 #include <QDateTime>
 #include <QTest>
+#include <icm.h>
+#include <cmath>
+
+namespace {
+QColor monitorExpectedColor(compositor::platform::DisplayProfile& destination){
+    // The canonical fixture remains sRGB. Use Windows' CPU color engine as an
+    // independent expectation for the displayed opaque pixel, not the D2D path.
+    auto require=[](bool ok,const char* why){if(!ok)throw std::runtime_error(why);};
+    wchar_t system[MAX_PATH]{};require(GetSystemDirectoryW(system,MAX_PATH)!=0,"Cannot locate the sRGB profile");
+    auto source=compositor::platform::loadDisplayProfile(std::filesystem::path(system)/L"spool/drivers/color/sRGB Color Space Profile.icm");
+    require(source.kind==compositor::platform::DisplayProfileKind::Icc,"System sRGB profile is invalid");
+    PROFILE s{PROFILE_MEMBUFFER,source.icc.data(),DWORD(source.icc.size())},d{PROFILE_MEMBUFFER,destination.icc.data(),DWORD(destination.icc.size())};
+    struct OpenProfile{HPROFILE value{};~OpenProfile(){if(value)CloseColorProfile(value);}};
+    OpenProfile from{OpenColorProfileW(&s,PROFILE_READ,FILE_SHARE_READ,OPEN_EXISTING)},to{OpenColorProfileW(&d,PROFILE_READ,FILE_SHARE_READ,OPEN_EXISTING)};
+    require(from.value&&to.value,"WCS cannot open the profile pair");
+    HPROFILE profiles[]{from.value,to.value};DWORD intents[]{INTENT_RELATIVE_COLORIMETRIC,INTENT_RELATIVE_COLORIMETRIC};
+    struct OpenTransform{HTRANSFORM value{};~OpenTransform(){if(value)DeleteColorTransform(value);}};
+    OpenTransform transform{CreateMultiProfileTransform(profiles,2,intents,2,BEST_MODE,INDEX_DONT_CARE)};
+    require(transform.value,"WCS cannot create the CPU profile transform");COLOR input{},output{};input.rgb={35*257,65*257,90*257};
+    require(TranslateColors(transform.value,&input,1,COLOR_RGB,&output,COLOR_RGB),"WCS CPU color translation failed");
+    return {int(std::lround(output.rgb.red/257.)),int(std::lround(output.rgb.green/257.)),int(std::lround(output.rgb.blue/257.))};
+}
+}
 
 namespace compositor {
 void MainWindow::exerciseNativeUi(const QString&dir){
     QDir().mkpath(dir);if(!canvas())addFeasibilityDocument();QTest::qWait(150);
     auto require=[](bool ok,const char*error){if(!ok)throw std::runtime_error(error);};
-    QJsonArray checks;auto passed=[&](const char*name){checks.append(name);};
+    QJsonArray checks;auto passed=[&](const char*name){checks.append(name);QFile progress(dir+"/native-ui-progress.json");require(progress.open(QIODevice::WriteOnly),"UI progress evidence output failed");progress.write(QJsonDocument(QJsonObject{{"status","running"},{"completed_checks",checks}}).toJson());};
     canvas()->repaint();QTest::qWait(30);
     if(!canvas()->deviceReady())throw std::runtime_error("Native graphics device unavailable: "+canvas()->deviceError().toStdString());
     auto original=active()->transform;auto middle=canvas()->rect().center();
@@ -55,11 +78,23 @@ void MainWindow::exerciseNativeUi(const QString&dir){
     {Document large;large.id=newId();large.width=large.height=30000;Layer blank;blank.id=newId();blank.name="Layer 1";blank.transform={0,0,30000,30000};large.layers.push_back(blank);QElapsedTimer clock;clock.start();Raster::resetMaterializationCount();addProject(large);canvas()->repaint();QTest::qWait(30);require(canvas()->deviceReady()&&canvas()->deviceError().isEmpty(),"Large blank canvas presentation failed");auto frame=canvas()->captureRendered();require(!frame.isNull(),"Large blank canvas readback failed");QFile timing(dir+"/large-canvas.json");if(timing.open(QIODevice::WriteOnly))timing.write(QJsonDocument(QJsonObject{{"width",30000},{"height",30000},{"create_and_present_ms",double(clock.elapsed())},{"display_tile_budget",64},{"rgba_materializations",double(Raster::materializationCount())}}).toJson());require(Raster::materializationCount()==0,"Blank canvas presentation flattened pixels");closeProject(tabs_->currentIndex());passed("30000-square blank canvas native presentation with bounded viewport tiles");}
     selectTool(Tool::Move);
     auto rendered=SoftwareRenderer().render(*current()->document,0,0,current()->document->width,current()->document->height)->rgba();
-    current()->path=dir+"/Project 実証 test.comp";require(saveProject(),"Native save failed");auto path=current()->path;openPath(path);
-    auto reopened=SoftwareRenderer().render(*current()->document,0,0,current()->document->width,current()->document->height)->rgba();require(rendered==reopened&&!current()->history.modified(),"Save/reopen changed rendered pixels or dirty state");passed("native save/open directory package with Unicode and spaces, exact composite round trip");
+    current()->path=dir+"/Project 実証 test.comp";require(saveProject(),"Native save failed");auto path=current()->path;
+    ProjectStore store(makeWicProjectCodec());const auto persisted=store.load(std::filesystem::path(path.toStdWString()));
+    auto reopened=SoftwareRenderer().render(persisted.document,0,0,persisted.document.width,persisted.document.height)->rgba();
+    require(rendered==reopened&&persisted.activeLayer==current()->active&&!current()->history.modified(),"Persisted project changed rendered pixels, active layer or dirty state");
+    auto* savedProject=current();const auto tabCount=tabs_->count();const auto savedDocument=current()->document;openPath(path);
+    require(current()==savedProject&&tabs_->count()==tabCount&&current()->document==savedDocument&&!current()->history.modified(),"Opening an existing project did not preserve its tab and state");
+    passed("native save/load Unicode directory package, exact composite round trip and existing-tab reuse");
     canvas()->recreateDevice();resize(1100,740);QTest::qWait(100);require(canvas()->deviceReady(),"Device recreation failed");canvas()->repaint();QTest::qWait(120);
     auto gpu=canvas()->captureRendered();require(!gpu.isNull()&&gpu.save(dir+"/canvas-readback.png"),"GPU capture failed");
-    auto sample=viewPoint({100,350})*devicePixelRatioF();require(gpu.rect().contains(sample),"GPU sample is outside the resized viewport");auto color=gpu.pixelColor(sample);require(std::abs(color.red()-35)<=1&&std::abs(color.green()-65)<=1&&std::abs(color.blue()-90)<=1,"GPU background pixels differ from canonical composite");passed("WARP readback pixel invariant, resize and device recreation");
+    auto sample=viewPoint({100,350})*devicePixelRatioF();require(gpu.rect().contains(sample),"GPU sample is outside the resized viewport");auto color=gpu.pixelColor(sample);
+    auto profile=platform::discoverDisplayProfile(reinterpret_cast<void*>(canvas()->winId()));
+    require(canvas()->presentationProfileHash()==QString::fromStdString(profile.sha256),"Monitor profile changed during the native pixel check");
+    const auto expected=canvas()->presentationConvertsColor()?monitorExpectedColor(profile):QColor(35,65,90);
+    require(canvas()->presentationConvertsColor()||!canvas()->presentationDiagnostic().isEmpty(),"Native sRGB fallback lacks a diagnostic");
+    QFile pixelEvidence(dir+"/pixel-oracle.json");require(pixelEvidence.open(QIODevice::WriteOnly),"Pixel oracle evidence output failed");
+    pixelEvidence.write(QJsonDocument(QJsonObject{{"canonical_rgb",QJsonArray{35,65,90}},{"expected_display_rgb",QJsonArray{expected.red(),expected.green(),expected.blue()}},{"actual_display_rgb",QJsonArray{color.red(),color.green(),color.blue()}},{"tolerance",1},{"profile_sha256",canvas()->presentationProfileHash()},{"converted",canvas()->presentationConvertsColor()},{"oracle",canvas()->presentationConvertsColor()?"Windows WCS CPU profile transform":"explicit sRGB fallback"}}).toJson());
+    require(std::abs(color.red()-expected.red())<=1&&std::abs(color.green()-expected.green())<=1&&std::abs(color.blue()-expected.blue())<=1,"GPU background pixels differ from the profile-qualified canonical composite");passed("WARP readback pixel invariant, resize and device recreation");
     auto screenshot=screen()->grabWindow(0,mapToGlobal(QPoint(0,0)).x(),mapToGlobal(QPoint(0,0)).y(),width(),height());require(!screenshot.isNull()&&screenshot.save(dir+"/native-window.png"),"Native screenshot failed");
     QFile report(dir+"/native-ui.json");require(report.open(QIODevice::WriteOnly),"UI evidence output failed");report.write(QJsonDocument(QJsonObject{{"status","passed"},{"checks",checks},{"devicePixelRatio",devicePixelRatioF()},{"brush_full_raster_materializations",double(flattenCount)},{"human_acceptance",false},{"timestamp",QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}}).toJson());for(auto&p:projects_)p->history.markSaved();
 }

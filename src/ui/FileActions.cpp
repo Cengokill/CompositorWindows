@@ -97,12 +97,24 @@ void MainWindow::dropEvent(QDropEvent*event){
 }
 void MainWindow::openProjectDialog(){auto path=QFileDialog::getExistingDirectory(this,"Open Compositor Project — choose a .comp directory");if(!path.isEmpty())openPath(path);}
 void MainWindow::openPath(const QString&path){
-    applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     if(QFileInfo(path).isDir()){
-        ProjectStore store(makeWicProjectCodec());auto opened=store.load(nativePath(path));
+        // ProjectWorkspace.swift:59,77-80: guard before any preparation and
+        // select an already-open resolved project without reloading its state.
+        if(!canSwitchProjects())return;
+        const auto supplied=nativePath(path);
+        for(size_t index=0;index<projects_.size();++index){
+            const auto& project=projects_[index];if(project->path.isEmpty())continue;
+            std::error_code error;
+            if(std::filesystem::equivalent(supplied,nativePath(project->path),error)&&!error){
+                tabs_->setCurrentIndex(int(index));return;
+            }
+        }
+        if(transformSession_&&transformSession_->persistent)applyTransformSession();
+        ProjectStore store(makeWicProjectCodec());auto opened=store.load(supplied);
         auto&project=addProject(std::move(opened.document),QFileInfo(path).fileName());
         project.path=path;project.active=opened.activeLayer;project.history.reset();refresh(false);return;
     }
+    applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{});
 }
