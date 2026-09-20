@@ -1,0 +1,353 @@
+{
+  "assets": [
+    {
+      "group": "model",
+      "sha256": "22fe432bdd706e8079ee1c53dcd6192962291d023c84d5416df3c983f6e665a2",
+      "url": "https://huggingface.co/ZhengPeng7/BiRefNet_lite/resolve/aa62cd87eafb9cc43056d08ef3615a14628b831d/README.md",
+      "path": "dependencies/imaging/model/README.md"
+    },
+    {
+      "group": "model",
+      "sha256": "af8568b5be406bf4d2a68a7ed6d72e40f73b37a1fb6fc9ebd71b5b3cbcd069c9",
+      "url": "https://huggingface.co/ZhengPeng7/BiRefNet_lite/resolve/aa62cd87eafb9cc43056d08ef3615a14628b831d/birefnet.py",
+      "path": "dependencies/imaging/model/birefnet.py"
+    },
+    {
+      "group": "model",
+      "sha256": "e7b8c2a74f6cea6a59553d517f71d47f2c1d90e670a13416af17c25fe2f3dc52",
+      "url": "https://huggingface.co/ZhengPeng7/BiRefNet_lite/resolve/aa62cd87eafb9cc43056d08ef3615a14628b831d/BiRefNet_config.py",
+      "path": "dependencies/imaging/model/BiRefNet_config.py"
+    },
+    {
+      "group": "model",
+      "sha256": "9dc8614fccddd40c601aeadc69b9db6dd820598179b2a2198492e6ffa016a824",
+      "url": "https://huggingface.co/ZhengPeng7/BiRefNet_lite/resolve/aa62cd87eafb9cc43056d08ef3615a14628b831d/config.json",
+      "path": "dependencies/imaging/model/config.json"
+    },
+    {
+      "group": "model",
+      "sha256": "4417d89795250e698c3cb0ae8df15743810065f646f48a694fdfa7ca052d0815",
+      "url": "https://huggingface.co/ZhengPeng7/BiRefNet_lite/resolve/aa62cd87eafb9cc43056d08ef3615a14628b831d/model.safetensors",
+      "path": "dependencies/imaging/model/model.safetensors"
+    },
+    {
+      "group": "model",
+      "sha256": "88431cd9653ccd539741b555fb0a46b61558b301d4110412b5bc28b5e3ea6cb5",
+      "url": "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.25.2/skimage/data/astronaut.png",
+      "path": "evidence/imaging/astronaut.png"
+    },
+    {
+      "group": "model",
+      "sha256": "596aa1e7cb875eb79f437e310381d26b338a81c2da23439704a73c4651e8c4bb",
+      "url": "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.25.2/skimage/data/chelsea.png",
+      "path": "evidence/imaging/chelsea.png"
+    },
+    {
+      "group": "fixture",
+      "sha256": "60fb2adecacf82132db0b1c09b303316f3bbd9e2823e7ba096d01627d12d57c9",
+      "url": "https://raw.githubusercontent.com/saucecontrol/Compact-ICC-Profiles/bdd84663061bc4ae95ca70decff54f581e27f702/profiles/AdobeCompat-v2.icc",
+      "path": "evidence/imaging/AdobeCompat-v2.icc"
+    },
+    {
+      "group": "model",
+      "sha256": "c6ba983baf5681af108599675d2a89c2d145512d02de28aed0bff177cd0ba949",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-1.30.0.zip",
+      "path": "dependencies/imaging/onnxruntime-win-x64-1.30.0.zip"
+    }
+  ],
+  "binaries": [
+    {
+      "bytes": 1447936,
+      "sha256": "172e241ed638c4ec250deb8e3fe35869087330463adc8f7ada791d1ba2844fba",
+      "path": "install/bin/heif.dll"
+    },
+    {
+      "bytes": 377344,
+      "sha256": "064ea0c514e8bbd53ba2a0a4f1febb4b7c35edc92fe654efa81d320ca25122b0",
+      "path": "install/bin/libde265.dll"
+    },
+    {
+      "bytes": 16462648,
+      "sha256": "7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da",
+      "path": "onnxruntime-win-x64-1.30.0/lib/onnxruntime.dll"
+    },
+    {
+      "bytes": 21816,
+      "sha256": "b9b7ab9e2a8b08ee7ae4a7ac1c8bfd44a741f17ad8d0f764953140a57de0b796",
+      "path": "onnxruntime-win-x64-1.30.0/lib/onnxruntime_providers_shared.dll"
+    }
+  ],
+  "acceptance": "experimental model quality; blocked Mac differential reference and full-corpus acceptance",
+  "repositories": [
+    {
+      "version": "1.23.4",
+      "url": "https://github.com/strukturag/libheif",
+      "license": "LGPL-3.0-or-later",
+      "commit": "4e14f5942c1732ace9611b9522cc991501445463",
+      "tag": "v1.23.4",
+      "name": "libheif",
+      "source_archive_sha256": "d902191737036c5edd0759a2e3a29e3f318ca4d195f12c08d48cc92f1730aec5"
+    },
+    {
+      "version": "1.1.3",
+      "url": "https://github.com/strukturag/libde265",
+      "license": "LGPL-3.0-or-later",
+      "commit": "ba62bf4cfb3242f3bf0a45617ff09e35236e4d82",
+      "tag": "v1.1.3",
+      "name": "libde265",
+      "source_archive_sha256": "a6bd45f2d3c3b7dcefb81573fb262282b962bddad29c2e86c8ad63939077df80"
+    }
+  ],
+  "baseline": "a19db9011282399785dc18efcfded904627bdcc2",
+  "schema": 1,
+  "source_build": "scripts/bootstrap-imaging.ps1",
+  "conversion_dependencies": "model-requirements.hashes.txt",
+  "model": {
+    "input": "float32 NCHW 1x3x1024x1024 normalized RGB",
+    "license": "MIT",
+    "model_card": "notices/BiRefNet-lite-model-card.md",
+    "onnx_sha256": "c0faf38f5504f2239f1e6481ce4ac166b17435b38ea35e480d811a47bc1aba80",
+    "conversion": "tests/imaging/convert_birefnet.py",
+    "revision": "aa62cd87eafb9cc43056d08ef3615a14628b831d",
+    "output": "float32 NCHW 1x1x1024x1024 sigmoid mask",
+    "repo": "ZhengPeng7/BiRefNet_lite",
+    "runtime": "ONNX Runtime 1.30.0 CPU"
+  },
+  "created_utc": "2026-09-20T00:18:47.0732873Z",
+  "conversion_wheels": [
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+      "file": "certifi-2026.7.22-py3-none-any.whl"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.1",
+      "sha256": "3617ac3cfd8b9888f145ad89dd6e692285834b0201c6074a5eeaad3fd4d668c2",
+      "file": "charset_normalizer-3.5.1-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+      "file": "colorama-0.4.6-py2.py3-none-any.whl"
+    },
+    {
+      "name": "coloredlogs",
+      "version": "15.0.1",
+      "sha256": "612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934",
+      "file": "coloredlogs-15.0.1-py2.py3-none-any.whl"
+    },
+    {
+      "name": "einops",
+      "version": "0.8.1",
+      "sha256": "919387eb55330f5757c6bea9165c5ff5cfe63a642682ea788a6d472576d81737",
+      "file": "einops-0.8.1-py3-none-any.whl"
+    },
+    {
+      "name": "filelock",
+      "version": "3.32.3",
+      "sha256": "7f0ca4bcc0e181c60dbbd8aa9ab5b120ebb99e4e064e83636340056f833a1f09",
+      "file": "filelock-3.32.3-py3-none-any.whl"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
+      "file": "flatbuffers-25.12.19-py2.py3-none-any.whl"
+    },
+    {
+      "name": "fsspec",
+      "version": "2026.7.0",
+      "sha256": "b57ddbafedfaef7018c1ecab32aa200a9d7ca26b77965f64e48b70061249d279",
+      "file": "fsspec-2026.7.0-py3-none-any.whl"
+    },
+    {
+      "name": "huggingface_hub",
+      "version": "0.36.2",
+      "sha256": "48f0c8eac16145dfce371e9d2d7772854a4f591bcb56c9cf548accf531d54270",
+      "file": "huggingface_hub-0.36.2-py3-none-any.whl"
+    },
+    {
+      "name": "humanfriendly",
+      "version": "10.0",
+      "sha256": "1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477",
+      "file": "humanfriendly-10.0-py2.py3-none-any.whl"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "file": "idna-3.20-py3-none-any.whl"
+    },
+    {
+      "name": "Jinja2",
+      "version": "3.1.6",
+      "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+      "file": "jinja2-3.1.6-py3-none-any.whl"
+    },
+    {
+      "name": "kornia",
+      "version": "0.8.2",
+      "sha256": "32dfe77c9c74a87a2de49395aa3c2c376a1b63c27611a298b394d02d13905819",
+      "file": "kornia-0.8.2-py2.py3-none-any.whl"
+    },
+    {
+      "name": "kornia_rs",
+      "version": "0.1.14",
+      "sha256": "ac4bbd0a8fd73b5058a39707c790fecec4c5204a42d1f5af17f1fa57cc83d406",
+      "file": "kornia_rs-0.1.14-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "MarkupSafe",
+      "version": "3.0.3",
+      "sha256": "26a5784ded40c9e318cfc2bdb30fe164bdb8665ded9cd64d500a34fb42067b1c",
+      "file": "markupsafe-3.0.3-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "ml_dtypes",
+      "version": "0.6.0",
+      "sha256": "2a3e9d53925597fbffafd2a37048dadeddd0bdaba58058f6ae0869ed709a184d",
+      "file": "ml_dtypes-0.6.0-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "mpmath",
+      "version": "1.3.0",
+      "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+      "file": "mpmath-1.3.0-py3-none-any.whl"
+    },
+    {
+      "name": "networkx",
+      "version": "3.6.1",
+      "sha256": "d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762",
+      "file": "networkx-3.6.1-py3-none-any.whl"
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.2",
+      "sha256": "28ac63476ec7651484215ee7fa15a1f78b57c14621f01e392afe17b9a1390ce4",
+      "file": "numpy-2.5.2-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "onnx",
+      "version": "1.19.0",
+      "sha256": "50220f3499a499b1a15e19451a678a58e22ad21b34edf2c844c6ef1d9febddc2",
+      "file": "onnx-1.19.0-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.30.0",
+      "sha256": "f3501472571f1b1eee50e017851e7929f5ea37312d2d8c2494a19e8fc58b4a38",
+      "file": "onnxruntime-1.30.0-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "file": "packaging-26.3-py3-none-any.whl"
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "sha256": "a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09",
+      "file": "pillow-12.3.0-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2",
+      "sha256": "a300819d441e078a5608c0d3c709796bb548136058fda017ae51d425b44fd353",
+      "file": "protobuf-7.36.2-cp310-abi3-win_amd64.whl"
+    },
+    {
+      "name": "pyreadline3",
+      "version": "3.5.6",
+      "sha256": "8449b734232e42a5dcd74048e39b60db2839a4c38cf3ae2bf7707d58b5389c0d",
+      "file": "pyreadline3-3.5.6-py3-none-any.whl"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "sha256": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+      "file": "pyyaml-6.0.3-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "regex",
+      "version": "2026.9.10",
+      "sha256": "4db7d00c4afbfbb55b8e17b1e371da11418ea9389b030acec63c1fa4c7ad4b86",
+      "file": "regex-2026.9.10-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+      "file": "requests-2.34.2-py3-none-any.whl"
+    },
+    {
+      "name": "safetensors",
+      "version": "0.7.0",
+      "sha256": "d1239932053f56f3456f32eb9625590cc7582e905021f94636202a864d470755",
+      "file": "safetensors-0.7.0-cp38-abi3-win_amd64.whl"
+    },
+    {
+      "name": "setuptools",
+      "version": "78.1.0",
+      "sha256": "3e386e96793c8702ae83d17b853fb93d3e09ef82ec62722e61da5cd22376dcd8",
+      "file": "setuptools-78.1.0-py3-none-any.whl"
+    },
+    {
+      "name": "sympy",
+      "version": "1.14.0",
+      "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+      "file": "sympy-1.14.0-py3-none-any.whl"
+    },
+    {
+      "name": "timm",
+      "version": "1.0.22",
+      "sha256": "888981753e65cbaacfc07494370138b1700a27b1f0af587f4f9b47bc024161d0",
+      "file": "timm-1.0.22-py3-none-any.whl"
+    },
+    {
+      "name": "tokenizers",
+      "version": "0.22.2",
+      "sha256": "c9ea31edff2968b44a88f97d784c2f16dc0729b8b143ed004699ebca91f05c48",
+      "file": "tokenizers-0.22.2-cp39-abi3-win_amd64.whl"
+    },
+    {
+      "name": "torch",
+      "version": "2.8.0+cpu",
+      "sha256": "2be20b2c05a0cce10430cc25f32b689259640d273232b2de357c35729132256d",
+      "file": "torch-2.8.0+cpu-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "torchvision",
+      "version": "0.23.0+cpu",
+      "sha256": "a651ccc540cf4c87eb988730c59c2220c52b57adc276f044e7efb9830fa65a1d",
+      "file": "torchvision-0.23.0+cpu-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.1",
+      "sha256": "c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73",
+      "file": "tqdm-4.70.1-py3-none-any.whl"
+    },
+    {
+      "name": "transformers",
+      "version": "4.57.3",
+      "sha256": "c77d353a4851b1880191603d36acb313411d3577f6e2897814f333841f7003f4",
+      "file": "transformers-4.57.3-py3-none-any.whl"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "file": "typing_extensions-4.16.0-py3-none-any.whl"
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+      "file": "urllib3-2.8.0-py3-none-any.whl"
+    }
+  ]
+}

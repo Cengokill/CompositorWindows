@@ -1,0 +1,71 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.
+-- The CXX compiler identification is MSVC 19.44.35221.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found WrapAtomic: TRUE
+-- Configuring done (2.7s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/persistence/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule H:/CompositorWindows/windows/tests/persistence/CMakeLists.txt
+  Scanning sources for module dependencies...
+  Document.cpp
+  ProjectStore.cpp
+  persistence_tests.cpp
+  Compiling...
+  persistence_tests.cpp
+  ProjectStore.cpp
+  Document.cpp
+  persistence_tests.vcxproj -> H:\CompositorWindows\windows\tests\persistence\build\Debug\persistence_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/persistence/CMakeLists.txt
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/persistence/build
+Test project H:/CompositorWindows/windows/tests/persistence/build
+      Start  1: persistence.blank_roundtrip
+ 1/10 Test  #1: persistence.blank_roundtrip .........   Passed    0.08 sec
+      Start  2: persistence.raster_mask_roundtrip
+ 2/10 Test  #2: persistence.raster_mask_roundtrip ...   Passed    0.06 sec
+      Start  3: persistence.legacy_version_gates
+ 3/10 Test  #3: persistence.legacy_version_gates ....   Passed    0.24 sec
+      Start  4: persistence.malformed_metadata
+ 4/10 Test  #4: persistence.malformed_metadata ......   Passed    0.39 sec
+      Start  5: persistence.graph_boundaries
+ 5/10 Test  #5: persistence.graph_boundaries ........   Passed    0.50 sec
+      Start  6: persistence.rollback_faults
+ 6/10 Test  #6: persistence.rollback_faults .........   Passed    0.18 sec
+      Start  7: persistence.crash_recovery
+ 7/10 Test  #7: persistence.crash_recovery ..........   Passed    0.09 sec
+      Start  8: persistence.allocation_preflight
+ 8/10 Test  #8: persistence.allocation_preflight ....   Passed    0.05 sec
+      Start  9: persistence.hostile_journal
+ 9/10 Test  #9: persistence.hostile_journal .........   Passed    0.04 sec
+      Start 10: persistence.reparse_rejection
+10/10 Test #10: persistence.reparse_rejection .......***Skipped   0.03 sec
+
+100% tests passed, 0 tests failed out of 10
+
+Total Test time (real) =   1.67 sec
+
+The following tests did not run:
+	 10 - persistence.reparse_rejection (Skipped)

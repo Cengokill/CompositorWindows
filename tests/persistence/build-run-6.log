@@ -1,0 +1,55 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/persistence/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  Scanning sources for module dependencies...
+  WicProjectCodec.cpp
+  wic_codec.cpp
+  ProjectStore.cpp
+  Document.cpp
+  project_png.cpp
+  Compiling...
+  ProjectStore.cpp
+  WicProjectCodec.cpp
+  project_png.cpp
+  Document.cpp
+  wic_codec.cpp
+  persistence_tests.vcxproj -> H:\CompositorWindows\windows\tests\persistence\build\Debug\persistence_tests.exe
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/persistence/build
+Test project H:/CompositorWindows/windows/tests/persistence/build
+      Start  1: persistence.blank_roundtrip
+ 1/11 Test  #1: persistence.blank_roundtrip .........   Passed    0.07 sec
+      Start  2: persistence.raster_mask_roundtrip
+ 2/11 Test  #2: persistence.raster_mask_roundtrip ...   Passed    0.06 sec
+      Start  3: persistence.legacy_version_gates
+ 3/11 Test  #3: persistence.legacy_version_gates ....   Passed    0.22 sec
+      Start  4: persistence.malformed_metadata
+ 4/11 Test  #4: persistence.malformed_metadata ......   Passed    0.33 sec
+      Start  5: persistence.graph_boundaries
+ 5/11 Test  #5: persistence.graph_boundaries ........   Passed    0.49 sec
+      Start  6: persistence.rollback_faults
+ 6/11 Test  #6: persistence.rollback_faults .........   Passed    0.17 sec
+      Start  7: persistence.crash_recovery
+ 7/11 Test  #7: persistence.crash_recovery ..........   Passed    0.08 sec
+      Start  8: persistence.allocation_preflight
+ 8/11 Test  #8: persistence.allocation_preflight ....   Passed    0.04 sec
+      Start  9: persistence.hostile_journal
+ 9/11 Test  #9: persistence.hostile_journal .........   Passed    0.03 sec
+      Start 10: persistence.reparse_rejection
+10/11 Test #10: persistence.reparse_rejection .......   Passed    0.03 sec
+      Start 11: persistence.real_png_exchange
+11/11 Test #11: persistence.real_png_exchange .......   Passed    0.06 sec
+
+100% tests passed, 0 tests failed out of 11
+
+Total Test time (real) =   1.59 sec
