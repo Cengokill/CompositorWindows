@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="15"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="0"
+	timestamp="2026-09-19T20:47:57"
+	>
+	<testcase name="growing_brush.unchanged_grid" classname="growing_brush.unchanged_grid" time="0.0788554" status="run">
+		<properties/>
+		<system-out>PASS unchanged_grid
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.blank_30000" classname="growing_brush.blank_30000" time="0.0143014" status="run">
+		<properties/>
+		<system-out>PASS blank_30000
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.growth_padding_masks" classname="growing_brush.growth_padding_masks" time="0.0126019" status="run">
+		<properties/>
+		<system-out>PASS growth_padding_masks
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.transformed_growth" classname="growing_brush.transformed_growth" time="0.0099" status="run">
+		<properties/>
+		<system-out>PASS transformed_growth
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.selection_cancel_mask" classname="growing_brush.selection_cancel_mask" time="0.0095486" status="run">
+		<properties/>
+		<system-out>PASS selection_cancel_mask
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.atomic_budget" classname="growing_brush.atomic_budget" time="0.0114988" status="run">
+		<properties/>
+		<system-out>PASS atomic_budget
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.immutable_history" classname="growing_brush.immutable_history" time="0.0102606" status="run">
+		<properties/>
+		<system-out>PASS immutable_history
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.empty_erase_noop" classname="growing_brush.empty_erase_noop" time="0.0096052" status="run">
+		<properties/>
+		<system-out>PASS empty_erase_noop
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.gpu_equivalence" classname="growing_brush.gpu_equivalence" time="0.220153" status="run">
+		<properties/>
+		<system-out>BACKEND Microsoft Basic Render Driver
+MAX_BYTE_ERROR 0
+PASS gpu_equivalence
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.invalid_sample" classname="growing_brush.invalid_sample" time="0.0097664" status="run">
+		<properties/>
+		<system-out>PASS invalid_sample
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.viewport_image" classname="growing_brush.viewport_image" time="0.0778741" status="run">
+		<properties/>
+		<system-out>PASS viewport_image
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.viewport_transformed" classname="growing_brush.viewport_transformed" time="0.0330365" status="run">
+		<properties/>
+		<system-out>PASS viewport_transformed
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.viewport_mask" classname="growing_brush.viewport_mask" time="0.0162747" status="run">
+		<properties/>
+		<system-out>PASS viewport_mask
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.region_row_copies" classname="growing_brush.region_row_copies" time="0.015911" status="run">
+		<properties/>
+		<system-out>PASS region_row_copies
+</system-out>
+	</testcase>
+	<testcase name="growing_brush.small_source_growth" classname="growing_brush.small_source_growth" time="0.0797624" status="run">
+		<properties/>
+		<system-out>STAGE backend 0
+STAGE before render
+STAGE begin
+STAGE first viewport
+STAGE append
+STAGE second viewport
+STAGE commit
+STAGE after render
+STAGE backend 1
+STAGE before render
+STAGE begin
+STAGE first viewport
+STAGE append
+STAGE second viewport
+STAGE commit
+STAGE after render
+PASS small_source_growth
+</system-out>
+	</testcase>
+</testsuite>

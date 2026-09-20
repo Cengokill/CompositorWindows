@@ -1,0 +1,48 @@
+// Exact assertion/fixture port of CompositorTests/DownsampleTests.swift at a19db901.
+// Copyright (c)2026 Wonder Assembly LLC. MIT: graphics/upstream/LICENSE.
+#include "graphics/Downsample.h"
+#include "graphics/StackRenderer.h"
+#include "graphics/SamplingSource.h"
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <iostream>
+#include <numeric>
+#include <stdexcept>
+using namespace compositor;
+using namespace compositor::graphics;
+namespace {
+DownsampleCache cache;QDir evidence;bool adapter,production;QString invocation;QJsonArray checks,results;bool passed;
+void check(int line,bool value,const char* name,int native,QJsonObject details={}){details["source_line"]=line;details["native_line"]=native;details["name"]=name;details["passed"]=value;checks.append(details);passed&=value;if(!value)std::cout<<"FAIL L"<<line<<' '<<name<<'\n';}
+#define EXPECT(line,value,name) check(line,bool(value),name,__LINE__)
+void require(int line,bool value,const char* name,int native){check(line,value,name,native);if(!value)throw std::runtime_error(name);}
+#define REQUIRE(line,value,name) require(line,bool(value),name,__LINE__)
+void save(const QString& name,const Raster& raster){auto data=raster.rgba();QFile output(evidence.filePath(invocation+"-"+name+".rgba"));if(!output.open(QIODevice::WriteOnly)||output.write(reinterpret_cast<const char*>(data.data()),qsizetype(data.size()))!=qsizetype(data.size()))throw std::runtime_error("Cannot save pixel evidence");QImage image(data.data(),raster.width,raster.height,raster.width*4,QImage::Format_RGBA8888_Premultiplied);if(!image.save(evidence.filePath(invocation+"-"+name+".png")))throw std::runtime_error("Cannot save PNG");QFile metadata(evidence.filePath(invocation+"-"+name+".json"));if(!metadata.open(QIODevice::WriteOnly))throw std::runtime_error("Cannot save format metadata");metadata.write(QJsonDocument(QJsonObject{{"width",raster.width},{"height",raster.height},{"row_bytes",raster.width*4},{"format","premultiplied_RGBA8_top_down"}}).toJson());}
+std::shared_ptr<const Raster> image(int width,int height,const std::function<uint8_t(int,int)>& gray){std::vector<Pixel> pixels(size_t(width)*height);REQUIRE(11,!pixels.empty(),"image context.data");for(int y=0;y<height;++y)for(int x=0;x<width;++x){auto v=gray(x,y);pixels[size_t(y)*width+x]={v,v,v,255};}auto result=Raster::fromRgba(width,height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(width)*4);REQUIRE(18,bool(result),"image context.makeImage");return result;}
+std::vector<uint8_t> bytes(const std::shared_ptr<const Raster>& image){auto result=image->rgba();REQUIRE(23,!result.empty(),"bytes context.data");return result;}
+struct ColorChoice {
+    std::shared_ptr<const Raster> raster;std::shared_ptr<const ReducedSource> reduced;int width{},height{};
+    ColorChoice(std::shared_ptr<const Raster> value):raster(std::move(value)),width(raster->width),height(raster->height){}
+    ColorChoice(std::shared_ptr<const ReducedSource> value):reduced(std::move(value)),width(reduced->grid().width),height(reduced->grid().height){}
+    bool operator==(const ColorChoice& other)const{return raster==other.raster&&reduced==other.reduced;}
+    const ColorChoice* operator->()const{return this;}
+    std::shared_ptr<const Raster> materialize()const{if(raster)return raster;std::vector<Pixel> values(size_t(width)*height);for(int y=0;y<height;++y)for(int x=0;x<width;++x)values[size_t(y)*width+x]=reduced->pixel(x,y);return Raster::fromRgba(width,height,reinterpret_cast<const uint8_t*>(values.data()),size_t(width)*4);}
+};
+// Production selection exercises the exact cache handles used by StackRenderer.
+// Materialization below is only for the source tests' explicit byte assertions.
+ColorChoice selected(const std::shared_ptr<const Raster>& source,double factor){if(production){const int level=DownsampleCache::levelFor(factor);if(level)return ColorChoice(ReducedSourceCache::shared().resolve(samplingSource(source),level));return ColorChoice(source);}return ColorChoice(adapter?cache.image(source,factor):source);}
+std::shared_ptr<const GrayRaster> selected(const std::shared_ptr<const GrayRaster>& source,double factor){if(production){const int level=DownsampleCache::levelFor(factor);if(!level)return source;auto reduced=ReducedSourceCache::shared().resolve(samplingSource(source),level);auto result=std::make_shared<GrayRaster>(GrayRaster{reduced->grid().width,reduced->grid().height,{}});result->pixels.resize(size_t(result->width)*result->height);for(int y=0;y<result->height;++y)for(int x=0;x<result->width;++x)result->pixels[size_t(y)*result->width+x]=reduced->gray(x,y);return result;}return adapter?cache.image(source,factor):source;}
+std::vector<uint8_t> drawn(const std::shared_ptr<const Raster>& source,int width,int height){Layer layer;layer.id=newId();layer.raster=source;layer.transform={0,0,double(width),double(height),0,false,false,Transform::Sampling::High};if(adapter)layer=downsampleLayer(layer,1,cache);Document d;d.width=width;d.height=height;d.layers={layer};auto frame=StackRenderer().render(d,0,0,width,height);auto data=frame->rgba();REQUIRE(34,!data.empty(),"drawn context.data");save("drawn",*frame);return data;}
+void reuse(){auto source=image(1024,512,[](int x,int){return uint8_t(x%2==0?0:255);});EXPECT(39,selected(source,.6)==source,"half size and up uses source identity");auto eighth=selected(source,.125);EXPECT(41,eighth->width==128&&eighth->height==64,"eighth dimensions128x64");EXPECT(42,selected(source,.3)->width==512,"point3 uses half width512");EXPECT(43,selected(source,.125)==eighth,"cached copy identity");save("eighth",*eighth.materialize());}
+void edge(){auto source=image(4096,64,[](int x,int){return uint8_t(x<2048?0:255);});auto pixels=drawn(source,512,8);std::vector<int> row(512);for(int x=0;x<512;++x)row[size_t(x)]=pixels[size_t(4*512+x)*4];int soft=int(std::count_if(row.begin(),row.end(),[](int v){return v>40&&v<215;}));check(51,soft<=3,"soft pixels at most3",__LINE__,{{"actual_soft_pixels",soft},{"limit",3}});check(52,row[250]<10&&row[262]>245,"hard edge endpoint intensities",__LINE__,{{"row250",row[250]},{"row262",row[262]}});}
+void stripes(){auto source=image(2048,256,[](int x,int){return uint8_t(x%2==0?0:255);});auto pixels=drawn(source,256,32);std::vector<double> values;for(int x=4;x<252;++x)values.push_back(pixels[size_t(16*256+x)*4]);double mean=std::accumulate(values.begin(),values.end(),0.)/values.size(),sum=0;for(auto value:values)sum+=(value-mean)*(value-mean);double spread=std::sqrt(sum/values.size());check(62,std::abs(mean-127.5)<8,"stripe mean within8 of127.5",__LINE__,{{"mean",mean},{"absolute_limit",8}});check(63,spread<6,"stripe spread below6",__LINE__,{{"spread",spread},{"limit",6}});}
+void alphaMask(){auto source=Raster::filled(512,512);std::vector<Pixel> white(256*256,{128,128,128,128});source=source->replacing(128,128,256,256,white.data(),256);REQUIRE(70,bool(source),"translucent context.makeImage");auto shrunkImage=selected(source,.25);auto shrunk=bytes(shrunkImage.materialize());bool valid=true;for(size_t i=0;i<shrunk.size();i+=4)valid&=shrunk[i]<=shrunk[i+3];EXPECT(72,valid,"all red channels at most alpha");save("translucent",*shrunkImage.materialize());auto mask=std::make_shared<GrayRaster>(GrayRaster{512,512,std::vector<uint8_t>(512*512)});for(int y=0;y<512;++y)for(int x=0;x<256;++x)mask->pixels[size_t(y)*512+x]=255;REQUIRE(77,mask&&mask->pixels.size()==512*512,"mask context.makeImage");auto level=selected(std::shared_ptr<const GrayRaster>(mask),.25);EXPECT(79,level->width==128&&level->pixels.size()==size_t(level->width)*level->height,"mask width128 monochrome no alpha");QFile gray(evidence.filePath(invocation+"-mask.gray8"));if(!gray.open(QIODevice::WriteOnly)||gray.write(reinterpret_cast<const char*>(level->pixels.data()),qsizetype(level->pixels.size()))!=qsizetype(level->pixels.size()))throw std::runtime_error("Cannot save mask");}
+}
+int main(int argc,char** argv){QCoreApplication app(argc,argv);std::cout<<std::unitbuf;adapter=argc>1&&QString::fromLocal8Bit(argv[1])=="adapter";production=argc>1&&QString::fromLocal8Bit(argv[1])=="production";evidence=QDir(argc>2?QString::fromLocal8Bit(argv[2]):"downsample-results");if(!evidence.mkpath("."))return 2;int failures=0;for(auto [name,body]:std::array<std::pair<const char*,void(*)()>,4>{{{"halvingsAreReusedAndOnlyUsedForLargeReductions",reuse},{"aHardEdgeStaysSharpShrunkEightTimes",edge},{"fineStripesAverageToFlatGrayWithoutShimmer",stripes},{"translucentEdgesStayValidAndMasksStayGray",alphaMask}}}){invocation="ACC-UT-DownsampleTests-"+QString::fromLatin1(name);checks={};passed=true;try{body();}catch(const std::exception& error){passed=false;checks.append(QJsonObject{{"exception",error.what()},{"passed",false}});}results.append(QJsonObject{{"id",invocation},{"argument",QJsonValue()},{"passed",passed},{"checks",checks}});failures+=passed?0:1;std::cout<<(passed?"PASS ":"FAIL ")<<invocation.toStdString()<<'\n';}QFile output(evidence.filePath("results.json"));if(!output.open(QIODevice::WriteOnly))return 2;output.write(QJsonDocument(QJsonObject{{"suite","DownsampleTests"},{"baseline_sha","a19db9011282399785dc18efcfded904627bdcc2"},{"mode",production?"production_lazy_Lanczos5":adapter?"isolated_Lanczos5_adapter":"retained_no_cache_selection_reference"},{"global_renderer_integrated",production},{"mac_differential",false},{"upstream_swift_executed",false},{"passed",4-failures},{"failed",failures},{"invocations",results}}).toJson());return failures?1:0;}

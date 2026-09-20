@@ -1,0 +1,9 @@
+value=-512 expected=-2 old=-2 guarded=-2
+value=-257 expected=-2 old=-2 guarded=-2
+value=-256 expected=-1 old=-1 guarded=-1
+value=-255 expected=-1 old=-1 guarded=-1
+value=-1 expected=-1 old=-1 guarded=-1
+value=0 expected=0 old=0 guarded=0
+value=255 expected=0 old=0 guarded=0
+value=256 expected=1 old=1 guarded=1
+site x=-40 phase=216 delta=-256 expected_key=-1 old_key=-1 guarded_key=-1 expected_local=0 old_local=0 guarded_local=0

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="15"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="0"
+	timestamp="2026-09-19T20:21:53"
+	>
+	<testcase name="cache.blank_30000" classname="cache.blank_30000" time="0.0544788" status="run">
+		<properties/>
+		<system-out>PASS blank_30000
+</system-out>
+	</testcase>
+	<testcase name="cache.identity_fastpath" classname="cache.identity_fastpath" time="0.0119972" status="run">
+		<properties/>
+		<system-out>PASS identity_fastpath
+</system-out>
+	</testcase>
+	<testcase name="cache.normal_equivalence" classname="cache.normal_equivalence" time="0.16184" status="run">
+		<properties/>
+		<system-out>PASS normal_equivalence
+</system-out>
+	</testcase>
+	<testcase name="cache.offscreen_invalidation" classname="cache.offscreen_invalidation" time="0.174458" status="run">
+		<properties/>
+		<system-out>PASS offscreen_invalidation
+</system-out>
+	</testcase>
+	<testcase name="cache.bounded_eviction" classname="cache.bounded_eviction" time="0.0688326" status="run">
+		<properties/>
+		<system-out>PASS bounded_eviction
+</system-out>
+	</testcase>
+	<testcase name="cache.metadata_and_hidden_source" classname="cache.metadata_and_hidden_source" time="0.0144635" status="run">
+		<properties/>
+		<system-out>PASS metadata_and_hidden_source
+</system-out>
+	</testcase>
+	<testcase name="cache.full_after_partial" classname="cache.full_after_partial" time="0.0854911" status="run">
+		<properties/>
+		<system-out>PASS full_after_partial
+</system-out>
+	</testcase>
+	<testcase name="cache.lod_large_content" classname="cache.lod_large_content" time="0.114275" status="run">
+		<properties/>
+		<system-out>PASS lod_large_content
+</system-out>
+	</testcase>
+	<testcase name="cache.scaled_renderer_contract" classname="cache.scaled_renderer_contract" time="0.0146548" status="run">
+		<properties/>
+		<system-out>PASS scaled_renderer_contract
+</system-out>
+	</testcase>
+	<testcase name="cache.scaled_grain_partition" classname="cache.scaled_grain_partition" time="0.0157793" status="run">
+		<properties/>
+		<system-out>PASS scaled_grain_partition
+</system-out>
+	</testcase>
+	<testcase name="cache.outside_and_rejections" classname="cache.outside_and_rejections" time="0.0117331" status="run">
+		<properties/>
+		<system-out>PASS outside_and_rejections
+</system-out>
+	</testcase>
+	<testcase name="cache.blank_culling" classname="cache.blank_culling" time="0.0184266" status="run">
+		<properties/>
+		<system-out>PASS blank_culling
+</system-out>
+	</testcase>
+	<testcase name="cache.lod_offscreen_invalidation" classname="cache.lod_offscreen_invalidation" time="0.0176651" status="run">
+		<properties/>
+		<system-out>PASS lod_offscreen_invalidation
+</system-out>
+	</testcase>
+	<testcase name="cache.unsupported_blank_adjustment" classname="cache.unsupported_blank_adjustment" time="0.0137693" status="run">
+		<properties/>
+		<system-out>PASS unsupported_blank_adjustment
+</system-out>
+	</testcase>
+	<testcase name="cache.stack_renderer_regression" classname="cache.stack_renderer_regression" time="0.0715109" status="run">
+		<properties/>
+		<system-out>PASS G-R-013-placed-mask-exterior-edge-majority
+PASS G-R-001-soft-clipping-stack-alpha
+PASS G-R-002-concrete-blue-base-regression
+PASS G-R-003-hidden-black-dependency-chain
+PASS G-R-004-moving-source-and-own-mask
+PASS G-R-005-noncontiguous-links-independent
+PASS G-R-006-hierarchy-order-and-hidden-parent
+PASS G-R-007-folder-mask-per-child-and-stack
+PASS G-R-008-source-parent-mask-independent
+PASS G-R-009-adjustment-alpha-mask-opacity
+PASS G-R-010-clipped-adjustment-uses-opaque-base
+PASS G-R-011-nonnormal-adjustment-restores-alpha
+PASS G-R-012-region-tile-invariance
+{"suite":"stack_renderer","passed":13,"failed":0,"mac_differential":false}
+</system-out>
+	</testcase>
+</testsuite>

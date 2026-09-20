@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.25)
+project(CompositorDisplayProfileTests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+add_executable(display_profile_tests DisplayProfileTests.cpp ../../src/platform/DisplayProfile.cpp)
+target_include_directories(display_profile_tests PRIVATE ../../src)
+target_compile_definitions(display_profile_tests PRIVATE NOMINMAX UNICODE _UNICODE)
+target_compile_options(display_profile_tests PRIVATE /W4 /WX /utf-8)
+target_link_libraries(display_profile_tests PRIVATE d2d1 d3d11 dxgi dxguid mscms bcrypt gdi32 user32)

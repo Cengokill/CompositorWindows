@@ -35,12 +35,13 @@ inline uint8_t cachedMaskBackground(const std::shared_ptr<const GrayRaster>& mas
     if(cache.size()>=128)cache.clear();
     const auto result=maskBackground(*mask);cache.insert_or_assign(mask.get(),Entry{mask,result});return result;
 }
-inline double sampleMask(const GrayRaster& mask,Point unit,Transform::Sampling sampling,uint8_t exterior=0){
-    double x=unit.x*mask.width,y=unit.y*mask.height;
-    if(!std::isfinite(x)||!std::isfinite(y)||x<0||y<0||x>=mask.width||y>=mask.height)return exterior/255.;
-    if(sampling==Transform::Sampling::Nearest)return mask.pixel(int(x),int(y))/255.;
+template<class Reader> inline double sampleMaskPixels(int width,int height,const Reader& pixel,Point unit,Transform::Sampling sampling,uint8_t exterior=0){
+    double x=unit.x*width,y=unit.y*height;
+    if(!std::isfinite(x)||!std::isfinite(y)||x<0||y<0||x>=width||y>=height)return exterior/255.;
+    if(sampling==Transform::Sampling::Nearest)return pixel(int(x),int(y))/255.;
     x-=.5;y-=.5;const int ix=int(std::floor(x)),iy=int(std::floor(y));const double fx=x-ix,fy=y-iy;
-    const auto get=[&](int xx,int yy){return double(mask.pixel(std::clamp(xx,0,mask.width-1),std::clamp(yy,0,mask.height-1)));};
+    const auto get=[&](int xx,int yy){return double(pixel(std::clamp(xx,0,width-1),std::clamp(yy,0,height-1)));};
     return ((1-fy)*((1-fx)*get(ix,iy)+fx*get(ix+1,iy))+fy*((1-fx)*get(ix,iy+1)+fx*get(ix+1,iy+1)))/255.;
 }
+inline double sampleMask(const GrayRaster& mask,Point unit,Transform::Sampling sampling,uint8_t exterior=0){return sampleMaskPixels(mask.width,mask.height,[&](int x,int y){return mask.pixel(x,y);},unit,sampling,exterior);}
 }

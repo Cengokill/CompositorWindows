@@ -29,9 +29,16 @@ public:
     bool antialiased() const;
     Rect bounds() const;
     bool contains(Point) const;
+    // Native no-op criterion: same AA and exact bounds, then empty D2D XOR.
+    // Uses the fixed D2D default flattening tolerance0.25 source pixels; this
+    // compares filled geometry, not CoreGraphics's structural path equality.
+    bool geometricallyEquals(const SelectionOutline&) const;
     SelectionOutline combined(const SelectionOutline&, SelectionMode, bool antialiased) const;
     SelectionOutline clipped(int canvasWidth, int canvasHeight) const;
     SelectionOutline moved(Point offset) const; // rounds offset, never clips
+    // Maps source pixel coordinates through the normalized layer/mask transform;
+    // preserves vector holes and off-canvas geometry without rasterizing.
+    SelectionOutline transformed(const Transform&, int sourceWidth, int sourceHeight) const;
     SelectionOutline resized(double delta, int canvasWidth, int canvasHeight) const;
     SelectionOutline mirrored(bool horizontally, double axis) const;
     std::shared_ptr<const GrayRaster> rasterize(int width, int height) const;

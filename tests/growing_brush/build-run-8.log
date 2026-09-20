@@ -1,0 +1,63 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/growing_brush/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  Scanning sources for module dependencies...
+  GrowingBrushSessionTests.cpp
+  Compiling...
+  GrowingBrushSessionTests.cpp
+  growing_brush_tests.vcxproj -> H:\CompositorWindows\windows\tests\growing_brush\build\Release\growing_brush_tests.exe
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/growing_brush/build
+Test project H:/CompositorWindows/windows/tests/growing_brush/build
+      Start  1: growing_brush.unchanged_grid
+ 1/15 Test  #1: growing_brush.unchanged_grid ..........   Passed    0.08 sec
+      Start  2: growing_brush.blank_30000
+ 2/15 Test  #2: growing_brush.blank_30000 .............   Passed    0.02 sec
+      Start  3: growing_brush.growth_padding_masks
+ 3/15 Test  #3: growing_brush.growth_padding_masks ....   Passed    0.01 sec
+      Start  4: growing_brush.transformed_growth
+ 4/15 Test  #4: growing_brush.transformed_growth ......   Passed    0.01 sec
+      Start  5: growing_brush.selection_cancel_mask
+ 5/15 Test  #5: growing_brush.selection_cancel_mask ...   Passed    0.01 sec
+      Start  6: growing_brush.atomic_budget
+ 6/15 Test  #6: growing_brush.atomic_budget ...........   Passed    0.01 sec
+      Start  7: growing_brush.immutable_history
+ 7/15 Test  #7: growing_brush.immutable_history .......   Passed    0.01 sec
+      Start  8: growing_brush.empty_erase_noop
+ 8/15 Test  #8: growing_brush.empty_erase_noop ........   Passed    0.01 sec
+      Start  9: growing_brush.gpu_equivalence
+ 9/15 Test  #9: growing_brush.gpu_equivalence .........   Passed    0.23 sec
+      Start 10: growing_brush.invalid_sample
+10/15 Test #10: growing_brush.invalid_sample ..........   Passed    0.01 sec
+      Start 11: growing_brush.viewport_image
+11/15 Test #11: growing_brush.viewport_image ..........   Passed    0.08 sec
+      Start 12: growing_brush.viewport_transformed
+12/15 Test #12: growing_brush.viewport_transformed ....   Passed    0.03 sec
+      Start 13: growing_brush.viewport_mask
+13/15 Test #13: growing_brush.viewport_mask ...........   Passed    0.02 sec
+      Start 14: growing_brush.region_row_copies
+14/15 Test #14: growing_brush.region_row_copies .......   Passed    0.02 sec
+      Start 15: growing_brush.small_source_growth
+15/15 Test #15: growing_brush.small_source_growth .....***Timeout  10.02 sec
+STAGE backend 0
+STAGE before render
+STAGE begin
+STAGE first viewport
+
+
+93% tests passed, 1 tests failed out of 15
+
+Total Test time (real) =  10.56 sec
+
+The following tests FAILED:
+	 15 - growing_brush.small_source_growth (Timeout)
+Errors while running CTest

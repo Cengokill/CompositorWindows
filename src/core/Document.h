@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -8,6 +9,7 @@
 
 namespace compositor {
 namespace editing { class SelectionOutline; }
+namespace graphics { struct SamplingSource; }
 struct Pixel { uint8_t r{},g{},b{},a{}; bool operator==(const Pixel&) const = default; };
 struct Point { double x{},y{}; bool operator==(const Point&) const = default; };
 struct Transform {
@@ -29,6 +31,9 @@ public:
     struct Tile { std::array<Pixel,tileSide*tileSide> pixels{}; };
     int width{},height{};
     std::vector<std::shared_ptr<const Tile>> tiles;
+    // RasterSnapshot.alignment: transient halving phase retained through crops.
+    // PNG project encoding materializes pixels and intentionally resets it.
+    int samplingOriginX{},samplingOriginY{};
     static std::shared_ptr<const Raster> filled(int width,int height,Pixel value={});
     static std::shared_ptr<const Raster> fromRgba(int width,int height,const uint8_t* data,size_t stride);
     Pixel pixel(int x,int y) const;
@@ -41,12 +46,15 @@ public:
 struct GrayRaster {
     int width{},height{};
     std::vector<uint8_t> pixels;
+    int samplingOriginX{},samplingOriginY{};
     uint8_t pixel(int x,int y,uint8_t exterior=0) const;
 };
 struct Mask {
     std::shared_ptr<const GrayRaster> raster;
     bool enabled{true},linked{true};
     std::optional<Transform> placement;
+    // Rendering-only crop metadata. Set on temporary viewport documents, never on saved layers.
+    std::optional<uint8_t> previewExterior;
     bool operator==(const Mask&) const = default;
 };
 struct Layer {
@@ -75,6 +83,20 @@ struct Document {
     std::optional<Selection> selection;
     bool operator==(const Document&) const = default;
 };
+// Immutable render-only source override. It is never part of Document, history,
+// or serialized data. Sampling uses the unit coordinates of layer metadata.
+struct LayerRenderPreview {
+    struct Damage {double left{},top{},right{},bottom{};};
+    Layer layer;
+    std::shared_ptr<const void> identity;
+    std::shared_ptr<const void> lineage;
+    std::function<Pixel(Point,Transform::Sampling)> image;
+    std::function<double(Point,Transform::Sampling,uint8_t)> mask;
+    std::shared_ptr<const graphics::SamplingSource> imageSource,maskSource;
+    // Null previous compares against the canonical source. Nullopt means that
+    // every output tile must be invalidated; an empty vector means no change.
+    std::function<std::optional<std::vector<Damage>>(const LayerRenderPreview*)> damageComparedWith;
+};
 std::string newId();
 void validateDocument(const Document&);
 Pixel blendPixel(Pixel destination,Pixel source,Blend mode);
@@ -84,17 +106,32 @@ public:
     virtual std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const=0;
 };
 class SoftwareRenderer final:public IRasterBackend {
+    std::shared_ptr<const LayerRenderPreview> preview_;
 public:
+    explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={}):preview_(std::move(preview)){}
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
+    std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel) const;
+};
+struct CompositeViewport {
+    std::shared_ptr<const Raster> raster;
+    double documentX{},documentY{},unitsPerPixel{1};
+    int documentWidth{},documentHeight{};
 };
 // Recompose only document tiles affected by changed source tiles. Value snapshots
 // and tile identities keep mouse-up and the next stroke independent of flattening.
 class CompositeCache {
     std::optional<Document> previous_;
     std::shared_ptr<const Raster> output_;
+    std::optional<Document> viewportPrevious_;
+    std::vector<std::shared_ptr<const Raster::Tile>> viewportTiles_;
+    std::vector<uint64_t> viewportUse_;
+    double viewportUnits_{};
+    uint64_t viewportTick_{};
+    std::shared_ptr<const LayerRenderPreview> viewportPreview_;
 public:
     std::shared_ptr<const Raster> render(const Document&);
-    void reset(){previous_.reset();output_.reset();}
+    CompositeViewport renderViewport(const Document&,double x,double y,double width,double height,double unitsPerPixel=1,size_t maxVisibleTiles=64,size_t maxRetainedTiles=256,std::shared_ptr<const LayerRenderPreview> preview={});
+    void reset(){previous_.reset();output_.reset();viewportPrevious_.reset();viewportTiles_.clear();viewportUse_.clear();viewportUnits_=0;viewportTick_=0;viewportPreview_.reset();}
 };
 struct Snapshot { std::optional<Document> document; std::string activeLayer; uint64_t revision{}; };
 class History {

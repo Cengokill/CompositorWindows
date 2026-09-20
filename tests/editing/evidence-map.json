@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
-  "native_checks_passed": 37,
+  "native_checks_passed": 38,
   "native_checks_failed": 0,
   "native_checks_skipped": 0,
   "full_upstream_test_methods_ported": 0,
   "mac_reference_status": "blocked_reference",
-  "build_log": "windows/tests/editing/build-run-5.log",
+  "build_log": "windows/tests/editing/build-run-6.log",
   "junit": "windows/tests/editing/results.xml",
   "cases": [
     {
@@ -1015,6 +1015,25 @@
             "end_line": 51,
             "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LayerFlip.swift#L24"
           }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-TRANSFORMED-OUTLINE",
+      "native_test": "editing.transformed_outline",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe transformed_outline",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/MaskTracing.swift",
+            "line": 77
+          },
+          "claim": "Vector source-pixel outline through normalized layer/mask transform; preserves holes and offcanvas geometry. Thresholding/session history belongs to caller."
         }
       ],
       "ui_acceptance": "not_run",

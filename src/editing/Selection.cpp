@@ -78,6 +78,13 @@ Rect SelectionOutline::bounds()const {
 bool SelectionOutline::empty()const{return bounds().empty();}
 bool SelectionOutline::antialiased()const{return impl_->aa;}
 bool SelectionOutline::contains(Point p)const {pointCheck(p);BOOL contained{};check(impl_->geometry->FillContainsPoint(D2D1::Point2F(float(p.x),float(p.y)),nullptr,&contained));return contained!=FALSE;}
+bool SelectionOutline::geometricallyEquals(const SelectionOutline& other)const {
+    if(impl_==other.impl_)return true;
+    if(antialiased()!=other.antialiased()||bounds()!=other.bounds())return false;
+    ComPtr<ID2D1PathGeometry> difference;check(factory()->CreatePathGeometry(&difference));ComPtr<ID2D1GeometrySink> sink;check(difference->Open(&sink));
+    check(impl_->geometry->CombineWithGeometry(other.impl_->geometry.Get(),D2D1_COMBINE_MODE_XOR,nullptr,.25f,sink.Get()));check(sink->Close());
+    D2D1_RECT_F r{};check(difference->GetBounds(nullptr,&r));return r.right<=r.left||r.bottom<=r.top;
+}
 SelectionOutline SelectionOutline::combined(const SelectionOutline& other,SelectionMode mode,bool aa)const {
     if(mode==SelectionMode::Replace)return SelectionOutline(std::make_shared<Impl>(Impl{other.impl_->geometry,aa}));
     const auto combine=mode==SelectionMode::Add?D2D1_COMBINE_MODE_UNION:mode==SelectionMode::Subtract?D2D1_COMBINE_MODE_EXCLUDE:D2D1_COMBINE_MODE_INTERSECT;
@@ -91,6 +98,14 @@ SelectionOutline SelectionOutline::moved(Point offset)const {
     auto b=bounds();if(!b.empty()){pointCheck({b.x+offset.x,b.y+offset.y});pointCheck({b.x+b.width+offset.x,b.y+b.height+offset.y});}
     ComPtr<ID2D1TransformedGeometry> g;check(factory()->CreateTransformedGeometry(impl_->geometry.Get(),D2D1::Matrix3x2F::Translation(float(offset.x),float(offset.y)),&g));
     return SelectionOutline(std::make_shared<Impl>(Impl{g,impl_->aa}));
+}
+SelectionOutline SelectionOutline::transformed(const Transform& transform,int width,int height)const {
+    sizeCheck(width,height);if(!transform.valid())throw std::runtime_error("Invalid selection outline transform");
+    auto extent=bounds();if(extent.empty())return *this;
+    for(auto point:std::array<Point,4>{{{extent.x,extent.y},{extent.x+extent.width,extent.y},{extent.x,extent.y+extent.height},{extent.x+extent.width,extent.y+extent.height}}})pointCheck(transform.fromUnit({point.x/width,point.y/height}));
+    auto origin=transform.fromUnit({0,0}),right=transform.fromUnit({1,0}),bottom=transform.fromUnit({0,1});
+    auto matrix=D2D1::Matrix3x2F(float((right.x-origin.x)/width),float((right.y-origin.y)/width),float((bottom.x-origin.x)/height),float((bottom.y-origin.y)/height),float(origin.x),float(origin.y));
+    ComPtr<ID2D1TransformedGeometry> geometry;check(factory()->CreateTransformedGeometry(impl_->geometry.Get(),matrix,&geometry));return SelectionOutline(std::make_shared<Impl>(Impl{geometry,impl_->aa}));
 }
 SelectionOutline SelectionOutline::resized(double delta,int w,int h)const {
     if(!std::isfinite(delta))throw std::runtime_error("Invalid selection expansion");if(empty()||delta==0||std::abs(delta)>500)return *this;

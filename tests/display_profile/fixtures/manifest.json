@@ -1,0 +1,10 @@
+{
+  "generator": "tests/display_profile/make_fixtures.py",
+  "license": "CC0-1.0: original profile bytes generated for this test; no external profile copied",
+  "profile": "linear-rgb.icc",
+  "sha256": "453a848b035caa68b269af3b7fcaa85649286f5f00a047ba3ae75e69abcb31a0",
+  "intent": "D50-adapted sRGB primary matrix with gamma 1.0 tone curves",
+  "oracle": "Neutral sRGB byte v maps to round(255*((v/255+0.055)/1.055)^2.4) above 0.04045; below it maps to round(v/12.92)",
+  "fixed_tolerance_bytes": 2,
+  "scope": "Original synthetic RGB ICC fixture; physical monitor calibration remains external acceptance"
+}

@@ -3,6 +3,8 @@
 // Copyright (c) 2026 Wonder Assembly LLC; MIT notice in upstream/LICENSE.
 #include "StackRenderer.h"
 #include "RasterSampling.h"
+#include "SamplingSource.h"
+#include "Downsample.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -34,27 +36,32 @@ struct LayerInfo {
     Inverse imageInverse,maskInverse;
     Transform::Sampling maskSampling;
     uint8_t maskExterior{};
+    std::shared_ptr<const ReducedSource> reducedImage,reducedMask,folderMask;
     int parent{-1},source{-1};
     std::vector<int> ancestors;
     explicit LayerInfo(const Layer& l):layer(l),imageInverse(l.transform),maskInverse(l.mask&&l.mask->placement?*l.mask->placement:l.transform),
         maskSampling(l.mask&&l.mask->placement?l.mask->placement->sampling:l.transform.sampling),
-        maskExterior(l.mask&&l.mask->enabled&&l.mask->placement&&l.mask->raster?cachedMaskBackground(l.mask->raster):0){}
+        maskExterior(l.mask&&l.mask->enabled&&l.mask->placement&&l.mask->raster?(l.mask->previewExterior?*l.mask->previewExterior:cachedMaskBackground(l.mask->raster)):0){}
 };
 class Render {
-    const Document& document;RenderRegion region;const AdjustmentCallback& callback;
+    Document document;RenderRegion region;const AdjustmentCallback& callback;std::shared_ptr<const LayerRenderPreview> preview;
     std::vector<LayerInfo> layers;std::unordered_map<std::string,int> ids;
     std::vector<std::vector<int>> children,stacks;std::vector<int> order;std::vector<bool> stacked;
     size_t pixelCount;
-    Point position(size_t i)const{return{region.x+double(i%size_t(region.width))+0.5,region.y+double(i/size_t(region.width))+0.5};}
+    Point position(size_t i)const{return{region.x+(double(i%size_t(region.width))+0.5)*region.unitsPerPixel,region.y+(double(i/size_t(region.width))+0.5)*region.unitsPerPixel};}
     double mask(int index,Point p,bool layerPlacement=false)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;
         if(!l.mask||!l.mask->enabled||!l.mask->raster)return 1;
+        const auto& reduced=layerPlacement?info.folderMask:info.reducedMask;
+        if(reduced)return reduced->sampleGray(layerPlacement?info.imageInverse(p):info.maskInverse(p),layerPlacement?l.transform.sampling:info.maskSampling,layerPlacement?0:info.maskExterior);
+        if(preview&&preview->layer.id==l.id&&preview->mask)return preview->mask(layerPlacement?info.imageInverse(p):info.maskInverse(p),layerPlacement?l.transform.sampling:info.maskSampling,layerPlacement?0:info.maskExterior);
         return sampleMask(*l.mask->raster,layerPlacement?info.imageInverse(p):info.maskInverse(p),layerPlacement?l.transform.sampling:info.maskSampling,layerPlacement?0:info.maskExterior);
     }
     double folders(int index,Point p)const{double result=1;for(int a:layers[size_t(index)].ancestors)result*=mask(a,p,true);return result;}
     Pixel own(int index,Point p,double factor=1)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;if(!l.raster)return{};
-        return scale(sampleRaster(*l.raster,info.imageInverse(p),l.transform.sampling),l.opacity*mask(index,p)*factor);
+        const auto value=info.reducedImage?info.reducedImage->sample(info.imageInverse(p),l.transform.sampling):preview&&preview->layer.id==l.id&&preview->image?preview->image(info.imageInverse(p),l.transform.sampling):sampleRaster(*l.raster,info.imageInverse(p),l.transform.sampling);
+        return scale(value,l.opacity*mask(index,p)*factor);
     }
     double dependency(int source,Point p)const{
         // Source visibility and containing-folder masks are intentionally absent:
@@ -82,11 +89,18 @@ class Render {
             auto p=position(i);pixels[i]=interpolate(original,value,mask(index,p,true)*(folderClip?folders(index,p):1));}
     }
 public:
-    Render(const Document& d,RenderRegion r,const AdjustmentCallback& cb):document(d),region(r),callback(cb),pixelCount(size_t(r.width)*r.height){
+    Render(const Document& input,RenderRegion r,const AdjustmentCallback& cb,std::shared_ptr<const LayerRenderPreview> overridePreview):document(input),region(r),callback(cb),preview(std::move(overridePreview)),pixelCount(size_t(r.width)*r.height){
+        if(preview){auto found=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==document.layers.end()||!preview->identity)throw std::invalid_argument("Invalid layer render preview");*found=preview->layer;}
+        const auto& d=document;
         validateDocument(document);layers.reserve(d.layers.size());
         for(size_t i=0;i<d.layers.size();++i){ids[d.layers[i].id]=int(i);layers.emplace_back(d.layers[i]);
             const auto& image=d.layers[i].raster;if(image){size_t expected=size_t((image->width+255)/256)*size_t((image->height+255)/256);
                 if(image->tiles.size()!=expected)throw std::runtime_error("Invalid raster tile array");for(auto&t:image->tiles)if(!t)throw std::runtime_error("Missing raster tile");}}
+        for(auto& info:layers){const auto& layer=info.layer;const bool overridden=preview&&preview->layer.id==layer.id;
+            const auto reduce=[&](std::shared_ptr<const SamplingSource> source,const Transform& transform){std::shared_ptr<const ReducedSource> result;if(source&&transform.sampling!=Transform::Sampling::Nearest){const int level=DownsampleCache::levelFor(transform.width/(region.unitsPerPixel*source->width));if(level)result=ReducedSourceCache::shared().resolve(std::move(source),level);}return result;};
+            if(layer.raster&&!(overridden&&preview->image&&!preview->imageSource))info.reducedImage=reduce(overridden&&preview->imageSource?preview->imageSource:samplingSource(layer.raster),layer.transform);
+            if(layer.mask&&layer.mask->enabled&&layer.mask->raster&&!(overridden&&preview->mask&&!preview->maskSource)){auto source=overridden&&preview->maskSource?preview->maskSource:samplingSource(layer.mask->raster);info.reducedMask=reduce(source,layer.mask->placement.value_or(layer.transform));info.folderMask=reduce(std::move(source),layer.transform);}
+        }
         children.resize(layers.size()+1);stacks.resize(layers.size());stacked.resize(layers.size());
         for(size_t i=0;i<layers.size();++i){auto& info=layers[i];const auto& l=info.layer;
             if(!l.parentId.empty())info.parent=ids.at(l.parentId);if(!l.maskSourceId.empty())info.source=ids.at(l.maskSourceId);
@@ -115,6 +129,14 @@ public:
 std::shared_ptr<const Raster> StackRenderer::render(const Document& d,int x,int y,int width,int height)const{
     if(width<1||height<1||width>30000||height>30000||uint64_t(width)*height>100000000 ||
        std::abs(int64_t(x))>10000000||std::abs(int64_t(y))>10000000)throw std::invalid_argument("Invalid render region");
-    return Render(d,{x,y,width,height},adjustment_).run();
+    return Render(d,{double(x),double(y),width,height,1},adjustment_,preview_).run();
 }
+std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,double x,double y,int width,int height,double unitsPerPixel)const{
+    if(width<1||height<1||width>30000||height>30000||uint64_t(width)*height>100000000||
+       !std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
+       !std::isfinite(unitsPerPixel)||unitsPerPixel<1||unitsPerPixel>32768)
+        throw std::invalid_argument("Invalid scaled render region");
+    return Render(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_).run();
+}
+
 } // namespace compositor::graphics

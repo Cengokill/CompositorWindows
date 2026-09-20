@@ -1,0 +1,57 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/core_cache/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  Checking File Globs
+  1>Checking Build System
+  Building Custom Rule H:/CompositorWindows/windows/tests/core_cache/CMakeLists.txt
+  Scanning sources for module dependencies...
+  core_cache_tests.cpp
+  Compiling...
+  core_cache_tests.cpp
+  core_cache_tests.vcxproj -> H:\CompositorWindows\windows\tests\core_cache\build\Debug\core_cache_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/core_cache/CMakeLists.txt
+  Scanning sources for module dependencies...
+  stack_renderer_tests.vcxproj -> H:\CompositorWindows\windows\tests\core_cache\build\Debug\stack_renderer_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/core_cache/CMakeLists.txt
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/core_cache/build
+Test project H:/CompositorWindows/windows/tests/core_cache/build
+      Start  1: cache.blank_30000
+ 1/13 Test  #1: cache.blank_30000 ..................   Passed    0.05 sec
+      Start  2: cache.identity_fastpath
+ 2/13 Test  #2: cache.identity_fastpath ............   Passed    0.01 sec
+      Start  3: cache.normal_equivalence
+ 3/13 Test  #3: cache.normal_equivalence ...........   Passed    0.17 sec
+      Start  4: cache.offscreen_invalidation
+ 4/13 Test  #4: cache.offscreen_invalidation .......   Passed    0.18 sec
+      Start  5: cache.bounded_eviction
+ 5/13 Test  #5: cache.bounded_eviction .............   Passed    0.07 sec
+      Start  6: cache.metadata_and_hidden_source
+ 6/13 Test  #6: cache.metadata_and_hidden_source ...   Passed    0.02 sec
+      Start  7: cache.full_after_partial
+ 7/13 Test  #7: cache.full_after_partial ...........   Passed    0.09 sec
+      Start  8: cache.lod_large_content
+ 8/13 Test  #8: cache.lod_large_content ............   Passed    0.11 sec
+      Start  9: cache.scaled_renderer_contract
+ 9/13 Test  #9: cache.scaled_renderer_contract .....   Passed    0.02 sec
+      Start 10: cache.scaled_grain_partition
+10/13 Test #10: cache.scaled_grain_partition .......   Passed    0.02 sec
+      Start 11: cache.outside_and_rejections
+11/13 Test #11: cache.outside_and_rejections .......   Passed    0.01 sec
+      Start 12: cache.blank_culling
+12/13 Test #12: cache.blank_culling ................   Passed    0.02 sec
+      Start 13: cache.stack_renderer_regression
+13/13 Test #13: cache.stack_renderer_regression ....   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 13
+
+Total Test time (real) =   0.80 sec
