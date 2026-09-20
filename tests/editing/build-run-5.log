@@ -1,0 +1,106 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/editing/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  Scanning sources for module dependencies...
+  Selection.cpp
+  DocumentGeometry.cpp
+  Shapes.cpp
+  PixelEdits.cpp
+  editing_tests.cpp
+  Compiling...
+  DocumentGeometry.cpp
+  editing_tests.cpp
+  Shapes.cpp
+  Selection.cpp
+  PixelEdits.cpp
+  editing_tests.vcxproj -> H:\CompositorWindows\windows\tests\editing\build\Debug\editing_tests.exe
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/editing/build
+Test project H:/CompositorWindows/windows/tests/editing/build
+      Start  1: editing.drag_box
+ 1/37 Test  #1: editing.drag_box .......................   Passed    0.04 sec
+      Start  2: editing.geometry_combine
+ 2/37 Test  #2: editing.geometry_combine ...............   Passed    0.05 sec
+      Start  3: editing.coverage_aa
+ 3/37 Test  #3: editing.coverage_aa ....................   Passed    0.04 sec
+      Start  4: editing.empty_move_inverse
+ 4/37 Test  #4: editing.empty_move_inverse .............   Passed    0.04 sec
+      Start  5: editing.mapping_transforms
+ 5/37 Test  #5: editing.mapping_transforms .............   Passed    0.03 sec
+      Start  6: editing.fill_clear_crop
+ 6/37 Test  #6: editing.fill_clear_crop ................   Passed    0.04 sec
+      Start  7: editing.fill_growth_mask
+ 7/37 Test  #7: editing.fill_growth_mask ...............   Passed    0.02 sec
+      Start  8: editing.selected_immutable_invert
+ 8/37 Test  #8: editing.selected_immutable_invert ......   Passed    0.03 sec
+      Start  9: editing.uniform_mask_fill_invert
+ 9/37 Test  #9: editing.uniform_mask_fill_invert .......   Passed    0.03 sec
+      Start 10: editing.copy_current_merged
+10/37 Test #10: editing.copy_current_merged ............   Passed    0.03 sec
+      Start 11: editing.copy_lasso
+11/37 Test #11: editing.copy_lasso .....................   Passed    0.03 sec
+      Start 12: editing.selection_history
+12/37 Test #12: editing.selection_history ..............   Passed    0.02 sec
+      Start 13: editing.invalid_inputs
+13/37 Test #13: editing.invalid_inputs .................   Passed    0.01 sec
+      Start 14: editing.scaled_selection_clear
+14/37 Test #14: editing.scaled_selection_clear .........   Passed    0.03 sec
+      Start 15: editing.gradient_linear
+15/37 Test #15: editing.gradient_linear ................   Passed    0.01 sec
+      Start 16: editing.gradient_radial
+16/37 Test #16: editing.gradient_radial ................   Passed    0.02 sec
+      Start 17: editing.gradient_reverse_transparent
+17/37 Test #17: editing.gradient_reverse_transparent ...   Passed    0.01 sec
+      Start 18: editing.gradient_mask_preview
+18/37 Test #18: editing.gradient_mask_preview ..........   Passed    0.01 sec
+      Start 19: editing.bitmap_outline
+19/37 Test #19: editing.bitmap_outline .................   Passed    0.04 sec
+      Start 20: editing.expand_contract
+20/37 Test #20: editing.expand_contract ................   Passed    0.03 sec
+      Start 21: editing.shape_rectangle_ellipse
+21/37 Test #21: editing.shape_rectangle_ellipse ........   Passed    0.03 sec
+      Start 22: editing.shape_rounded_style
+22/37 Test #22: editing.shape_rounded_style ............   Passed    0.04 sec
+      Start 23: editing.shape_redraw_mask
+23/37 Test #23: editing.shape_redraw_mask ..............   Passed    0.04 sec
+      Start 24: editing.shape_preview
+24/37 Test #24: editing.shape_preview ..................   Passed    0.17 sec
+      Start 25: editing.canvas_anchors
+25/37 Test #25: editing.canvas_anchors .................   Passed    0.01 sec
+      Start 26: editing.canvas_units
+26/37 Test #26: editing.canvas_units ...................   Passed    0.01 sec
+      Start 27: editing.canvas_extension
+27/37 Test #27: editing.canvas_extension ...............   Passed    0.04 sec
+      Start 28: editing.canvas_allocation_free
+28/37 Test #28: editing.canvas_allocation_free .........   Passed    0.01 sec
+      Start 29: editing.crop_geometry
+29/37 Test #29: editing.crop_geometry ..................   Passed    0.01 sec
+      Start 30: editing.crop_snapping
+30/37 Test #30: editing.crop_snapping ..................   Passed    0.01 sec
+      Start 31: editing.crop_commit
+31/37 Test #31: editing.crop_commit ....................   Passed    0.01 sec
+      Start 32: editing.image_resize
+32/37 Test #32: editing.image_resize ...................   Passed    0.03 sec
+      Start 33: editing.image_resolution_only
+33/37 Test #33: editing.image_resolution_only ..........   Passed    0.01 sec
+      Start 34: editing.image_rotated_hidden
+34/37 Test #34: editing.image_rotated_hidden ...........   Passed    0.01 sec
+      Start 35: editing.flip_canvas
+35/37 Test #35: editing.flip_canvas ....................   Passed    0.04 sec
+      Start 36: editing.flip_layer_masks
+36/37 Test #36: editing.flip_layer_masks ...............   Passed    0.04 sec
+      Start 37: editing.flip_group
+37/37 Test #37: editing.flip_group .....................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 37
+
+Total Test time (real) =   1.10 sec

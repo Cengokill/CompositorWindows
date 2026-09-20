@@ -1,0 +1,723 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
+  "basis": "Native math, control and actual modal dialog evidence; Mac reference remains blocked",
+  "candidates": [
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-NORMALIZATION-HANDLES",
+      "native_test": "effects_tools.levels_normalization_handles",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_normalization_handles",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/Levels.swift",
+            "line": 8,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/Levels.swift#L8"
+          },
+          "claim": "Levels normalization, channel order, gamma midpoint and input/output handle bounds"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-channelsCoexistAndUseDocumentedOrder",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 59,
+            "end_line": 69,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L59"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-HISTOGRAM-WEIGHTS",
+      "native_test": "effects_tools.levels_histogram_weights",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_histogram_weights",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/Levels.swift",
+            "line": 95,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/Levels.swift#L95"
+          },
+          "claim": "Actual C histogram alpha and selection weights, RGB channel mean and no Raster flattening across tiles"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-histogramExcludesTransparencyAndWeightsSelection",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 70,
+            "end_line": 82,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L70"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-HISTOGRAM-DISPLAY",
+      "native_test": "effects_tools.levels_histogram_display",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_histogram_display",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/Levels.swift",
+            "line": 47,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/Levels.swift#L47"
+          },
+          "claim": "Display-only 95th-percentile spike cap with unchanged histogram counts"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-histogramDisplayKeepsDistributionVisibleBesideClippingSpikes",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 131,
+            "end_line": 150,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L131"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-AUTO-MODES",
+      "native_test": "effects_tools.levels_auto_modes",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_auto_modes",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/LevelsAutomatic.swift",
+            "line": 4,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LevelsAutomatic.swift#L4"
+          },
+          "claim": "Strict 0.1 percent tail clipping; composite Contrast, channel Color, neutral gamma and empty histogram"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-autoAlgorithmsAndEyedropperCalibration",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 151,
+            "end_line": 170,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L151"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-SAMPLE-CALIBRATION",
+      "native_test": "effects_tools.levels_sample_calibration",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_sample_calibration",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/LevelsAutomatic.swift",
+            "line": 41,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LevelsAutomatic.swift#L41"
+          },
+          "claim": "Black, gray and white calibration to original RGB; repeat sample stability and skipped gray endpoints"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-autoAlgorithmsAndEyedropperCalibration",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 151,
+            "end_line": 170,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L151"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-ORIGINAL-SAMPLER",
+      "native_test": "effects_tools.levels_original_sampler",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_original_sampler",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/LevelsAutomatic.swift",
+            "line": 68,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LevelsAutomatic.swift#L68"
+          },
+          "claim": "Transform inverse, original straight RGB, transparent and exterior rejection"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-eyedropperSamplesOriginalAndRejectsTransparentPixels",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 171,
+            "end_line": 184,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L171"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-JSON-PRESERVATION",
+      "native_test": "effects_tools.levels_json_preservation",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_json_preservation",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/Levels.swift",
+            "line": 32,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/Levels.swift#L32"
+          },
+          "claim": "Four-channel Codable shape, surrounding metadata retention and malformed input rejection"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-LEVELS-WIDGET-CONTROLS",
+      "native_test": "effects_tools.levels_widget_controls",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe levels_widget_controls",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/LevelsSheet.swift",
+            "line": 1,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/LevelsSheet.swift#L1"
+          },
+          "claim": "Qt buttons, original sample callback, Auto and histogram handle mouse drag"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-HUE-BAND-WEIGHTS",
+      "native_test": "effects_tools.hue_band_weights",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe hue_band_weights",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/HueSaturation.swift",
+            "line": 26,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/HueSaturation.swift#L26"
+          },
+          "claim": "Wraparound ramp/plateau/falloff and constrained four-handle updates"
+        },
+        {
+          "upstream_test_id": "UT-HueSaturationTests-bandWeightsRampThroughFalloffAndWrapAround",
+          "source": {
+            "path": "CompositorTests/HueSaturationTests.swift",
+            "line": 158,
+            "end_line": 171,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/HueSaturationTests.swift#L158"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-HUE-SAMPLE-RANGE",
+      "native_test": "effects_tools.hue_sample_range",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe hue_sample_range",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/HueSaturation.swift",
+            "line": 514,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/HueSaturation.swift#L514"
+          },
+          "claim": "Replace, add and remove preserve adjustment values and reject master range sampling"
+        },
+        {
+          "upstream_test_id": "UT-HueSaturationTests-eyedroppersRecenterWidenAndNarrowTheBand",
+          "source": {
+            "path": "CompositorTests/HueSaturationTests.swift",
+            "line": 217,
+            "end_line": 237,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/HueSaturationTests.swift#L217"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-HUE-TARGET-DRAG",
+      "native_test": "effects_tools.hue_target_drag",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe hue_target_drag",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/HueSaturation.swift",
+            "line": 528,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/HueSaturation.swift#L528"
+          },
+          "claim": "Blue range selection, delta over two from captured baseline, neutral and colorize rejection"
+        },
+        {
+          "upstream_test_id": "UT-HueSaturationTests-targetedAdjustmentPicksTheRangeUnderTheCursor",
+          "source": {
+            "path": "CompositorTests/HueSaturationTests.swift",
+            "line": 239,
+            "end_line": 255,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/HueSaturationTests.swift#L239"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-HUE-JSON-SPECTRUM",
+      "native_test": "effects_tools.hue_json_spectrum",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe hue_json_spectrum",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/HueSaturation.swift",
+            "line": 170,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/HueSaturation.swift#L170"
+          },
+          "claim": "Independent range settings, source dictionary arrays, legacy fallback and selected-band inversion"
+        },
+        {
+          "upstream_test_id": "UT-HueSaturationTests-slidersEditTheSelectedRangeAndTheAfterBarFollowsHueShifts",
+          "source": {
+            "path": "CompositorTests/HueSaturationTests.swift",
+            "line": 201,
+            "end_line": 215,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/HueSaturationTests.swift#L201"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-CURVES-GRAPH-DRAG",
+      "native_test": "effects_tools.curves_graph_drag",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe curves_graph_drag",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/CurvesControls.swift",
+            "line": 33,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/CurvesControls.swift#L33"
+          },
+          "claim": "Shared Hermite curve graph, insertion, movement, fixed endpoint x, removal/reset and interpolation bounds"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-CURVES-JSON",
+      "native_test": "effects_tools.curves_json",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe curves_json",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/Curves.swift",
+            "line": 7,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/Curves.swift#L7"
+          },
+          "claim": "Four-channel curve metadata, validation and surrounding metadata retention"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-COLOR-HEX-HSB",
+      "native_test": "effects_tools.color_hex_hsb",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe color_hex_hsb",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/ColorPalette.swift",
+            "line": 123,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/ColorPalette.swift#L123"
+          },
+          "claim": "Hex RGB parsing, 8-bit HSB round trips and gray/black hue retention"
+        },
+        {
+          "upstream_test_id": "UT-ColorPickerTests-hsbRoundTripsEightBitColors",
+          "source": {
+            "path": "CompositorTests/ColorPickerTests.swift",
+            "line": 16,
+            "end_line": 21,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ColorPickerTests.swift#L16"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        },
+        {
+          "upstream_test_id": "UT-ColorPickerTests-hexParsesFullShorthandAndRejectsInvalid",
+          "source": {
+            "path": "CompositorTests/ColorPickerTests.swift",
+            "line": 7,
+            "end_line": 14,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ColorPickerTests.swift#L7"
+          },
+          "claim": "Bounded RGB/HSB assertions"
+        },
+        {
+          "upstream_test_id": "UT-ColorPickerTests-graysAndBlackKeepPreviousHueAndSaturation",
+          "source": {
+            "path": "CompositorTests/ColorPickerTests.swift",
+            "line": 23,
+            "end_line": 31,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ColorPickerTests.swift#L23"
+          },
+          "claim": "Bounded RGB/HSB assertions"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-COLOR-SAMPLE-RING",
+      "native_test": "effects_tools.color_sample_ring",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe color_sample_ring",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Rendering/SampleRingOverlay.swift",
+            "line": 15,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Rendering/SampleRingOverlay.swift#L15"
+          },
+          "claim": "Composite sample pixel math only; ring dimensions/stroke geometry. No picker commit transaction claim"
+        },
+        {
+          "upstream_test_id": "UT-ColorPickerTests-canvasSamplingReadsCompositeAndCommitsOnlyOnOK",
+          "source": {
+            "path": "CompositorTests/ColorPickerTests.swift",
+            "line": 33,
+            "end_line": 61,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ColorPickerTests.swift#L33"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "not_applicable"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-HUE-WIDGET-CONTROLS",
+      "native_test": "effects_tools.hue_widget_controls",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe hue_widget_controls",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/HueSaturationSheet.swift",
+            "line": 80,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/HueSaturationSheet.swift#L80"
+          },
+          "claim": "Qt sample/add/remove, target baseline drag, spectrum handle movement and before/after bar rendering"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-EFFECTS-TOOLS-CURVES-WIDGET-CONTROLS",
+      "native_test": "effects_tools.curves_widget_controls",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/effects_tools_tests.exe curves_widget_controls",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/CurvesControls.swift",
+            "line": 1,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/CurvesControls.swift#L1"
+          },
+          "claim": "Qt graph click/drag/remove/reset; imported too-close handles rejected without escaping Qt event loop"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-LEVELS-CANCEL",
+      "native_test": "adjustment_dialog.levels_cancel",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe levels_cancel",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/Levels.swift",
+            "line": 198,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/Levels.swift#L198"
+          },
+          "claim": "Actual modal Cancel while a newer revision is pending leaves original immutable document and pixels unchanged"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-selectionPreviewCancelCommitUndoAndPersistence",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 83,
+            "end_line": 114,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L83"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-CURVES-APPLY",
+      "native_test": "adjustment_dialog.curves_apply",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe curves_apply",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/CurvesControls.swift",
+            "line": 33,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/CurvesControls.swift#L33"
+          },
+          "claim": "Actual modal red-channel curve edit applies full raster once and removes live shape style on pixel change"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-HUE-TARGETING",
+      "native_test": "adjustment_dialog.hue_targeting",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe hue_targeting",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/HueSaturation.swift",
+            "line": 507,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/HueSaturation.swift#L507"
+          },
+          "claim": "Actual preview composite sampling and target mouse drag sync selected range and preserve editable live metadata"
+        },
+        {
+          "upstream_test_id": "UT-HueSaturationTests-targetedAdjustmentPicksTheRangeUnderTheCursor",
+          "source": {
+            "path": "CompositorTests/HueSaturationTests.swift",
+            "line": 239,
+            "end_line": 255,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/HueSaturationTests.swift#L239"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-LIVE-LEVELS-INPUT",
+      "native_test": "adjustment_dialog.live_levels_input",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe live_levels_input",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/AdjustmentEditing.swift",
+            "line": 14,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/AdjustmentEditing.swift#L14"
+          },
+          "claim": "Live Levels input retains later group and mask-source records, hides above via hierarchy order and ignores document selection"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-LIVE-FOLDER-INSERT",
+      "native_test": "adjustment_dialog.live_folder_insert",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe live_folder_insert",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/LayerAdjustment.swift",
+            "line": 87,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LayerAdjustment.swift#L87"
+          },
+          "claim": "New adjustment goes inside active folder and has no invented selection mask"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-PREVIEW-OFF-APPLY",
+      "native_test": "adjustment_dialog.preview_off_apply",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe preview_off_apply",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/AdjustmentEditing.swift",
+            "line": 76,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/AdjustmentEditing.swift#L76"
+          },
+          "claim": "Preview-off displays original while Apply retains adjusted result; pending revision disables Apply"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-LEVELS-SAMPLER-APPLY",
+      "native_test": "adjustment_dialog.levels_sampler_apply",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe levels_sampler_apply",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/Document/LevelsAutomatic.swift",
+            "line": 68,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LevelsAutomatic.swift#L68"
+          },
+          "claim": "Actual modal gray calibration samples original pixels repeatedly, ignores letterbox clicks and applies opaque result"
+        },
+        {
+          "upstream_test_id": "UT-LevelsTests-eyedropperSamplesOriginalAndRejectsTransparentPixels",
+          "source": {
+            "path": "CompositorTests/LevelsTests.swift",
+            "line": 171,
+            "end_line": 184,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/LevelsTests.swift#L171"
+          },
+          "claim": "Bounded assertions only; full source method/session orchestration is not claimed ported"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    },
+    {
+      "id": "EFFECTS-TOOLS-ADJUSTMENT-DIALOG-HUE-COLORIZE-RESET",
+      "native_test": "adjustment_dialog.hue_colorize_reset",
+      "command": "$env:QT_QPA_PLATFORM=\"offscreen\"; windows/tests/effects_tools/build/Debug/adjustment_dialog_tests.exe hue_colorize_reset",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "full_upstream_method_port": false,
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/HueSaturationSheet.swift",
+            "line": 49,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/HueSaturationSheet.swift#L49"
+          },
+          "claim": "Actual modal Colorize initializes master hue 0/saturation 25, constrains field ranges, and Reset follows Colorize state"
+        }
+      ],
+      "evidence": "windows/tests/effects_tools/results.xml",
+      "ui_acceptance": "native_offscreen_interaction_only"
+    }
+  ]
+}

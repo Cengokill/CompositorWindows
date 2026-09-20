@@ -1,0 +1,1047 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
+  "native_checks_passed": 37,
+  "native_checks_failed": 0,
+  "native_checks_skipped": 0,
+  "full_upstream_test_methods_ported": 0,
+  "mac_reference_status": "blocked_reference",
+  "build_log": "windows/tests/editing/build-run-5.log",
+  "junit": "windows/tests/editing/results.xml",
+  "cases": [
+    {
+      "id": "EDIT-DRAG-BOX",
+      "native_test": "editing.drag_box",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe drag_box",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionTests-marqueeDrawsWholePixelRectanglesInAnyDirection",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 309,
+            "end_line": 322,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L309"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-marqueeShiftMakesSquaresAndCenteredDragsGrowFromTheAnchor",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 324,
+            "end_line": 334,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L324"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-modifiersPickModeAndSelectionIsClippedToCanvas",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 44,
+            "end_line": 53,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L44"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-GEOMETRY-COMBINE",
+      "native_test": "editing.geometry_combine",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe geometry_combine",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionTests-replaceAddAndSubtractCombineOutlines",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 32,
+            "end_line": 42,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L32"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-modifiersPickModeAndSelectionIsClippedToCanvas",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 44,
+            "end_line": 53,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L44"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-COVERAGE-AA",
+      "native_test": "editing.coverage_aa",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe coverage_aa",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionTests-antialiasingControlsEdgeCoverage",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 101,
+            "end_line": 112,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L101"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-marqueeEllipseSelectsAnOvalInItsBoxAndShiftMakesACircle",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 336,
+            "end_line": 354,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L336"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-polygonalCornersCanBeRemovedAndClosed",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 83,
+            "end_line": 99,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L83"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-EMPTY-MOVE-INVERSE",
+      "native_test": "editing.empty_move_inverse",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe empty_move_inverse",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionTests-emptySelectionIsDistinctFromNoSelection",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 55,
+            "end_line": 66,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L55"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-movingOffCanvasAndBackKeepsTheWholeShape",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 164,
+            "end_line": 175,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L164"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-selectAllInverseAndToolSwitchCancelsDraft",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 114,
+            "end_line": 124,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L114"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-MAPPING-TRANSFORMS",
+      "native_test": "editing.mapping_transforms",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe mapping_transforms",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionEditTests-clipFollowsScaledLayersAndSoftensEdges",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 129,
+            "end_line": 155,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L129"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-FILL-CLEAR-CROP",
+      "native_test": "editing.fill_clear_crop",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe fill_clear_crop",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionEditTests-fillUsesPaletteInsideSelectionOrWholeLayerWithoutOne",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 77,
+            "end_line": 92,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L77"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionEditTests-deleteClearsSelectedPixelsOrDeletesTheLayerWithoutASelection",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 94,
+            "end_line": 109,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L94"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionEditTests-emptySelectionEditsNothing",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 43,
+            "end_line": 62,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L43"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-FILL-GROWTH-MASK",
+      "native_test": "editing.fill_growth_mask",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe fill_growth_mask",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/BrushStroke.swift",
+            "line": 147,
+            "end_line": 170,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/BrushStroke.swift#L147"
+          }
+        },
+        {
+          "production_source": {
+            "path": "Compositor/Document/BrushStroke.swift",
+            "line": 851,
+            "end_line": 859,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/BrushStroke.swift#L851"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SELECTED-IMMUTABLE-INVERT",
+      "native_test": "editing.selected_immutable_invert",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe selected_immutable_invert",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionEditTests-invertKeepsTransparencyStaysInSelectionAndWorksOnMasks",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 302,
+            "end_line": 329,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L302"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-UNIFORM-MASK-FILL-INVERT",
+      "native_test": "editing.uniform_mask_fill_invert",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe uniform_mask_fill_invert",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionEditTests-maskFillHidesOnlyTheSelectedArea",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 111,
+            "end_line": 127,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L111"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionEditTests-invertIsFastOnLargeImagesAndHandlesUniformMasksWithASelection",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 346,
+            "end_line": 366,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L346"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-COPY-CURRENT-MERGED",
+      "native_test": "editing.copy_current_merged",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe copy_current_merged",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionClipboardTests-copyAndPastePutsPixelsOnANewLayerInPlace",
+          "source": {
+            "path": "CompositorTests/SelectionClipboardTests.swift",
+            "line": 48,
+            "end_line": 66,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionClipboardTests.swift#L48"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionClipboardTests-copyMergedTakesEveryVisibleLayerNotJustTheActiveOne",
+          "source": {
+            "path": "CompositorTests/SelectionClipboardTests.swift",
+            "line": 178,
+            "end_line": 216,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionClipboardTests.swift#L178"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-COPY-LASSO",
+      "native_test": "editing.copy_lasso",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe copy_lasso",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionClipboardTests-lassoShapedSelectionCopiesAndPastes",
+          "source": {
+            "path": "CompositorTests/SelectionClipboardTests.swift",
+            "line": 162,
+            "end_line": 176,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionClipboardTests.swift#L162"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SELECTION-HISTORY",
+      "native_test": "editing.selection_history",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe selection_history",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionTests-clickDeselectsAndSelectionStepsUndo",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 68,
+            "end_line": 81,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L68"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-INVALID-INPUTS",
+      "native_test": "editing.invalid_inputs",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe invalid_inputs",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SCALED-SELECTION-CLEAR",
+      "native_test": "editing.scaled_selection_clear",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe scaled_selection_clear",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionEditTests-clipFollowsScaledLayersAndSoftensEdges",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 129,
+            "end_line": 155,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L129"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionEditTests-invertKeepsTransparencyStaysInSelectionAndWorksOnMasks",
+          "source": {
+            "path": "CompositorTests/SelectionEditTests.swift",
+            "line": 302,
+            "end_line": 329,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionEditTests.swift#L302"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-GRADIENT-LINEAR",
+      "native_test": "editing.gradient_linear",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe gradient_linear",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-GradientTests-foregroundToBackgroundFillsCanvasAndCommitsOneUndo",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 37,
+            "end_line": 53,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L37"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-GRADIENT-RADIAL",
+      "native_test": "editing.gradient_radial",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe gradient_radial",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-GradientTests-radialSpreadsFromStartToRimInEveryDirection",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 55,
+            "end_line": 67,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L55"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-GRADIENT-REVERSE-TRANSPARENT",
+      "native_test": "editing.gradient_reverse_transparent",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe gradient_reverse_transparent",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-GradientTests-reverseOpacityAndDirectionFollowSettings",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 69,
+            "end_line": 81,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L69"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-GradientTests-foregroundToTransparentPreservesUnderlyingPixelsAndAlpha",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 83,
+            "end_line": 100,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L83"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-GRADIENT-MASK-PREVIEW",
+      "native_test": "editing.gradient_mask_preview",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe gradient_mask_preview",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-GradientTests-maskGradientWritesCoverageInsideLayerBounds",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 126,
+            "end_line": 142,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L126"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-GradientTests-redraggingReplacesPendingLineWithoutAccumulating",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 116,
+            "end_line": 124,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L116"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-GradientTests-cancelUndoAndClicksLeaveDocumentUntouched",
+          "source": {
+            "path": "CompositorTests/GradientTests.swift",
+            "line": 102,
+            "end_line": 114,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/GradientTests.swift#L102"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-BITMAP-OUTLINE",
+      "native_test": "editing.bitmap_outline",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe bitmap_outline",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/MagicWand.swift",
+            "line": 55,
+            "end_line": 82,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/MagicWand.swift#L55"
+          }
+        },
+        {
+          "production_source": {
+            "path": "Compositor/Rendering/WandPixels.c",
+            "line": 1,
+            "end_line": 174,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Rendering/WandPixels.c#L1"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-EXPAND-CONTRACT",
+      "native_test": "editing.expand_contract",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe expand_contract",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-SelectionTests-expandAndContractGrowAndShrinkTheOutline",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 194,
+            "end_line": 209,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L194"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-SelectionTests-expandStaysOnCanvasAndContractCanEmptyTheSelection",
+          "source": {
+            "path": "CompositorTests/SelectionTests.swift",
+            "line": 211,
+            "end_line": 221,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/SelectionTests.swift#L211"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SHAPE-RECTANGLE-ELLIPSE",
+      "native_test": "editing.shape_rectangle_ellipse",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe shape_rectangle_ellipse",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-ShapeToolTests-rectangleFillsANewLayerWithTheForegroundColorAsOneUndoStep",
+          "source": {
+            "path": "CompositorTests/ShapeToolTests.swift",
+            "line": 32,
+            "end_line": 52,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ShapeToolTests.swift#L32"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-ShapeToolTests-ellipseLeavesItsCornersClearWithShiftCircleAndOptionFromCenter",
+          "source": {
+            "path": "CompositorTests/ShapeToolTests.swift",
+            "line": 54,
+            "end_line": 65,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ShapeToolTests.swift#L54"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SHAPE-ROUNDED-STYLE",
+      "native_test": "editing.shape_rounded_style",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe shape_rounded_style",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-ShapeToolTests-roundedRectanglesFollowTheRadiusAndClampToAPill",
+          "source": {
+            "path": "CompositorTests/ShapeToolTests.swift",
+            "line": 84,
+            "end_line": 104,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ShapeToolTests.swift#L84"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SHAPE-REDRAW-MASK",
+      "native_test": "editing.shape_redraw_mask",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe shape_redraw_mask",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/ShapeTool.swift",
+            "line": 128,
+            "end_line": 145,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/ShapeTool.swift#L128"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-SHAPE-PREVIEW",
+      "native_test": "editing.shape_preview",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe shape_preview",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/ShapeTool.swift",
+            "line": 149,
+            "end_line": 164,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/ShapeTool.swift#L149"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CANVAS-ANCHORS",
+      "native_test": "editing.canvas_anchors",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe canvas_anchors",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CanvasSizeTests-everyAnchorPreservesSourceAndTransformForExpansionAndShrink",
+          "source": {
+            "path": "CompositorTests/CanvasSizeTests.swift",
+            "line": 8,
+            "end_line": 35,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CanvasSizeTests.swift#L8"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CANVAS-UNITS",
+      "native_test": "editing.canvas_units",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe canvas_units",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CanvasSizeTests-relativeRatioAndUnitsUseFinalDimensions",
+          "source": {
+            "path": "CompositorTests/CanvasSizeTests.swift",
+            "line": 37,
+            "end_line": 58,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CanvasSizeTests.swift#L37"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CANVAS-EXTENSION",
+      "native_test": "editing.canvas_extension",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe canvas_extension",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CanvasSizeTests-coloredExtensionPreservesOldTransparencyAndRoundTripsWithUndo",
+          "source": {
+            "path": "CompositorTests/CanvasSizeTests.swift",
+            "line": 60,
+            "end_line": 91,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CanvasSizeTests.swift#L60"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CANVAS-ALLOCATION-FREE",
+      "native_test": "editing.canvas_allocation_free",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe canvas_allocation_free",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CanvasSizeTests-transparentResizeIsAllocationFreeAndShrinkDoesNotAddFill",
+          "source": {
+            "path": "CompositorTests/CanvasSizeTests.swift",
+            "line": 93,
+            "end_line": 106,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CanvasSizeTests.swift#L93"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CROP-GEOMETRY",
+      "native_test": "editing.crop_geometry",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe crop_geometry",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CropTests-dragGeometrySupportsReverseRatioMoveAndEveryHandle",
+          "source": {
+            "path": "CompositorTests/CropTests.swift",
+            "line": 8,
+            "end_line": 23,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CropTests.swift#L8"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CROP-SNAPPING",
+      "native_test": "editing.crop_snapping",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe crop_snapping",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CropTests-cropEdgesSnapToNearbyEdges",
+          "source": {
+            "path": "CompositorTests/CropTests.swift",
+            "line": 88,
+            "end_line": 114,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CropTests.swift#L88"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-CropTests-snapTargetsAreTheCanvasAndLayerBounds",
+          "source": {
+            "path": "CompositorTests/CropTests.swift",
+            "line": 116,
+            "end_line": 127,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CropTests.swift#L116"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-CROP-COMMIT",
+      "native_test": "editing.crop_commit",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe crop_commit",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-CropTests-cropTranslatesWithoutResamplingAndUndoRestoresBounds",
+          "source": {
+            "path": "CompositorTests/CropTests.swift",
+            "line": 25,
+            "end_line": 44,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CropTests.swift#L25"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        },
+        {
+          "upstream_test_id": "UT-CropTests-sameSizeOffsetCropAndExpansionUseExactBounds",
+          "source": {
+            "path": "CompositorTests/CropTests.swift",
+            "line": 46,
+            "end_line": 62,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/CropTests.swift#L46"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-IMAGE-RESIZE",
+      "native_test": "editing.image_resize",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe image_resize",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-ImageSizeTests-resizePreservesLayerIdentityAndUndoRestoresSource",
+          "source": {
+            "path": "CompositorTests/ImageSizeTests.swift",
+            "line": 9,
+            "end_line": 32,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ImageSizeTests.swift#L9"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-IMAGE-RESOLUTION-ONLY",
+      "native_test": "editing.image_resolution_only",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe image_resolution_only",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-ImageSizeTests-resolutionOnlyRetainsPixelsAndSurvivesSaveAndExport",
+          "source": {
+            "path": "CompositorTests/ImageSizeTests.swift",
+            "line": 34,
+            "end_line": 54,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ImageSizeTests.swift#L34"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-IMAGE-ROTATED-HIDDEN",
+      "native_test": "editing.image_rotated_hidden",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe image_rotated_hidden",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "upstream_test_id": "UT-ImageSizeTests-rotatedHiddenLayerScalesInDocumentAxesAndInvalidSizeIsRejected",
+          "source": {
+            "path": "CompositorTests/ImageSizeTests.swift",
+            "line": 56,
+            "end_line": 81,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/CompositorTests/ImageSizeTests.swift#L56"
+          },
+          "claim": "bounded assertions only; other assertions in the method remain unported"
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-FLIP-CANVAS",
+      "native_test": "editing.flip_canvas",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe flip_canvas",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/LayerFlip.swift",
+            "line": 55,
+            "end_line": 81,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LayerFlip.swift#L55"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-FLIP-LAYER-MASKS",
+      "native_test": "editing.flip_layer_masks",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe flip_layer_masks",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/LayerFlip.swift",
+            "line": 24,
+            "end_line": 51,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LayerFlip.swift#L24"
+          }
+        },
+        {
+          "production_source": {
+            "path": "Compositor/Document/LayerMask.swift",
+            "line": 50,
+            "end_line": 59,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LayerMask.swift#L50"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    },
+    {
+      "id": "EDIT-FLIP-GROUP",
+      "native_test": "editing.flip_group",
+      "command": "windows/tests/editing/build/Debug/editing_tests.exe flip_group",
+      "native_result": "pass",
+      "reference_status": "blocked_reference",
+      "parity_status": "partial_native_evidence",
+      "source_evidence": [
+        {
+          "production_source": {
+            "path": "Compositor/Document/EditorSession.swift",
+            "line": 255,
+            "end_line": 280,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/EditorSession.swift#L255"
+          }
+        },
+        {
+          "production_source": {
+            "path": "Compositor/Document/LayerFlip.swift",
+            "line": 24,
+            "end_line": 51,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/Document/LayerFlip.swift#L24"
+          }
+        }
+      ],
+      "ui_acceptance": "not_run",
+      "evidence": "windows/tests/editing/results.xml"
+    }
+  ],
+  "frozen_tolerances": {
+    "default_integer_pixel_assertions": 0,
+    "gradient_near_channels": 3,
+    "gradient_radial_halfway": 5,
+    "gradient_radial_direction_agreement": 1,
+    "gradient_tolerance_basis": "Existing GradientTests.swift near() and radial assertions; no Mac comparison was executed."
+  },
+  "unvalidated": [
+    "Core Graphics versus Direct2D curve and antialias coverage",
+    "Core Graphics high-quality resampling (High currently shares native bilinear Smooth)",
+    "Core Graphics selection mask interpolation and soft-edge rounding",
+    "Large-mask thumbnail background classification",
+    "Imported/saved Mac .comp exchange",
+    "37-case native suite is not all source methods or UI acceptance",
+    "12000000-pixel invert performance threshold was not executed"
+  ],
+  "remaining_editing_work": [
+    "Selected pixel move/lift/duplicate/transform/cancel integration",
+    "Selection-from-layer-alpha and mask command integration",
+    "OS clipboard PNG ownership/change count/paste positioning integration",
+    "Source tool eligibility, toolbar keyboard and transient preview state acceptance",
+    "UI history/dirty revisions and source object identity coverage across all commands"
+  ]
+}

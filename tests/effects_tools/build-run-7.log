@@ -1,0 +1,113 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Could NOT find WrapVulkanHeaders (missing: Vulkan_INCLUDE_DIR) 
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/effects_tools/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  Checking File Globs
+  1>Checking Build System
+  Building Custom Rule H:/CompositorWindows/windows/tests/effects_tools/CMakeLists.txt
+  Scanning sources for module dependencies...
+  Levels.cpp
+  AdjustmentDialog.cpp
+  Hue.cpp
+  Color.cpp
+  StackRenderer.cpp
+  Curves.cpp
+  LayerOperations.cpp
+  Document.cpp
+  Selection.cpp
+  PixelAlgorithms.cpp
+  SoftwareRenderer.cpp
+  Adjustments.cpp
+  adjustment_dialog_tests.cpp
+  AdjustmentAdvancedControls.cpp
+  Compiling...
+  Levels.cpp
+  Selection.cpp
+  AdjustmentDialog.cpp
+  AdjustmentAdvancedControls.cpp
+  PixelAlgorithms.cpp
+  LayerOperations.cpp
+  Hue.cpp
+  Curves.cpp
+  adjustment_dialog_tests.cpp
+  Adjustments.cpp
+  Document.cpp
+  SoftwareRenderer.cpp
+  StackRenderer.cpp
+  Color.cpp
+  AdjustPixels.c
+  BrushPixels.c
+  ContentFill.c
+  HealPixels.c
+  LensPixels.c
+  LevelsPixels.c
+  NoisePixels.c
+  WandPixels.c
+  Generating Code...
+  adjustment_dialog_tests.vcxproj -> H:\CompositorWindows\windows\tests\effects_tools\build\Debug\adjustment_dialog_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/effects_tools/CMakeLists.txt
+  Scanning sources for module dependencies...
+  effects_tools_tests.vcxproj -> H:\CompositorWindows\windows\tests\effects_tools\build\Debug\effects_tools_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/effects_tools/CMakeLists.txt
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/effects_tools/build
+Test project H:/CompositorWindows/windows/tests/effects_tools/build
+      Start  1: effects_tools.levels_normalization_handles
+ 1/23 Test  #1: effects_tools.levels_normalization_handles ...   Passed    0.08 sec
+      Start  2: effects_tools.levels_histogram_weights
+ 2/23 Test  #2: effects_tools.levels_histogram_weights .......   Passed    0.03 sec
+      Start  3: effects_tools.levels_histogram_display
+ 3/23 Test  #3: effects_tools.levels_histogram_display .......   Passed    0.03 sec
+      Start  4: effects_tools.levels_auto_modes
+ 4/23 Test  #4: effects_tools.levels_auto_modes ..............   Passed    0.03 sec
+      Start  5: effects_tools.levels_sample_calibration
+ 5/23 Test  #5: effects_tools.levels_sample_calibration ......   Passed    0.03 sec
+      Start  6: effects_tools.levels_original_sampler
+ 6/23 Test  #6: effects_tools.levels_original_sampler ........   Passed    0.03 sec
+      Start  7: effects_tools.levels_json_preservation
+ 7/23 Test  #7: effects_tools.levels_json_preservation .......   Passed    0.03 sec
+      Start  8: effects_tools.levels_widget_controls
+ 8/23 Test  #8: effects_tools.levels_widget_controls .........   Passed    0.05 sec
+      Start  9: effects_tools.hue_band_weights
+ 9/23 Test  #9: effects_tools.hue_band_weights ...............   Passed    0.03 sec
+      Start 10: effects_tools.hue_sample_range
+10/23 Test #10: effects_tools.hue_sample_range ...............   Passed    0.03 sec
+      Start 11: effects_tools.hue_target_drag
+11/23 Test #11: effects_tools.hue_target_drag ................   Passed    0.03 sec
+      Start 12: effects_tools.hue_json_spectrum
+12/23 Test #12: effects_tools.hue_json_spectrum ..............   Passed    0.03 sec
+      Start 13: effects_tools.curves_graph_drag
+13/23 Test #13: effects_tools.curves_graph_drag ..............   Passed    0.03 sec
+      Start 14: effects_tools.curves_json
+14/23 Test #14: effects_tools.curves_json ....................   Passed    0.03 sec
+      Start 15: effects_tools.color_hex_hsb
+15/23 Test #15: effects_tools.color_hex_hsb ..................   Passed    0.03 sec
+      Start 16: effects_tools.color_sample_ring
+16/23 Test #16: effects_tools.color_sample_ring ..............   Passed    0.03 sec
+      Start 17: effects_tools.hue_widget_controls
+17/23 Test #17: effects_tools.hue_widget_controls ............   Passed    0.05 sec
+      Start 18: effects_tools.curves_widget_controls
+18/23 Test #18: effects_tools.curves_widget_controls .........   Passed    0.06 sec
+      Start 19: adjustment_dialog.levels_cancel
+19/23 Test #19: adjustment_dialog.levels_cancel ..............   Passed    0.10 sec
+      Start 20: adjustment_dialog.curves_apply
+20/23 Test #20: adjustment_dialog.curves_apply ...............   Passed    0.23 sec
+      Start 21: adjustment_dialog.hue_targeting
+21/23 Test #21: adjustment_dialog.hue_targeting ..............   Passed    0.38 sec
+      Start 22: adjustment_dialog.live_levels_input
+22/23 Test #22: adjustment_dialog.live_levels_input ..........   Passed    0.17 sec
+      Start 23: adjustment_dialog.live_folder_insert
+23/23 Test #23: adjustment_dialog.live_folder_insert .........   Passed    0.06 sec
+
+100% tests passed, 0 tests failed out of 23
+
+Total Test time (real) =   1.59 sec

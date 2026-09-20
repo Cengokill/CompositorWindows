@@ -6,54 +6,54 @@
 	skipped="0"
 	hostname=""
 	time="0"
-	timestamp="2026-09-19T18:24:35"
+	timestamp="2026-09-19T19:19:49"
 	>
-	<testcase name="effects.identity_handles" classname="effects.identity_handles" time="0.0539234" status="run">
+	<testcase name="effects.identity_handles" classname="effects.identity_handles" time="0.0531671" status="run">
 		<properties/>
 		<system-out>PASS identity_handles
 </system-out>
 	</testcase>
-	<testcase name="effects.exposure_formula" classname="effects.exposure_formula" time="0.0164586" status="run">
+	<testcase name="effects.exposure_formula" classname="effects.exposure_formula" time="0.016231" status="run">
 		<properties/>
 		<system-out>PASS exposure_formula
 </system-out>
 	</testcase>
-	<testcase name="effects.curves_alpha" classname="effects.curves_alpha" time="0.0169874" status="run">
+	<testcase name="effects.curves_alpha" classname="effects.curves_alpha" time="0.0165073" status="run">
 		<properties/>
 		<system-out>PASS curves_alpha
 </system-out>
 	</testcase>
-	<testcase name="effects.gradient_endpoints" classname="effects.gradient_endpoints" time="0.014577" status="run">
+	<testcase name="effects.gradient_endpoints" classname="effects.gradient_endpoints" time="0.0158536" status="run">
 		<properties/>
 		<system-out>PASS gradient_endpoints
 </system-out>
 	</testcase>
-	<testcase name="effects.grain_global_tiles" classname="effects.grain_global_tiles" time="0.0353562" status="run">
+	<testcase name="effects.grain_global_tiles" classname="effects.grain_global_tiles" time="0.034526" status="run">
 		<properties/>
 		<system-out>PASS grain_global_tiles
 </system-out>
 	</testcase>
-	<testcase name="effects.hsv_primary_alpha" classname="effects.hsv_primary_alpha" time="0.0945036" status="run">
+	<testcase name="effects.hsv_primary_alpha" classname="effects.hsv_primary_alpha" time="0.0905467" status="run">
 		<properties/>
 		<system-out>PASS hsv_primary_alpha
 </system-out>
 	</testcase>
-	<testcase name="effects.hsv_bands_colorize" classname="effects.hsv_bands_colorize" time="0.0607339" status="run">
+	<testcase name="effects.hsv_bands_colorize" classname="effects.hsv_bands_colorize" time="0.0652533" status="run">
 		<properties/>
 		<system-out>PASS hsv_bands_colorize
 </system-out>
 	</testcase>
-	<testcase name="effects.selected_immutable_tiles" classname="effects.selected_immutable_tiles" time="0.032271" status="run">
+	<testcase name="effects.selected_immutable_tiles" classname="effects.selected_immutable_tiles" time="0.0262201" status="run">
 		<properties/>
 		<system-out>PASS selected_immutable_tiles
 </system-out>
 	</testcase>
-	<testcase name="effects.malformed_json" classname="effects.malformed_json" time="0.0173558" status="run">
+	<testcase name="effects.malformed_json" classname="effects.malformed_json" time="0.0149082" status="run">
 		<properties/>
 		<system-out>PASS malformed_json
 </system-out>
 	</testcase>
-	<testcase name="effects.levels_opaque_order" classname="effects.levels_opaque_order" time="0.0142869" status="run">
+	<testcase name="effects.levels_opaque_order" classname="effects.levels_opaque_order" time="0.0135466" status="run">
 		<properties/>
 		<system-out>PASS levels_opaque_order
 </system-out>

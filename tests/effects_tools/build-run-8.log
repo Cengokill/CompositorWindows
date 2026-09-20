@@ -1,0 +1,30 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Could NOT find WrapVulkanHeaders (missing: Vulkan_INCLUDE_DIR) 
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/effects_tools/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  Checking File Globs
+  Scanning sources for module dependencies...
+  AdjustmentDialog.cpp
+  adjustment_dialog_tests.cpp
+  Compiling...
+  adjustment_dialog_tests.cpp
+  AdjustmentDialog.cpp
+H:\CompositorWindows\windows\src\ui\AdjustmentDialog.cpp(1,1): warning C4828: The file contains a character starting at offset 0x5563 that is illegal in the current source character set (codepage 65001). [H:\CompositorWindows\windows\tests\effects_tools\build\adjustment_dialog_tests.vcxproj]
+H:\CompositorWindows\windows\src\ui\AdjustmentDialog.cpp(165,302): error C2660: 'compositor::`anonymous-namespace'::makePreview': function does not take 6 arguments [H:\CompositorWindows\windows\tests\effects_tools\build\adjustment_dialog_tests.vcxproj]
+      H:\CompositorWindows\windows\src\ui\AdjustmentDialog.cpp(71,15):
+      see declaration of 'compositor::`anonymous-namespace'::makePreview'
+      H:\CompositorWindows\windows\src\ui\AdjustmentDialog.cpp(165,302):
+      while trying to match the argument list '(const compositor::Document, const std::string, const std::string, const bool, const bool, const std::string)'
+  
+  Scanning sources for module dependencies...
+  effects_tools_tests.vcxproj -> H:\CompositorWindows\windows\tests\effects_tools\build\Debug\effects_tools_tests.exe

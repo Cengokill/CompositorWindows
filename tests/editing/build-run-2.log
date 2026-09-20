@@ -1,0 +1,71 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/editing/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule H:/CompositorWindows/windows/tests/editing/CMakeLists.txt
+  Scanning sources for module dependencies...
+  editing_tests.cpp
+  StackRenderer.cpp
+  Selection.cpp
+  Document.cpp
+  PixelEdits.cpp
+  Compiling...
+  StackRenderer.cpp
+  Selection.cpp
+  editing_tests.cpp
+  Document.cpp
+  PixelEdits.cpp
+  editing_tests.vcxproj -> H:\CompositorWindows\windows\tests\editing\build\Debug\editing_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/editing/CMakeLists.txt
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/editing/build
+Test project H:/CompositorWindows/windows/tests/editing/build
+      Start  1: editing.drag_box
+ 1/18 Test  #1: editing.drag_box .......................   Passed    0.04 sec
+      Start  2: editing.geometry_combine
+ 2/18 Test  #2: editing.geometry_combine ...............   Passed    0.04 sec
+      Start  3: editing.coverage_aa
+ 3/18 Test  #3: editing.coverage_aa ....................   Passed    0.03 sec
+      Start  4: editing.empty_move_inverse
+ 4/18 Test  #4: editing.empty_move_inverse .............   Passed    0.03 sec
+      Start  5: editing.mapping_transforms
+ 5/18 Test  #5: editing.mapping_transforms .............   Passed    0.03 sec
+      Start  6: editing.fill_clear_crop
+ 6/18 Test  #6: editing.fill_clear_crop ................   Passed    0.04 sec
+      Start  7: editing.fill_growth_mask
+ 7/18 Test  #7: editing.fill_growth_mask ...............   Passed    0.02 sec
+      Start  8: editing.selected_immutable_invert
+ 8/18 Test  #8: editing.selected_immutable_invert ......   Passed    0.03 sec
+      Start  9: editing.uniform_mask_fill_invert
+ 9/18 Test  #9: editing.uniform_mask_fill_invert .......   Passed    0.03 sec
+      Start 10: editing.copy_current_merged
+10/18 Test #10: editing.copy_current_merged ............   Passed    0.03 sec
+      Start 11: editing.copy_lasso
+11/18 Test #11: editing.copy_lasso .....................   Passed    0.03 sec
+      Start 12: editing.selection_history
+12/18 Test #12: editing.selection_history ..............   Passed    0.02 sec
+      Start 13: editing.invalid_inputs
+13/18 Test #13: editing.invalid_inputs .................   Passed    0.01 sec
+      Start 14: editing.scaled_selection_clear
+14/18 Test #14: editing.scaled_selection_clear .........   Passed    0.03 sec
+      Start 15: editing.gradient_linear
+15/18 Test #15: editing.gradient_linear ................   Passed    0.01 sec
+      Start 16: editing.gradient_radial
+16/18 Test #16: editing.gradient_radial ................   Passed    0.01 sec
+      Start 17: editing.gradient_reverse_transparent
+17/18 Test #17: editing.gradient_reverse_transparent ...   Passed    0.01 sec
+      Start 18: editing.gradient_mask_preview
+18/18 Test #18: editing.gradient_mask_preview ..........   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 18
+
+Total Test time (real) =   0.45 sec

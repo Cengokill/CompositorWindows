@@ -1,6 +1,7 @@
 // Formula translations from pinned Compositor, copyright Wonder Assembly LLC 2026 (MIT).
 // See windows/LICENSE and docs/effects.md for exact source and reference limitations.
 #include "Adjustments.h"
+#include "effects_tools/CurveMath.h"
 #include "graphics/PixelAlgorithms.h"
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -31,7 +32,7 @@ void channel(QJsonValue v){static constexpr std::array<const char*,4> channels{"
 QJsonObject parse(std::string_view json){if(json.size()>4*1024*1024)bad();QJsonParseError error;auto doc=QJsonDocument::fromJson(QByteArray(json.data(),qsizetype(json.size())),&error);if(error.error!=QJsonParseError::NoError||!doc.isObject())bad();return doc.object();}
 struct Level {double black{},gamma{1},white{255},outputBlack{},outputWhite{255};double apply(double v)const{auto t=std::clamp((v*255-black)/(white-black),0.,1.);return (outputBlack+std::pow(t,1/gamma)*(outputWhite-outputBlack))/255;}bool identity()const{return black==0&&gamma==1&&white==255&&outputBlack==0&&outputWhite==255;}};
 Level level(QJsonValue value){auto o=object(value);Level r;r.black=number(o["black"],0,254);r.white=number(o["white"],r.black+1,255);r.gamma=number(o["gamma"],.1,9.99);r.outputBlack=number(o["outputBlack"],0,255);r.outputWhite=number(o["outputWhite"],0,255);return r;}
-struct Curve {std::vector<Point> points;bool identity()const{return std::all_of(points.begin(),points.end(),[](auto p){return p.x==p.y;});}double value(double x)const{size_t i=0;while(i+1<points.size()&&points[i+1].x<=x)++i;i=std::min(points.size()-2,i);std::vector<double> d;for(size_t j=0;j+1<points.size();++j)d.push_back((points[j+1].y-points[j].y)/(points[j+1].x-points[j].x));auto slope=[&](size_t j){if(!j)return d[0];if(j==points.size()-1)return d.back();if(d[j-1]*d[j]<=0)return 0.;return 2/(1/d[j-1]+1/d[j]);};auto h=points[i+1].x-points[i].x,t=std::clamp((x-points[i].x)/h,0.,1.);auto y=(2*t*t*t-3*t*t+1)*points[i].y+(t*t*t-2*t*t+t)*h*slope(i)+(-2*t*t*t+3*t*t)*points[i+1].y+(t*t*t-t*t)*h*slope(i+1);return std::clamp(y,0.,255.);}};
+struct Curve {std::vector<Point> points;bool identity()const{return std::all_of(points.begin(),points.end(),[](auto p){return p.x==p.y;});}double value(double x)const{return effects_tools::curveValueUnchecked(points,x);}};
 Curve curve(QJsonValue v){auto a=array(v);if(a.size()<2||a.size()>32)bad();Curve c;double previous=-1;for(qsizetype i=0;i<a.size();++i){auto p=object(a[i]);auto x=number(p["x"],0,255),y=number(p["y"],0,255);if(x<=previous||(i==0&&x!=0)||(i==a.size()-1&&x!=255))bad();c.points.push_back({x,y});previous=x;}return c;}
 RGB color(QJsonValue v){auto o=object(v);return {number(o["red"],0,1),number(o["green"],0,1),number(o["blue"],0,1)};}
 struct HSVChange{double hue{},saturation{},lightness{};bool zero()const{return hue==0&&saturation==0&&lightness==0;}};
