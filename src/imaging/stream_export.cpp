@@ -1,4 +1,5 @@
 #include "stream_export.h"
+#include "win32_file_path.h"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -36,7 +37,7 @@ struct TemporaryFile {
     explicit TemporaryFile(const std::filesystem::path& destination) {
         GUID id{}; ok(CoCreateGuid(&id), "Create temporary export identifier");
         wchar_t text[40]{}; if (!StringFromGUID2(id, text, 40)) throw std::runtime_error("Cannot name temporary export");
-        path = destination; path += std::wstring(L".") + text + L".tmp";
+        path = win32FilePath(destination); path += std::wstring(L".") + text + L".tmp";
         Handle file{CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr)};
         if (file.value == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot create temporary export beside destination");
         try { regularFile(file.value); }
@@ -45,7 +46,8 @@ struct TemporaryFile {
     ~TemporaryFile() { std::error_code error; std::filesystem::remove(path, error); }
     void replace(const std::filesystem::path& destination, const std::function<bool()>& check) {
         cancelled(check);
-        if (!MoveFileExW(path.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        const auto target=win32FilePath(destination);
+        if (!MoveFileExW(path.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             throw std::runtime_error("Atomic export replacement failed");
     }
 };
@@ -217,9 +219,9 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
 }
 
 void copyEncodedAtomic(const std::filesystem::path& source, const std::filesystem::path& destination, const std::function<bool()>& check) {
-    cancelled(check); TemporaryFile temporary(destination);
+    cancelled(check); const auto inputPath=win32FilePath(source); TemporaryFile temporary(destination);
     {
-        Handle input{CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
+        Handle input{CreateFileW(inputPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
         Handle output{CreateFileW(temporary.path.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
         if (input.value == INVALID_HANDLE_VALUE || output.value == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot open encoded image for export");
         regularFile(input.value); regularFile(output.value);

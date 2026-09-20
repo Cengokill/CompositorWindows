@@ -15,10 +15,10 @@ namespace compositor {
 using Microsoft::WRL::ComPtr;
 static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
 NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);synchronizeViewport();}
-NativeCanvas::~NativeCanvas(){releaseDevice();}
-void NativeCanvas::releaseDevice(){displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
+NativeCanvas::~NativeCanvas(){profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
+void NativeCanvas::releaseDevice(){resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
 void NativeCanvas::createDevice(){UINT flags=D3D11_CREATE_DEVICE_BGRA_SUPPORT;D3D_FEATURE_LEVEL level{};auto hr=D3D11CreateDevice(nullptr,warp_?D3D_DRIVER_TYPE_WARP:D3D_DRIVER_TYPE_HARDWARE,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);if(FAILED(hr)&&!warp_)hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);check(hr,"D3D11 device");ComPtr<IDXGIDevice> dxgi;check(device_.As(&dxgi),"DXGI device");ComPtr<IDXGIAdapter> adapter;check(dxgi->GetAdapter(&adapter),"DXGI adapter");ComPtr<IDXGIFactory2> dxgiFactory;check(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)),"DXGI factory");DXGI_SWAP_CHAIN_DESC1 desc{};desc.Width=std::max(1,int(width()*devicePixelRatioF()));desc.Height=std::max(1,int(height()*devicePixelRatioF()));desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.SampleDesc.Count=1;desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.BufferCount=2;desc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;desc.Scaling=DXGI_SCALING_STRETCH;desc.AlphaMode=DXGI_ALPHA_MODE_IGNORE;check(dxgiFactory->CreateSwapChainForHwnd(device_.Get(),reinterpret_cast<HWND>(winId()),&desc,nullptr,nullptr,&swap_),"Canvas swap chain");dxgiFactory->MakeWindowAssociation(reinterpret_cast<HWND>(winId()),DXGI_MWA_NO_ALT_ENTER);check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,IID_PPV_ARGS(&factory_)),"D2D factory");check(factory_->CreateDevice(dxgi.Get(),&d2device_),"D2D device");check(d2device_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,&context_),"D2D context");createTarget();upload();}
-void NativeCanvas::createTarget(){ComPtr<IDXGISurface> surface;check(swap_->GetBuffer(0,IID_PPV_ARGS(&surface)),"Canvas surface");float dpi=float(96*devicePixelRatioF());auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET|D2D1_BITMAP_OPTIONS_CANNOT_DRAW,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpi,dpi);check(context_->CreateBitmapFromDxgiSurface(surface.Get(),&props,&target_),"Canvas render target");context_->SetTarget(target_.Get());context_->SetDpi(dpi,dpi);}
+void NativeCanvas::createTarget(){resetPresentationResources();ComPtr<IDXGISurface> surface;check(swap_->GetBuffer(0,IID_PPV_ARGS(&surface)),"Canvas surface");float dpi=float(96*devicePixelRatioF());auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET|D2D1_BITMAP_OPTIONS_CANNOT_DRAW,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpi,dpi);check(context_->CreateBitmapFromDxgiSurface(surface.Get(),&props,&target_),"Canvas render target");context_->SetTarget(target_.Get());context_->SetDpi(dpi,dpi);}
 void NativeCanvas::upload(){
     image_.Reset();
     if(!raster_){displayTiles_.clear();return;}
@@ -26,7 +26,7 @@ void NativeCanvas::upload(){
     for(const auto&tile:raster_->tiles)live[tile.get()]=true;
     std::erase_if(displayTiles_,[&](const auto&entry){return !live.contains(entry.first);});
 }
-void NativeCanvas::draw(){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});auto patch=viewportProvider(origin.x(),origin.y(),width()/scale,height()/scale,std::max(1.,1/zoom));raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));context_->PushAxisAlignedClip(bounds,D2D1_ANTIALIAS_MODE_ALIASED);ComPtr<ID2D1SolidColorBrush> light,dark;check(context_->CreateSolidColorBrush(D2D1::ColorF(.77f,.78f,.79f),&light),"Checker brush");check(context_->CreateSolidColorBrush(D2D1::ColorF(.91f,.92f,.93f),&dark),"Checker brush");for(int y=0;y<height();y+=12)for(int x=0;x<width();x+=12)context_->FillRectangle(D2D1::RectF(float(x),float(y),float(x+12),float(y+12)),((x/12+y/12)%2?light:dark).Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
+void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));context_->PushAxisAlignedClip(bounds,D2D1_ANTIALIAS_MODE_ALIASED);ComPtr<ID2D1SolidColorBrush> light,dark;check(context_->CreateSolidColorBrush(D2D1::ColorF(.77f,.78f,.79f),&light),"Checker brush");check(context_->CreateSolidColorBrush(D2D1::ColorF(.91f,.92f,.93f),&dark),"Checker brush");for(int y=0;y<height();y+=12)for(int x=0;x<width();x+=12)context_->FillRectangle(D2D1::RectF(float(x),float(y),float(x+12),float(y+12)),((x/12+y/12)%2?light:dark).Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
 // Upload bounded tiles so a valid 30,000-pixel narrow document remains displayable.
 for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;auto tile=raster_->tiles[size_t(ty/256)*((raster_->width+255)/256)+tx/256];auto found=displayTiles_.find(tile.get());
 if(found==displayTiles_.end()){
@@ -38,7 +38,24 @@ if(found==displayTiles_.end()){
 }
 auto sourceRect=D2D1::RectF(0,0,float(tw),float(th));
 context_->DrawBitmap(found->second.bitmap.Get(),rect,1,D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,sourceRect);}}
-if(showPixelGrid&&zoom>=8){ComPtr<ID2D1SolidColorBrush> grid;check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.25f),&grid),"Grid brush");for(int x=0;x<=documentWidth_;++x){float px=left+float(x*scale);if(px>=0&&px<=width())context_->DrawLine(D2D1::Point2F(px,top),D2D1::Point2F(px,bounds.bottom),grid.Get(),.5f);}for(int y=0;y<=documentHeight_;++y){float py=top+float(y*scale);if(py>=0&&py<=height())context_->DrawLine(D2D1::Point2F(left,py),D2D1::Point2F(bounds.right,py),grid.Get(),.5f);}}if(!selectionEdges_.empty()){
+if(showPixelGrid&&zoom>=8){
+    const auto area=D2D1::RectF(std::max(0.f,left),std::max(0.f,top),std::min(float(width()),bounds.right),std::min(float(height()),bounds.bottom));
+    if(area.right>area.left&&area.bottom>area.top){
+        // EditorCanvas.swift 896-919 fills one winding path so crossings have
+        // the same coverage as each one-physical-pixel hairline.
+        const float halfHairline=float(.5/backingScale_);
+        ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Grid path");
+        ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink),"Grid path sink");sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+        auto rectangle=[&](D2D1_RECT_F rect){sink->BeginFigure(D2D1::Point2F(rect.left,rect.top),D2D1_FIGURE_BEGIN_FILLED);sink->AddLine(D2D1::Point2F(rect.right,rect.top));sink->AddLine(D2D1::Point2F(rect.right,rect.bottom));sink->AddLine(D2D1::Point2F(rect.left,rect.bottom));sink->EndFigure(D2D1_FIGURE_END_CLOSED);};
+        const int firstX=std::max(0,int(std::ceil((area.left-left)/scale))),lastX=std::min(documentWidth_,int(std::floor((area.right-left)/scale)));
+        const int firstY=std::max(0,int(std::ceil((area.top-top)/scale))),lastY=std::min(documentHeight_,int(std::floor((area.bottom-top)/scale)));
+        for(int x=firstX;x<=lastX;++x){const float px=left+float(x*scale);rectangle(D2D1::RectF(px-halfHairline,area.top,px+halfHairline,area.bottom));}
+        for(int y=firstY;y<=lastY;++y){const float py=top+float(y*scale);rectangle(D2D1::RectF(area.left,py-halfHairline,area.right,py+halfHairline));}
+        check(sink->Close(),"Grid path close");ComPtr<ID2D1SolidColorBrush> grid;
+        check(context_->CreateSolidColorBrush(D2D1::ColorF(.55f,.55f,.55f,.45f),&grid),"Grid brush");
+        context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);context_->FillGeometry(path.Get(),grid.Get());context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+    }
+}if(!selectionEdges_.empty()){
 ComPtr<ID2D1SolidColorBrush> edgeDark,edgeLight;
 check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,1),&edgeDark),"Selection edge");
 check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1),&edgeLight),"Selection edge");
@@ -94,7 +111,7 @@ if(brushCursor_){
     if(cursor.marker){const float x=float(cursor.marker->x),y=float(cursor.marker->y);for(const bool horizontal:{true,false}){const auto a=D2D1::Point2F(x-(horizontal?7:0),y-(horizontal?0:7)),b=D2D1::Point2F(x+(horizontal?7:0),y+(horizontal?0:7));context_->DrawLine(a,b,white.Get(),3);context_->DrawLine(a,b,black.Get(),1);}}
 }
 if(sampleRing_){auto center=viewMapping().toView(sampleRing_->position);auto ring=D2D1::Ellipse(D2D1::Point2F(float(center.x),float(center.y)),43,43);ComPtr<ID2D1SolidColorBrush> brush;check(context_->CreateSolidColorBrush(D2D1::ColorF(.45f,.45f,.45f),&brush),"Sample ring");context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);context_->DrawEllipse(ring,brush.Get(),24);for(int half=0;half<2;++half){auto color=half?sampleRing_->original:sampleRing_->sampled;brush->SetColor(D2D1::ColorF(color.r/255.f,color.g/255.f,color.b/255.f));context_->PushAxisAlignedClip(D2D1::RectF(float(center.x-58),float(center.y+(half?0:-58)),float(center.x+58),float(center.y+(half?58:0))),D2D1_ANTIALIAS_MODE_ALIASED);context_->DrawEllipse(ring,brush.Get(),16);context_->PopAxisAlignedClip();}}
-auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas draw");hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
+auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas draw");hr=finishPresentation();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas presentation");if(!present)return;hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
 void NativeCanvas::setSelection(std::shared_ptr<const GrayRaster> value){
 if(selection_==value)return;selection_=std::move(value);selectionEdges_.clear();
 if(selection_){auto inside=[&](int x,int y){return selection_->pixel(x,y)>=128;};
@@ -113,6 +130,8 @@ void NativeCanvas::zoomAt(double value,QPointF anchor){if(documentWidth_<=0||doc
 void NativeCanvas::panBy(QPointF delta){auto state=viewportState();state.translate({delta.x(),delta.y()});installViewport(state);}
 void NativeCanvas::recreateDevice(){releaseDevice();error_.clear();update();}
 QImage NativeCanvas::captureRendered(){
+    // Read the freshly rendered back buffer before Present advances the flip chain.
+    draw(false);
     if(!device_||!swap_)throw std::runtime_error("No canvas graphics device");
     ComPtr<ID3D11Texture2D> source;
     check(swap_->GetBuffer(0,IID_PPV_ARGS(&source)),"Canvas capture buffer");
@@ -122,7 +141,7 @@ QImage NativeCanvas::captureRendered(){
     immediate_->CopyResource(staging.Get(),source.Get());
     D3D11_MAPPED_SUBRESOURCE mapped{};check(immediate_->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Canvas capture readback");
     QImage image(static_cast<const uchar*>(mapped.pData),int(desc.Width),int(desc.Height),mapped.RowPitch,QImage::Format_ARGB32);
-    auto copy=image.copy();immediate_->Unmap(staging.Get(),0);return copy;
+    auto copy=image.copy();immediate_->Unmap(staging.Get(),0);check(swap_->Present(1,0),"Present captured canvas");return copy;
 }
 void NativeCanvas::paintEvent(QPaintEvent*){try{draw();error_.clear();}catch(const std::exception&e){error_=e.what();releaseDevice();}}
 void NativeCanvas::resizeEvent(QResizeEvent*){synchronizeViewport();if(swap_){context_->SetTarget(nullptr);target_.Reset();auto hr=swap_->ResizeBuffers(0,std::max(1,int(width()*devicePixelRatioF())),std::max(1,int(height()*devicePixelRatioF())),DXGI_FORMAT_UNKNOWN,0);try{check(hr,"Canvas resize");createTarget();}catch(const std::exception&e){error_=e.what();releaseDevice();}}update();}
@@ -166,7 +185,7 @@ void NativeCanvas::tabletEvent(QTabletEvent*e){
     // The pinned source has no pressure mapping. Accept prevents Qt's duplicate synthesized mouse stroke.
 }
 void NativeCanvas::leaveEvent(QEvent*e){if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}
-bool NativeCanvas::event(QEvent*e){
+bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();}
     const bool focusLost=e->type()==QEvent::WindowDeactivate||e->type()==QEvent::FocusOut;
     if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){dragging_=rightDragging_=tabletActive_=false;if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
     if(e->type()==QEvent::DevicePixelRatioChange){releaseDevice();synchronizeViewport();}

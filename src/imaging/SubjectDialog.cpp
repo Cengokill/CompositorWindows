@@ -15,6 +15,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <atomic>
+#include <algorithm>
+#include <cmath>
 
 namespace compositor::imaging {
 namespace {
@@ -37,12 +39,14 @@ class SubjectDialog final:public QDialog {
     const std::shared_ptr<const RgbaImage> source_;
     const std::shared_ptr<const GrayMask> existing_;
     const std::filesystem::path model_;
+    const std::function<void(const MatteSettings&)> onApply_;
     std::shared_ptr<const GrayMask> base_;
     QComboBox* quality_{};QWidget* advanced_{};QSpinBox* refine_{};QSpinBox* contrast_{};QSpinBox* shift_{};
     Preview* preview_{};QLabel* status_{};QProgressBar* progress_{};QPushButton* apply_{};
     QFutureWatcher<Result> watcher_;QTimer debounce_;Stage stage_{Stage::Idle},pending_{Stage::Idle};
     std::shared_ptr<std::atomic<bool>> cancelled_;bool closing_{};
     std::optional<GrayMask> committed_;
+    bool previewReady_{};
     QSpinBox* control(QGridLayout* layout,int row,const QString& text,int low,int high,int value,const QString& suffix){
         auto* label=new QLabel(text,advanced_);auto* slider=new QSlider(Qt::Horizontal,advanced_);slider->setRange(low,high);slider->setValue(value);slider->setAccessibleName(text);
         auto* spin=new QSpinBox(advanced_);spin->setRange(low,high);spin->setValue(value);spin->setSuffix(suffix);spin->setAccessibleName(text);label->setBuddy(spin);
@@ -60,10 +64,12 @@ class SubjectDialog final:public QDialog {
         if(closing_)return;
         if(stage_!=Stage::Idle){pending_=next;if(cancelled_&&stage_!=Stage::Infer)cancelled_->store(true);return;}
         if(next!=Stage::Infer&&!base_)return;
+        if(next==Stage::Apply&&!previewReady_)return;
+        if(next==Stage::Apply&&onApply_)onApply_(settings());
         stage_=next;pending_=Stage::Idle;cancelled_=std::make_shared<std::atomic<bool>>(false);
         auto cancellation=cancelled_;auto source=source_;auto existing=existing_;auto base=base_;auto model=model_;auto parameters=settings();
         progress_->show();status_->setText(next==Stage::Infer?tr("Finding foreground…"):next==Stage::Apply?tr("Applying mask…"):tr("Updating preview…"));
-        apply_->setEnabled(next==Stage::Preview);quality_->setEnabled(next!=Stage::Infer&&next!=Stage::Apply);advanced_->setEnabled(next!=Stage::Infer&&next!=Stage::Apply);
+        apply_->setEnabled(next==Stage::Preview&&previewReady_);quality_->setEnabled(next!=Stage::Infer&&next!=Stage::Apply);advanced_->setEnabled(next!=Stage::Infer&&next!=Stage::Apply);
         watcher_.setFuture(QtConcurrent::run([source,existing,base,model,parameters,cancellation,next]{
             Result out;ImportOptions options;options.cancelled=[cancellation]{return cancellation->load();};
             try{
@@ -77,21 +83,23 @@ class SubjectDialog final:public QDialog {
         auto result=watcher_.result();const auto completed=stage_;stage_=Stage::Idle;progress_->hide();
         if(closing_)return;
         if(!result.cancelled&&!result.error.isEmpty()){
-            qWarning("Background removal: %s",qPrintable(result.error));status_->setText(result.error.contains("No foreground")?tr("No foreground subject was detected. Try an image with a more distinct subject."):tr("Background removal could not be completed. Try a smaller image or reopen the app."));
-            apply_->setEnabled(bool(base_));quality_->setEnabled(bool(base_));advanced_->setEnabled(bool(base_));
+            if(completed==Stage::Preview)previewReady_=false;
+            qWarning("Background removal: %s",qPrintable(result.error));status_->setText(result.error.contains("ONNX Runtime")?tr("Background removal could not load its runtime. Repair or reinstall Compositor."):result.error.contains("No foreground")?tr("No foreground subject was detected. Try an image with a more distinct subject."):tr("Background removal could not be completed. Try a smaller image or reopen the app."));
+            apply_->setEnabled(previewReady_);quality_->setEnabled(bool(base_));advanced_->setEnabled(bool(base_));
         }else if(!result.cancelled){
             if(completed==Stage::Infer&&result.mask){base_=std::make_shared<const GrayMask>(std::move(*result.mask));pending_=Stage::Preview;}
-            else if(completed==Stage::Preview&&result.preview){preview_->setImage(*result.preview);status_->clear();apply_->setEnabled(true);}
+            else if(completed==Stage::Preview&&result.preview){previewReady_=true;preview_->setImage(*result.preview);status_->clear();apply_->setEnabled(true);}
             else if(completed==Stage::Apply&&result.mask){committed_=std::move(result.mask);accept();return;}
         }
         if(pending_!=Stage::Idle&&!debounce_.isActive()){const auto next=pending_;pending_=Stage::Idle;launch(next);}
     }
 public:
-    SubjectDialog(QWidget* parent,const RgbaImage& source,const GrayMask* existing,const std::filesystem::path& model):QDialog(parent),source_(std::make_shared<const RgbaImage>(source)),existing_(existing?std::make_shared<const GrayMask>(*existing):nullptr),model_(model){
+    SubjectDialog(QWidget* parent,const RgbaImage& source,const GrayMask* existing,const std::filesystem::path& model,const SubjectDialogOptions& options):QDialog(parent),source_(std::make_shared<const RgbaImage>(source)),existing_(existing?std::make_shared<const GrayMask>(*existing):nullptr),model_(model),onApply_(options.onApply){
+        const auto setting=[](double value,int low,int high,int fallback){return std::isfinite(value)?int(std::lround(std::clamp(value,double(low),double(high)))):fallback;};
         setWindowTitle(tr("Remove Background"));setModal(true);resize(760,690);auto* layout=new QVBoxLayout(this);
         preview_=new Preview(this);preview_->setImage(source);layout->addWidget(preview_,1);
-        auto* qualityLayout=new QHBoxLayout;auto* qualityLabel=new QLabel(tr("Quality"),this);quality_=new QComboBox(this);quality_->setObjectName("backgroundQuality");quality_->addItems({tr("Basic"),tr("Advanced")});quality_->setAccessibleName(tr("Quality"));qualityLabel->setBuddy(quality_);qualityLayout->addWidget(qualityLabel);qualityLayout->addWidget(quality_);qualityLayout->addStretch();layout->addLayout(qualityLayout);
-        advanced_=new QWidget(this);auto* grid=new QGridLayout(advanced_);grid->setContentsMargins(0,0,0,0);refine_=control(grid,0,tr("Refine"),0,40,12,tr(" px"));contrast_=control(grid,1,tr("Contrast"),0,100,25,tr(" %"));shift_=control(grid,2,tr("Shift Edge"),-10,10,0,tr(" px"));advanced_->hide();layout->addWidget(advanced_);
+        auto* qualityLayout=new QHBoxLayout;auto* qualityLabel=new QLabel(tr("Quality"),this);quality_=new QComboBox(this);quality_->setObjectName("backgroundQuality");quality_->addItems({tr("Basic"),tr("Advanced")});quality_->setCurrentIndex(options.initial.advanced?1:0);quality_->setAccessibleName(tr("Quality"));qualityLabel->setBuddy(quality_);qualityLayout->addWidget(qualityLabel);qualityLayout->addWidget(quality_);qualityLayout->addStretch();layout->addLayout(qualityLayout);
+        advanced_=new QWidget(this);auto* grid=new QGridLayout(advanced_);grid->setContentsMargins(0,0,0,0);refine_=control(grid,0,tr("Refine"),0,40,setting(options.initial.refineEdges,0,40,12),tr(" px"));contrast_=control(grid,1,tr("Contrast"),0,100,setting(options.initial.contrast,0,100,25),tr(" %"));shift_=control(grid,2,tr("Shift Edge"),-10,10,setting(options.initial.shiftEdge,-10,10,0),tr(" px"));advanced_->setVisible(options.initial.advanced);layout->addWidget(advanced_);
         status_=new QLabel(this);status_->setWordWrap(true);layout->addWidget(status_);progress_=new QProgressBar(this);progress_->setRange(0,0);progress_->setTextVisible(false);layout->addWidget(progress_);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,this);apply_=buttons->button(QDialogButtonBox::Apply);apply_->setObjectName("applySubjectMask");apply_->setEnabled(false);layout->addWidget(buttons);
         connect(buttons,&QDialogButtonBox::rejected,this,&SubjectDialog::reject);connect(apply_,&QPushButton::clicked,this,[this]{debounce_.stop();apply_->setEnabled(false);quality_->setEnabled(false);advanced_->setEnabled(false);pending_=Stage::Apply;launch(Stage::Apply);});
@@ -104,7 +112,7 @@ public:
     std::optional<GrayMask> takeCommitted(){return std::move(committed_);}
 };
 }
-std::optional<GrayMask> showSubjectDialog(QWidget* parent,const RgbaImage& source,const GrayMask* existing,const std::filesystem::path& path){
-    validate(source);if(existing){validate(*existing);if(existing->width!=source.width||existing->height!=source.height)throw std::runtime_error("Existing mask dimensions differ");}SubjectDialog dialog(parent,source,existing,path);if(dialog.exec()!=QDialog::Accepted)return std::nullopt;return dialog.takeCommitted();
+std::optional<GrayMask> showSubjectDialog(QWidget* parent,const RgbaImage& source,const GrayMask* existing,const std::filesystem::path& path,const SubjectDialogOptions& options){
+    validate(source);if(existing){validate(*existing);if(existing->width!=source.width||existing->height!=source.height)throw std::runtime_error("Existing mask dimensions differ");}SubjectDialog dialog(parent,source,existing,path,options);if(dialog.exec()!=QDialog::Accepted)return std::nullopt;return dialog.takeCommitted();
 }
 }

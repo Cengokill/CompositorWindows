@@ -3,11 +3,27 @@
 #include "retouch/RetouchSession.h"
 #include "editing/PixelEdits.h"
 #include "editing/Shapes.h"
+#include "editing/SelectionGesture.h"
+#include "filters/PixelFilters.h"
+#include "imaging/subject_matte.h"
 #include <QColor>
+#include <QJsonObject>
 
 namespace compositor {
 // Values preserve the existing tool action/property order.
 enum class ProjectTool { Move,Hand,Brush,Eraser,Marquee,Lasso,Polygon,Wand,Gradient,Shape,Crop,CloneStamp,SpotHealing,Blur,Eyedropper,Zoom };
+
+// Filters.swift33-83: one remembered bundle per EditorSession. Adjustment JSON
+// contains the same typed settings used by the dialog/persistent live layers;
+// the bundle itself is neither document content nor undo state.
+struct ProjectFilterSettings {
+    filters::Settings pixels;
+    imaging::MatteSettings background;
+    QJsonObject curves,exposure,gradientMap,grain;
+    ProjectFilterSettings();
+    std::string beginAdjustment(const QString& kind,QColor foreground,QColor backgroundColor) const;
+    void rememberAdjustment(const std::string& json);
+};
 
 // Session choices for implemented controls. Kept by EditorProject, never in a
 // saved Document or History snapshot. Clone alignment, selected layers, group
@@ -21,6 +37,10 @@ struct ProjectToolState {
     editing::GradientSettings gradientSettings;
     editing::ShapeStyle shapeStyle;
     editing::SelectionMode selectionMode{editing::SelectionMode::Replace};
+    QString cropRatioChoice{"Free"};
+    editing::LassoKind lassoKind{editing::LassoKind::Freehand};
+    int selectionExpandAmount{1},selectionContractAmount{1};
+    ProjectFilterSettings filterSettings;
     bool ellipse{},selectionAntialias{true};
     int wandTolerance{32},wandSampleRadius{};
     bool wandContiguous{true},wandAllLayers{};

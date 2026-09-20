@@ -27,7 +27,12 @@ void MainWindow::setupSelectionActions(){
     selectionScrollTimer_=new QChronoTimer(this);selectionScrollTimer_->setTimerType(Qt::PreciseTimer);selectionScrollTimer_->setInterval(std::chrono::nanoseconds(16666667));
     connect(selectionScrollTimer_,&QChronoTimer::timeout,this,[this]{try{stepSelectionAutoscroll();}catch(const std::exception& error){pointerCancel();statusBar()->showMessage(error.what());}});
     auto*menu=menuBar()->addMenu("&Select");
-    for(bool expand:{true,false})action(menu,expand?"Expand…":"Contract…",{},[this,expand]{auto*p=current();if(!p||!p->document||!p->document->selection)return;bool ok=false;auto amount=QInputDialog::getDouble(this,expand?"Expand Selection":"Contract Selection","Pixels",1,1,500,0,&ok);if(ok)edit(expand?"Expand Selection":"Contract Selection",[&](Document&d){auto outline=outlineOf(d.selection);if(outline)d.selection=editing::rasterSelection(outline->resized(expand?amount:-amount,d.width,d.height),d.width,d.height);});});
+    for(bool expand:{true,false})action(menu,expand?"Expand…":"Contract…",{},[this,expand]{
+        auto* p=current();if(!p||!p->document||!p->document->selection)return;
+        auto& remembered=expand?selectionExpandAmount_:selectionContractAmount_;bool ok=false;
+        const auto amount=QInputDialog::getDouble(this,expand?"Expand Selection":"Contract Selection","Pixels",remembered,1,500,0,&ok);
+        if(ok){remembered=int(amount);if(auto* spin=findChild<QSpinBox*>(expand?"selectionExpandAmount":"selectionContractAmount")){const QSignalBlocker block(spin);spin->setValue(remembered);}resizeSelection(expand,amount);}
+    });
     action(menu,"All",QKeySequence::SelectAll,[this]{edit("Select All",[&](Document&d){d.selection=editing::rasterSelection(editing::SelectionOutline::rectangle({0,0,double(d.width),double(d.height)}),d.width,d.height);});});
     action(menu,"Deselect",QKeySequence("Ctrl+D"),[this]{edit("Deselect",[](Document&d){d.selection.reset();});});
     action(menu,"Inverse",QKeySequence("Ctrl+Shift+I"),[this]{if(current()&&current()->document&&current()->document->selection)edit("Inverse",[](Document&d){if(d.selection->outline)d.selection=editing::rasterSelection(editing::inverseSelection(*d.selection->outline,d.width,d.height),d.width,d.height);else{auto gray=std::make_shared<GrayRaster>();gray->width=d.width;gray->height=d.height;gray->pixels.resize(size_t(d.width)*d.height);for(size_t i=0;i<gray->pixels.size();++i)gray->pixels[i]=d.selection->coverage?255-d.selection->coverage->pixels[i]:255;d.selection=Selection{gray};}});});
@@ -43,10 +48,21 @@ void MainWindow::setupSelectionActions(){
     auto*shape=new QComboBox;shape->addItems({"Rectangle","Ellipse"});shape->setAccessibleName("Marquee shape");bar->addWidget(shape);connect(shape,&QComboBox::currentIndexChanged,this,[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);});
     auto*lasso=bar->addAction("Lasso (L)");bindCommand(lasso,"Tools","Lasso (L)",[this]{selectTool(Tool::Lasso);});lasso->setShortcut({});
     auto*polygon=bar->addAction("Polygonal Lasso");bindCommand(polygon,"Tools","Polygon",[this]{selectTool(Tool::Polygon);});polygon->setShortcut({});
+    auto*lassoKind=new QComboBox;lassoKind->setObjectName("lassoKind");lassoKind->setAccessibleName("Lasso kind");lassoKind->addItems({"Freehand","Polygonal"});bar->addWidget(lassoKind);
+    connect(lassoKind,&QComboBox::currentIndexChanged,this,[this](int index){if(selectionGesture_.active())pointerCancel();lassoKind_=index?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;selectTool(Tool::Lasso);});
+    for(bool expand:{true,false}){
+        auto* button=bar->addAction(expand?"Expand":"Contract");bindCommand(button,"Select",expand?"Expand…":"Contract…",[this,expand]{resizeSelection(expand,expand?selectionExpandAmount_:selectionContractAmount_);});
+        auto* amount=new QSpinBox;amount->setObjectName(expand?"selectionExpandAmount":"selectionContractAmount");amount->setAccessibleName(expand?"Expand pixels":"Contract pixels");amount->setRange(1,500);amount->setValue(1);amount->setSuffix(" px");bar->addWidget(amount);
+        connect(amount,&QSpinBox::valueChanged,this,[this,expand](int value){(expand?selectionExpandAmount_:selectionContractAmount_)=value;});
+    }
     auto*mode=new QComboBox;mode->setObjectName("selectionMode");mode->addItems({"New selection","Add","Subtract"});mode->setAccessibleName("Selection mode");bar->addWidget(mode);connect(mode,&QComboBox::currentIndexChanged,this,[this](int i){selectionMode_=editing::SelectionMode(i);});
     auto*aa=new QCheckBox("Antialias");aa->setChecked(true);bar->addWidget(aa);connect(aa,&QCheckBox::toggled,this,[this](bool v){selectionAntialias_=v;});
     auto*wandBar=addToolBar("Magic Wand Options");wandBar->setObjectName("wandOptions");auto*tolerance=new QSpinBox;tolerance->setRange(0,255);tolerance->setValue(32);tolerance->setPrefix("Tolerance ");tolerance->setAccessibleName("Wand tolerance");wandBar->addWidget(tolerance);connect(tolerance,&QSpinBox::valueChanged,this,[this](int v){wandTolerance_=v;});
     auto*sample=new QComboBox;sample->addItems({"Point Sample","3 by 3 Average","5 by 5 Average"});sample->setAccessibleName("Wand sample size");wandBar->addWidget(sample);connect(sample,&QComboBox::currentIndexChanged,this,[this](int v){wandSampleRadius_=v;});auto*contiguous=new QCheckBox("Contiguous");contiguous->setChecked(true);wandBar->addWidget(contiguous);connect(contiguous,&QCheckBox::toggled,this,[this](bool v){wandContiguous_=v;});auto*all=new QCheckBox("Sample All Layers");wandBar->addWidget(all);connect(all,&QCheckBox::toggled,this,[this](bool v){wandAllLayers_=v;});
+}
+void MainWindow::resizeSelection(bool expand,double amount){
+    if(!ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()))return;
+    edit(expand?"Expand Selection":"Contract Selection",[&](Document& document){auto outline=outlineOf(document.selection);if(outline)document.selection=editing::rasterSelection(outline->resized(expand?amount:-amount,document.width,document.height),document.width,document.height);});
 }
 bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int clickCount){
     const bool selectionTool=tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand;

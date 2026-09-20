@@ -50,6 +50,12 @@ void row_failure_atomic(){
  auto invalid=StreamExportLimits{};invalid.maxBufferBytes=10;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),{},invalid);});
  auto directory=path(temp,"directory");std::filesystem::create_directory(directory);original(directory/"project.comp");auto protectedBytes=bytes(directory/"project.comp");
  rejects([&]{encodeRowsAtomic(directory,10,10,pattern());});REQUIRE(std::filesystem::is_directory(directory)&&bytes(directory/"project.comp")==protectedBytes&&bytes(target)==before);only(temp,2);
+ // Empty image layers with masks still export transparency. A malformed live
+ // effect must remain an error even though its input has no image pixels.
+ auto empty=blank(19,17);Layer emptyLayer;emptyLayer.id=newId();emptyLayer.name="Empty masked layer";emptyLayer.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{1,1,{128}})};empty.layers.push_back(emptyLayer);
+ exportDocumentAtomic(empty,target);auto blankImage=WicCodec::decode(target);REQUIRE(std::all_of(blankImage.image.pixels.begin(),blankImage.image.pixels.end(),[](uint8_t value){return value==0;}));const auto savedBlank=bytes(target);
+ empty.layers[0].adjustmentJson="{\"kind\":\"Unsupported test effect\"}";rejects([&]{exportDocumentAtomic(empty,target);});REQUIRE(bytes(target)==savedBlank);
+ empty.layers[0].adjustmentJson.clear();empty.height=200;bool cancelledBlank=false;ExportOptions blankOptions;blankOptions.cancelled=[&]{return cancelledBlank;};rejects([&]{exportDocumentAtomic(empty,target,blankOptions,{},[&](uint32_t,uint32_t){cancelledBlank=true;});});REQUIRE(bytes(target)==savedBlank);only(temp,2);
 }
 void copy_atomic(){
  QTemporaryDir temp;auto source=path(temp,"source.bin"),target=path(temp,"target.bin");{std::ofstream out(source,std::ios::binary);std::vector<char> block(1024*1024,'a');for(int i=0;i<4;++i){block[0]=char(i);out.write(block.data(),std::streamsize(block.size()));}}original(target);auto before=bytes(target);

@@ -90,10 +90,10 @@ PreviewResult makePreview(Document doc,std::string active,const std::string&json
     return result;
 }
 }
-std::optional<AdjustmentDialogResult> showAdjustmentDialog(QWidget*parent,const Document&original,const std::string&active,const QString&requestedKind,bool live,bool existing){
+std::optional<AdjustmentDialogResult> showAdjustmentDialog(QWidget*parent,const Document&original,const std::string&active,const QString&requestedKind,bool live,bool existing,const AdjustmentDialogOptions& options){
     Object settings;
     if(existing){auto it=std::find_if(original.layers.begin(),original.layers.end(),[&](const Layer&l){return l.id==active;});if(it==original.layers.end())return {};settings=QJsonDocument::fromJson(QByteArray::fromStdString(it->adjustmentJson)).object();}
-    else settings=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson(requestedKind.toStdString()))).object();
+    else settings=QJsonDocument::fromJson(QByteArray::fromStdString(!live&&!options.initialAdjustmentJson.empty()?options.initialAdjustmentJson:effects::defaultAdjustmentJson(requestedKind.toStdString()))).object();
     const QString kind=settings["kind"].toString();
     if(kind=="Exposure"&&!settings.contains("exposureSettings"))settings["exposureSettings"]=Object{{"exposure",0},{"offset",0},{"gamma",1}};
     if(kind=="Gradient Map"&&!settings.contains("gradientMapSettings"))settings["gradientMapSettings"]=Object{{"shadows",Object{{"red",0},{"green",0},{"blue",0}}},{"highlights",Object{{"red",1},{"green",1},{"blue",1}}},{"reversed",false}};
@@ -165,7 +165,14 @@ std::optional<AdjustmentDialogResult> showAdjustmentDialog(QWidget*parent,const 
     std::function<void()> start=[&]{if(closing)return;if(watcher.isRunning()){pending=true;return;}pending=false;runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked();status.setText("Updating preview...");watcher.setFuture(QtConcurrent::run([original,active,json,live,existing,insertedId,showPreview]{return makePreview(original,active,json,live,existing,insertedId,showPreview);}));};
     QObject::connect(&debounce,&QTimer::timeout,&dialog,start);
     QObject::connect(&watcher,&QFutureWatcher<PreviewResult>::finished,&dialog,[&]{if(closing)return;auto result=watcher.result();if(pending||runningRevision!=revision){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);return;}completed=std::move(result.value);preview.setPixmap(QPixmap::fromImage(result.image));status.setText(previewEnabled.isChecked()?"Preview":"Original image  -  preview off");apply->setEnabled(true);});
-    QObject::connect(apply,&QPushButton::clicked,&dialog,&QDialog::accept);QObject::connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);start();
+    QObject::connect(apply,&QPushButton::clicked,&dialog,[&]{
+        if(!live){
+            const auto exposure=settings["exposureSettings"].toObject(),grain=settings["grainSettings"].toObject();
+            if((kind=="Exposure"&&exposure.value("exposure").toDouble()==0&&exposure.value("offset").toDouble()==0&&exposure.value("gamma").toDouble(1)==1)||(kind=="Grain"&&grain.value("amount").toDouble(25)==0)){dialog.reject();return;}
+            if(options.onApply)options.onApply(encoded(settings));
+        }
+        dialog.accept();
+    });QObject::connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);start();
     int answer=dialog.exec();closing=true;debounce.stop();watcher.waitForFinished();histogramWatcher.waitForFinished();
     if(answer!=QDialog::Accepted)return {};return completed;
 }

@@ -3,7 +3,10 @@
 #include "editing/SelectionGesture.h"
 #include "editing_transform/TransformGeometry.h"
 #include "graphics/CanvasViewport.h"
+#include "platform/DisplayProfile.h"
+#include "platform/DisplayProfileWatcher.h"
 #include <QWidget>
+#include <QPointer>
 #include <functional>
 #include <unordered_map>
 #include <d3d11.h>
@@ -35,6 +38,17 @@ class NativeCanvas final:public QWidget {
     double rasterX_{},rasterY_{},rasterUnits_{1};
     struct DisplayTile { std::shared_ptr<const Raster::Tile> source; Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap; };
     std::unordered_map<const Raster::Tile*,DisplayTile> displayTiles_;
+    platform::DisplayProfile displayProfile_;
+    std::unique_ptr<platform::DisplayProfileWatcher> profileWatcher_;
+    std::optional<std::filesystem::path> displayProfileOverride_;
+    QPointer<QWidget> profileWindow_;
+    QMetaObject::Connection profileScreenConnection_;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> presentationScene_;
+    Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
+    bool profileKnown_{},presentationAttempted_{};
+    QString presentationDiagnostic_;
+    uint64_t presentationBytes_{},profileDiscoveryCount_{};
+    uint64_t presentationByteBudget_{128ULL*1024*1024};
     bool warp_,dragging_{},rightDragging_{},tabletActive_{};
     double backingScale_{1};
     bool followsFit_{true};
@@ -44,10 +58,14 @@ class NativeCanvas final:public QWidget {
     void createTarget();
     void upload();
     void releaseDevice();
-    void draw();
+    void draw(bool present=true);
     graphics::CanvasViewport viewportState()const;
     void installViewport(const graphics::CanvasViewport&);
     void synchronizeViewport();
+    void watchPresentationWindow();
+    void resetPresentationResources();
+    void preparePresentation();
+    HRESULT finishPresentation();
 public:
     explicit NativeCanvas(bool warp,QWidget* parent=nullptr);
     ~NativeCanvas() override;
@@ -87,6 +105,16 @@ public:
     bool deviceReady()const{return bool(context_);}
     void recreateDevice();
     QImage captureRendered();
+    // Override is local to this canvas; null restores Windows monitor discovery.
+    void setDisplayProfileOverride(std::optional<std::filesystem::path>);
+    void setPresentationBudget(uint64_t bytes);
+    void refreshDisplayProfile();
+    QString presentationProfileHash()const{return QString::fromStdString(displayProfile_.sha256);}
+    QString presentationDiagnostic()const{return presentationDiagnostic_;}
+    bool presentationConvertsColor()const{return bool(presentationEffect_);}
+    uint64_t presentationBytes()const{return presentationBytes_;}
+    uint64_t profileDiscoveryCount()const{return profileDiscoveryCount_;}
+    std::vector<platform::DisplayProfileWatchStatus> profileWatchStatuses()const{return profileWatcher_?profileWatcher_->statuses():std::vector<platform::DisplayProfileWatchStatus>{};}
     QPaintEngine* paintEngine() const override{return nullptr;}
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -100,5 +128,6 @@ protected:
     void tabletEvent(QTabletEvent*) override;
     void leaveEvent(QEvent*) override;
     bool event(QEvent*) override;
+    bool eventFilter(QObject*,QEvent*) override;
 };
 }

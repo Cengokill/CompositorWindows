@@ -102,6 +102,9 @@ class MainWindow final:public QMainWindow {
     bool gradientMask_{};
     std::string shapeDraftId_;
     std::optional<editing::Rect> cropDraft_;
+    QString cropRatioChoice_{"Free"};
+    editing::LassoKind lassoKind_{editing::LassoKind::Freehand};
+    int selectionExpandAmount_{1},selectionContractAmount_{1};
     std::optional<editing::CropDrag> cropDrag_;
     bool ellipse_{},selectionAntialias_{true},movingSelection_{};
     editing::SelectionMode selectionMode_{editing::SelectionMode::Replace};
@@ -165,6 +168,9 @@ class MainWindow final:public QMainWindow {
     void pointerCancel();
     void interruptPointer();
     void selectTool(Tool);
+    std::optional<double> cropRatio();
+    void changeCropRatio();
+    void resizeSelection(bool expand,double amount);
     bool handleEditingKey(QKeyEvent*);
     bool beginTemporaryHand(Point);
     bool updateTemporaryHand(Point,bool finish);

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -123,15 +124,17 @@ class CompositeCache {
     std::optional<Document> previous_;
     std::shared_ptr<const Raster> output_;
     std::optional<Document> viewportPrevious_;
-    std::vector<std::shared_ptr<const Raster::Tile>> viewportTiles_;
-    std::vector<uint64_t> viewportUse_;
-    double viewportUnits_{};
+    struct ViewportTile {std::shared_ptr<const Raster::Tile> pixels;uint64_t use{};};
+    std::map<std::pair<int,int>,ViewportTile> viewportTiles_;
+    double viewportUnits_{},viewportPhaseX_{},viewportPhaseY_{};
     uint64_t viewportTick_{};
     std::shared_ptr<const LayerRenderPreview> viewportPreview_;
 public:
     std::shared_ptr<const Raster> render(const Document&);
     CompositeViewport renderViewport(const Document&,double x,double y,double width,double height,double unitsPerPixel=1,size_t maxVisibleTiles=64,size_t maxRetainedTiles=256,std::shared_ptr<const LayerRenderPreview> preview={});
-    void reset(){previous_.reset();output_.reset();viewportPrevious_.reset();viewportTiles_.clear();viewportUse_.clear();viewportUnits_=0;viewportTick_=0;viewportPreview_.reset();}
+    size_t viewportRetainedTiles()const{return viewportTiles_.size();}
+    size_t viewportMetadataEntries()const{return viewportTiles_.size();}
+    void reset(){previous_.reset();output_.reset();viewportPrevious_.reset();viewportTiles_.clear();viewportUnits_=viewportPhaseX_=viewportPhaseY_=0;viewportTick_=0;viewportPreview_.reset();}
 };
 struct Snapshot { std::optional<Document> document; std::string activeLayer; uint64_t revision{}; };
 class History {

@@ -26,7 +26,9 @@ void MainWindow::adjust(const QString&kind,bool live,bool existing){
     auto*p=current();auto*l=active();
     if(!p||!p->document||(!live&&(!l||!l->raster||l->group||!l->adjustmentJson.empty())))return;
     const auto before=*p->document;const auto id=p->active;
-    auto result=showAdjustmentDialog(this,before,id,kind,live,existing);
+    AdjustmentDialogOptions options;
+    if(!live){options.initialAdjustmentJson=p->toolState.filterSettings.beginAdjustment(kind,foreground_,background_);options.onApply=[p](const std::string& json){p->toolState.filterSettings.rememberAdjustment(json);};}
+    auto result=showAdjustmentDialog(this,before,id,kind,live,existing,options);
     if(!result)return;
     if(p!=current()||!p->document||*p->document!=before){QMessageBox::information(this,"Adjustment","The project changed while the adjustment was open. Reopen the adjustment to apply it.");return;}
     edit(existing?"Edit Adjustment":live?"Add Adjustment Layer":"Adjust Image",[&](Document&d){d=std::move(result->document);p->active=result->active;});
@@ -39,7 +41,9 @@ void MainWindow::removeBackground(){
     if(l->mask&&!l->mask->placement&&l->mask->raster&&l->mask->raster->width==int(image.width)&&l->mask->raster->height==int(image.height))old=imaging::GrayMask{image.width,image.height,image.width,l->mask->raster->pixels};
     auto model=QDir(QApplication::applicationDirPath()).filePath("models/birefnet-lite.onnx");
     if(!QFileInfo::exists(model))model=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/dependencies/imaging/model/birefnet-lite.onnx";
-    auto result=imaging::showSubjectDialog(this,image,old?&*old:nullptr,std::filesystem::path(model.toStdWString()));
+    imaging::SubjectDialogOptions options;options.initial=p->toolState.filterSettings.background;
+    options.onApply=[p](const imaging::MatteSettings& settings){p->toolState.filterSettings.background=settings;};
+    auto result=imaging::showSubjectDialog(this,image,old?&*old:nullptr,std::filesystem::path(model.toStdWString()),options);
     if(!result)return;
     if(p!=current()||!active()||active()->id!=original.id||active()->raster!=original.raster||active()->transform!=original.transform)return;
     auto mask=std::make_shared<GrayRaster>();mask->width=int(result->width);mask->height=int(result->height);mask->pixels=std::move(result->pixels);

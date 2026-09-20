@@ -2,7 +2,9 @@
 #define NOMINMAX
 #endif
 #include "onnx_subject_provider.h"
+#define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
+#undef ORT_API_MANUAL_INIT
 #include <windows.h>
 #include <bcrypt.h>
 #include <array>
@@ -13,6 +15,22 @@
 #include <mutex>
 namespace compositor::imaging {
 namespace {
+void initializeRuntime(){
+    // Resolve once on the first inference request, before any Ort wrapper member
+    // can dereference its API table. A system DLL may be older than our headers.
+    static std::once_flag initialized;
+    std::call_once(initialized,[]{
+        const auto* base=OrtGetApiBase();const auto* api=base?base->GetApi(ORT_API_VERSION):nullptr;
+        if(!api){
+            std::array<wchar_t,32768> path{};const auto module=GetModuleHandleW(L"onnxruntime.dll");
+            const DWORD length=module?GetModuleFileNameW(module,path.data(),DWORD(path.size())):0;
+            const auto utf8=length?std::filesystem::path(std::wstring(path.data(),length)).u8string():std::u8string(u8"unknown module");
+            const std::string loaded(utf8.begin(),utf8.end());
+            throw std::runtime_error("ONNX Runtime API "+std::to_string(ORT_API_VERSION)+" is unavailable; loaded "+(base?base->GetVersionString():"unknown version")+" from "+loaded);
+        }
+        Ort::InitApi(api);
+    });
+}
 std::string hash(const std::filesystem::path& file){
     BCRYPT_ALG_HANDLE alg{};BCRYPT_HASH_HANDLE value{};
     if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0)throw std::runtime_error("SHA256 initialization failed");
@@ -47,7 +65,7 @@ struct OnnxSubjectProvider::Impl {
         if(in.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT||out.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT||in.GetShape()!=std::vector<int64_t>{1,3,1024,1024}||out.GetShape()!=std::vector<int64_t>{1,1,1024,1024})throw std::runtime_error("Unexpected model tensor format");
     }
 };
-OnnxSubjectProvider::OnnxSubjectProvider(const std::filesystem::path& path):impl_(std::make_unique<Impl>(path)){}
+OnnxSubjectProvider::OnnxSubjectProvider(const std::filesystem::path& path){initializeRuntime();impl_=std::make_unique<Impl>(path);}
 OnnxSubjectProvider::~OnnxSubjectProvider()=default;
 GrayMask OnnxSubjectProvider::infer(const RgbaImage& image,const ImportOptions& options){
     return inferImpl(image,options,true);

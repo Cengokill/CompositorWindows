@@ -134,7 +134,7 @@ std::shared_ptr<const Raster> StackRenderer::render(const Document& d,int x,int 
 std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,double x,double y,int width,int height,double unitsPerPixel)const{
     if(width<1||height<1||width>30000||height>30000||uint64_t(width)*height>100000000||
        !std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
-       !std::isfinite(unitsPerPixel)||unitsPerPixel<1||unitsPerPixel>32768)
+       !std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768)
         throw std::invalid_argument("Invalid scaled render region");
     return Render(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_).run();
 }

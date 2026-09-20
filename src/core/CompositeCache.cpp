@@ -72,41 +72,61 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");*found=preview->layer;}
     validateDocument(doc);
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(width)||!std::isfinite(height)||!std::isfinite(x+width)||!std::isfinite(y+height)||width<0||height<0||
-       !std::isfinite(requestedUnits)||requestedUnits<=0||requestedUnits>30000||maxVisibleTiles<1||maxVisibleTiles>16384||maxRetainedTiles<maxVisibleTiles||maxRetainedTiles>16384)
+       !std::isfinite(requestedUnits)||requestedUnits<1./32||requestedUnits>30000||maxVisibleTiles<1||maxVisibleTiles>16384||maxRetainedTiles<maxVisibleTiles||maxRetainedTiles>16384)
         throw std::invalid_argument("Invalid viewport or tile budget");
     CompositeViewport result;result.documentWidth=doc.width;result.documentHeight=doc.height;
-    double left=std::clamp(x,0.,double(doc.width)),top=std::clamp(y,0.,double(doc.height));double right=std::clamp(x+width,0.,double(doc.width)),bottom=std::clamp(y+height,0.,double(doc.height));
+    const double left=std::clamp(x,0.,double(doc.width)),top=std::clamp(y,0.,double(doc.height)),right=std::clamp(x+width,0.,double(doc.width)),bottom=std::clamp(y+height,0.,double(doc.height));
     if(right<=left||bottom<=top)return result;
-    double units=std::pow(2.,std::ceil(std::log2(std::max(1.,requestedUnits))));int pixelWidth{},pixelHeight{},columns{},rows{},tx0{},ty0{},tx1{},ty1{};
-    for(;;){pixelWidth=int(std::ceil(doc.width/units));pixelHeight=int(std::ceil(doc.height/units));columns=(pixelWidth+255)/256;rows=(pixelHeight+255)/256;double side=256*units;tx0=int(std::floor(left/side));ty0=int(std::floor(top/side));tx1=std::min(columns,int(std::ceil(right/side)));ty1=std::min(rows,int(std::ceil(bottom/side)));if(size_t(tx1-tx0)*size_t(ty1-ty0)<=maxVisibleTiles)break;units*=2;}
-    result.unitsPerPixel=units;result.documentX=tx0*256*units;result.documentY=ty0*256*units;
-    if(viewportUnits_!=units||viewportTiles_.size()!=size_t(columns)*rows){viewportPrevious_.reset();viewportTiles_.assign(size_t(columns)*rows,{});viewportUse_.assign(viewportTiles_.size(),0);viewportUnits_=units;viewportTick_=0;}
-    // Compare canonical documents separately from ephemeral crop metadata. The
-    // snapshot damage map uses original source coordinates across crop growth.
-    auto invalid=invalidTiles(viewportPrevious_,input,units,columns,rows);
-    const auto identity=preview?preview->identity:std::shared_ptr<const void>{};
-    if(identity!=(viewportPreview_?viewportPreview_->identity:std::shared_ptr<const void>{})){
-        std::optional<std::vector<LayerRenderPreview::Damage>> damage;
-        if(preview&&preview->damageComparedWith)damage=preview->damageComparedWith(viewportPreview_.get());
-        else if(!preview&&viewportPreview_&&viewportPreview_->damageComparedWith)damage=viewportPreview_->damageComparedWith(nullptr);
-        // Effects and live clipping can propagate changed source pixels outside
-        // the painted layer; retain conservative complete invalidation there.
-        const bool dependent=std::any_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return !layer.maskSourceId.empty()||!layer.adjustmentJson.empty();});
-        const auto reduced=[&](const LayerRenderPreview* source){if(!source)return false;const auto& layer=source->layer;const auto image=source->imageSource?source->imageSource:graphics::samplingSource(layer.raster);if(image&&layer.transform.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(layer.transform.width/(units*image->width)))return true;if(layer.mask&&layer.mask->enabled){const auto mask=source->maskSource?source->maskSource:graphics::samplingSource(layer.mask->raster);const auto placement=layer.mask->placement.value_or(layer.transform);if(mask&&placement.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(placement.width/(units*mask->width)))return true;}return false;};
-        // A halving's filter halo reaches farther than the level-zero damage
-        // rectangles. Until that support is mapped, invalidate all output tiles.
-        if(!damage||dependent||reduced(preview.get())||reduced(viewportPreview_.get()))std::fill(invalid.begin(),invalid.end(),uint8_t(1));
-        else for(const auto& rect:*damage){const double side=256*units;const int x0=int(std::clamp(std::floor(rect.left/side),0.,double(columns))),y0=int(std::clamp(std::floor(rect.top/side),0.,double(rows))),x1=int(std::clamp(std::ceil(rect.right/side),0.,double(columns))),y1=int(std::clamp(std::ceil(rect.bottom/side),0.,double(rows)));for(int ty=y0;ty<y1;++ty)for(int tx=x0;tx<x1;++tx)invalid[size_t(ty)*columns+tx]=1;}
+    // Put pixel zero at or immediately before the document origin. The phase
+    // remains congruent to the physical viewport origin, including fractional
+    // pan. Sparse tile keys then stay nonnegative without a document-sized array.
+    const auto phase=[](double origin,double units){double value=std::fmod(origin,units);if(value>0)value-=units;return value==0?0:value;};
+    double units=requestedUnits,px{},py{};int pixelWidth{},pixelHeight{},tx0{},ty0{},tx1{},ty1{},patchWidth{},patchHeight{};
+    for(;;){px=phase(x,units);py=phase(y,units);pixelWidth=int(std::ceil((doc.width-px)/units));pixelHeight=int(std::ceil((doc.height-py)/units));const double side=256*units;
+        tx0=std::max(0,int(std::floor((left-px)/side)));ty0=std::max(0,int(std::floor((top-py)/side)));tx1=int(std::ceil((right-px)/side));ty1=int(std::ceil((bottom-py)/side));
+        patchWidth=std::min(pixelWidth,tx1*256)-tx0*256;patchHeight=std::min(pixelHeight,ty1*256)-ty0*256;
+        if(size_t(tx1-tx0)*size_t(ty1-ty0)<=maxVisibleTiles&&patchWidth<=30000&&patchHeight<=30000&&uint64_t(patchWidth)*patchHeight<=100000000)break;
+        units*=2;
     }
-    for(size_t i=0;i<invalid.size();++i)if(invalid[i]){viewportTiles_[i].reset();viewportUse_[i]=0;}
-    if(std::any_of(invalid.begin(),invalid.end(),[](uint8_t value){return value!=0;}))validateCulledAdjustments(doc,preview);
-    ++viewportTick_;auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);
-    auto patch=std::make_shared<Raster>();patch->width=std::min(pixelWidth,tx1*256)-tx0*256;patch->height=std::min(pixelHeight,ty1*256)-ty0*256;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
-    for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){size_t index=size_t(ty)*columns+tx;auto& tile=viewportTiles_[index];if(!tile){int px=tx*256,py=ty*256,w=std::min(256,pixelWidth-px),h=std::min(256,pixelHeight-py);if(direct)tile=direct->tiles[index];else if(!touches(painted,px*units,py*units,w*units,h*units))tile=zeroTile();else tile=renderer.renderScaled(doc,px*units,py*units,w,h,units)->tiles.front();}viewportUse_[index]=viewportTick_;patch->tiles.push_back(tile);}
-    // Retained source/display handles are bounded independently of document area.
-    // The returned immutable patch owns its visible handles until its caller drops it.
-    std::vector<size_t> retained;for(size_t i=0;i<viewportTiles_.size();++i)if(viewportTiles_[i])retained.push_back(i);
-    if(retained.size()>maxRetainedTiles){std::sort(retained.begin(),retained.end(),[&](size_t a,size_t b){return viewportUse_[a]<viewportUse_[b];});size_t remove=retained.size()-maxRetainedTiles;for(size_t i=0;i<remove;++i){auto at=retained[i];viewportTiles_[at].reset();viewportUse_[at]=0;}}
+    result.unitsPerPixel=units;result.documentX=px+tx0*256*units;result.documentY=py+ty0*256*units;
+    bool all=viewportUnits_!=units||viewportPhaseX_!=px||viewportPhaseY_!=py;
+    std::vector<Bounds> damage;
+    const bool dependent=std::any_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return !layer.maskSourceId.empty()||!layer.adjustmentJson.empty();});
+    // Compare canonical documents independently from transient preview metadata.
+    // Only retained output entries will be checked against these damage bounds.
+    if(!viewportPrevious_||viewportPrevious_->width!=input.width||viewportPrevious_->height!=input.height||viewportPrevious_->layers.size()!=input.layers.size())all=true;
+    else for(size_t index=0;index<input.layers.size()&&!all;++index){const auto& before=viewportPrevious_->layers[index];const auto& after=input.layers[index];if(before==after)continue;auto metadata=before;metadata.raster=after.raster;
+        if(metadata!=after||!before.raster||!after.raster||before.raster->width!=after.raster->width||before.raster->height!=after.raster->height||before.raster->samplingOriginX!=after.raster->samplingOriginX||before.raster->samplingOriginY!=after.raster->samplingOriginY||dependent||
+           (after.transform.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(after.transform.width/(units*after.raster->width)))){all=true;break;}
+        const int columns=(after.raster->width+255)/256;
+        for(size_t tile=0;tile<after.raster->tiles.size();++tile)if(before.raster->tiles[tile]!=after.raster->tiles[tile]){const int sx=int(tile%columns)*256,sy=int(tile/columns)*256;damage.push_back(bounds(after.transform,double(sx-1)/after.raster->width,double(sy-1)/after.raster->height,258./after.raster->width,258./after.raster->height));}
+    }
+    const auto identity=preview?preview->identity:std::shared_ptr<const void>{};
+    if(!all&&identity!=(viewportPreview_?viewportPreview_->identity:std::shared_ptr<const void>{})){
+        std::optional<std::vector<LayerRenderPreview::Damage>> changed;
+        if(preview&&preview->damageComparedWith)changed=preview->damageComparedWith(viewportPreview_.get());
+        else if(!preview&&viewportPreview_&&viewportPreview_->damageComparedWith)changed=viewportPreview_->damageComparedWith(nullptr);
+        const auto reduced=[&](const LayerRenderPreview* source){if(!source)return false;const auto& layer=source->layer;const auto image=source->imageSource?source->imageSource:graphics::samplingSource(layer.raster);if(image&&layer.transform.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(layer.transform.width/(units*image->width)))return true;if(layer.mask&&layer.mask->enabled){const auto mask=source->maskSource?source->maskSource:graphics::samplingSource(layer.mask->raster);const auto placement=layer.mask->placement.value_or(layer.transform);if(mask&&placement.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(placement.width/(units*mask->width)))return true;}return false;};
+        // Reduced filter support is broader than the level-zero brush damage.
+        if(!changed||dependent||reduced(preview.get())||reduced(viewportPreview_.get()))all=true;
+        else for(const auto& rect:*changed)damage.push_back({rect.left,rect.top,rect.right,rect.bottom});
+    }
+    if(all)viewportTiles_.clear();
+    else if(!damage.empty())for(auto it=viewportTiles_.begin();it!=viewportTiles_.end();){const double dx=px+it->first.first*256*units,dy=py+it->first.second*256*units;if(touches(damage,dx,dy,256*units,256*units))it=viewportTiles_.erase(it);else ++it;}
+    if(all||!damage.empty())validateCulledAdjustments(doc,preview);
+    viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
+    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);
+    auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
+    for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){const std::pair<int,int> key{tx,ty};auto found=viewportTiles_.find(key);if(found==viewportTiles_.end()){
+            const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;Tile tile;
+            if(direct)tile=direct->tiles[size_t(ty)*((direct->width+255)/256)+tx];else if(!touches(painted,dx,dy,w*units,h*units))tile=zeroTile();else tile=renderer.renderScaled(doc,dx,dy,w,h,units)->tiles.front();
+            while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
+            found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
+        }else found->second.use=viewportTick_;patch->tiles.push_back(found->second.pixels);
+    }
+    // The returned patch owns its visible immutable tiles; cache entries and
+    // their metadata are bounded independently of document area and zoom.
+    while(viewportTiles_.size()>maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
     viewportPrevious_=input;viewportPreview_=std::move(preview);result.raster=std::move(patch);return result;
 }
 }

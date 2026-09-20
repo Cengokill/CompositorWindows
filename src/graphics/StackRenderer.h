@@ -12,7 +12,8 @@ class StackRenderer final:public IRasterBackend {
 public:
     explicit StackRenderer(AdjustmentCallback adjustment={},std::shared_ptr<const LayerRenderPreview> preview={}):adjustment_(std::move(adjustment)),preview_(std::move(preview)){}
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height)const override;
-    // Display sampling on the original document geometry. Export stays at step 1.
+    // Physical display sampling on original geometry (steps 1/32 through 32768).
+    // Export stays at step 1. x/y is the corner before the first pixel center.
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel)const;
 private:
     AdjustmentCallback adjustment_;

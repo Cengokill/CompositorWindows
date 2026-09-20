@@ -10,8 +10,14 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     constexpr int chunkWidth = 1024;
     std::size_t renderBound = 0;
     SoftwareRenderer renderer;
+    // A stack with no image or adjustment has no color contribution, including
+    // empty layers/folders with masks. Fill its encoder stripes directly instead
+    // of allocating and discarding transparent Raster tiles for every chunk.
+    // Adjustments still go through the renderer so invalid effects remain errors.
+    const bool emptyStack=std::none_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.raster||!layer.adjustmentJson.empty();});
     auto result = imaging::encodeRowsAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height),
         [&](std::uint32_t top, std::uint32_t rows, std::span<std::uint8_t> output, std::size_t stride) {
+            if(emptyStack){for(std::uint32_t y=0;y<rows;++y)std::fill_n(output.data()+std::size_t(y)*stride,std::size_t(document.width)*4,uint8_t(0));return;}
             for (int left = 0; left < document.width; left += chunkWidth) {
                 if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
                 const int width = std::min(chunkWidth, document.width - left);

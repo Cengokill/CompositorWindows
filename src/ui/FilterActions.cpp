@@ -36,7 +36,7 @@ void MainWindow::runFilter(int kindIndex){
     auto*p=current();auto*l=active();if(!p||!p->document||!l||!l->raster||l->group||!l->adjustmentJson.empty())return;
     const auto kind=filters::Kind(kindIndex);if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
     const auto before=*p->document;const auto original=*l;
-    filters::Request request;request.kind=kind;request.source=l->raster;request.transform=l->transform;request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,original,kind);
+    filters::Request request;request.settings=p->toolState.filterSettings.pixels;request.kind=kind;request.source=l->raster;request.transform=l->transform;request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,original,kind);
     const QStringList names{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill"};
     QDialog dialog(this);dialog.setWindowTitle(names[kindIndex]);QVBoxLayout layout(&dialog);QFormLayout fields;layout.addLayout(&fields);
     QLabel preview;preview.setMinimumSize(500,320);preview.setAlignment(Qt::AlignCenter);layout.addWidget(&preview,1);QLabel status;status.setWordWrap(true);layout.addWidget(&status);
@@ -48,7 +48,7 @@ void MainWindow::runFilter(int kindIndex){
     switch(kind){
         case filters::Kind::GaussianBlur:number("Radius",request.settings.radius,.1,250,1);break;
         case filters::Kind::MotionBlur:number("Angle",request.settings.angle,-90,90,1);number("Distance",request.settings.distance,1,2000,1);break;
-        case filters::Kind::AddNoise:{number("Amount",request.settings.amount,.1,400,1);auto*gaussian=new QCheckBox("Gaussian");auto*mono=new QCheckBox("Monochromatic");fields.addRow(gaussian);fields.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog,[&](bool v){request.settings.gaussian=v;change();});connect(mono,&QCheckBox::toggled,&dialog,[&](bool v){request.settings.monochromatic=v;change();});break;}
+        case filters::Kind::AddNoise:{number("Amount",request.settings.amount,.1,400,1);auto*gaussian=new QCheckBox("Gaussian");auto*mono=new QCheckBox("Monochromatic");gaussian->setChecked(request.settings.gaussian);mono->setChecked(request.settings.monochromatic);fields.addRow(gaussian);fields.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog,[&](bool v){request.settings.gaussian=v;change();});connect(mono,&QCheckBox::toggled,&dialog,[&](bool v){request.settings.monochromatic=v;change();});break;}
         case filters::Kind::LensCorrection:number("Distortion",request.settings.distortion,-100,100,1);break;
         case filters::Kind::ContentAwareFill:break;
     }
@@ -59,8 +59,14 @@ void MainWindow::runFilter(int kindIndex){
         status.setText(full?"Applying filter…":"Updating preview…");const bool fullJob=full;
         worker.setFuture(QtConcurrent::run([job,before,original,fullJob]{FilterOutput out;out.full=fullJob;try{auto result=filters::apply(job);out.layer=original;out.layer.raster=result.raster;out.layer.transform=result.transform;if(result.changed)out.layer.shapeJson.clear();auto doc=before;for(auto&layer:doc.layers)if(layer.id==original.id)layer=out.layer;auto raster=SoftwareRenderer().render(doc,0,0,doc.width,doc.height);auto pixels=raster->rgba();out.image=QImage(pixels.data(),doc.width,doc.height,doc.width*4,QImage::Format_RGBA8888_Premultiplied).scaled(640,420,Qt::KeepAspectRatio,Qt::SmoothTransformation);}catch(const std::exception&e){out.error=e.what();}return out;}));
     };
-    connect(&debounce,&QTimer::timeout,&dialog,start);connect(&worker,&QFutureWatcher<FilterOutput>::finished,&dialog,[&]{if(closing)return;auto result=worker.result();if(pending||runningVersion!=version){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);full=false;return;}preview.setPixmap(QPixmap::fromImage(result.image));if(result.full){completed=result.layer;dialog.accept();return;}status.setText("Preview");apply->setEnabled(true);});
-    connect(apply,&QPushButton::clicked,&dialog,[&]{full=true;apply->setEnabled(false);start();});connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    connect(&debounce,&QTimer::timeout,&dialog,start);connect(&worker,&QFutureWatcher<FilterOutput>::finished,&dialog,[&]{if(closing)return;auto result=worker.result();if(pending||runningVersion!=version){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);buttons.button(QDialogButtonBox::Cancel)->setEnabled(true);full=false;return;}preview.setPixmap(QPixmap::fromImage(result.image));if(result.full){completed=result.layer;dialog.accept();return;}status.setText("Preview");apply->setEnabled(true);});
+    connect(apply,&QPushButton::clicked,&dialog,[&]{
+        // Filters.swift389-395 remembers at the start of a real commit, including
+        // later processing errors. A neutral lens Apply follows Cancel instead.
+        if(kind==filters::Kind::LensCorrection&&request.settings.distortion==0){dialog.reject();return;}
+        p->toolState.filterSettings.pixels=request.settings.normalized();
+        full=true;apply->setEnabled(false);buttons.button(QDialogButtonBox::Cancel)->setEnabled(false);start();
+    });connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
     start();int answer=dialog.exec();closing=true;cancel->store(true);debounce.stop();worker.waitForFinished();
     if(answer==QDialog::Accepted&&completed&&p==current()&&p->document&&*p->document==before)edit(names[kindIndex].toUtf8().constData(),[&](Document&){*active()=std::move(*completed);});
 }

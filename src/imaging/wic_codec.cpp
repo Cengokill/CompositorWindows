@@ -2,6 +2,7 @@
 #define NOMINMAX
 #endif
 #include "wic_codec.h"
+#include "win32_file_path.h"
 #include <windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -23,7 +24,8 @@ ComPtr<IWICColorContext> srgb(IWICImagingFactory* f){ComPtr<IWICColorContext> c;
 ComPtr<IWICBitmapSource> convert(IWICImagingFactory* f,IWICBitmapSource* source,REFWICPixelFormatGUID format){ComPtr<IWICFormatConverter> c;ok(f->CreateFormatConverter(&c),"Create converter");ok(c->Initialize(source,format,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom),"Convert pixel format");ComPtr<IWICBitmapSource> out;ok(c.As(&out),"Query bitmap source");return out;}
 void premultiply(std::vector<std::uint8_t>& p){for(std::size_t i=0;i<p.size();i+=4)for(int c=0;c<3;++c)p[i+c]=std::uint8_t((unsigned(p[i+c])*p[i+3]+127)/255);}
 }
-DecodedImage WicCodec::decode(const std::filesystem::path& path,const ImportOptions& options){
+DecodedImage WicCodec::decode(const std::filesystem::path& filename,const ImportOptions& options){
+    const auto path=win32FilePath(filename);
     checkCancelled(options);Apartment apartment;auto f=factory();ComPtr<IWICBitmapDecoder> decoder;
     ok(f->CreateDecoderFromFilename(path.c_str(),nullptr,GENERIC_READ,WICDecodeMetadataCacheOnDemand,&decoder),"Open image");
     GUID container{};ok(decoder->GetContainerFormat(&container),"Read image type");
@@ -63,7 +65,8 @@ void WicCodec::normalizeStraightRgba(std::span<std::uint8_t> rgba,std::uint32_t 
     auto dest=srgb(f.Get());ComPtr<IWICColorTransform> transform;ok(f->CreateColorTransformer(&transform),"Create ICC transform");ok(transform->Initialize(bitmap.Get(),context.Get(),dest.Get(),GUID_WICPixelFormat32bppRGBA),"Normalize HEIC ICC to sRGB");
     std::vector<std::uint8_t> copy(rgba.size());ok(transform->CopyPixels(nullptr,w*4,static_cast<UINT>(copy.size()),copy.data()),"Read ICC transformed pixels");std::copy(copy.begin(),copy.end(),rgba.begin());
 }
-void WicCodec::encode(const std::filesystem::path& path,const RgbaImage& image,const ExportOptions& options){
+void WicCodec::encode(const std::filesystem::path& filename,const RgbaImage& image,const ExportOptions& options){
+    const auto path=win32FilePath(filename);
     validate(image);if(!std::isfinite(options.dpi)||options.dpi<=0||!std::isfinite(options.jpegQuality))throw std::runtime_error("Invalid export settings");
     auto cancelled=[&]{if(options.cancelled&&options.cancelled())throw std::runtime_error("Image export cancelled");};cancelled();Apartment apartment;auto f=factory();
     GUID id{};ok(CoCreateGuid(&id),"Create output identifier");wchar_t guid[40]{};StringFromGUID2(id,guid,40);auto temp=path;temp+=std::wstring(L".")+guid+L".tmp";
