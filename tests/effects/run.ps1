@@ -1,0 +1,15 @@
+$ErrorActionPreference = 'Stop'
+$taskWindows = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+. (Join-Path $taskWindows 'scripts\bootstrap.ps1') -Offline
+$taskBuild = Join-Path $PSScriptRoot 'build'
+$taskQt = Join-Path $taskWindows 'dependencies\qt'
+& cmake -S $PSScriptRoot -B $taskBuild -G 'Visual Studio 17 2022' -A x64 "-DCMAKE_PREFIX_PATH=$taskQt" '-DCMAKE_SYSTEM_VERSION=10.0.26100.0'
+if ($LASTEXITCODE) { throw 'Effects configure failed' }
+& cmake --build $taskBuild --config Debug
+if ($LASTEXITCODE) { throw 'Effects build failed' }
+& ctest --test-dir $taskBuild -C Debug --output-on-failure --output-junit (Join-Path $PSScriptRoot 'results.xml')
+if ($LASTEXITCODE) { throw 'Effects tests failed' }
+& (Join-Path $taskBuild 'Debug\effects_tests.exe') levels_upstream_conflict > (Join-Path $PSScriptRoot 'levels-source-test-conflict.json')
+$taskConflictExit = $LASTEXITCODE
+Write-Host "Source/test conflict characterization exit code: $taskConflictExit (retained separately from native implementation checks)."
+if ($taskConflictExit -ne 1) { throw 'Conflict characterization changed; review source and evidence before continuing' }

@@ -1,0 +1,25 @@
+{
+    "actual_pinned_call_sequence": [
+        0,
+        32,
+        64,
+        128
+    ],
+    "expected_upstream_assertion": [
+        64,
+        96,
+        128,
+        128
+    ],
+    "id": "SOURCE-TEST-CONFLICT-LEVELS-ALPHA",
+    "input": [
+        64,
+        32,
+        0,
+        128
+    ],
+    "mac_reference": "blocked_reference",
+    "result": "fail",
+    "source": "Levels.swift:80-94 and LevelsPixels.c:3-16",
+    "test": "LevelsTests.inputClippingGammaOutputInversionAndAlpha"
+}
