@@ -1,0 +1,62 @@
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\valid
+exit=2
+Development update signing key requires explicit opt-in
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\valid --allow-test-key
+exit=0
+{"available":true,"channel":"test","version":"0.2.0"}
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\valid --allow-test-key
+exit=0
+{"installed":true,"version":"0.2.0"}
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\valid --allow-test-key
+exit=0
+{"available":false,"channel":"test","version":"0.2.0"}
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\downgrade --allow-test-key
+exit=2
+Update downgrade rejected
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\channel --allow-test-key
+exit=2
+Update channel mismatch
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\version --allow-test-key
+exit=2
+Version must be strict major.minor.patch
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\signature --allow-test-key
+exit=2
+Update metadata signature rejected
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\tamper --allow-test-key
+exit=2
+Downloaded payload exceeds signed size
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\traversal --allow-test-key
+exit=2
+Unsafe payload path component
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\reserved --allow-test-key
+exit=2
+Reserved payload path
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\duplicate --allow-test-key
+exit=2
+Duplicate payload path
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\cancel --allow-test-key --cancel-after-bytes 65536
+exit=2
+Update cancelled
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\unhealthy --allow-test-key
+exit=2
+Installed application health check failed
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\rename-failure --allow-test-key --fault after-version
+exit=2
+Injected install failure after version rename
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\rename-failure --allow-test-key
+exit=0
+{"installed":true,"version":"0.4.0"}
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\crash --allow-test-key --fault crash-after-activation
+exit=86
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\locked-pointer --allow-test-key
+exit=2
+Activate update pointer (Windows error 5)
+> check --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\install-junction --test-feed H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\valid --allow-test-key
+exit=2
+Install paths must be ordinary directories, without reparse points
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed http://127.0.0.1:60151/http/valid/ --allow-test-key
+exit=0
+{"installed":true,"version":"0.7.0"}
+> install --root H:\CompositorWindows\windows\tests\update\results\run-20260920-011446-b3fda675\Install with 日本語 space --test-feed http://127.0.0.1:60151/http/interrupt/ --allow-test-key
+exit=2
+Downloaded payload hash/signature rejected
