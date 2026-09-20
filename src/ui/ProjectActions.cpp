@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QScopeGuard>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QVBoxLayout>
@@ -51,7 +52,7 @@ bool MainWindow::canSwitchProjects(){
 }
 void MainWindow::switchProject(){
     auto*next=current();if(next==activeProject_){refresh(false);return;}
-    if(activeProject_&&!canSwitchProjects()){
+    if(activeProject_&&!selectingProjectForOpen_&&!canSwitchProjects()){
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==activeProject_){QSignalBlocker block(tabs_);tabs_->setCurrentIndex(int(i));break;}
         return;
     }
@@ -86,8 +87,20 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     row->addWidget(panel);row->addStretch();outer->addLayout(row);outer->addStretch();raw->page->addWidget(raw->welcome);raw->page->addWidget(raw->canvas);
     projects_.push_back(std::move(project));const auto index=tabs_->addTab(raw->page,raw->defaultTitle);tabs_->setCurrentIndex(index);switchProject();width->setFocus();return *raw;
 }
-EditorProject& MainWindow::addProject(Document document,QString title){
-    validateDocument(document);auto&project=addEmptyProject();project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;
+EditorProject& MainWindow::addProject(Document document,QString title,bool reuseEmpty){
+    validateDocument(document);
+    const auto restoreNumber=qScopeGuard([this,reuseEmpty,number=nextProjectNumber_]{if(!reuseEmpty)nextProjectNumber_=number;});
+    const bool replaceWelcome=!reuseEmpty&&projects_.size()==1&&!projects_.front()->document&&!projects_.front()->importing&&!projects_.front()->projectBusy&&(!importQueue_||!importQueue_->contains(projects_.front()->canvas));
+    auto&project=addEmptyProject(reuseEmpty);project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;
+    if(replaceWelcome){
+        // ProjectWorkspace.swift:81-86: attach the successfully loaded fresh
+        // session before discarding the sole empty welcome session. Tab-change
+        // callbacks already selected the new owner in addEmptyProject(false).
+        auto* previous=projects_.front().get();detach(previous->canvas);
+        previous->page->setEnabled(false);previous->page->hide();
+        {QSignalBlocker blocked(tabs_);tabs_->removeTab(0);}
+        previous->page->deleteLater();projects_.erase(projects_.begin());
+    }
     refresh();project.canvas->fit();project.canvas->setFocus();return project;
 }
 void MainWindow::newDialog(){if(canSwitchProjects())addEmptyProject(false);}

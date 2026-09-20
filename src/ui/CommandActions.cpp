@@ -10,7 +10,8 @@ namespace compositor {
 ui::CommandState MainWindow::commandState(EditorProject* owner){
     ui::CommandState state;
     auto* project=owner?owner:current();
-    state.modalDialog=QApplication::activeModalWidget()!=nullptr;
+    state.managing=managingProjectOpen_;
+    state.modalDialog=managingProjectOpen_||QApplication::activeModalWidget()!=nullptr;
     state.brushStroke=bool(stroke_);state.warpStroke=bool(retouch_);
     state.gradient=drawingOriginal_.has_value();state.crop=cropDraft_.has_value();
     state.transformEdit=bool(transformSession_);

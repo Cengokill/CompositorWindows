@@ -72,7 +72,11 @@ void testPreviewAndFailure(){
     q.limits={};q.kind=Kind(999);fails([&]{apply(q);},"unknown filter must fail");q.kind=Kind::AddNoise;auto malformed=std::make_shared<GrayRaster>();malformed->width=1;malformed->height=1;q.selection=SourceSelection{malformed};fails([&]{apply(q);},"malformed coverage must fail");
 }
 int sourceParity(){
-    auto q=request(Kind::GaussianBlur,image(40,20,[](int x,int){return x<20?Pixel{255,255,255,255}:Pixel{};}));q.settings.radius=3;auto result=apply(q);auto alpha=[&](int x){return int(result.raster->pixel(x,10).a);};
+    auto q=request(Kind::GaussianBlur,image(40,20,[](int x,int){return x<20?Pixel{255,255,255,255}:Pixel{};}));q.settings.radius=3;auto result=apply(q);
+    // FilterTests.swift:28 indexes the raw committed buffer. When trimming
+    // makes width < 39, x=38 crosses into the next row rather than sampling
+    // transparent exterior through Raster::pixel's coordinate bounds check.
+    const auto bytes=result.raster->rgba();auto alpha=[&](int x){const auto offset=(size_t(10)*result.raster->width+size_t(x))*4+3;require(offset<bytes.size(),"Upstream Gaussian raw offset exceeds committed allocation");return int(bytes[offset]);};
     std::cout<<"upstream FilterTests.swift:29-31 source Gaussian border assertions: alpha(0)="<<alpha(0)<<" expected255; alpha(20)="<<alpha(20)<<" expected20..235; alpha(38)="<<alpha(38)<<" expected0; grid="<<result.raster->width<<"x"<<result.raster->height<<"\n";
     bool passed=alpha(0)==255&&alpha(20)>20&&alpha(20)<235&&alpha(38)==0;
     std::cout<<(passed?"PASS":"FAIL")<<" source Gaussian raster assertions; upstream grow/unclamped/trim behavior conflicts with border assertion. Mac reference execution remains required.\n";return passed?0:1;

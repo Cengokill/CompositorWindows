@@ -2,6 +2,9 @@
 #include "BrushSession.h"
 #include <map>
 #include <memory>
+#include <functional>
+#include <span>
+#include <vector>
 namespace compositor::graphics {
 struct BrushSourceRect {int x{},y{},width{},height{};bool empty()const{return width<=0||height<=0;}bool operator==(const BrushSourceRect&)const=default;};
 struct BrushTileKey {int x{},y{};auto operator<=>(const BrushTileKey&)const=default;};
@@ -10,6 +13,16 @@ struct GrowingBrushMetrics {
     size_t sparsePixelTiles{},sparsePixelBytes{};
     uint64_t snapshots{},materializedTiles{},reusedTiles{};
 };
+// Synchronous composition only. Published snapshots own pixels, never these spans.
+struct GrowingTileInput {
+    BrushSourceRect rect; // ORIGINAL source-grid coordinates, including negatives
+    BrushSessionGeometry mapping;
+    std::span<const Pixel> original; // stride 256 pixels
+    std::span<const uint8_t> rawCoverage; // stride rect.width, selection not applied
+    std::shared_ptr<const GrayRaster> selection;
+};
+using GrowingTileCompositor=std::function<void(const GrowingTileInput&,std::span<Pixel>)>; // output stride 256
+struct GrowingCoverageTile {BrushSourceRect rect;std::shared_ptr<const BrushTile> coverage;};
 class GrowingBrushSnapshot {
 public:
     struct Impl;
@@ -41,12 +54,19 @@ class GrowingBrushSession {
 public:
     GrowingBrushSession(Layer original,BrushSessionSettings,int canvasWidth,int canvasHeight,
         std::shared_ptr<D3D11BrushCoverage> accelerator={},std::shared_ptr<const GrayRaster> documentSelection={},
-        bool targetMask=false,uint64_t remainingPixelBudget=100000000);
+        bool targetMask=false,uint64_t remainingPixelBudget=100000000,GrowingTileCompositor compositor={});
     ~GrowingBrushSession();
     GrowingBrushSession(const GrowingBrushSession&)=delete;
     GrowingBrushSession& operator=(const GrowingBrushSession&)=delete;
     bool begin(Point);
     bool append(Point);
+    void flushCoverage();
+    BrushSourceRect virtualBounds()const;
+    std::vector<GrowingCoverageTile> coverageSnapshot()const;
+    std::shared_ptr<const Raster> readOriginal(BrushSourceRect)const;
+    // Healing publishes coverage patches even when their final bytes equal the
+    // source. Selection clips pixel composition, not that source patch identity.
+    void recomposeTouched(GrowingTileCompositor,bool retainCoveredTiles=false);
     std::shared_ptr<const GrowingBrushSnapshot> preview()const;
     std::shared_ptr<const GrowingBrushSnapshot> commit();
     std::shared_ptr<const GrowingBrushSnapshot> cancel();

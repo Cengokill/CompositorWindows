@@ -44,6 +44,7 @@ struct EditorProject {
     History history;
     CompositeCache composite;
     std::shared_ptr<const graphics::GrowingBrushSnapshot> brushPreview;
+    std::shared_ptr<const LayerRenderPreview> retouchPreview;
     std::optional<Layer> gradientPreview;
     std::string brushLayerId;
     QString path;
@@ -54,6 +55,7 @@ struct EditorProject {
 };
 class MainWindow final:public QMainWindow {
     bool warp_,refreshing_{};
+    bool managingProjectOpen_{},selectingProjectForOpen_{};
     QTabWidget* tabs_{};
     QTreeWidget* layers_{};
     QComboBox* blend_{};
@@ -160,6 +162,7 @@ class MainWindow final:public QMainWindow {
     void importImage();
     void exportImage();
     void openProjectDialog();
+    bool loadProjectDirectory(const QString&);
     bool saveProject(bool saveAs=false);
     bool closeProject(int);
     void pointerBegin(QPointF,Qt::KeyboardModifiers,int clickCount=1);
@@ -268,9 +271,10 @@ public:
     explicit MainWindow(bool warp=false);
     ~MainWindow()override;
     EditorProject& addEmptyProject(bool reuseEmpty=true);
-    EditorProject& addProject(Document d,QString title="Untitled");
+    EditorProject& addProject(Document d,QString title="Untitled",bool reuseEmpty=true);
     void addFeasibilityDocument();
     void openPath(const QString&);
+    bool openProjectPaths(const QStringList&);
     NativeCanvas* canvas(){auto*p=current();return p?p->canvas:nullptr;}
     void exerciseNativeUi(const QString& evidenceDirectory);
 };

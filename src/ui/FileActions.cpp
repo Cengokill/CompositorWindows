@@ -4,7 +4,9 @@
 #include "imaging/heif_codec.h"
 #include "core/DocumentExport.h"
 #include "ImportActions.h"
+#include "ProjectOpenDialog.h"
 #include <QFileDialog>
+#include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QDialogButtonBox>
@@ -28,11 +30,23 @@
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QSettings>
+#include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <atomic>
 #include <cmath>
 
 namespace compositor {
 static std::filesystem::path nativePath(const QString&s){return std::filesystem::path(s.toStdWString());}
+namespace {
+template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& paths,Load&& load){
+    bool opened=false;
+    for(const auto& path:paths){
+        try{opened=load(path)||opened;}
+        catch(const std::exception& error){QMessageBox message(QMessageBox::Critical,"Open Compositor Project",QString("Could not open %1.\n\n%2").arg(QDir::toNativeSeparators(path),QString::fromUtf8(error.what())),QMessageBox::Ok,owner);message.setObjectName("projectOpenError");message.exec();}
+    }
+    return opened;
+}
+}
 ui::ImportQueue* MainWindow::ensureImportQueue(){
     if(importQueue_)return importQueue_;
     auto project=[this](QObject* target)->EditorProject*{for(auto& p:projects_)if(p->canvas==target)return p.get();return nullptr;};
@@ -81,10 +95,16 @@ void MainWindow::dropEvent(QDropEvent*event){
         auto* destination=current();std::optional<Point> point;
         if(destination&&destination->document&&destination->canvas){const auto local=destination->canvas->mapFrom(this,event->position().toPoint());if(destination->canvas->rect().contains(local)){const auto p=destination->canvas->documentPoint(local);point=Point{p.x(),p.y()};}else destination=nullptr;}
         else if(destination&&destination->page&&!destination->page->rect().contains(destination->page->mapFrom(this,event->position().toPoint())))destination=nullptr;
+        const bool hadDestination=destination!=nullptr;
+        const QPointer<NativeCanvas> destinationCanvas=destination?destination->canvas:nullptr;
+        auto resolveDestination=[&]()->EditorProject*{if(destinationCanvas)for(const auto& project:projects_)if(project->canvas==destinationCanvas)return project.get();return nullptr;};
         QStringList images;
         bool localItems=false;
-        auto flush=[&]{if(images.isEmpty())return;if(destination)queueImageImports(images,destination,point);else for(const auto& path:images)openPath(path);images.clear();};
-        for(const auto&url:event->mimeData()->urls())if(url.isLocalFile()){localItems=true;const auto path=url.toLocalFile();if(QFileInfo(path).isDir()){flush();openPath(path);}else images.append(path);}
+        auto flush=[&]{if(images.isEmpty())return;if(auto* target=resolveDestination())queueImageImports(images,target,point);else if(!hadDestination)for(const auto& path:images)openPath(path);images.clear();};
+        QStringList directories;
+        auto flushDirectories=[&]{if(!directories.isEmpty()){openProjectPaths(directories);directories.clear();}};
+        for(const auto&url:event->mimeData()->urls())if(url.isLocalFile()){localItems=true;const auto path=url.toLocalFile();if(QFileInfo(path).isDir()){flush();directories.append(path);}else{flushDirectories();images.append(path);}}
+        flushDirectories();
         flush();
         if(!localItems&&event->mimeData()->hasImage()){
             auto temp=std::make_shared<QTemporaryDir>();if(!temp->isValid())throw std::runtime_error("Cannot create dropped-image temporary storage");
@@ -95,24 +115,47 @@ void MainWindow::dropEvent(QDropEvent*event){
         event->acceptProposedAction();
     }catch(const std::exception&e){QMessageBox::critical(this,"Import Images",e.what());}
 }
-void MainWindow::openProjectDialog(){auto path=QFileDialog::getExistingDirectory(this,"Open Compositor Project — choose a .comp directory");if(!path.isEmpty())openPath(path);}
-void MainWindow::openPath(const QString&path){
-    if(QFileInfo(path).isDir()){
-        // ProjectWorkspace.swift:59,77-80: guard before any preparation and
-        // select an already-open resolved project without reloading its state.
-        if(!canSwitchProjects())return;
+void MainWindow::openProjectDialog(){
+    if(!canSwitchProjects())return;
+    // Destruction order clears the managing flag before refreshing commands.
+    const auto update=qScopeGuard([this]{refresh(false,false);});
+    QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
+    try{if(const auto paths=ui::chooseProjectDirectories(this))loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}
+    catch(const std::exception& error){QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
+}
+bool MainWindow::openProjectPaths(const QStringList& paths){
+    if(!canSwitchProjects()||paths.isEmpty())return false;
+    const auto update=qScopeGuard([this]{refresh(false,false);});
+    QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
+    return loadProjectBatch(this,paths,[this](const QString& path){return loadProjectDirectory(path);});
+}
+bool MainWindow::loadProjectDirectory(const QString& path){
+        if(!QFileInfo(path).isDir())throw std::runtime_error("The project path is not an existing directory");
+        // ProjectWorkspace.swift:77-80: select an existing resolved project
+        // without reloading state; the caller owns the workspace guard.
         const auto supplied=nativePath(path);
         for(size_t index=0;index<projects_.size();++index){
             const auto& project=projects_[index];if(project->path.isEmpty())continue;
             std::error_code error;
             if(std::filesystem::equivalent(supplied,nativePath(project->path),error)&&!error){
-                tabs_->setCurrentIndex(int(index));return;
+                QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);
+                tabs_->setCurrentIndex(int(index));return true;
             }
         }
         if(transformSession_&&transformSession_->persistent)applyTransformSession();
         ProjectStore store(makeWicProjectCodec());auto opened=store.load(supplied);
-        auto&project=addProject(std::move(opened.document),QFileInfo(path).fileName());
-        project.path=path;project.active=opened.activeLayer;project.history.reset();refresh(false);return;
+        EditorProject* project{};
+        {QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);project=&addProject(std::move(opened.document),QFileInfo(path).fileName(),false);}
+        project->path=path;project->active=opened.activeLayer;project->selected={opened.activeLayer};project->history.reset();refresh(false);return true;
+}
+void MainWindow::openPath(const QString&path){
+    if(QFileInfo(path).isDir()){
+        // Direct callers retain exception reporting and the same guard before
+        // any preparation or filesystem lookup as the workspace Open command.
+        if(!canSwitchProjects())return;
+        const auto update=qScopeGuard([this]{refresh(false,false);});
+        QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
+        loadProjectDirectory(path);return;
     }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);

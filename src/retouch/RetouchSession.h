@@ -1,8 +1,12 @@
 #pragma once
 // Translated from Compositor retouch tools, MIT license in LICENSE.
 #include "graphics/BrushSession.h"
+#include "graphics/GrowingBrushSession.h"
 
 namespace compositor::retouch {
+// Existing document-sized sample/working-buffer limit; call before rendering
+// an all-layer sample. Sparse destination growth does not remove this limit.
+void validateCanvasExtent(int width,int height);
 enum class Mode { Clone,HealContentAware,HealCreateTexture,HealProximity,Blur,Smudge,Liquify };
 struct Settings {
     Mode mode{Mode::Clone};
@@ -32,6 +36,9 @@ struct Metrics {
 };
 class RetouchSession {
 public:
+    RetouchSession(Layer original,int canvasWidth,int canvasHeight,Settings,Sources={},
+        std::shared_ptr<const GrayRaster> selection={},std::shared_ptr<graphics::D3D11BrushCoverage> accelerator={},
+        bool targetMask=false,uint64_t remainingPixelBudget=100000000);
     RetouchSession(std::shared_ptr<const Raster> original,Transform,int canvasWidth,int canvasHeight,
         Settings,Sources={},std::shared_ptr<const GrayRaster> selection={},std::shared_ptr<graphics::D3D11BrushCoverage> accelerator={});
     // Blur is the sole retouch mode supported on mask targets, matching source.
@@ -42,6 +49,12 @@ public:
     RetouchSession& operator=(const RetouchSession&)=delete;
     bool begin(Point documentPoint);
     bool append(Point documentPoint);
+    // Layer-based sessions retain source-grid growth, placement, masks and phase.
+    std::shared_ptr<const graphics::GrowingBrushSnapshot> previewSnapshot()const;
+    std::shared_ptr<const graphics::GrowingBrushSnapshot> commitSnapshot();
+    std::shared_ptr<const graphics::GrowingBrushSnapshot> cancelSnapshot();
+    // Warp retains the source document-sized preview before selection clipping.
+    std::shared_ptr<const LayerRenderPreview> livePreview()const;
     std::shared_ptr<const Raster> preview()const;
     // Source live Smudge/Liquify preview before final selection clipping. Place
     // across the document and retain layer opacity/blend plus its placed mask.

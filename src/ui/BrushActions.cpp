@@ -70,6 +70,7 @@ CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,doubl
         for(auto& layer:preview.layers)if(layer.id==project.gradientPreview->id){layer=*project.gradientPreview;break;}
         return project.composite.renderViewport(preview,x,y,width,height,requestedUnits);
     }
+    if(project.retouchPreview)return project.composite.renderViewport(*project.document,x,y,width,height,requestedUnits,64,256,project.retouchPreview);
     if(!project.brushPreview)return project.composite.renderViewport(*project.document,x,y,width,height,requestedUnits);
     return project.composite.renderViewport(*project.document,x,y,width,height,requestedUnits,64,256,project.brushPreview->renderPreview());
 }

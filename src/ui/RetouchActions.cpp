@@ -31,35 +31,19 @@ Layer* findLayer(EditorProject* project,const std::string& id) {
     for(auto& layer:project->document->layers)if(layer.id==id)return &layer;
     return nullptr;
 }
-std::shared_ptr<const GrayRaster> expandedMask(const Layer& layer,const Document& document) {
-    const auto original=layer.mask->raster;
-    if(original->width!=1||original->height!=1)return original;
-    auto result=std::make_shared<GrayRaster>();
-    result->width=layer.raster?layer.raster->width:document.width;
-    result->height=layer.raster?layer.raster->height:document.height;
-    result->pixels.assign(size_t(result->width)*result->height,original->pixels.front());
-    return result;
-}
-// The source displays warp's document image before final selection clipping.
-// Its owned mask keeps its original document placement during this preview.
-Layer previewLayer(const Layer& original,retouch::RetouchSession& session,
-                   retouch::Mode mode,bool mask,int width,int height,bool finish) {
-    Layer result=original;
-    if(mask) {
-        auto gray=finish?session.commitMask():session.previewMask();
-        const auto previous=original.mask->raster;
-        if(previous->width==1&&previous->height==1&&
-            std::all_of(gray->pixels.begin(),gray->pixels.end(),[&](uint8_t v){return v==previous->pixels.front();}))gray=previous;
-        result.mask->raster=std::move(gray);
-    } else if(isWarp(mode)&&!finish) {
-        result.raster=session.warpDocumentPreview();
-        result.transform={0,0,double(width),double(height)};
-        if(result.mask)result.mask->placement=original.mask->placement.value_or(original.transform);
-    } else {
-        result.raster=finish?session.commit():session.preview();
+uint64_t retouchPixelBudget(const Document& document,const Layer& target,bool mask) {
+    uint64_t imageRemaining=100000000,maskRemaining=100000000;
+    auto consume=[](uint64_t& remaining,int width,int height){
+        if(width<=0||height<=0||width>30000||height>30000)throw std::runtime_error("Invalid existing raster extent");
+        const auto pixels=uint64_t(width)*uint64_t(height);
+        if(pixels>remaining)throw std::runtime_error("Existing layers exceed the retouch pixel budget");
+        remaining-=pixels;
+    };
+    for(const auto& layer:document.layers)if(layer.id!=target.id){
+        if(!mask&&layer.raster)consume(imageRemaining,layer.raster->width,layer.raster->height);
+        if(layer.mask&&layer.mask->raster)consume(maskRemaining,layer.mask->raster->width,layer.mask->raster->height);
     }
-    if(!mask&&result.raster!=original.raster)result.shapeJson.clear();
-    return result;
+    return mask?maskRemaining:target.mask?std::min(imageRemaining,maskRemaining):imageRemaining;
 }
 }
 
@@ -126,10 +110,13 @@ void MainWindow::refreshRetouchControls() {
         if(item->objectName()=="retouchHeal")item->setChecked(heal);
         if(item->objectName()=="retouchSmear")item->setChecked(smear);
     }
-    healingModes_->setVisible(heal);healingModes_->setEnabled(enabled);
-    blurModes_->setVisible(smear);blurModes_->setEnabled(enabled);
-    cloneAligned_->setVisible(clone);cloneAligned_->setEnabled(enabled);
-    cloneAllLayers_->setVisible(clone);cloneAllLayers_->setEnabled(enabled);
+    // QToolBar owns widget visibility through its actions. Hiding only the
+    // widget lets a subsequent toolbar layout show another tool's controls.
+    const auto showOption=[this](QWidget* widget,bool visible){for(auto* action:retouchBar_->actions())if(retouchBar_->widgetForAction(action)==widget){action->setVisible(visible);break;}};
+    showOption(healingModes_,heal);healingModes_->setEnabled(enabled);
+    showOption(blurModes_,smear);blurModes_->setEnabled(enabled);
+    showOption(cloneAligned_,clone);cloneAligned_->setEnabled(enabled);
+    showOption(cloneAllLayers_,clone);cloneAllLayers_->setEnabled(enabled);
     const QSignalBlocker healingBlock(healingModes_),blurBlock(blurModes_),alignedBlock(cloneAligned_),allBlock(cloneAllLayers_);
     healingModes_->setCurrentIndex(healingMode_==retouch::Mode::HealCreateTexture?1:healingMode_==retouch::Mode::HealProximity?2:0);
     blurModes_->setCurrentIndex(blurSettings_.mode==retouch::Mode::Blur?1:blurSettings_.mode==retouch::Mode::Smudge?2:0);
@@ -179,6 +166,8 @@ bool MainWindow::beginRetouch(Point point,Qt::KeyboardModifiers modifiers) {
     try {
         const Layer original=*layer;
         const auto& document=*project->document;
+        retouch::validateCanvasExtent(document.width,document.height);
+        const auto remainingPixels=retouchPixelBudget(document,original,mask);
         if(!brushGpu_) {
             auto shader=QDir(QApplication::applicationDirPath()).filePath("shaders/BrushCoverage.hlsl");
             if(!QFileInfo::exists(shader))shader=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/shaders/BrushCoverage.hlsl";
@@ -187,13 +176,7 @@ bool MainWindow::beginRetouch(Point point,Qt::KeyboardModifiers modifiers) {
         }
         if(settings.mode==retouch::Mode::Clone&&settings.sampleAllLayers)sources.allLayers=SoftwareRenderer().render(document,0,0,document.width,document.height);
         const auto selection=selected?selected->coverage:nullptr;
-        std::unique_ptr<retouch::RetouchSession> session;
-        if(mask)session=std::make_unique<retouch::RetouchSession>(expandedMask(original,document),original.mask->placement.value_or(original.transform),document.width,document.height,settings,selection,brushGpu_);
-        else {
-            auto pixels=original.raster;
-            if(!pixels)pixels=Raster::filled(std::max(1,int(std::round(original.transform.width))),std::max(1,int(std::round(original.transform.height))));
-            session=std::make_unique<retouch::RetouchSession>(pixels,original.transform,document.width,document.height,settings,sources,selection,brushGpu_);
-        }
+        auto session=std::make_unique<retouch::RetouchSession>(original,document.width,document.height,settings,sources,selection,brushGpu_,mask,remainingPixels);
         if(!session->begin(start))return true;
         if(start!=point)session->append(point);
         finishOpacityEdit();project->history.begin(editName(settings.mode,mask),project->document,project->active);
@@ -221,9 +204,12 @@ Point MainWindow::constrainRetouch(Point point,Qt::KeyboardModifiers modifiers) 
 void MainWindow::publishRetouch(bool finish) {
     if(!retouch_||!retouchOwner_||!retouchOwner_->document||!retouchOriginal_)throw std::logic_error("No active retouch target");
     auto* layer=findLayer(retouchOwner_,retouchOriginal_->id);
-    if(!layer)throw std::runtime_error("The retouch target was removed");
-    const auto& document=*retouchOwner_->document;
-    *layer=previewLayer(*retouchOriginal_,*retouch_,retouchMode_,retouchMask_,document.width,document.height,finish);
+    if(!layer||*layer!=*retouchOriginal_)throw std::runtime_error("The retouch target changed during the stroke");
+    if(!finish){retouchOwner_->retouchPreview=retouch_->livePreview();return;}
+    const auto snapshot=retouch_->commitSnapshot();
+    if(!snapshot)throw std::runtime_error("Retouch did not produce a commit snapshot");
+    if(snapshot->changed())*layer=snapshot->materializeLayer();
+    retouchOwner_->retouchPreview.reset();
 }
 
 bool MainWindow::updateRetouch(Point point,Qt::KeyboardModifiers modifiers) {
@@ -231,8 +217,7 @@ bool MainWindow::updateRetouch(Point point,Qt::KeyboardModifiers modifiers) {
     try {
         if(current()!=retouchOwner_||!retouchOwner_->document||retouchOwner_->active!=retouchOriginal_->id||retouchOwner_->maskSelected!=retouchMask_){cancelRetouch();return true;}
         auto* layer=findLayer(retouchOwner_,retouchOriginal_->id);
-        const auto& document=*retouchOwner_->document;
-        if(!layer||*layer!=previewLayer(*retouchOriginal_,*retouch_,retouchMode_,retouchMask_,document.width,document.height,false))throw std::runtime_error("The retouch target changed during the stroke");
+        if(!layer||*layer!=*retouchOriginal_)throw std::runtime_error("The retouch target changed during the stroke");
         point=constrainRetouch(point,modifiers);
         retouch_->append(point);lastBrushPoint_=point;
         publishRetouch(false);refresh(true,false);
@@ -256,7 +241,8 @@ bool MainWindow::endRetouch(Point point,Qt::KeyboardModifiers modifiers) {
 void MainWindow::cancelRetouch() {
     if(!retouch_)return;
     auto* owner=retouchOwner_;
-    retouch_->cancel();retouch_.reset();retouchOriginal_.reset();retouchOwner_=nullptr;
+    retouch_->cancelSnapshot();retouch_.reset();retouchOriginal_.reset();retouchOwner_=nullptr;
+    if(owner)owner->retouchPreview.reset();
     retouchAxisAnchor_.reset();retouchAxisHorizontal_.reset();
     if(owner)if(auto snapshot=owner->history.cancel()){owner->document=snapshot->document;owner->active=snapshot->activeLayer;}
     if(owner==current())refresh();

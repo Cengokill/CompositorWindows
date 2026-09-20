@@ -3,6 +3,7 @@
 #include "RetouchSession.h"
 #include "graphics/PixelAlgorithms.h"
 #include "graphics/RasterSampling.h"
+#include "graphics/SamplingSource.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -38,6 +39,7 @@ std::shared_ptr<const Raster> gaussian(const Raster& source,double sigma,bool cl
     return fromPixels(output,w,h);
 }
 }
+void validateCanvasExtent(int width,int height){validSize(width,height);}
 void CloneAlignment::setSource(Point p){if(!pointValid(p))return;source_=p;offset_.reset();}
 std::optional<Point> CloneAlignment::strokeOffset(Point p)const{if(!source_||!pointValid(p))return {};if(aligned&&offset_)return offset_;return Point{std::round(source_->x-p.x),std::round(source_->y-p.y)};}
 std::optional<Point> CloneAlignment::beginStroke(Point p){auto result=strokeOffset(p);if(result)offset_=result;return result;}
@@ -61,6 +63,10 @@ struct RetouchSession::Impl {
     std::vector<std::array<float,4>> carried;
     std::optional<Point> last;
     bool started{},finished{},coverageStarted{},emptySelection{},maskTarget{};
+    Layer originalLayer;
+    std::unique_ptr<graphics::GrowingBrushSession> growing;
+    mutable std::shared_ptr<const graphics::GrowingBrushSnapshot> rasterSnapshotOwner;
+    mutable Layer materialized;
     Impl(std::shared_ptr<const Raster> image,Transform placement,int w,int h,Settings options,Sources input,std::shared_ptr<const GrayRaster> clip,std::shared_ptr<graphics::D3D11BrushCoverage> gpu)
         :original(std::move(image)),published(original),selection(std::move(clip)),transform(placement),width(w),height(h),settings(options),sources(std::move(input)),accelerator(std::move(gpu)){
         if(!original)throw std::invalid_argument("Missing retouch raster");validRaster(*original);validSize(w,h);if(!placement.valid())throw std::invalid_argument("Invalid retouch transform");
@@ -69,6 +75,23 @@ struct RetouchSession::Impl {
         if(selection){if(selection->width!=w||selection->height!=h||selection->pixels.size()!=size_t(w)*h)throw std::invalid_argument("Retouch selection must use document grid");emptySelection=std::none_of(selection->pixels.begin(),selection->pixels.end(),[](uint8_t v){return v!=0;});}
         for(auto imageSource:{sources.currentLayer,sources.allLayers})if(imageSource){validRaster(*imageSource);if(imageSource->width!=w||imageSource->height!=h)throw std::invalid_argument("Retouch sample must use document grid");}
     }
+    Impl(Layer layer,int w,int h,Settings options,Sources input,std::shared_ptr<const GrayRaster> clip,std::shared_ptr<graphics::D3D11BrushCoverage> gpu,bool mask,uint64_t budget)
+        :Impl(mask?maskRaster(layer.mask?layer.mask->raster:nullptr):layer.raster?layer.raster:Raster::filled(1,1),mask&&layer.mask?layer.mask->placement.value_or(layer.transform):layer.transform,w,h,options,std::move(input),std::move(clip),std::move(gpu)){
+        if(mask&&options.mode!=Mode::Blur)throw std::invalid_argument("Only Blur supports mask retouch");
+        if(!mask&&!layer.raster&&(options.mode==Mode::Blur||warp(options.mode)))throw std::invalid_argument("Blur and warp require image pixels");
+        originalLayer=std::move(layer);maskTarget=mask;if(mask)originalMask=originalLayer.mask->raster;else original=originalLayer.raster;
+        published=original;graphics::BrushSessionSettings brush;brush.radius=warp(settings.mode)?std::max(1.,settings.radius)+2:settings.radius;brush.hardness=warp(settings.mode)?1:settings.hardness;brush.opacity=1;
+        growing=std::make_unique<graphics::GrowingBrushSession>(originalLayer,brush,w,h,accelerator,selection,mask,budget,tileCompositor());
+    }
+    graphics::GrowingTileCompositor tileCompositor(){return [this](const graphics::GrowingTileInput& input,std::span<Pixel> output){
+        for(int y=0;y<input.rect.height;++y)for(int x=0;x<input.rect.width;++x){const auto i=size_t(y)*256+x;const double sx=input.rect.x+x+.5,sy=input.rect.y+y+.5;
+            const Point doc{input.mapping.tx+sx*input.mapping.a+sy*input.mapping.c,input.mapping.ty+sx*input.mapping.b+sy*input.mapping.d};
+            const auto base=input.original[i];const double amount=input.rawCoverage[size_t(y)*input.rect.width+x]/255.*selected(doc);
+            if(healing(settings.mode))output[i]=over(base,{31,31,31,255},amount*.45);
+            else if(warp(settings.mode))output[i]=lerp(base,workingSample(doc),amount);
+            else {const auto offset=settings.mode==Mode::Clone?*sources.cloneOffset:Point{};const auto copied=graphics::sampleRaster(*sample,{(doc.x+offset.x)/width,(doc.y+offset.y)/height},Transform::Sampling::Smooth);output[i]=over(base,copied,amount*settings.opacity);}
+        }};}
+    const Layer& materialize()const{auto snapshot=growing->preview();if(snapshot!=rasterSnapshotOwner){materialized=snapshot->materializeLayer();rasterSnapshotOwner=std::move(snapshot);}return materialized;}
     Point documentPoint(int x,int y)const{return transform.fromUnit({(x+.5)/original->width,(y+.5)/original->height});}
     double selected(Point p)const{return selection?selection->pixel(int(std::floor(p.x)),int(std::floor(p.y)))/255.:1;}
     std::shared_ptr<const Raster> currentSample(){
@@ -76,7 +99,7 @@ struct RetouchSession::Impl {
         std::vector<Pixel> output(size_t(width)*height);const uint8_t bg=maskTarget?graphics::cachedMaskBackground(originalMask):uint8_t{0};
         for(int y=0;y<height;++y)for(int x=0;x<width;++x){const auto unit=transform.toUnit({x+.5,y+.5});
             if(maskTarget){const auto v=byte(graphics::sampleGray(*originalMask,unit,transform.sampling,bg)*255);output[size_t(y)*width+x]={v,v,v,255};}
-            else output[size_t(y)*width+x]=graphics::sampleRaster(*original,unit,transform.sampling);}
+            else output[size_t(y)*width+x]=original?graphics::sampleRaster(*original,unit,transform.sampling):Pixel{};}
         ++stats.documentRasterizations;stats.workingBufferPixels+=output.size();return fromPixels(output,width,height);
     }
     void prepare(){
@@ -84,7 +107,7 @@ struct RetouchSession::Impl {
         else if(settings.mode==Mode::Blur)sample=gaussian(*currentSample(),std::clamp(settings.radius*2/10,1.5,30.),maskTarget,stats);
         else if(warp(settings.mode)){working=pixelsOf(*currentSample());stats.workingBufferPixels+=working.size();}
         graphics::BrushSessionSettings brush;brush.radius=warp(settings.mode)?std::max(1.,settings.radius)+2:settings.radius;brush.hardness=warp(settings.mode)?1:settings.hardness;brush.opacity=1;
-        coverage=std::make_unique<graphics::BrushSession>(original,brush,accelerator,nullptr,graphics::BrushSessionGeometry::forLayer(transform,original->width,original->height,width,height),graphics::BrushSession::Output::CoverageOnly);
+        if(!growing)coverage=std::make_unique<graphics::BrushSession>(original,brush,accelerator,nullptr,graphics::BrushSessionGeometry::forLayer(transform,original->width,original->height,width,height),graphics::BrushSession::Output::CoverageOnly);
     }
     Pixel workingSample(Point doc)const{
         // The sample image lives at pixel edges; interpolate its pixel centers.
@@ -131,8 +154,32 @@ struct RetouchSession::Impl {
         const auto from=*last;const double distance=std::hypot(point.x-from.x,point.y-from.y),diameter=std::max(2.,settings.radius*2),spacing=std::max(1.,diameter*(settings.mode==Mode::Smudge?.08:.025));if(distance<spacing)return false;
         const int steps=int(std::ceil(distance/spacing));Point previous=from;
         for(int step=1;step<=steps;++step){const double t=double(step)/steps;const Point next{from.x+(point.x-from.x)*t,from.y+(point.y-from.y)*t};if(settings.mode==Mode::Smudge)smudge(next);else push(previous,next);++stats.warpDabs;
-            if(!coverageStarted){coverageStarted=coverage->begin(next);}else coverage->append(next);previous=next;}
-        last=point;compose();return true;
+            if(growing){if(!coverageStarted)coverageStarted=growing->begin(next);else growing->append(next);}
+            else {if(!coverageStarted)coverageStarted=coverage->begin(next);else coverage->append(next);}previous=next;}
+        last=point;if(growing)growing->recomposeTouched(tileCompositor());else compose();return true;
+    }
+    void finishGrowingHeal(){
+        const auto tiles=growing->coverageSnapshot();auto extent=growing->virtualBounds();int minX=extent.x+extent.width,minY=extent.y+extent.height,maxX=extent.x,maxY=extent.y;
+        for(const auto& item:tiles){const auto& tile=*item.coverage;auto b=graphics::coverageBounds({tile.preview,tile.width,tile.height,tile.width});if(b[2]<=b[0]||b[3]<=b[1])continue;
+            minX=std::min(minX,item.rect.x+int(b[0]));minY=std::min(minY,item.rect.y+int(b[1]));maxX=std::max(maxX,item.rect.x+int(b[2]));maxY=std::max(maxY,item.rect.y+int(b[3]));}
+        if(minX>=maxX||minY>=maxY)return;
+        const double reach=(std::max(maxX-minX,maxY-minY)+32)*3.2;
+        minX=int(std::max(double(extent.x),std::floor(minX-reach)));minY=int(std::max(double(extent.y),std::floor(minY-reach)));
+        maxX=int(std::min(double(extent.x+extent.width),std::ceil(maxX+reach)));maxY=int(std::min(double(extent.y+extent.height),std::ceil(maxY+reach)));
+        const int w=maxX-minX,h=maxY-minY;validSize(w,h);auto base=growing->readOriginal({minX,minY,w,h});stats.healingRegionPixels=uint64_t(w)*h;
+        auto rgba=std::make_shared<std::vector<uint8_t>>(size_t(w)*h*4);std::vector<uint8_t> gray(size_t(w)*h);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){const auto p=base->pixel(x,y);const size_t i=(size_t(y)*w+x)*4;(*rgba)[i]=p.r;(*rgba)[i+1]=p.g;(*rgba)[i+2]=p.b;(*rgba)[i+3]=p.a;}
+        for(const auto& item:tiles){const int l=std::max(minX,item.rect.x),t=std::max(minY,item.rect.y),r=std::min(maxX,item.rect.x+item.rect.width),b=std::min(maxY,item.rect.y+item.rect.height);
+            for(int y=t;y<b;++y)for(int x=l;x<r;++x)gray[size_t(y-minY)*w+x-minX]=item.coverage->preview[size_t(y-item.rect.y)*item.rect.width+x-item.rect.x];}
+        const int mode=settings.mode==Mode::HealContentAware?0:settings.mode==Mode::HealCreateTexture?1:2;
+        graphics::spotHeal({*rgba,uint32_t(w),uint32_t(h),size_t(w)*4},{gray,uint32_t(w),uint32_t(h),size_t(w)},float(settings.opacity),mode,settings.healingSeed);
+        growing->recomposeTouched([rgba,minX,minY,w,h](const graphics::GrowingTileInput& input,std::span<Pixel> output){
+            for(int y=0;y<input.rect.height;++y)for(int x=0;x<input.rect.width;++x){const int xx=input.rect.x+x,yy=input.rect.y+y;const size_t local=size_t(y)*256+x;output[local]=input.original[local];
+                if(xx<minX||yy<minY||xx>=minX+w||yy>=minY+h)continue;const size_t i=(size_t(yy-minY)*w+xx-minX)*4;
+                const Pixel healed{(*rgba)[i],(*rgba)[i+1],(*rgba)[i+2],(*rgba)[i+3]};const double sx=xx+.5,sy=yy+.5;
+                const double selectionAmount=input.selection?input.selection->pixel(int(std::floor(input.mapping.tx+sx*input.mapping.a+sy*input.mapping.c)),int(std::floor(input.mapping.ty+sx*input.mapping.b+sy*input.mapping.d)))/255.:1;
+                output[local]=lerp(input.original[local],healed,selectionAmount);
+            }},true);
     }
     void finishHeal(){
         const size_t columns=size_t((original->width+255)/256);int minX=original->width,minY=original->height,maxX=0,maxY=0;
@@ -156,6 +203,8 @@ struct RetouchSession::Impl {
         published=std::move(result);
     }
 };
+RetouchSession::RetouchSession(Layer layer,int w,int h,Settings settings,Sources sources,std::shared_ptr<const GrayRaster> selection,std::shared_ptr<graphics::D3D11BrushCoverage> accelerator,bool mask,uint64_t budget)
+    :impl_(std::make_unique<Impl>(std::move(layer),w,h,settings,std::move(sources),std::move(selection),std::move(accelerator),mask,budget)){}
 RetouchSession::RetouchSession(std::shared_ptr<const Raster> image,Transform transform,int w,int h,Settings settings,Sources sources,std::shared_ptr<const GrayRaster> selection,std::shared_ptr<graphics::D3D11BrushCoverage> accelerator)
     :impl_(std::make_unique<Impl>(std::move(image),transform,w,h,settings,std::move(sources),std::move(selection),std::move(accelerator))){}
 RetouchSession::RetouchSession(std::shared_ptr<const GrayRaster> mask,Transform transform,int w,int h,Settings settings,std::shared_ptr<const GrayRaster> selection,std::shared_ptr<graphics::D3D11BrushCoverage> accelerator)
@@ -164,13 +213,17 @@ RetouchSession::RetouchSession(std::shared_ptr<const GrayRaster> mask,Transform 
 }
 RetouchSession::~RetouchSession()=default;
 bool RetouchSession::begin(Point p){auto& s=*impl_;if(s.started||s.finished)throw std::logic_error("Retouch session already started or finished");if(!pointValid(p)||s.emptySelection)return false;s.prepare();s.started=true;
-    if(warp(s.settings.mode))return s.appendWarp(p);s.coverageStarted=s.coverage->begin(p);s.compose();return s.coverageStarted;}
-bool RetouchSession::append(Point p){auto& s=*impl_;if(!s.started||s.finished)throw std::logic_error("Retouch session is not active");if(!pointValid(p))return false;if(warp(s.settings.mode))return s.appendWarp(p);if(!s.coverage->append(p))return false;s.compose();return true;}
-std::shared_ptr<const Raster> RetouchSession::preview()const{return impl_->published;}
+    if(warp(s.settings.mode))return s.appendWarp(p);if(s.growing)return s.coverageStarted=s.growing->begin(p);s.coverageStarted=s.coverage->begin(p);s.compose();return s.coverageStarted;}
+bool RetouchSession::append(Point p){auto& s=*impl_;if(!s.started||s.finished)throw std::logic_error("Retouch session is not active");if(!pointValid(p))return false;if(warp(s.settings.mode))return s.appendWarp(p);if(s.growing)return s.growing->append(p);if(!s.coverage->append(p))return false;s.compose();return true;}
+std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::previewSnapshot()const{if(!impl_->growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");return impl_->growing->preview();}
+std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::commitSnapshot(){auto& s=*impl_;if(!s.growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");if(s.finished)return s.growing->preview();if(s.started&&s.coverageStarted){s.growing->flushCoverage();if(healing(s.settings.mode))s.finishGrowingHeal();}auto result=s.growing->commit();s.finished=true;return result;}
+std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::cancelSnapshot(){auto& s=*impl_;if(!s.growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");s.finished=true;s.working.clear();s.carried.clear();return s.growing->cancel();}
+std::shared_ptr<const LayerRenderPreview> RetouchSession::livePreview()const{auto& s=*impl_;if(!s.growing)throw std::logic_error("Live layer preview requires a Layer-based retouch session");if(!s.started||s.finished)return {};if(!warp(s.settings.mode))return s.growing->preview()->renderPreview();auto raster=warpDocumentPreview();auto result=std::make_shared<LayerRenderPreview>();result->layer=s.originalLayer;result->layer.raster=raster;result->layer.transform={0,0,double(s.width),double(s.height)};result->layer.shapeJson.clear();if(result->layer.mask&&!result->layer.mask->placement)result->layer.mask->placement=s.originalLayer.transform;result->identity=raster;result->lineage=s.originalLayer.raster;result->imageSource=graphics::samplingSource(raster);result->image=[raster](Point unit,Transform::Sampling sampling){return graphics::sampleRaster(*raster,unit,sampling);};return result;}
+std::shared_ptr<const Raster> RetouchSession::preview()const{return impl_->growing?impl_->materialize().raster:impl_->published;}
 std::shared_ptr<const Raster> RetouchSession::warpDocumentPreview()const{auto& s=*impl_;if(!s.started||!warp(s.settings.mode)||s.working.empty())throw std::logic_error("No active warp document preview");if(s.warpPreviewRevision!=s.stats.warpDabs){s.warpPreview=fromPixels(s.working,s.width,s.height);s.warpPreviewRevision=s.stats.warpDabs;}return s.warpPreview;}
-std::shared_ptr<const Raster> RetouchSession::commit(){auto& s=*impl_;if(s.finished)return s.published;if(!s.started||!s.coverageStarted){s.finished=true;return s.published;}s.coverage->commit();if(healing(s.settings.mode))s.finishHeal();else s.compose();s.finished=true;return s.published;}
-std::shared_ptr<const Raster> RetouchSession::cancel(){auto& s=*impl_;s.published=s.original;s.finished=true;s.coverage.reset();s.working.clear();s.carried.clear();return s.original;}
-std::shared_ptr<const GrayRaster> RetouchSession::previewMask()const{auto& s=*impl_;if(!s.maskTarget)throw std::logic_error("Retouch target is not a mask");if(s.published==s.original)return s.originalMask;if(s.grayPreviewOwner==s.published)return s.grayPreview;
+std::shared_ptr<const Raster> RetouchSession::commit(){auto& s=*impl_;if(s.growing){commitSnapshot();return preview();}if(s.finished)return s.published;if(!s.started||!s.coverageStarted){s.finished=true;return s.published;}s.coverage->commit();if(healing(s.settings.mode))s.finishHeal();else s.compose();s.finished=true;return s.published;}
+std::shared_ptr<const Raster> RetouchSession::cancel(){auto& s=*impl_;if(s.growing){cancelSnapshot();return preview();}s.published=s.original;s.finished=true;s.coverage.reset();s.working.clear();s.carried.clear();return s.original;}
+std::shared_ptr<const GrayRaster> RetouchSession::previewMask()const{auto& s=*impl_;if(!s.maskTarget)throw std::logic_error("Retouch target is not a mask");if(s.growing)return s.materialize().mask->raster;if(s.published==s.original)return s.originalMask;if(s.grayPreviewOwner==s.published)return s.grayPreview;
     auto gray=std::make_shared<GrayRaster>();gray->width=s.original->width;gray->height=s.original->height;gray->pixels.resize(size_t(gray->width)*gray->height);for(int y=0;y<gray->height;++y)for(int x=0;x<gray->width;++x)gray->pixels[size_t(y)*gray->width+x]=s.published->pixel(x,y).r;s.grayPreview=gray;s.grayPreviewOwner=s.published;return gray;}
 std::shared_ptr<const GrayRaster> RetouchSession::commitMask(){commit();return previewMask();}
 std::shared_ptr<const GrayRaster> RetouchSession::cancelMask(){cancel();return previewMask();}
