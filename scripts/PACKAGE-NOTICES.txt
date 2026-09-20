@@ -1,0 +1,25 @@
+Compositor Windows development distribution
+
+The application and reused Compositor code are distributed under MIT; see
+Compositor-MIT.txt. The offline foreground replacement uses MIT-licensed
+BiRefNet_lite weights, pinned to the revision recorded in its model card.
+ONNX Runtime license and third party notices accompany its binary.
+
+Qt 6.8.3 is dynamically linked. Qt license texts and the upstream supplied
+SPDX software inventory are in Qt and Qt-SBOM. This package uses Qt under
+LGPL-3.0 where that license applies, with component-specific notices in SPDX.
+libheif and libde265 are dynamically linked under LGPL-3.0-or-later.
+Corresponding source archives, application source, and dependency build
+scripts are in ../sources. The application source snapshot includes the
+build configuration needed to relink against modified libraries. Users may
+replace the DLLs and run versions/<version>/Compositor.exe directly. A local
+test update receipt deliberately rejects modifications during update checks;
+it does not prevent running a modified application directly. No production
+signing key or trusted release feed is included.
+
+Microsoft Visual C++ runtime DLLs are redistributed app-locally from the
+installed Visual Studio redistributable directory; their Microsoft license
+terms apply. Windows system components are supplied by Windows 11.
+
+The installer uses NSIS with zlib compression. NSIS-COPYING.txt contains
+notices for the installer system. No external fonts or Apple icons are used.

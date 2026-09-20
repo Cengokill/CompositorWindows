@@ -1,0 +1,74 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- The C compiler identification is MSVC 19.44.35221.0
+-- The CXX compiler identification is MSVC 19.44.35221.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (2.4s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/selection_gesture/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule H:/CompositorWindows/windows/tests/selection_gesture/CMakeLists.txt
+  Scanning sources for module dependencies...
+  Selection.cpp
+  Document.cpp
+  SelectionGestureTests.cpp
+  SelectionGesture.cpp
+  Compiling...
+  Selection.cpp
+  SelectionGestureTests.cpp
+  Document.cpp
+  SelectionGesture.cpp
+  WandPixels.c
+  selection_gesture_tests.vcxproj -> H:\CompositorWindows\windows\tests\selection_gesture\build\Release\selection_gesture_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/selection_gesture/CMakeLists.txt
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/selection_gesture/build
+Test project H:/CompositorWindows/windows/tests/selection_gesture/build
+      Start  1: selection_gesture.polygon_corners
+ 1/14 Test  #1: selection_gesture.polygon_corners .........   Passed    0.06 sec
+      Start  2: selection_gesture.click_history
+ 2/14 Test  #2: selection_gesture.click_history ...........   Passed    0.04 sec
+      Start  3: selection_gesture.marquee_rounding
+ 3/14 Test  #3: selection_gesture.marquee_rounding ........   Passed    0.04 sec
+      Start  4: selection_gesture.centered_programmatic
+ 4/14 Test  #4: selection_gesture.centered_programmatic ...   Passed    0.04 sec
+      Start  5: selection_gesture.ellipse
+ 5/14 Test  #5: selection_gesture.ellipse .................   Passed    0.04 sec
+      Start  6: selection_gesture.option_marquee
+ 6/14 Test  #6: selection_gesture.option_marquee ..........   Passed    0.04 sec
+      Start  7: selection_gesture.fresh_shift
+ 7/14 Test  #7: selection_gesture.fresh_shift .............   Passed    0.05 sec
+      Start  8: selection_gesture.stationary_modifiers
+ 8/14 Test  #8: selection_gesture.stationary_modifiers ....   Passed    0.01 sec
+      Start  9: selection_gesture.polygon_closure
+ 9/14 Test  #9: selection_gesture.polygon_closure .........   Passed    0.01 sec
+      Start 10: selection_gesture.quarter_pixel
+10/14 Test #10: selection_gesture.quarter_pixel ...........   Passed    0.01 sec
+      Start 11: selection_gesture.mode_and_interrupt
+11/14 Test #11: selection_gesture.mode_and_interrupt ......   Passed    0.01 sec
+      Start 12: selection_gesture.empty_noop
+12/14 Test #12: selection_gesture.empty_noop ..............   Passed    0.03 sec
+      Start 13: selection_gesture.move_axis
+13/14 Test #13: selection_gesture.move_axis ...............   Passed    0.01 sec
+      Start 14: selection_gesture.autoscroll
+14/14 Test #14: selection_gesture.autoscroll ..............   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 14
+
+Total Test time (real) =   0.40 sec

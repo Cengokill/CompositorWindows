@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="15"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="0"
+	timestamp="2026-09-19T21:56:07"
+	>
+	<testcase name="selection_gesture.polygon_corners" classname="selection_gesture.polygon_corners" time="0.060525" status="run">
+		<properties/>
+		<system-out>PASS polygon_corners
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.click_history" classname="selection_gesture.click_history" time="0.0318746" status="run">
+		<properties/>
+		<system-out>PASS click_history
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.marquee_rounding" classname="selection_gesture.marquee_rounding" time="0.0238906" status="run">
+		<properties/>
+		<system-out>PASS marquee_rounding
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.centered_programmatic" classname="selection_gesture.centered_programmatic" time="0.0257955" status="run">
+		<properties/>
+		<system-out>PASS centered_programmatic
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.ellipse" classname="selection_gesture.ellipse" time="0.0360088" status="run">
+		<properties/>
+		<system-out>PASS ellipse
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.option_marquee" classname="selection_gesture.option_marquee" time="0.0242463" status="run">
+		<properties/>
+		<system-out>PASS option_marquee
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.fresh_shift" classname="selection_gesture.fresh_shift" time="0.0347269" status="run">
+		<properties/>
+		<system-out>PASS fresh_shift
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.stationary_modifiers" classname="selection_gesture.stationary_modifiers" time="0.0090387" status="run">
+		<properties/>
+		<system-out>PASS stationary_modifiers
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.polygon_closure" classname="selection_gesture.polygon_closure" time="0.0094565" status="run">
+		<properties/>
+		<system-out>PASS polygon_closure
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.quarter_pixel" classname="selection_gesture.quarter_pixel" time="0.0079586" status="run">
+		<properties/>
+		<system-out>PASS quarter_pixel
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.mode_and_interrupt" classname="selection_gesture.mode_and_interrupt" time="0.0083582" status="run">
+		<properties/>
+		<system-out>PASS mode_and_interrupt
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.empty_noop" classname="selection_gesture.empty_noop" time="0.0203753" status="run">
+		<properties/>
+		<system-out>PASS empty_noop
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.move_axis" classname="selection_gesture.move_axis" time="0.0081669" status="run">
+		<properties/>
+		<system-out>PASS move_axis
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.autoscroll" classname="selection_gesture.autoscroll" time="0.0076624" status="run">
+		<properties/>
+		<system-out>PASS autoscroll
+</system-out>
+	</testcase>
+	<testcase name="selection_gesture.geometry_equality" classname="selection_gesture.geometry_equality" time="0.0078773" status="run">
+		<properties/>
+		<system-out>PASS geometry_equality
+</system-out>
+	</testcase>
+</testsuite>

@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
+  "source": "upstream/CompositorTests/SelectionTests.swift",
+  "source_sha256": "56d19c551fb1d842d840eeb055dcf6a70f0e94992539dd82d91ce525cd50c8b2",
+  "methods": [
+    {
+      "upstream_method": "polygonalCornersCanBeRemovedAndClosed",
+      "line": 83,
+      "assertions": [
+        {
+          "line": 92,
+          "expression": "#expect(session.lassoDraft?.points.count == 4)"
+        },
+        {
+          "line": 94,
+          "expression": "#expect(session.history.undoName == \"Polygonal Lasso\")"
+        },
+        {
+          "line": 95,
+          "expression": "#expect(try coverage(session, 80, 80) == 255 && coverage(session, 5, 50) == 0)"
+        },
+        {
+          "line": 98,
+          "expression": "#expect(session.lassoDraft == nil && session.selection?.isEmpty == false)"
+        }
+      ],
+      "native_case": "selection_gesture.polygon_corners",
+      "native_result": "pass",
+      "full_logical_contract_candidate": true,
+      "scope": "Native draft plus explicit100x100 selection/history fixture; eligibility and canvas host remain independently tested"
+    },
+    {
+      "upstream_method": "clickDeselectsAndSelectionStepsUndo",
+      "line": 68,
+      "assertions": [
+        {
+          "line": 72,
+          "expression": "#expect(session.history.undoCount == count + 1 && session.history.undoName == \"Lasso\")"
+        },
+        {
+          "line": 74,
+          "expression": "#expect(session.selection == nil && session.history.undoName == \"Deselect\")"
+        },
+        {
+          "line": 76,
+          "expression": "#expect(session.selection?.isEmpty == false)"
+        },
+        {
+          "line": 78,
+          "expression": "#expect(session.selection == nil)"
+        },
+        {
+          "line": 80,
+          "expression": "#expect(try coverage(session, 30, 30) == 255)"
+        }
+      ],
+      "native_case": "selection_gesture.click_history",
+      "native_result": "pass",
+      "full_logical_contract_candidate": true,
+      "scope": "Native draft plus explicit100x100 selection/history fixture; eligibility and canvas host remain independently tested"
+    },
+    {
+      "upstream_method": "marqueeDrawsWholePixelRectanglesInAnyDirection",
+      "line": 309,
+      "assertions": [
+        {
+          "line": 313,
+          "expression": "#expect(session.history.undoName == \"Rectangular Marquee\")"
+        },
+        {
+          "line": 314,
+          "expression": "#expect(session.selection?.path.boundingBoxOfPath == CGRect(x: 20, y: 30, width: 40, height: 41))"
+        },
+        {
+          "line": 315,
+          "expression": "#expect(try coverage(session, 20, 30) == 255 && coverage(session, 19, 30) == 0)"
+        },
+        {
+          "line": 317,
+          "expression": "#expect(try coverage(session, 85, 85) == 255 && coverage(session, 40, 50) == 255)"
+        },
+        {
+          "line": 319,
+          "expression": "#expect(try coverage(session, 40, 50) == 0 && coverage(session, 25, 35) == 255)"
+        },
+        {
+          "line": 321,
+          "expression": "#expect(session.selection == nil)"
+        }
+      ],
+      "native_case": "selection_gesture.marquee_rounding",
+      "native_result": "pass",
+      "full_logical_contract_candidate": true,
+      "scope": "Native draft plus explicit100x100 selection/history fixture; eligibility and canvas host remain independently tested"
+    },
+    {
+      "upstream_method": "marqueeShiftMakesSquaresAndCenteredDragsGrowFromTheAnchor",
+      "line": 324,
+      "assertions": [
+        {
+          "line": 328,
+          "expression": "#expect(session.selection?.path.boundingBoxOfPath == CGRect(x: 10, y: 10, width: 30, height: 30))"
+        },
+        {
+          "line": 330,
+          "expression": "#expect(session.selection?.path.boundingBoxOfPath == CGRect(x: 40, y: 45, width: 20, height: 10))"
+        },
+        {
+          "line": 332,
+          "expression": "#expect(session.selection?.path.boundingBoxOfPath == CGRect(x: 42, y: 42, width: 16, height: 16))"
+        },
+        {
+          "line": 333,
+          "expression": "#expect(NavigationTool.marquee.isSelectionTool && !NavigationTool.brush.isSelectionTool)"
+        }
+      ],
+      "native_case": "selection_gesture.centered_programmatic",
+      "native_result": "pass",
+      "full_logical_contract_candidate": false,
+      "scope": "Bounded assertions: NavigationTool predicate/marquee toggle remain outside helper; Option/Shift actual UI event before-tests still fail pending host integration"
+    },
+    {
+      "upstream_method": "marqueeEllipseSelectsAnOvalInItsBoxAndShiftMakesACircle",
+      "line": 336,
+      "assertions": [
+        {
+          "line": 344,
+          "expression": "#expect(abs(bounds.minX - 10) < 0.5 && abs(bounds.maxX - 70) < 0.5 && abs(bounds.minY - 20) < 0.5 && abs(bounds.maxY - 60) < 0.5)"
+        },
+        {
+          "line": 345,
+          "expression": "#expect(try coverage(session, 40, 40) == 255) // the middle"
+        },
+        {
+          "line": 346,
+          "expression": "#expect(try coverage(session, 11, 21) == 0)   // the box's corner lies outside the oval"
+        },
+        {
+          "line": 351,
+          "expression": "#expect(abs(circle.width - circle.height) < 0.5)"
+        },
+        {
+          "line": 353,
+          "expression": "#expect(session.marqueeKind == .rectangle)"
+        }
+      ],
+      "native_case": "selection_gesture.ellipse",
+      "native_result": "pass",
+      "full_logical_contract_candidate": false,
+      "scope": "Bounded assertions: NavigationTool predicate/marquee toggle remain outside helper; Option/Shift actual UI event before-tests still fail pending host integration"
+    },
+    {
+      "upstream_method": "optionDraggingTheMarqueeSubtractsWithoutDrawingFromTheCenter",
+      "line": 357,
+      "assertions": [
+        {
+          "line": 376,
+          "expression": "#expect(try coverage(session, 50, 50) == 0)   // the dragged box is subtracted"
+        },
+        {
+          "line": 377,
+          "expression": "#expect(try coverage(session, 30, 30) == 255) // a box grown from its center would have reached here"
+        }
+      ],
+      "native_case": "selection_gesture.option_marquee",
+      "native_result": "pass",
+      "full_logical_contract_candidate": false,
+      "scope": "Bounded assertions: NavigationTool predicate/marquee toggle remain outside helper; Option/Shift actual UI event before-tests still fail pending host integration"
+    },
+    {
+      "upstream_method": "shiftStartsAnAddAndOnlyAFreshShiftSquaresTheMarquee",
+      "line": 405,
+      "assertions": [
+        {
+          "line": 430,
+          "expression": "#expect(try coverage(session, 10, 10) == 255, \"the earlier selection is kept\")"
+        },
+        {
+          "line": 431,
+          "expression": "#expect(try coverage(session, 65, 45) == 255)"
+        },
+        {
+          "line": 432,
+          "expression": "#expect(try coverage(session, 65, 60) == 0, \"a Shift held from the press must not square the box\")"
+        },
+        {
+          "line": 440,
+          "expression": "#expect(try coverage(session, 30, 75) == 255, \"a fresh Shift squares the box\")"
+        },
+        {
+          "line": 441,
+          "expression": "#expect(try coverage(session, 65, 45) == 255 && coverage(session, 10, 10) == 255, \"still adding\")"
+        }
+      ],
+      "native_case": "selection_gesture.fresh_shift",
+      "native_result": "pass",
+      "full_logical_contract_candidate": false,
+      "scope": "Bounded assertions: NavigationTool predicate/marquee toggle remain outside helper; Option/Shift actual UI event before-tests still fail pending host integration"
+    }
+  ],
+  "native_test_sha256": "72e1a6841b623ab45e72c5770dba0efca65321ab19fcfd4c6bbdaca6304f358d",
+  "native_executable_sha256": "f77435d0a5531593bea3be27141a1acb8248acef798081013da48979cfded7ad",
+  "native_runtime": "windows/tests/selection_gesture/build-run-3.log",
+  "helper_correspondences": [
+    {
+      "source_line": 23,
+      "source_require": "session.document",
+      "native": "Session::current/coverage require optional Document; constructor validateDocument on100x100 blank-layer fixture"
+    },
+    {
+      "source_line": 24,
+      "source_require": "session.selection",
+      "native": "Session::coverage requires selection and valid immutable gray coverage"
+    },
+    {
+      "source_line": 25,
+      "source_require": "CGContext gray coverage reader",
+      "native": "production SelectionOutline::rasterize uses checked D2D software/WIC rendering; reader requires100x100 GrayRaster storage"
+    },
+    {
+      "source_line": 28,
+      "source_require": "context.data",
+      "native": "Session::coverage requires10000 bytes and nonnull gray data pointer"
+    }
+  ],
+  "complete_candidate_coverage_helper_calls": {
+    "polygonalCornersCanBeRemovedAndClosed": 2,
+    "clickDeselectsAndSelectionStepsUndo": 1,
+    "marqueeDrawsWholePixelRectanglesInAnyDirection": 6
+  },
+  "complete_candidate_helper_require_invocations": 36
+}

@@ -1,0 +1,177 @@
+#include "NativeCanvas.h"
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QKeyEvent>
+#include <QTabletEvent>
+#include <QNativeGestureEvent>
+#include <QPaintEngine>
+#include <QImage>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <d2d1_1helper.h>
+
+namespace compositor {
+using Microsoft::WRL::ComPtr;
+static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
+NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);synchronizeViewport();}
+NativeCanvas::~NativeCanvas(){releaseDevice();}
+void NativeCanvas::releaseDevice(){displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
+void NativeCanvas::createDevice(){UINT flags=D3D11_CREATE_DEVICE_BGRA_SUPPORT;D3D_FEATURE_LEVEL level{};auto hr=D3D11CreateDevice(nullptr,warp_?D3D_DRIVER_TYPE_WARP:D3D_DRIVER_TYPE_HARDWARE,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);if(FAILED(hr)&&!warp_)hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);check(hr,"D3D11 device");ComPtr<IDXGIDevice> dxgi;check(device_.As(&dxgi),"DXGI device");ComPtr<IDXGIAdapter> adapter;check(dxgi->GetAdapter(&adapter),"DXGI adapter");ComPtr<IDXGIFactory2> dxgiFactory;check(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)),"DXGI factory");DXGI_SWAP_CHAIN_DESC1 desc{};desc.Width=std::max(1,int(width()*devicePixelRatioF()));desc.Height=std::max(1,int(height()*devicePixelRatioF()));desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.SampleDesc.Count=1;desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.BufferCount=2;desc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;desc.Scaling=DXGI_SCALING_STRETCH;desc.AlphaMode=DXGI_ALPHA_MODE_IGNORE;check(dxgiFactory->CreateSwapChainForHwnd(device_.Get(),reinterpret_cast<HWND>(winId()),&desc,nullptr,nullptr,&swap_),"Canvas swap chain");dxgiFactory->MakeWindowAssociation(reinterpret_cast<HWND>(winId()),DXGI_MWA_NO_ALT_ENTER);check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,IID_PPV_ARGS(&factory_)),"D2D factory");check(factory_->CreateDevice(dxgi.Get(),&d2device_),"D2D device");check(d2device_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,&context_),"D2D context");createTarget();upload();}
+void NativeCanvas::createTarget(){ComPtr<IDXGISurface> surface;check(swap_->GetBuffer(0,IID_PPV_ARGS(&surface)),"Canvas surface");float dpi=float(96*devicePixelRatioF());auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET|D2D1_BITMAP_OPTIONS_CANNOT_DRAW,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpi,dpi);check(context_->CreateBitmapFromDxgiSurface(surface.Get(),&props,&target_),"Canvas render target");context_->SetTarget(target_.Get());context_->SetDpi(dpi,dpi);}
+void NativeCanvas::upload(){
+    image_.Reset();
+    if(!raster_){displayTiles_.clear();return;}
+    std::unordered_map<const Raster::Tile*,bool> live;
+    for(const auto&tile:raster_->tiles)live[tile.get()]=true;
+    std::erase_if(displayTiles_,[&](const auto&entry){return !live.contains(entry.first);});
+}
+void NativeCanvas::draw(){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});auto patch=viewportProvider(origin.x(),origin.y(),width()/scale,height()/scale,std::max(1.,1/zoom));raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));context_->PushAxisAlignedClip(bounds,D2D1_ANTIALIAS_MODE_ALIASED);ComPtr<ID2D1SolidColorBrush> light,dark;check(context_->CreateSolidColorBrush(D2D1::ColorF(.77f,.78f,.79f),&light),"Checker brush");check(context_->CreateSolidColorBrush(D2D1::ColorF(.91f,.92f,.93f),&dark),"Checker brush");for(int y=0;y<height();y+=12)for(int x=0;x<width();x+=12)context_->FillRectangle(D2D1::RectF(float(x),float(y),float(x+12),float(y+12)),((x/12+y/12)%2?light:dark).Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
+// Upload bounded tiles so a valid 30,000-pixel narrow document remains displayable.
+for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;auto tile=raster_->tiles[size_t(ty/256)*((raster_->width+255)/256)+tx/256];auto found=displayTiles_.find(tile.get());
+if(found==displayTiles_.end()){
+    if(displayTiles_.size()>=1024)displayTiles_.erase(displayTiles_.begin());
+    DisplayTile display;display.source=tile;
+    auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+    check(context_->CreateBitmap(D2D1::SizeU(256,256),tile->pixels.data(),256*4,&props,&display.bitmap),"Canvas tile upload");
+    found=displayTiles_.emplace(tile.get(),std::move(display)).first;
+}
+auto sourceRect=D2D1::RectF(0,0,float(tw),float(th));
+context_->DrawBitmap(found->second.bitmap.Get(),rect,1,D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,sourceRect);}}
+if(showPixelGrid&&zoom>=8){ComPtr<ID2D1SolidColorBrush> grid;check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.25f),&grid),"Grid brush");for(int x=0;x<=documentWidth_;++x){float px=left+float(x*scale);if(px>=0&&px<=width())context_->DrawLine(D2D1::Point2F(px,top),D2D1::Point2F(px,bounds.bottom),grid.Get(),.5f);}for(int y=0;y<=documentHeight_;++y){float py=top+float(y*scale);if(py>=0&&py<=height())context_->DrawLine(D2D1::Point2F(left,py),D2D1::Point2F(bounds.right,py),grid.Get(),.5f);}}if(!selectionEdges_.empty()){
+ComPtr<ID2D1SolidColorBrush> edgeDark,edgeLight;
+check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,1),&edgeDark),"Selection edge");
+check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1),&edgeLight),"Selection edge");
+ComPtr<ID2D1StrokeStyle> dashed;auto style=D2D1::StrokeStyleProperties();style.dashStyle=D2D1_DASH_STYLE_DASH;
+check(factory_->CreateStrokeStyle(style,nullptr,0,&dashed),"Selection dash");
+for(const auto&edge:selectionEdges_){auto a=D2D1::Point2F(left+float(edge.first.x*scale),top+float(edge.first.y*scale));auto b=D2D1::Point2F(left+float(edge.second.x*scale),top+float(edge.second.y*scale));context_->DrawLine(a,b,edgeDark.Get(),1.5f);context_->DrawLine(a,b,edgeLight.Get(),1,dashed.Get());}}
+context_->PopAxisAlignedClip();}
+if(selectionDraft_&&!selectionDraft_->points.empty()&&documentWidth_>0&&documentHeight_>0){
+    auto points=selectionDraft_->points;
+    if(selectionDraft_->kind==editing::LassoKind::Polygonal&&selectionDraft_->cursor)points.push_back(*selectionDraft_->cursor);
+    const auto mapping=viewMapping();for(auto& point:points)point=mapping.toView(point);
+    ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Selection draft path");
+    ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink),"Selection draft sink");
+    auto point=[](Point p){return D2D1::Point2F(float(p.x),float(p.y));};
+    sink->BeginFigure(point(points.front()),D2D1_FIGURE_BEGIN_HOLLOW);
+    for(size_t i=1;i<points.size();++i)sink->AddLine(point(points[i]));
+    sink->EndFigure(selectionDraft_->kind==editing::LassoKind::Rectangle?D2D1_FIGURE_END_CLOSED:D2D1_FIGURE_END_OPEN);check(sink->Close(),"Selection draft path close");
+    ComPtr<ID2D1SolidColorBrush> black,white;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.8f),&black),"Selection draft black");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Selection draft white");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    if(selectionDraft_->kind==editing::LassoKind::Ellipse&&points.size()==4){
+        const auto a=points.front(),b=points[2];const auto ellipse=D2D1::Ellipse(D2D1::Point2F(float((a.x+b.x)/2),float((a.y+b.y)/2)),float(std::abs(b.x-a.x)/2),float(std::abs(b.y-a.y)/2));
+        context_->DrawEllipse(ellipse,black.Get(),2);context_->DrawEllipse(ellipse,white.Get(),1);
+    }else{context_->DrawGeometry(path.Get(),black.Get(),2);context_->DrawGeometry(path.Get(),white.Get(),1);}
+    if(selectionDraft_->kind==editing::LassoKind::Polygonal){const auto first=points.front();const auto handle=D2D1::RectF(float(first.x-4),float(first.y-4),float(first.x+4),float(first.y+4));context_->FillRectangle(handle,white.Get());context_->DrawRectangle(handle,black.Get(),1);}
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
+if(gradientLine_&&documentWidth_>0&&documentHeight_>0){
+    const auto a=viewMapping().toView(gradientLine_->first),b=viewMapping().toView(gradientLine_->second);
+    const auto start=D2D1::Point2F(float(a.x),float(a.y)),end=D2D1::Point2F(float(b.x),float(b.y));
+    ComPtr<ID2D1SolidColorBrush> black,white;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.7f),&black),"Gradient outline");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Gradient line");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    context_->DrawLine(start,end,black.Get(),3);context_->DrawLine(start,end,white.Get(),1);
+    black->SetColor(D2D1::ColorF(0,0,0));
+    for(auto point:{start,end}){const auto handle=D2D1::Ellipse(point,6,6);context_->FillEllipse(handle,white.Get());context_->DrawEllipse(handle,black.Get(),1);}
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
+if((transformOverlay_||distortionOverlay_)&&documentWidth_>0&&documentHeight_>0){auto overlay=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());ComPtr<ID2D1SolidColorBrush> line,fill;check(context_->CreateSolidColorBrush(D2D1::ColorF(.3f,.7f,1),&line),"Transform outline");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&fill),"Transform handle");auto point=[](Point p){return D2D1::Point2F(float(p.x),float(p.y));};for(int i=0;i<4;++i)context_->DrawLine(point(overlay.outline[i]),point(overlay.outline[(i+1)%4]),line.Get(),1);for(auto h:overlay.handles){auto box=D2D1::RectF(float(h.x-3),float(h.y-3),float(h.x+3),float(h.y+3));context_->FillRectangle(box,fill.Get());context_->DrawRectangle(box,line.Get(),1);}if(overlay.showsRotation){context_->DrawLine(point(overlay.handles[1]),point(overlay.rotationHandle),line.Get(),1);context_->FillEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),fill.Get());context_->DrawEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),line.Get(),1);}}
+if(brushCursor_){
+    const auto& cursor=*brushCursor_;const auto center=D2D1::Point2F(float(cursor.center.x),float(cursor.center.y));const float radius=float(cursor.diameter/2);
+    ComPtr<ID2D1SolidColorBrush> black,white;check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0),&black),"Brush cursor black");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Brush cursor white");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    const auto circle=D2D1::Ellipse(center,radius,radius);context_->DrawEllipse(circle,white.Get(),2.5f);context_->DrawEllipse(circle,black.Get(),1);
+    if(cursor.hardness&&*cursor.hardness>0){
+        auto style=D2D1::StrokeStyleProperties();style.dashStyle=D2D1_DASH_STYLE_CUSTOM;
+        const float whiteDashes[]{4/2.5f,3/2.5f},blackDashes[]{4,3};ComPtr<ID2D1StrokeStyle> whiteDash,blackDash;
+        check(factory_->CreateStrokeStyle(style,whiteDashes,2,&whiteDash),"Hardness white dash");check(factory_->CreateStrokeStyle(style,blackDashes,2,&blackDash),"Hardness black dash");
+        const float inner=radius*float(*cursor.hardness);const auto ring=D2D1::Ellipse(center,inner,inner);context_->DrawEllipse(ring,white.Get(),2.5f,whiteDash.Get());context_->DrawEllipse(ring,black.Get(),1,blackDash.Get());
+    }
+    if(cursor.marker){const float x=float(cursor.marker->x),y=float(cursor.marker->y);for(const bool horizontal:{true,false}){const auto a=D2D1::Point2F(x-(horizontal?7:0),y-(horizontal?0:7)),b=D2D1::Point2F(x+(horizontal?7:0),y+(horizontal?0:7));context_->DrawLine(a,b,white.Get(),3);context_->DrawLine(a,b,black.Get(),1);}}
+}
+if(sampleRing_){auto center=viewMapping().toView(sampleRing_->position);auto ring=D2D1::Ellipse(D2D1::Point2F(float(center.x),float(center.y)),43,43);ComPtr<ID2D1SolidColorBrush> brush;check(context_->CreateSolidColorBrush(D2D1::ColorF(.45f,.45f,.45f),&brush),"Sample ring");context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);context_->DrawEllipse(ring,brush.Get(),24);for(int half=0;half<2;++half){auto color=half?sampleRing_->original:sampleRing_->sampled;brush->SetColor(D2D1::ColorF(color.r/255.f,color.g/255.f,color.b/255.f));context_->PushAxisAlignedClip(D2D1::RectF(float(center.x-58),float(center.y+(half?0:-58)),float(center.x+58),float(center.y+(half?58:0))),D2D1_ANTIALIAS_MODE_ALIASED);context_->DrawEllipse(ring,brush.Get(),16);context_->PopAxisAlignedClip();}}
+auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas draw");hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
+void NativeCanvas::setSelection(std::shared_ptr<const GrayRaster> value){
+if(selection_==value)return;selection_=std::move(value);selectionEdges_.clear();
+if(selection_){auto inside=[&](int x,int y){return selection_->pixel(x,y)>=128;};
+for(int y=0;y<=selection_->height;++y){int start=-1;for(int x=0;x<=selection_->width;++x){bool edge=x<selection_->width&&(inside(x,y)!=inside(x,y-1));if(edge&&start<0)start=x;if(!edge&&start>=0){selectionEdges_.push_back({{double(start),double(y)},{double(x),double(y)}});start=-1;}}}
+for(int x=0;x<=selection_->width;++x){int start=-1;for(int y=0;y<=selection_->height;++y){bool edge=y<selection_->height&&(inside(x,y)!=inside(x-1,y));if(edge&&start<0)start=y;if(!edge&&start>=0){selectionEdges_.push_back({{double(x),double(start)},{double(x),double(y)}});start=-1;}}}}
+update();}
+void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(r);setDocumentSize(raster_?raster_->width:0,raster_?raster_->height:0);rasterX_=rasterY_=0;rasterUnits_=1;try{upload();}catch(const std::exception&e){error_=e.what();releaseDevice();}update();}
+graphics::CanvasViewport NativeCanvas::viewportState()const{return {{double(width()),double(height())},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
+void NativeCanvas::installViewport(const graphics::CanvasViewport& state){zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;update();}
+void NativeCanvas::synchronizeViewport(){auto state=viewportState();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({double(width()),double(height())},devicePixelRatioF(),document);installViewport(state);}
+void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionEdges_.clear();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();}if(changed)synchronizeViewport();else update();}
+void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
+editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto state=viewportState();return {state.pointsPerPixel(),state.origin({double(documentWidth_),double(documentHeight_)})};}
+QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto point=viewportState().documentPoint({p.x(),p.y()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}
+void NativeCanvas::zoomAt(double value,QPointF anchor){if(documentWidth_<=0||documentHeight_<=0)return;auto state=viewportState();state.setZoom(value,{anchor.x(),anchor.y()},{double(documentWidth_),double(documentHeight_)});installViewport(state);}
+void NativeCanvas::panBy(QPointF delta){auto state=viewportState();state.translate({delta.x(),delta.y()});installViewport(state);}
+void NativeCanvas::recreateDevice(){releaseDevice();error_.clear();update();}
+QImage NativeCanvas::captureRendered(){
+    if(!device_||!swap_)throw std::runtime_error("No canvas graphics device");
+    ComPtr<ID3D11Texture2D> source;
+    check(swap_->GetBuffer(0,IID_PPV_ARGS(&source)),"Canvas capture buffer");
+    D3D11_TEXTURE2D_DESC desc{};source->GetDesc(&desc);
+    desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;desc.MiscFlags=0;
+    ComPtr<ID3D11Texture2D> staging;check(device_->CreateTexture2D(&desc,nullptr,&staging),"Canvas staging capture");
+    immediate_->CopyResource(staging.Get(),source.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};check(immediate_->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Canvas capture readback");
+    QImage image(static_cast<const uchar*>(mapped.pData),int(desc.Width),int(desc.Height),mapped.RowPitch,QImage::Format_ARGB32);
+    auto copy=image.copy();immediate_->Unmap(staging.Get(),0);return copy;
+}
+void NativeCanvas::paintEvent(QPaintEvent*){try{draw();error_.clear();}catch(const std::exception&e){error_=e.what();releaseDevice();}}
+void NativeCanvas::resizeEvent(QResizeEvent*){synchronizeViewport();if(swap_){context_->SetTarget(nullptr);target_.Reset();auto hr=swap_->ResizeBuffers(0,std::max(1,int(width()*devicePixelRatioF())),std::max(1,int(height()*devicePixelRatioF())),DXGI_FORMAT_UNKNOWN,0);try{check(hr,"Canvas resize");createTarget();}catch(const std::exception&e){error_=e.what();releaseDevice();}}update();}
+void NativeCanvas::mousePressEvent(QMouseEvent*e){
+    if(tabletActive_){e->accept();return;}
+    setFocus();last_=e->position();if(pointerHover)pointerHover(e->position(),e->modifiers());
+    if(e->button()==Qt::RightButton&&rightPointerDown&&rightPointerDown(e->position(),e->modifiers())){rightDragging_=true;grabMouse();e->accept();return;}
+    if(e->button()==Qt::LeftButton&&!rightDragging_){dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
+}
+void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
+    if(tabletActive_){e->accept();return;}
+    if(pointerHover)pointerHover(e->position(),e->modifiers());
+    if(rightDragging_){if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),false);last_=e->position();return;}
+    if(!dragging_&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({e->position().x(),e->position().y()});auto cursor=mode?geometry.cursor(*mode,{e->modifiers().testFlag(Qt::ShiftModifier),e->modifiers().testFlag(Qt::AltModifier),e->modifiers().testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
+    if((e->buttons()&Qt::MiddleButton)&&(!navigationAllowed||navigationAllowed()))panBy(e->position()-last_);else if(dragging_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());last_=e->position();
+}
+void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
+    if(tabletActive_||e->button()!=Qt::LeftButton||rightDragging_){e->accept();return;}
+    setFocus();last_=e->position();if(pointerHover)pointerHover(e->position(),e->modifiers());
+    dragging_=true;grabMouse();if(pointerDoubleClick)pointerDoubleClick(documentPoint(e->position()),e->modifiers());else if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());
+}
+void NativeCanvas::mouseReleaseEvent(QMouseEvent*e){
+    if(tabletActive_){e->accept();return;}
+    if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);return;}
+    if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
+}
+void NativeCanvas::wheelEvent(QWheelEvent*e){
+    e->accept();if(documentWidth_<=0||documentHeight_<=0||(navigationAllowed&&!navigationAllowed()))return;
+    // Qt reports discrete wheel angle in eighths of degrees (120 per detent).
+    // One normalized detent is one source non-precise scrolling unit.
+    const bool precise=!e->pixelDelta().isNull();const QPointF delta=precise?QPointF(e->pixelDelta()):QPointF(e->angleDelta())/120;
+    if(e->modifiers()&(Qt::ControlModifier|Qt::AltModifier))zoomAt(zoom*std::exp(-delta.y()*.015),e->position());else panBy(delta*(precise?1:12));
+    if(pointerHover)pointerHover(e->position(),e->modifiers());
+}
+void NativeCanvas::keyPressEvent(QKeyEvent*e){if(e->key()==Qt::Key_Escape&&(dragging_||rightDragging_)){dragging_=rightDragging_=tabletActive_=false;releaseMouse();if(pointerCancel)pointerCancel();e->accept();}else QWidget::keyPressEvent(e);}
+void NativeCanvas::tabletEvent(QTabletEvent*e){
+    e->accept();if(pointerHover)pointerHover(e->position(),e->modifiers());
+    if(e->type()==QEvent::TabletPress){setFocus();if(dragging_||rightDragging_)return;tabletActive_=dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
+    else if(e->type()==QEvent::TabletMove){if(tabletActive_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());}
+    else if(e->type()==QEvent::TabletRelease&&tabletActive_){tabletActive_=dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
+    // The pinned source has no pressure mapping. Accept prevents Qt's duplicate synthesized mouse stroke.
+}
+void NativeCanvas::leaveEvent(QEvent*e){if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}
+bool NativeCanvas::event(QEvent*e){
+    const bool focusLost=e->type()==QEvent::WindowDeactivate||e->type()==QEvent::FocusOut;
+    if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){dragging_=rightDragging_=tabletActive_=false;if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
+    if(e->type()==QEvent::DevicePixelRatioChange){releaseDevice();synchronizeViewport();}
+    if(e->type()==QEvent::NativeGesture){auto*gesture=static_cast<QNativeGestureEvent*>(e);if(gesture->gestureType()==Qt::ZoomNativeGesture){if(documentWidth_>0&&(!navigationAllowed||navigationAllowed()))zoomAt(zoom*(1+gesture->value()),gesture->position());gesture->accept();return true;}}
+    return QWidget::event(e);
+}
+}
+

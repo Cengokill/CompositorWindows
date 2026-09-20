@@ -16,4 +16,8 @@ try {
     if($LASTEXITCODE){throw 'Native model build failed'}
     Copy-Item "$root/dependencies/imaging/onnxruntime-win-x64-1.30.0/lib/*.dll" .
     foreach($case in @('astronaut','chelsea')){& ./native_model_checks.exe "$root/dependencies/imaging/model/birefnet-lite.onnx" "$out/$case.png" "$out/$case-native-advanced.png" 2>&1 | Tee-Object "$case-native.log";if($LASTEXITCODE){throw "Native model case failed: $case"}}
+    & cl @flags "/I$root/dependencies/imaging/onnxruntime-win-x64-1.30.0/include" "$root/src/imaging/subject_matte.cpp" "$root/src/imaging/onnx_subject_provider.cpp" "$PSScriptRoot/model_health_checks.cpp" "$root/dependencies/imaging/onnxruntime-win-x64-1.30.0/lib/onnxruntime.lib" bcrypt.lib /Fe:model_health_checks.exe 2>&1 | Tee-Object build-model-health.log
+    if($LASTEXITCODE){throw 'Native health build failed'}
+    & ./model_health_checks.exe "$root/dependencies/imaging/model/birefnet-lite.onnx" 2>&1 | Tee-Object model-health-check.log
+    if($LASTEXITCODE){throw 'Native health/semantic separation failed'}
 }finally{Pop-Location}

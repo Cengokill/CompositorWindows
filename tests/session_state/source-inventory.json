@@ -1,0 +1,527 @@
+{
+  "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
+  "source": "upstream/Compositor/Document/EditorSession.swift",
+  "sha256": "779bacbe19aef648869ea45c1ef66cc098a90b73cc1ede423f5dcaf73771c48e",
+  "stored_property_count": 84,
+  "counts": {
+    "implemented_tool_bundle": 21,
+    "already_project_owned": 11,
+    "choice_not_yet_wired": 5,
+    "operation_or_pending_edit_excluded": 24,
+    "derived_runtime_or_cache_excluded": 21,
+    "workflow_or_clipboard_outside_bundle": 2
+  },
+  "properties": [
+    {
+      "name": "skipsInitialClipboardCanvasSize",
+      "line": 95,
+      "category": "workflow_or_clipboard_outside_bundle",
+      "declaration": "var skipsInitialClipboardCanvasSize = false"
+    },
+    {
+      "name": "document",
+      "line": 96,
+      "category": "already_project_owned",
+      "declaration": "var document: CanvasDocument?"
+    },
+    {
+      "name": "canvasFocusRequest",
+      "line": 97,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var canvasFocusRequest = 0"
+    },
+    {
+      "name": "showsSampleRing",
+      "line": 98,
+      "category": "implemented_tool_bundle",
+      "declaration": "var showsSampleRing = true"
+    },
+    {
+      "name": "adjustmentOriginal",
+      "line": 99,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var adjustmentOriginal: LayerAdjustment?"
+    },
+    {
+      "name": "adjustmentEditingID",
+      "line": 100,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var adjustmentEditingID: UUID? { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "projectURL",
+      "line": 101,
+      "category": "already_project_owned",
+      "declaration": "var projectURL: URL?"
+    },
+    {
+      "name": "isProjectBusy",
+      "line": 105,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var isProjectBusy = false {"
+    },
+    {
+      "name": "showsBusy",
+      "line": 117,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "private(set) var showsBusy = false"
+    },
+    {
+      "name": "busyIndicatorTask",
+      "line": 119,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored private var busyIndicatorTask: Task<Void, Never>?"
+    },
+    {
+      "name": "projectWaiters",
+      "line": 135,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "private var projectWaiters: [CheckedContinuation<Void, Never>] = []"
+    },
+    {
+      "name": "fileRequestWaiters",
+      "line": 136,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "private var fileRequestWaiters: [CheckedContinuation<Void, Never>] = []"
+    },
+    {
+      "name": "viewport",
+      "line": 157,
+      "category": "already_project_owned",
+      "declaration": "var viewport = CanvasViewport()"
+    },
+    {
+      "name": "tool",
+      "line": 158,
+      "category": "implemented_tool_bundle",
+      "declaration": "var tool: NavigationTool = .move"
+    },
+    {
+      "name": "collapsedGroupIDs",
+      "line": 159,
+      "category": "already_project_owned",
+      "declaration": "var collapsedGroupIDs: Set<UUID> = []"
+    },
+    {
+      "name": "cropRect",
+      "line": 160,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var cropRect: CGRect?"
+    },
+    {
+      "name": "cropRatioChoice",
+      "line": 161,
+      "category": "choice_not_yet_wired",
+      "declaration": "var cropRatioChoice = \"Free\""
+    },
+    {
+      "name": "cropError",
+      "line": 162,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var cropError: String?"
+    },
+    {
+      "name": "transformEdit",
+      "line": 163,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var transformEdit: TransformEdit?"
+    },
+    {
+      "name": "distortPreviewCache",
+      "line": 164,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var distortPreviewCache: [UUID: DistortPreviewCache] = [:]"
+    },
+    {
+      "name": "snapGuides",
+      "line": 166,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var snapGuides: (xs: [CGFloat], ys: [CGFloat]) = ([], [])"
+    },
+    {
+      "name": "lastBrushPoint",
+      "line": 168,
+      "category": "implemented_tool_bundle",
+      "declaration": "@ObservationIgnored var lastBrushPoint: (point: CGPoint, layerID: UUID, mask: Bool)?"
+    },
+    {
+      "name": "maskDistortPreviewCache",
+      "line": 169,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var maskDistortPreviewCache: MaskDistortPreviewCache?"
+    },
+    {
+      "name": "shapeTransformPreviewCache",
+      "line": 171,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var shapeTransformPreviewCache: [UUID: (size: CGSize, image: CGImage)] = [:]"
+    },
+    {
+      "name": "locksTransformRatio",
+      "line": 172,
+      "category": "implemented_tool_bundle",
+      "declaration": "var locksTransformRatio = true"
+    },
+    {
+      "name": "transformAutoSelect",
+      "line": 174,
+      "category": "implemented_tool_bundle",
+      "declaration": "var transformAutoSelect = false"
+    },
+    {
+      "name": "showsTransformControls",
+      "line": 177,
+      "category": "implemented_tool_bundle",
+      "declaration": "var showsTransformControls = true"
+    },
+    {
+      "name": "transformDuplicate",
+      "line": 178,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "@ObservationIgnored var transformDuplicate: (copy: UUID, source: UUID)?"
+    },
+    {
+      "name": "brushSettings",
+      "line": 179,
+      "category": "implemented_tool_bundle",
+      "declaration": "var brushSettings = BrushSettings() { didSet { refreshGradient() } }"
+    },
+    {
+      "name": "spotHealingMode",
+      "line": 180,
+      "category": "implemented_tool_bundle",
+      "declaration": "var spotHealingMode: SpotHealingMode = .contentAware"
+    },
+    {
+      "name": "blurMode",
+      "line": 181,
+      "category": "implemented_tool_bundle",
+      "declaration": "var blurMode: BlurToolMode = .liquify"
+    },
+    {
+      "name": "brushMode",
+      "line": 183,
+      "category": "implemented_tool_bundle",
+      "declaration": "var brushMode: BrushToolMode = .paint"
+    },
+    {
+      "name": "cloneSource",
+      "line": 190,
+      "category": "already_project_owned",
+      "declaration": "var cloneSource: CGPoint?"
+    },
+    {
+      "name": "cloneSettings",
+      "line": 191,
+      "category": "already_project_owned",
+      "declaration": "var cloneSettings = CloneSettings()"
+    },
+    {
+      "name": "parkedBrushTips",
+      "line": 196,
+      "category": "implemented_tool_bundle",
+      "declaration": "@ObservationIgnored var parkedBrushTips: [Int: (diameter: CGFloat, hardness: CGFloat, opacity: CGFloat)] = [1: (40, 0, 1), 2: (40, 0, 1)]"
+    },
+    {
+      "name": "cloneOffset",
+      "line": 198,
+      "category": "already_project_owned",
+      "declaration": "@ObservationIgnored var cloneOffset: CGSize?"
+    },
+    {
+      "name": "maskPaintWhite",
+      "line": 199,
+      "category": "implemented_tool_bundle",
+      "declaration": "var maskPaintWhite = false { didSet { refreshGradient() } }"
+    },
+    {
+      "name": "backgroundColor",
+      "line": 200,
+      "category": "implemented_tool_bundle",
+      "declaration": "var backgroundColor = PaletteColor.white { didSet { refreshGradient() } }"
+    },
+    {
+      "name": "gradientSettings",
+      "line": 201,
+      "category": "implemented_tool_bundle",
+      "declaration": "var gradientSettings = GradientSettings() { didSet { refreshGradient() } }"
+    },
+    {
+      "name": "gradientEdit",
+      "line": 202,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var gradientEdit: GradientEdit?"
+    },
+    {
+      "name": "lassoDraft",
+      "line": 203,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var lassoDraft: LassoDraft?"
+    },
+    {
+      "name": "lassoKind",
+      "line": 204,
+      "category": "choice_not_yet_wired",
+      "declaration": "var lassoKind = LassoKind.freehand"
+    },
+    {
+      "name": "marqueeKind",
+      "line": 205,
+      "category": "implemented_tool_bundle",
+      "declaration": "var marqueeKind = LassoKind.rectangle"
+    },
+    {
+      "name": "shapeKind",
+      "line": 206,
+      "category": "implemented_tool_bundle",
+      "declaration": "var shapeKind = ShapeKind.rectangle"
+    },
+    {
+      "name": "shapeCornerRadius",
+      "line": 208,
+      "category": "implemented_tool_bundle",
+      "declaration": "var shapeCornerRadius: Double = 0"
+    },
+    {
+      "name": "shapeDraft",
+      "line": 210,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var shapeDraft: ShapeDraft?"
+    },
+    {
+      "name": "selectionModeChoice",
+      "line": 211,
+      "category": "implemented_tool_bundle",
+      "declaration": "var selectionModeChoice = SelectionMode.replace"
+    },
+    {
+      "name": "heldSelectionMode",
+      "line": 213,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var heldSelectionMode: SelectionMode?"
+    },
+    {
+      "name": "selectionMoveOrigin",
+      "line": 215,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "@ObservationIgnored var selectionMoveOrigin: DocumentSelection?"
+    },
+    {
+      "name": "pixelMove",
+      "line": 216,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var pixelMove: PixelMove?"
+    },
+    {
+      "name": "pixelClipboard",
+      "line": 217,
+      "category": "workflow_or_clipboard_outside_bundle",
+      "declaration": "@ObservationIgnored var pixelClipboard: PixelClipboard?"
+    },
+    {
+      "name": "levels",
+      "line": 218,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var levels: LevelsEdit? { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "hueSaturation",
+      "line": 219,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var hueSaturation: HueSaturationEdit?"
+    },
+    {
+      "name": "filterEdit",
+      "line": 221,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var filterEdit: FilterEdit?"
+    },
+    {
+      "name": "filterSettings",
+      "line": 222,
+      "category": "choice_not_yet_wired",
+      "declaration": "var filterSettings = FilterSettings()"
+    },
+    {
+      "name": "hueSaturationTask",
+      "line": 223,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var hueSaturationTask: Task<Void, Never>?"
+    },
+    {
+      "name": "hueSaturationPending",
+      "line": 225,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var hueSaturationPending: HueSaturationJob?"
+    },
+    {
+      "name": "hueSampleMode",
+      "line": 227,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var hueSampleMode: HueSampleMode?"
+    },
+    {
+      "name": "hueTargeting",
+      "line": 228,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var hueTargeting = false"
+    },
+    {
+      "name": "hueTargetDrag",
+      "line": 229,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "@ObservationIgnored var hueTargetDrag: HueTargetDrag?"
+    },
+    {
+      "name": "selectionAntialiased",
+      "line": 230,
+      "category": "implemented_tool_bundle",
+      "declaration": "var selectionAntialiased = true"
+    },
+    {
+      "name": "wandSettings",
+      "line": 231,
+      "category": "implemented_tool_bundle",
+      "declaration": "var wandSettings = WandSettings()"
+    },
+    {
+      "name": "showsPixelGrid",
+      "line": 232,
+      "category": "implemented_tool_bundle",
+      "declaration": "var showsPixelGrid = true"
+    },
+    {
+      "name": "selectionExpandAmount",
+      "line": 234,
+      "category": "choice_not_yet_wired",
+      "declaration": "var selectionExpandAmount = 1"
+    },
+    {
+      "name": "selectionContractAmount",
+      "line": 235,
+      "category": "choice_not_yet_wired",
+      "declaration": "var selectionContractAmount = 1"
+    },
+    {
+      "name": "pendingOpacityDigit",
+      "line": 236,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "@ObservationIgnored var pendingOpacityDigit: (digit: Int, time: TimeInterval)?"
+    },
+    {
+      "name": "colorPicker",
+      "line": 237,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var colorPicker: ColorPickerState?"
+    },
+    {
+      "name": "brushError",
+      "line": 238,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var brushError: String?"
+    },
+    {
+      "name": "brushRevision",
+      "line": 239,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var brushRevision = 0"
+    },
+    {
+      "name": "brushStroke",
+      "line": 242,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "@ObservationIgnored var brushStroke: BrushStroke? { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "warpStroke",
+      "line": 244,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "@ObservationIgnored var warpStroke: WarpStroke? { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "showsNewDocument",
+      "line": 426,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var showsNewDocument = false { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "showsImporter",
+      "line": 427,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var showsImporter = false { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "isImporting",
+      "line": 428,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var isImporting = false { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "importError",
+      "line": 429,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "var importError: String? { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "opacityEditLayerID",
+      "line": 430,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var opacityEditLayerID: UUID?"
+    },
+    {
+      "name": "blendPreview",
+      "line": 431,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var blendPreview: (layerID: UUID, mode: LayerBlendMode)?"
+    },
+    {
+      "name": "refreshCanvasPreview",
+      "line": 432,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "@ObservationIgnored var refreshCanvasPreview: (() -> Void)?"
+    },
+    {
+      "name": "isMaskSelected",
+      "line": 433,
+      "category": "already_project_owned",
+      "declaration": "var isMaskSelected = false"
+    },
+    {
+      "name": "selectedLayerIDs",
+      "line": 434,
+      "category": "already_project_owned",
+      "declaration": "var selectedLayerIDs: Set<UUID> = []"
+    },
+    {
+      "name": "activeLayerID",
+      "line": 435,
+      "category": "already_project_owned",
+      "declaration": "var activeLayerID: UUID? {"
+    },
+    {
+      "name": "renamingLayerID",
+      "line": 441,
+      "category": "operation_or_pending_edit_excluded",
+      "declaration": "var renamingLayerID: UUID? { didSet { resumeFileRequests() } }"
+    },
+    {
+      "name": "history",
+      "line": 442,
+      "category": "already_project_owned",
+      "declaration": "let history = DocumentHistory()"
+    },
+    {
+      "name": "pendingImports",
+      "line": 599,
+      "category": "derived_runtime_or_cache_excluded",
+      "declaration": "private var pendingImports: [ImportRequest] = []"
+    }
+  ],
+  "representation_notes": [
+    "Source Brush/Eraser mode is represented by current ProjectTool Brush/Eraser values; a separate parked rail-icon mode is not added in this bounded slice.",
+    "Source parkedBrushTips is represented by separate native brushSettings, cloneSettings and blurSettings tip values; foreground is a shared QColor.",
+    "Clone source, aligned flag, retained offset and sample-all-layers already belong to EditorProject. They are not duplicated in ProjectToolState.",
+    "Crop ratio, remembered lasso family, remembered filter settings and expand/contract defaults are explicit remaining source choices, not implemented by unused fields.",
+    "ProjectWorkspace.swift canSwitch prohibits some pending edits. MainWindow tab interruption behavior is a separate root-owned integration concern."
+  ]
+}

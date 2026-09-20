@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "foreground-quality-v1",
+  "purpose": "Frozen local CPU screening and human review, not replacement acceptance or macOS parity.",
+  "freeze_rule": "Created before any candidate inference on these prepared inputs. Changes require a new criteria id and a new results directory.",
+  "preparation": {"max_long_side": 1024, "allow_upscale": false, "resample": "Pillow LANCZOS", "exif_orientation": true, "embedded_icc": "convert to sRGB using Pillow ImageCms if present; otherwise explicitly assume sRGB", "published_reference_background_rgb": [96,112,128], "reference_composite": "8-bit sRGB-domain straight-alpha blend; alpha is the published PNG channel"},
+  "model_sha256": "c0faf38f5504f2239f1e6481ce4ac166b17435b38ea35e480d811a47bc1aba80",
+  "provider": "Native OnnxSubjectProvider; mandatory CPU; ONNX Runtime 1.30.0; 8 intra-op, 1 inter-op; fresh process per image",
+  "basic": {"advanced": false},
+  "advanced": {"advanced": true, "refine_edges": 12, "contrast": 25, "shift_edge": 0, "preview": false},
+  "reference_policy": "Seven real photographs have no independent reference alpha: alpha error, reference boundary error, reference coverage recall and quality gate are null with reason qualitative_only. The eighth input uses an independently published historical cutout: metrics mean agreement with that published channel; its extraction method and physical accuracy are unknown. It is not a scientific ground-truth corpus. No model-generated matte is treated as ground truth.",
+  "definitions": {
+    "alpha_mae": "mean(abs(predicted_alpha-reference_alpha)) in [0,1]",
+    "boundary_mae": "alpha MAE within an 8-pixel Euclidean band of the 4-connected inner boundary of reference_alpha>=0.5; include every pixel with 0<reference_alpha<1",
+    "foreground_recall": "fraction of reference_alpha>=0.95 pixels for which predicted_alpha>=0.5",
+    "background_mean_alpha": "mean predicted_alpha where reference_alpha<=0.05",
+    "iou": "intersection / union of predicted_alpha>=0.5 and reference_alpha>=0.5",
+    "boundary_f1": "harmonic mean of predicted/reference 4-connected inner-boundary precision and recall; nearest boundary Euclidean tolerance 2 pixels",
+    "coverage_fraction": "fraction of all image pixels with alpha>=0.5; observable area, not recall",
+    "soft_alpha_fraction": "fraction of all image pixels with 0.05<alpha<0.95; does not establish physical transparency",
+    "basic_advanced_mae": "mean absolute alpha difference between Basic and Advanced; does not establish accuracy",
+    "negative_case": "Grass has no predesignated salient foreground object. Report rejection behavior and coverage; do not create a fabricated all-zero reference alpha.",
+    "memory": "Fresh process Windows PeakWorkingSetSize after inference and refinement; private committed bytes measured at end; includes model/session. CPU latency splits model load, inference and refinement. One run per image: descriptive measurements, not a performance distribution."
+  },
+  "published_reference_screening_thresholds": {"alpha_mae_max": 0.05, "boundary_mae_max": 0.12, "foreground_recall_min": 0.97, "background_mean_alpha_max": 0.02, "iou_min": 0.9, "boundary_f1_min": 0.85},
+  "threshold_status": "Provisional engineering criteria frozen before measurement; not validated user acceptance thresholds. Both modes are scored without tuning.",
+  "cases": [
+    {"id":"hair","source":"koch-loose-hair","category":"hair","reference":null,"crop_fraction":[0.25,0.0,0.53,0.43]},
+    {"id":"fur","source":"lemur","category":"fur","reference":null,"crop_fraction":[0.16,0.10,0.62,0.68]},
+    {"id":"fine-structures","source":"dandelion","category":"fine structures","reference":null,"crop_fraction":[0.35,0.08,0.86,0.80]},
+    {"id":"low-contrast","source":"snow-leopard","category":"low contrast","reference":null,"crop_fraction":[0.32,0.23,0.65,0.86]},
+    {"id":"multiple-subjects","source":"crew-multiple","category":"multiple subjects","reference":null,"crop_fraction":[0.10,0.08,0.84,0.63]},
+    {"id":"transparent-edges","source":"soap-bubble","category":"transparent edges","reference":null,"crop_fraction":[0.13,0.08,0.83,0.94]},
+    {"id":"no-plausible-subject","source":"grass","category":"no plausible subject","reference":null,"crop_fraction":[0.25,0.25,0.75,0.75]},
+    {"id":"published-cutout","source":"rhoads-reference","category":"published cutout reference (agreement only)","reference":"published PNG alpha","crop_fraction":[0.22,0.12,0.78,0.60]}
+  ]
+}

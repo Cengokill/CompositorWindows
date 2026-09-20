@@ -1,0 +1,16 @@
+Internal ctest changing into directory: H:/CompositorWindows/windows/build/release
+Test project H:/CompositorWindows/windows/build/release
+    Start 3: session_state.source_defaults
+1/5 Test #3: session_state.source_defaults .....   Passed    0.08 sec
+    Start 4: session_state.tab_isolation
+2/5 Test #4: session_state.tab_isolation .......   Passed    0.03 sec
+    Start 5: session_state.control_signals
+3/5 Test #5: session_state.control_signals .....   Passed    0.03 sec
+    Start 6: session_state.continuity_local
+4/5 Test #6: session_state.continuity_local ....   Passed    0.03 sec
+    Start 7: session_state.brush_family_tips
+5/5 Test #7: session_state.brush_family_tips ...   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   0.21 sec

@@ -1,0 +1,26 @@
+{
+  "qt": {
+    "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_683/qt6_683/qt.qt6.683.win64_msvc2022_64/6.8.3-0-202503201308qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+    "kit": "msvc2022_64",
+    "modules": [
+      "qtbase"
+    ],
+    "sha256": "41688269FAC0565DB956C66D9EECAE777D16197E0C02CD81B88640C1F5D73D3F",
+    "official_sha1": "ab0bd2551618f7128ef30c6d74fe45b6a76e2296",
+    "license": "LGPL-3.0-only or GPL-2.0-only or GPL-3.0-only or commercial (module-specific)",
+    "version": "6.8.3",
+    "source": {
+      "url": "https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz",
+      "sha256": "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80",
+      "path": "dependencies/downloads/qtbase-everywhere-src-6.8.3.tar.xz"
+    }
+  },
+  "schema": 1,
+  "upstream": "a19db9011282399785dc18efcfded904627bdcc2",
+  "toolchain": {
+    "architecture": "x64",
+    "windows_sdk": "10.0.26100.0",
+    "cmake": "3.31.6-msvc6",
+    "msvc": "14.44.35207"
+  }
+}

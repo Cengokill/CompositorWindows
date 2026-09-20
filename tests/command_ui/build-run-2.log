@@ -1,0 +1,44 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+-- Could NOT find WrapVulkanHeaders (missing: Vulkan_INCLUDE_DIR) 
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: H:/CompositorWindows/windows/tests/command_ui/build
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule H:/CompositorWindows/windows/tests/command_ui/CMakeLists.txt
+  Scanning sources for module dependencies...
+  CommandRegistry.cpp
+  Compiling...
+  CommandRegistry.cpp
+  command_ui_tests.vcxproj -> H:\CompositorWindows\windows\tests\command_ui\build\Release\command_ui_tests.exe
+  Building Custom Rule H:/CompositorWindows/windows/tests/command_ui/CMakeLists.txt
+Internal ctest changing into directory: H:/CompositorWindows/windows/tests/command_ui/build
+Test project H:/CompositorWindows/windows/tests/command_ui/build
+    Start 1: command_ui.source_predicates
+1/8 Test #1: command_ui.source_predicates .....   Passed    0.06 sec
+    Start 2: command_ui.layer_eligibility
+2/8 Test #2: command_ui.layer_eligibility .....   Passed    0.02 sec
+    Start 3: command_ui.pending_preparation
+3/8 Test #3: command_ui.pending_preparation ...   Passed    0.02 sec
+    Start 4: command_ui.stale_activation
+4/8 Test #4: command_ui.stale_activation ......   Passed    0.02 sec
+    Start 5: command_ui.text_shortcuts
+5/8 Test #5: command_ui.text_shortcuts ........   Passed    0.02 sec
+    Start 6: command_ui.text_menu_routes
+6/8 Test #6: command_ui.text_menu_routes ......   Passed    0.02 sec
+    Start 7: command_ui.catalog_manifest
+7/8 Test #7: command_ui.catalog_manifest ......   Passed    0.02 sec
+    Start 8: command_ui.registration
+8/8 Test #8: command_ui.registration ..........   Passed    0.02 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Total Test time (real) =   0.21 sec

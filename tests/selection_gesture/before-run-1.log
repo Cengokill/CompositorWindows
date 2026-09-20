@@ -1,0 +1,21 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+SelectionEventTests.cpp
+coverage50,50=0 coverage30,30=0
+FAIL source SelectionTests:377 Alt must not draw from center
+EXIT option_marquee 1
+first coverage10,10=255 coverage65,45=255 coverage65,60=255
+FAIL source initial Shift must add without squaring
+EXIT fresh_shift_marquee 1
+history=0 name= coverage80,80=-1
+FAIL source near-first click closes one Polygonal Lasso edit
+EXIT polygon_click_close 1
+canonical_unchanged_during_draft=0
+FAIL source lasso draft must not mutate canonical selection
+EXIT canonical_draft 1

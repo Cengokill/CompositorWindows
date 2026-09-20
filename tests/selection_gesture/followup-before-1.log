@@ -1,0 +1,15 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+SelectionFollowupTests.cpp
+H:\CompositorWindows\windows\tests\selection_gesture/SelectionFollowupTests.cpp(22): error C2039: 'keyRelease': is not a member of 'QTest'
+H:\CompositorWindows\windows/dependencies/qt/include\QtCore/qtestsupport_core.h(14): note: see declaration of 'QTest'
+H:\CompositorWindows\windows\tests\selection_gesture/SelectionFollowupTests.cpp(22): error C3861: 'keyRelease': identifier not found
+H:\CompositorWindows\windows\tests\selection_gesture/SelectionFollowupTests.cpp(22): error C2039: 'keyClick': is not a member of 'QTest'
+H:\CompositorWindows\windows/dependencies/qt/include\QtCore/qtestsupport_core.h(14): note: see declaration of 'QTest'
+H:\CompositorWindows\windows\tests\selection_gesture/SelectionFollowupTests.cpp(22): error C3861: 'keyClick': identifier not found

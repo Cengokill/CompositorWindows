@@ -1,0 +1,21 @@
+**********************************************************************
+** Visual Studio 2022 Developer PowerShell v17.14.21
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+cmake version 3.31.6-msvc6
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+Ready: Qt 6.8.3, MSVC 14.44.35207, SDK 10.0.26100.0\. Run cmake --preset windows-x64-debug from H:\CompositorWindows\windows.
+SelectionFollowupTests.cpp
+draft_after_undo=0 draft_after_redo=0
+FAIL EditorSession.restore467-472 preserves lassoDraft across history restore
+EXIT undo_redo_draft 1
+selection_mode_after_escape=2
+FAIL Selection.swift119 displays rememberedNew after cancel and releasedAlt
+EXIT escape_mode_reset 1
+expand_maximum=1000
+FAIL Selection.swift285 maximum expand/contract amount500
+EXIT expand_range 1
+wand_10,10=0 wand_58,50=255
+FAIL EditorCanvas1406 unmovedWand usesReplace regardless releaseflags or changedchoice
+EXIT wand_replace 1

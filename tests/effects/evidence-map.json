@@ -1,6 +1,6 @@
 {
   "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
-  "build_log": "windows/tests/effects/build-run-1.log",
+  "build_log": "windows/tests/effects/build-run-2.log",
   "junit": "windows/tests/effects/results.xml",
   "native_checks_passed": 10,
   "native_checks_failed": 0,

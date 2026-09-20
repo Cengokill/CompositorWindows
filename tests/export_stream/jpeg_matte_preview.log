@@ -1,0 +1,1 @@
+FAIL H:\CompositorWindows\windows\tests\export_stream\ExportStreamTests.cpp:40: result.preview.pixels==decoded.image.pixels

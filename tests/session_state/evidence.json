@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
+  "native_status": "passed",
+  "mac_reference_status": "blocked_reference",
+  "desktop_visual_acceptance": false,
+  "build_log": "windows/evidence/integration/release-build-15.log",
+  "run_log": "windows/tests/session_state/run-1.log",
+  "junit": "windows/tests/session_state/results.xml",
+  "command": ". windows/scripts/bootstrap.ps1 -Offline; ctest --test-dir windows/build/release -C Release -R '^session_state\\.' --output-on-failure --output-junit <absolute-output-path>",
+  "passed": 5,
+  "failed": 0,
+  "native_cases": [
+    {
+      "name": "session_state.source_defaults",
+      "classname": "session_state.source_defaults",
+      "time": "0.0754442",
+      "status": "run"
+    },
+    {
+      "name": "session_state.tab_isolation",
+      "classname": "session_state.tab_isolation",
+      "time": "0.0322609",
+      "status": "run"
+    },
+    {
+      "name": "session_state.control_signals",
+      "classname": "session_state.control_signals",
+      "time": "0.0314508",
+      "status": "run"
+    },
+    {
+      "name": "session_state.continuity_local",
+      "classname": "session_state.continuity_local",
+      "time": "0.030733",
+      "status": "run"
+    },
+    {
+      "name": "session_state.brush_family_tips",
+      "classname": "session_state.brush_family_tips",
+      "time": "0.0302498",
+      "status": "run"
+    }
+  ],
+  "stored_property_inventory": "windows/tests/session_state/source-inventory.json",
+  "stored_properties_audited": 84,
+  "full_upstream_test_methods_ported": 0,
+  "complete_assertion_equivalence_candidates": [
+    {
+      "upstream_file": "CompositorTests/CloneStampTests.swift",
+      "method": "cloneStampKeepsItsOwnSoftBrushTip",
+      "method_line": 63,
+      "native_file": "windows/tests/session_state/ProjectToolStateTests.cpp",
+      "native_case": "brush_family_tips",
+      "native_line": 34,
+      "source_assertions": [
+        {
+          "line": 68,
+          "expected": "Brush hardness == 1",
+          "native_witness": "Shared SpotHealing hardness control == 100 percent after Brush diameter30"
+        },
+        {
+          "line": 70,
+          "expected": "Clone hardness == 0 and diameter == 40",
+          "native_witness": "Clone control hardness0 and diameter40"
+        },
+        {
+          "line": 74,
+          "expected": "SpotHealing hardness == 1 and diameter == 30",
+          "native_witness": "SpotHealing control hardness100 and diameter30"
+        },
+        {
+          "line": 76,
+          "expected": "Clone hardness == 0.5 and diameter == 40",
+          "native_witness": "Clone control hardness50 and diameter40"
+        }
+      ],
+      "representation_note": "Native dedicated tip families are read through active Qt controls instead of Swift single active brushSettings; first check selects SpotHealing (same family) solely to expose hardness. Source setup creates40x20; native fixture creates40x20. Additional tab-isolation assertions are native regression coverage.",
+      "review_status": "candidate_for_assertion_coverage_audit_not_automatically_credited"
+    }
+  ],
+  "remaining_choices": [
+    "cropRatioChoice",
+    "lassoKind remembered separately from active tool",
+    "filterSettings remembered values",
+    "selectionExpandAmount",
+    "selectionContractAmount",
+    "brushMode parked rail icon"
+  ],
+  "known_lifecycle_difference": "Native tab switch cancels a pointer stroke; source canSwitch blocks while brush/warp exists.",
+  "sha256": {
+    "windows/src/ui/ProjectToolState.h": "2f18e6d9b7293547408eb006b11905fbdbf0409cc60b85c01663455d4745243e",
+    "windows/src/ui/ProjectToolState.cpp": "288765dab130a4a5ef1019caf1fd4362ae50353fe83b4d60321fb6ebe1d853f0",
+    "windows/src/ui/ProjectActions.cpp": "b5381cef407cc748b7c38e4b1568eea4521dbf99a7a96e7710cdd179d75dfa6a",
+    "windows/tests/session_state/ProjectToolStateTests.cpp": "179d5222ae1f5ecd02b3fe17b3ffde18051617dde63c3949c84777da4734dfc7",
+    "windows/build/release/Release/session_state_tests.exe": "a07813ef9259461b11ad972941ae18e3970d898da0c3a0f409548c0fc676ea64",
+    "upstream/Compositor/Document/EditorSession.swift": "779bacbe19aef648869ea45c1ef66cc098a90b73cc1ede423f5dcaf73771c48e",
+    "upstream/Compositor/Document/ProjectWorkspace.swift": "e354c967835a9e3bfc5c9223c3d828074eae0abab0880e9d5988d1d638499dd2",
+    "upstream/CompositorTests/CloneStampTests.swift": "f79a3520f24507a36074c6f33057b2f0a1885731f76b527b7344846e168d1794"
+  }
+}

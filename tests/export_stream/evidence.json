@@ -1,0 +1,536 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2",
+  "scope": "Bounded native streaming export; no complete Swift method or Mac differential claim",
+  "final_stream_run": "03",
+  "stream_passed": 9,
+  "stream_failed": 0,
+  "stream_executable": {
+    "path": "tests/import_ui/build/Release/export_stream_tests.exe",
+    "sha256": "2c49fdf8a6bf3decdee2b18090f4309cf8ef0f8da4b2b4b6a8fd6a0bbffc22b1"
+  },
+  "source_fingerprints": [
+    {
+      "path": "src/imaging/stream_export.h",
+      "sha256": "aac1307fc492550fad346948abafdfc05b1a3f47b0792829312e4627cc4c10c7"
+    },
+    {
+      "path": "src/imaging/stream_export.cpp",
+      "sha256": "0fe41613b049fbbeb4ba3fbe4e65791df15a152e5768101c77bb4f564effc862"
+    },
+    {
+      "path": "src/core/DocumentExport.h",
+      "sha256": "574acef09b6e854555a4ee4104c1d68025a4e44b480bb5da027d57e2f92eeb6e"
+    },
+    {
+      "path": "src/core/DocumentExport.cpp",
+      "sha256": "f24127cbd1ef9b5536b36dbb790c5d77ea02436abefcb86b9dc12942a29e18b3"
+    },
+    {
+      "path": "src/ui/FileActions.cpp",
+      "sha256": "2c2c6c5671cda54df3dfddee661e7f4e1708c2a84ff207d8f2861377781ef7fd"
+    },
+    {
+      "path": "src/main.cpp",
+      "sha256": "d9fdac0e6930d466c4c603d770a841c93a695f4fb975cef2a1483bee072d1473"
+    },
+    {
+      "path": "tests/export_stream/ExportStreamTests.cpp",
+      "sha256": "7526b85810d2e3166d1530271ed4228404c005215bdfdfc5d8c6c03fc12f8ba9"
+    },
+    {
+      "path": "tests/export_stream/ExportUiTests.cpp",
+      "sha256": "c120c8141291cf3c7dea6412ac37994602f468a328f31bb1f251d7b89156d75f"
+    }
+  ],
+  "runs": [
+    {
+      "native_test": "export_stream.extent_guard",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "extent_guard"
+      ],
+      "output": "PASS extent_guard\n",
+      "evidence": {
+        "path": "tests/export_stream/extent_guard-03.log",
+        "sha256": "11d69f9109c72e33d42ff6f9a691423a5d676c4462d797c881fd78edb756f558"
+      }
+    },
+    {
+      "native_test": "export_stream.row_png",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "row_png"
+      ],
+      "output": "PASS row_png\n",
+      "evidence": {
+        "path": "tests/export_stream/row_png-03.log",
+        "sha256": "98663f2c005b9d7f26f012a8aa9173aae5bf509cc90391a5e5907abe1857dda9"
+      }
+    },
+    {
+      "native_test": "export_stream.canonical_partition",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "canonical_partition"
+      ],
+      "output": "PASS canonical_partition\n",
+      "evidence": {
+        "path": "tests/export_stream/canonical_partition-03.log",
+        "sha256": "1b8580578f5de8100003d33e9ba57168e2ad9919afb60e855afe3535764e84ff"
+      }
+    },
+    {
+      "native_test": "export_stream.jpeg_matte_preview",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "jpeg_matte_preview"
+      ],
+      "output": "PASS jpeg_matte_preview\n",
+      "evidence": {
+        "path": "tests/export_stream/jpeg_matte_preview-03.log",
+        "sha256": "7b756828b8c78219d073227543a82fbb2785029825780042333bed9d2cc00ee7"
+      }
+    },
+    {
+      "native_test": "export_stream.cancel_atomic",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "cancel_atomic"
+      ],
+      "output": "PASS cancel_atomic\n",
+      "evidence": {
+        "path": "tests/export_stream/cancel_atomic-03.log",
+        "sha256": "79092c11e5d601417ca6a830dbd372d91271ce7388350dc2920c8e79d080ba4e"
+      }
+    },
+    {
+      "native_test": "export_stream.row_failure_atomic",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "row_failure_atomic"
+      ],
+      "output": "PASS row_failure_atomic\n",
+      "evidence": {
+        "path": "tests/export_stream/row_failure_atomic-03.log",
+        "sha256": "a800e38e653613b18c48a61e2fb6b82602ea2074048a7101ebe1c5c83ece0bdd"
+      }
+    },
+    {
+      "native_test": "export_stream.copy_atomic",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "copy_atomic"
+      ],
+      "output": "PASS copy_atomic\n",
+      "evidence": {
+        "path": "tests/export_stream/copy_atomic-03.log",
+        "sha256": "2a84d4eb3c02aa4f953712a80c364291a0db835478c727b4680b361b3aad86c7"
+      }
+    },
+    {
+      "native_test": "export_stream.large_blank",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "large_blank"
+      ],
+      "output": "format=png width=10000 height=10000 bytes=388384 owned_pixel_bytes=8846400 render_bound=4784128\nformat=jpeg width=10000 height=10000 bytes=1566289 owned_pixel_bytes=12909600 render_bound=4784128\npeak_working_set=26157056 peak_commit=16068608 elapsed_ms=2478\nPASS large_blank\n",
+      "evidence": {
+        "path": "tests/export_stream/large_blank-03.log",
+        "sha256": "83c53d4700158f8bb20da949180b6690feb076478326b980a3e52fc03454adec"
+      }
+    },
+    {
+      "native_test": "export_stream.large_narrow",
+      "result": "passed",
+      "command": [
+        "tests/import_ui/build/Release/export_stream_tests.exe",
+        "large_narrow"
+      ],
+      "output": "format=png width=30000 height=3333 bytes=388339 owned_pixel_bytes=16547040 render_bound=4784128\nformat=jpeg width=30000 height=3333 bytes=1571289 owned_pixel_bytes=13440000 render_bound=4784128\npeak_working_set=30277632 peak_commit=20766720 elapsed_ms=2523\nPASS large_narrow\n",
+      "evidence": {
+        "path": "tests/export_stream/large_narrow-03.log",
+        "sha256": "eb38d58fa54e8618b13f3f300e904f385c002c59dd49403fad040c23483fd2db"
+      }
+    }
+  ],
+  "ui": {
+    "passed": 4,
+    "failed": 0,
+    "evidence": {
+      "path": "evidence/integration/ctest-11.xml",
+      "sha256": "1e9c63503a4c1068611f04c8a73663e9e3bd00d4f6040b95c72ac6c3333df6a5"
+    },
+    "output": "PASS oversized_preflight\nPASS cancel_active_worker\nPASS supersede_and_cancel_ready\nPASS exact_encoded_file_save\nExport UI 4 passed, 0 failed\n",
+    "scope": "Actual root build20/CTest11 UI execution; final regular-disk-handle guard was subsequently covered by the stream03 run; no FileActions changes after UI execution"
+  },
+  "first_failure_preserved": {
+    "path": "tests/export_stream/jpeg_matte_preview.log",
+    "sha256": "df01f8df7c3c49f5ea8e2de2f6e511e3fcc729399106f28b257824d772d8c5ab"
+  },
+  "memory_gates": {
+    "working_set_bytes": 268435456,
+    "commit_bytes": 268435456,
+    "established_before_run": true,
+    "owned_pixel_budget_bytes": 67108864,
+    "exclusions": [
+      "existing document storage/metadata",
+      "Windows codec internals and runtime"
+    ]
+  },
+  "complete_upstream_test_methods_ported": 0,
+  "acceptance_cases": [
+    {
+      "id": "EXPORT-EXTENT-GUARD",
+      "native_test": "export_stream.extent_guard",
+      "command": "export_stream_tests extent_guard",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 20,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L20"
+          },
+          "claim": "Reject canvases above 100MP or 30000 per side before allocation"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-ROW-PNG",
+      "native_test": "export_stream.row_png",
+      "command": "export_stream_tests row_png",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 71,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L71"
+          },
+          "claim": "PNG dimensions, alpha, top-down pixels, sRGB and DPI survive row encoding"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-CANONICAL-PARTITION",
+      "native_test": "export_stream.canonical_partition",
+      "command": "export_stream_tests canonical_partition",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 33,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L33"
+          },
+          "claim": "Canonical layer stack is invariant to export stripe partitioning"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-JPEG-MATTE-PREVIEW",
+      "native_test": "export_stream.jpeg_matte_preview",
+      "command": "export_stream_tests jpeg_matte_preview",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 87,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L87"
+          },
+          "claim": "JPEG matte and encoded preview use opaque normalized sRGB pixels"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-CANCEL-ATOMIC",
+      "native_test": "export_stream.cancel_atomic",
+      "command": "export_stream_tests cancel_atomic",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 88,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L88"
+          },
+          "claim": "Cancellation discards partial encoded output and preserves destination"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-ROW-FAILURE-ATOMIC",
+      "native_test": "export_stream.row_failure_atomic",
+      "command": "export_stream_tests row_failure_atomic",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 122,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L122"
+          },
+          "claim": "Invalid settings, row failures and directory destinations preserve original data"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-COPY-ATOMIC",
+      "native_test": "export_stream.copy_atomic",
+      "command": "export_stream_tests copy_atomic",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 122,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L122"
+          },
+          "claim": "Atomic write copies the exact encoded data and preserves destination on interruption"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-LARGE-BLANK",
+      "native_test": "export_stream.large_blank",
+      "command": "export_stream_tests large_blank",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 20,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L20"
+          },
+          "claim": "100MP empty canvas export avoids full-canvas pixel allocation"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-LARGE-NARROW",
+      "native_test": "export_stream.large_narrow",
+      "command": "export_stream_tests large_narrow",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 20,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L20"
+          },
+          "claim": "30000-side export remains within the aggregate source pixel limit"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-OVERSIZED-PREFLIGHT",
+      "native_test": "export_ui.oversized_preflight",
+      "command": "export_ui_tests",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/IO/ImageExporter.swift",
+            "line": 20,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/IO/ImageExporter.swift#L20"
+          },
+          "claim": "Oversized UI export reports the source limit before opening a renderer"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp",
+        "src/ui/FileActions.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-CANCEL-ACTIVE-WORKER",
+      "native_test": "export_ui.cancel_active_worker",
+      "command": "export_ui_tests",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/JPEGExportSheet.swift",
+            "line": 60,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/JPEGExportSheet.swift#L60"
+          },
+          "claim": "Actual modal export cancels an active worker without document/history mutation"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp",
+        "src/ui/FileActions.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-SUPERSEDE-AND-CANCEL-READY",
+      "native_test": "export_ui.supersede_and_cancel_ready",
+      "command": "export_ui_tests",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/JPEGExportSheet.swift",
+            "line": 73,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/JPEGExportSheet.swift#L73"
+          },
+          "claim": "Superseded export options cannot save stale encoded bytes"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp",
+        "src/ui/FileActions.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    },
+    {
+      "id": "EXPORT-EXACT-ENCODED-FILE-SAVE",
+      "native_test": "export_ui.exact_encoded_file_save",
+      "command": "export_ui_tests",
+      "source_evidence": [
+        {
+          "source": {
+            "path": "Compositor/UI/JPEGExportSheet.swift",
+            "line": 62,
+            "url": "https://github.com/robbietilton/Compositor/blob/a19db9011282399785dc18efcfded904627bdcc2/Compositor/UI/JPEGExportSheet.swift#L62"
+          },
+          "claim": "Save copies the displayed encoded generation and retains selected JPEG quality"
+        }
+      ],
+      "windows_implementation": [
+        "src/imaging/stream_export.cpp",
+        "src/core/DocumentExport.cpp",
+        "src/ui/FileActions.cpp"
+      ],
+      "full_upstream_method_port": false,
+      "reference_status": "blocked_reference",
+      "evidence": [
+        "tests/export_stream/evidence.json"
+      ]
+    }
+  ],
+  "instrumented_configuration_observation": {
+    "configuration": "MSVC AddressSanitizer Release",
+    "report": "evidence/asan/ctest-io-04.xml",
+    "report_sha256": "3713210f9824d44625b6b7cfa244dd1995dd8ee2b79a55e22241fcf6f462868e",
+    "timestamp": "2026-09-19T21:40:27",
+    "results": [
+      {
+        "native_test": "export_stream.large_blank",
+        "result": "failed",
+        "limit_bytes": 268435456,
+        "peak_working_set_bytes": 348336128,
+        "peak_commit_bytes": 388980736,
+        "elapsed_ms": 12899,
+        "output": "format=png width=10000 height=10000 bytes=388384 owned_pixel_bytes=8846400 render_bound=4784128\nformat=jpeg width=10000 height=10000 bytes=1566289 owned_pixel_bytes=12909600 render_bound=4784128\npeak_working_set=348336128 peak_commit=388980736 elapsed_ms=12899\nFAIL H:\\CompositorWindows\\windows\\tests\\export_stream\\ExportStreamTests.cpp:62: memory.PeakWorkingSetSize<256*1024*1024&&memory.PeakPagefileUsage<256*1024*1024\n"
+      },
+      {
+        "native_test": "export_stream.large_narrow",
+        "result": "failed",
+        "limit_bytes": 268435456,
+        "peak_working_set_bytes": 357658624,
+        "peak_commit_bytes": 398938112,
+        "elapsed_ms": 12917,
+        "output": "format=png width=30000 height=3333 bytes=388339 owned_pixel_bytes=16547040 render_bound=4784128\nformat=jpeg width=30000 height=3333 bytes=1571289 owned_pixel_bytes=13440000 render_bound=4784128\npeak_working_set=357658624 peak_commit=398938112 elapsed_ms=12917\nFAIL H:\\CompositorWindows\\windows\\tests\\export_stream\\ExportStreamTests.cpp:62: memory.PeakWorkingSetSize<256*1024*1024&&memory.PeakPagefileUsage<256*1024*1024\n"
+      }
+    ],
+    "scope": "Dated actual run; both original 256 MiB process-memory assertions failed. No threshold change or sanitizer suppression. Release passes do not supersede this result.",
+    "source_evidence_note": "Peak metrics now print and flush before the unchanged assertion; existing run03 source hashes retain the earlier output order."
+  }
+}

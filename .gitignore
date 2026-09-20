@@ -20,3 +20,8 @@ __pycache__/
 !/dependencies/packaging/lock.json
 !/dependencies/packaging/notices/
 !/dependencies/packaging/notices/**
+
+# Generated isolated build trees and replicated deployment payloads.
+/tests/**/build/
+/tests/**/ui-build/
+/evidence/packaging/*/feed/payload/
