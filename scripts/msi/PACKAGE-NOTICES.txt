@@ -1,6 +1,6 @@
-Compositor Windows community preview
+Compositor Windows preview
 
-Community Windows port of Compositor by Robbie Tilton:
+Independent Windows port of Compositor by Robbie Tilton:
 https://github.com/robbietilton/Compositor
 Baseline: a19db9011282399785dc18efcfded904627bdcc2 (Compositor 1.0.4).
 This port is not endorsed by the upstream author. Complete Mac equivalence

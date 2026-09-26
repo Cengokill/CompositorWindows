@@ -59,7 +59,7 @@ function Add-Directory($element,[string]$path,[string]$relative){
 }
 Add-Directory $directoryRef $package ''
 $payloadSource=Join-Path $work 'Payload.wxs'; $xml.Save($payloadSource)
-$license="Compositor Windows Community Preview`r`n`r`nCommunity port of Compositor by Robbie Tilton, https://github.com/robbietilton/Compositor, baseline a19db9011282399785dc18efcfded904627bdcc2 (1.0.4). This port is not endorsed by the upstream author.`r`n`r`n"+(Get-Content -LiteralPath (Join-Path $root 'LICENSE') -Raw)
+$license="Compositor Windows Preview`r`n`r`nIndependent port of Compositor by Robbie Tilton, https://github.com/robbietilton/Compositor, baseline a19db9011282399785dc18efcfded904627bdcc2 (1.0.4). This port is not endorsed by the upstream author.`r`n`r`n"+(Get-Content -LiteralPath (Join-Path $root 'LICENSE') -Raw)
 $rtf='{\rtf1\ansi\deff0{\fonttbl{\f0 Segoe UI;}}\f0\fs20 '+$license.Replace('\','\\').Replace('{','\{').Replace('}','\}').Replace("`r`n",'\par ').Replace("`n",'\par ')+'}'
 $licensePath=Join-Path $work 'License.rtf'; [IO.File]::WriteAllText($licensePath,$rtf,[Text.Encoding]::ASCII)
 & dotnet exec --roll-forward Major $compiler build -arch x64 -ext $extension -culture en-us -wx -ct 2 -pdbtype none `

@@ -1,12 +1,16 @@
 # Using Compositor on Windows
 
-This Windows 11 x64 community preview opens and edits layered images locally. It is an independent port of Compositor 1.0.4 by Robbie Tilton, based on upstream commit `a19db9011282399785dc18efcfded904627bdcc2`. See the release notes for supported workflows and measured limitations.
+This Windows 11 x64 preview opens and edits layered images locally. It is an independent port of Compositor 1.0.4 by Robbie Tilton, based on upstream commit `a19db9011282399785dc18efcfded904627bdcc2`. See the release notes for supported workflows and measured limitations.
 
 ## Start a project
 
 In an installed build, use the Start menu shortcut. In a portable build, open `Compositor.exe`. Choose **File > New Canvas** to enter canvas dimensions, or **File > Import Image** to import a PNG, JPEG, TIFF or HEIC image. Import adds a layer to the current document. Each project has its own tab, layer selection and tool settings. The Layers panel selects the image or mask you are editing.
 
 Use **File > Open Project** for a saved `.comp` project. A `.comp` project is a directory containing its manifest and image assets. Copy or back up the complete directory. Save with **Ctrl+S**, or use **Save Project As** to make a separate project. An asterisk in the tab indicates unsaved changes. Closing a modified project offers Save, Discard or Cancel.
+
+## Window appearance
+
+Windows title bars and system controls are the default. Turn on **View > Appearance > Mac-style title bar** for colored controls on the left; turn it off to restore the native Windows title bar. The choice applies immediately to the editor and dialogs and is remembered between launches. It changes only the window chrome; the editor's visual design stays the same.
 
 ## Navigate and arrange layers
 
@@ -28,7 +32,7 @@ Each project remembers its Freehand/Polygonal lasso choice and separate Expand/C
 
 ## Adjust an image
 
-The Adjustments and Filters menus provide color and tonal adjustments, blur, noise, lens correction and content-aware fill. Select an image layer first; a selection restricts applicable pixel edits. Inspect the preview, then Apply to commit one undoable change or Cancel to discard it. Adjustment-layer commands keep editable adjustment parameters in the layer stack.
+Image > Adjustments and the Filters menu provide color and tonal adjustments, blur, noise, lens correction and content-aware fill. Select an image layer first; a selection restricts applicable pixel edits. Inspect the preview, then Apply to commit one undoable change or Cancel to discard it. Adjustment-layer commands keep editable adjustment parameters in the layer stack.
 
 Filter dialogs reopen the choices last used with Apply, including Curves, Exposure, Grain and background-removal controls. Cancel preserves the previously remembered choices, and each project keeps its own values. A new Gradient Map always starts from the current foreground and background colors. Live adjustment layers retain their own parameters.
 

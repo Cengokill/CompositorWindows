@@ -1,7 +1,0 @@
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/valid/feed.json HTTP/1.1" 200 -
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/valid/payload/Compositor.exe HTTP/1.1" 200 -
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/valid/payload/data/large.bin HTTP/1.1" 200 -
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/valid/payload/data/%E6%97%A5%E6%9C%AC%E8%AA%9E.txt HTTP/1.1" 200 -
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/interrupt/feed.json HTTP/1.1" 200 -
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/interrupt/payload/Compositor.exe HTTP/1.1" 200 -
-127.0.0.1 - - [19/Sep/2026 19:14:48] "GET /http/interrupt/payload/data/large.bin HTTP/1.1" 200 -

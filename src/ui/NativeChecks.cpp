@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "VisualStyle.h"
 #include "persistence/ProjectStore.h"
 #include <QApplication>
 #include <QDialog>
@@ -10,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QScreen>
+#include <QPainter>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -76,7 +78,7 @@ void MainWindow::exerciseNativeUi(const QString&dir){
                 if(panel)completion=connect(panel,&QDialog::finished,&wait,[&]{finished=true;wait.quit();});
             }
             auto* d=panel.data();if(!d)return;
-            if(!commit){if(elapsed.elapsed()>=180)d->reject();return;}
+            if(!commit){if(elapsed.elapsed()>=180){auto name=kind;name.replace('/', '-');d->grab().save(dir+"/panel-"+name+".png");d->reject();}return;}
             for(auto*spin:d->findChildren<QDoubleSpinBox*>())if(spin->accessibleName()=="Exposure"&&!applied){spin->setValue(1);applied=true;}
             for(auto*box:d->findChildren<QDialogButtonBox*>())if(auto*button=box->button(QDialogButtonBox::Apply);button&&button->isEnabled()&&applied&&!submitted){submitted=true;button->click();}
         });
@@ -91,7 +93,7 @@ void MainWindow::exerciseNativeUi(const QString&dir){
     {auto before=*current()->document;current()->maskSelected=true;maskPaintWhite_=false;gesture(Tool::Brush,{280,190},{310,210});require(active()->mask!=before.layers.back().mask&&active()->raster==before.layers.back().raster,"Native mask brush failed");undo_->trigger();require(*current()->document==before,"Mask brush undo failed");current()->maskSelected=false;passed("mask brush preserves image / exact undo");}
     {auto before=*current()->document;gesture(Tool::Crop,{30,25},{200,180});require(cropDraft_.has_value()&&*current()->document==before,"Crop preview mutated document");applyCrop();require(current()->document->width<before.width&&current()->document->height<before.height,"Native crop Apply failed");undo_->trigger();require(*current()->document==before,"Crop undo failed");canvas()->fit();passed("crop preview / Apply / exact undo");}
     {auto before=*current()->document;selectTool(Tool::Wand);wandAllLayers_=true;wandTolerance_=0;runWand({20,20},Qt::NoModifier);require(current()->document->selection&&current()->document->selection->coverage->pixel(20,20)>0,"Native wand result failed");undo_->trigger();require(*current()->document==before,"Wand undo failed");passed("asynchronous wand / exact undo");}
-    {auto paletteBefore=foreground_;openPalette();require(colorPicker_,"Floating picker failed to open");pointerBegin({100,350},Qt::NoModifier);pointerEnd({100,350},Qt::NoModifier);auto sample=colorPicker_->color();require(sample==effects_tools::PaletteColor{35/255.,65/255.,90/255.}&&foreground_==paletteBefore,"Picker sampling changed palette before Apply");colorPicker_->reject();require(foreground_==paletteBefore,"Palette Cancel changed foreground");openPalette();pointerBegin({100,350},Qt::NoModifier);pointerEnd({100,350},Qt::NoModifier);colorPicker_->accept();require(foreground_.red()==35&&foreground_.green()==65&&foreground_.blue()==90,"Palette Apply failed");foreground_=paletteBefore;passed("floating palette original-composite sampling / Cancel / Apply");}
+    {auto paletteBefore=foreground_;openPalette();require(colorPicker_,"Floating picker failed to open");pointerBegin({100,350},Qt::NoModifier);pointerEnd({100,350},Qt::NoModifier);auto sample=colorPicker_->color();require(sample==effects_tools::PaletteColor{35/255.,65/255.,90/255.}&&foreground_==paletteBefore,"Picker sampling changed palette before Apply");colorPicker_->grab().save(dir+"/panel-Palette.png");colorPicker_->reject();require(foreground_==paletteBefore,"Palette Cancel changed foreground");openPalette();pointerBegin({100,350},Qt::NoModifier);pointerEnd({100,350},Qt::NoModifier);colorPicker_->accept();require(foreground_.red()==35&&foreground_.green()==65&&foreground_.blue()==90,"Palette Apply failed");foreground_=paletteBefore;passed("floating palette original-composite sampling / Cancel / Apply");}
     {auto zoom=canvas()->zoom;selectTool(Tool::Zoom);auto point=canvas()->rect().center();auto documentBefore=canvas()->documentPoint(point);QTest::mouseClick(canvas(),Qt::LeftButton,{},point);require(std::abs(canvas()->zoom-zoom*2)<1e-9&&QLineF(canvas()->documentPoint(point),documentBefore).length()<1e-6,"Anchored zoom click failed");QTest::mouseClick(canvas(),Qt::LeftButton,Qt::AltModifier,point);require(std::abs(canvas()->zoom-zoom)<1e-9,"Zoom out click failed");passed("anchored zoom tool / Alt zoom out");}
     {Document large;large.id=newId();large.width=large.height=30000;Layer emptyLayer;emptyLayer.id=newId();emptyLayer.name="Layer 1";emptyLayer.transform={0,0,30000,30000};large.layers.push_back(emptyLayer);QElapsedTimer clock;clock.start();Raster::resetMaterializationCount();addProject(large);canvas()->repaint();QTest::qWait(30);require(canvas()->deviceReady()&&canvas()->deviceError().isEmpty(),"Large blank canvas presentation failed");auto frame=canvas()->captureRendered();require(!frame.isNull(),"Large blank canvas readback failed");QFile timing(dir+"/large-canvas.json");if(timing.open(QIODevice::WriteOnly))timing.write(QJsonDocument(QJsonObject{{"width",30000},{"height",30000},{"create_and_present_ms",double(clock.elapsed())},{"display_tile_budget",64},{"rgba_materializations",double(Raster::materializationCount())}}).toJson());require(Raster::materializationCount()==0,"Blank canvas presentation flattened pixels");closeProject(tabs_->currentIndex());passed("30000-square blank canvas native presentation with bounded viewport tiles");}
     {
@@ -139,6 +141,15 @@ void MainWindow::exerciseNativeUi(const QString&dir){
     auto* savedProject=current();const auto tabCount=tabs_->count();const auto savedDocument=current()->document;openPath(path);
     require(current()==savedProject&&tabs_->count()==tabCount&&current()->document==savedDocument&&!current()->history.modified(),"Opening an existing project did not preserve its tab and state");
     passed("native save/load Unicode directory package, exact composite round trip and existing-tab reuse");
+    QAbstractButton* maximize=nullptr;for(auto* button:findChildren<QAbstractButton*>())if(button->accessibleName()=="Maximize or restore window")maximize=button;
+    if(ui::macTitleBarEnabled()){
+        require(maximize&&windowFlags().testFlag(Qt::FramelessWindowHint),"Custom window controls missing");maximize->click();QTest::qWait(50);require(isMaximized(),"Custom maximize failed");maximize->click();QTest::qWait(50);require(!isMaximized(),"Custom restore failed");
+    }else{
+        const auto hwnd=reinterpret_cast<HWND>(winId());const auto style=GetWindowLongPtrW(hwnd,GWL_STYLE);
+        require((style&(WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_THICKFRAME))==(WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_THICKFRAME),"Native caption or window controls missing");
+        SendMessageW(hwnd,WM_SYSCOMMAND,SC_MAXIMIZE,0);QTest::qWait(50);require(isMaximized(),"Native maximize failed");SendMessageW(hwnd,WM_SYSCOMMAND,SC_RESTORE,0);QTest::qWait(50);require(!isMaximized(),"Native restore failed");
+    }
+    passed("selected title bar maximize and restore");
     canvas()->recreateDevice();resize(1100,740);QTest::qWait(100);require(canvas()->deviceReady(),"Device recreation failed");canvas()->repaint();QTest::qWait(120);
     auto gpu=canvas()->captureRendered();require(!gpu.isNull()&&gpu.save(dir+"/canvas-readback.png"),"GPU capture failed");
     auto sample=viewPoint({100,350})*devicePixelRatioF();require(gpu.rect().contains(sample),"GPU sample is outside the resized viewport");auto color=gpu.pixelColor(sample);
@@ -150,6 +161,17 @@ void MainWindow::exerciseNativeUi(const QString&dir){
     pixelEvidence.write(QJsonDocument(QJsonObject{{"canonical_rgb",QJsonArray{35,65,90}},{"expected_display_rgb",QJsonArray{expected.red(),expected.green(),expected.blue()}},{"actual_display_rgb",QJsonArray{color.red(),color.green(),color.blue()}},{"tolerance",1},{"profile_sha256",canvas()->presentationProfileHash()},{"converted",canvas()->presentationConvertsColor()},{"oracle",canvas()->presentationConvertsColor()?"Windows WCS CPU profile transform":"explicit sRGB fallback"}}).toJson());
     require(std::abs(color.red()-expected.red())<=1&&std::abs(color.green()-expected.green())<=1&&std::abs(color.blue()-expected.blue())<=1,"GPU background pixels differ from the profile-qualified canonical composite");passed("WARP readback pixel invariant, resize and device recreation");
     auto screenshot=screen()->grabWindow(0,mapToGlobal(QPoint(0,0)).x(),mapToGlobal(QPoint(0,0)).y(),width(),height());require(!screenshot.isNull()&&screenshot.save(dir+"/native-window.png"),"Native screenshot failed");
+    auto widgetLayout=grab();
+    {QPainter painter(&widgetLayout);painter.drawImage(QRect(canvas()->mapTo(this,QPoint{}),canvas()->size()),gpu);}
+    require(widgetLayout.save(dir+"/widget-layout.png"),"Widget layout capture failed");
+    addEmptyProject(false);QTest::qWait(30);require(grab().save(dir+"/welcome.png"),"Welcome capture failed");
+    const auto demo=qEnvironmentVariable("COMPOSITOR_UI_DEMO");
+    if(!demo.isEmpty()){
+        openPath(demo);require(current()&&current()->document,"Demo capture project failed to open");resize(1440,900);canvas()->fit();QTest::qWait(150);
+        auto demoFrame=canvas()->captureRendered();require(!demoFrame.isNull(),"Demo D3D readback failed");auto demoLayout=grab();
+        {QPainter painter(&demoLayout);painter.drawImage(QRect(canvas()->mapTo(this,QPoint{}),canvas()->size()),demoFrame);}
+        require(demoLayout.save(dir+"/demo-workspace.png"),"Demo workspace capture failed");
+    }
     QFile report(dir+"/native-ui.json");require(report.open(QIODevice::WriteOnly),"UI evidence output failed");report.write(QJsonDocument(QJsonObject{{"status","passed"},{"checks",checks},{"devicePixelRatio",devicePixelRatioF()},{"brush_full_raster_materializations",double(flattenCount)},{"human_acceptance",false},{"timestamp",QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}}).toJson());for(auto&p:projects_)p->history.markSaved();
 }
 }

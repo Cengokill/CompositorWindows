@@ -4,6 +4,7 @@
 #include "ProjectLayerCopyJob.h"
 #include "LayerMergeJob.h"
 #include "LayerPanel.h"
+#include "EditorIcons.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QDialogButtonBox>
@@ -49,6 +50,8 @@ void MainWindow::initializeProject(EditorProject&project){
         auto* button=new QToolButton(tabs_);button->setObjectName("newProjectDropTarget");
         for(auto* action:findChildren<QAction*>())if(action->property("commandId").toString()=="file.new"){button->setDefaultAction(action);break;}
         if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));button->setFixedSize(32,30);
+        if(button->defaultAction())connect(button->defaultAction(),&QAction::changed,button,[button]{button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));});
         button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");tabs_->setCornerWidget(button,Qt::TopRightCorner);
     }
     project.canvas=new NativeCanvas(warp_);
@@ -89,8 +92,10 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     raw->defaultTitle=first&&nextProjectNumber_==2?"Untitled":QString("Untitled %1").arg(nextProjectNumber_++);
     initializeProject(*raw);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
     raw->welcome=new QWidget;raw->welcome->setObjectName("newCanvasWelcome");auto*outer=new QVBoxLayout(raw->welcome);outer->addStretch();
-    auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setMaximumWidth(500);auto*form=new QFormLayout(panel);
-    auto*heading=new QLabel("New canvas");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
+    auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setObjectName("newCanvasCard");panel->setMaximumWidth(440);
+    panel->setStyleSheet("QWidget#newCanvasCard { background: #27292e; border: 1px solid #3b3e46; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
+    auto*form=new QFormLayout(panel);form->setContentsMargins(28,28,28,26);form->setVerticalSpacing(14);form->setHorizontalSpacing(18);
+    auto*heading=new QLabel("New canvas");heading->setObjectName("newCanvasHeading");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
     auto*width=new QSpinBox;auto*height=new QSpinBox;for(auto*spin:{width,height})spin->setRange(1,30000);
     width->setObjectName("newCanvasWidth");height->setObjectName("newCanvasHeight");width->setAccessibleName("Width in pixels");height->setAccessibleName("Height in pixels");width->setValue(1920);height->setValue(1080);
     if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){width->setValue(image.width());height->setValue(image.height());}}

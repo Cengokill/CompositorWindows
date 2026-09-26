@@ -1,4 +1,5 @@
 #include "ProjectChrome.h"
+#include "EditorIcons.h"
 #include <QAbstractButton>
 #include <QAccessibleWidget>
 #include <QDockWidget>
@@ -246,12 +247,12 @@ public:
             if (auto* button = dock->findChild<QAbstractButton*>(name)) {
                 const auto label = button->accessibleName(); button->setToolTip(label); button->setText({});
                 button->setFixedSize(36, 36); button->setIconSize({20, 20});
-                if (qstrcmp(name, "layerAddMaskButton") == 0) {
-                    QPixmap pixmap(20, 20); pixmap.fill(Qt::transparent); QPainter painter(&pixmap);
-                    const auto color = button->palette().color(QPalette::ButtonText); painter.setPen(QPen(color, 1.5));
-                    painter.setBrush(color); painter.drawRoundedRect(QRectF(2, 4, 16, 12), 1.5, 1.5);
-                    painter.setPen(Qt::NoPen); painter.setBrush(button->palette().color(QPalette::Button)); painter.drawEllipse(QRectF(7, 7, 6, 6)); painter.end(); button->setIcon(QIcon(pixmap));
-                } else button->setIcon(button->style()->standardIcon(qstrcmp(name, "layerGroupButton") == 0 ? QStyle::SP_DirIcon : QStyle::SP_TrashIcon));
+                button->setIcon(editorIcon(qstrcmp(name,"layerGroupButton")==0 ? EditorIcon::Group
+                    : qstrcmp(name,"layerAddMaskButton")==0 ? EditorIcon::Mask : EditorIcon::Delete));
+                button->setStyleSheet("QAbstractButton { background: transparent; border: 1px solid transparent; border-radius: 6px; }"
+                    "QAbstractButton:hover { background: rgba(128,128,128,32); }"
+                    "QAbstractButton:pressed { background: rgba(128,128,128,55); }"
+                    "QAbstractButton:focus { border: 1px solid palette(highlight); }");
             }
         dock->setMinimumWidth(202); dock->setMaximumWidth(352);
         QSettings settings;

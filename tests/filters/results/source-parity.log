@@ -1,2 +1,0 @@
-upstream FilterTests.swift:29-31 source Gaussian border assertions: alpha(0)=1 expected255; alpha(20)=203 expected20..235; alpha(38)=0 expected0; grid=36x36
-FAIL source Gaussian raster assertions; upstream grow/unclamped/trim behavior conflicts with border assertion. Mac reference execution remains required.

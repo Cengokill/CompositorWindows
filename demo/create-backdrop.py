@@ -19,5 +19,5 @@ for text, y in [("After", 198), ("the", 365), ("wind.", 532)]:
     draw.text((75, y), text, fill=ink, font=serif(168), stroke_width=0)
 draw.line((82, 817, 570, 817), fill=ink, width=2)
 draw.text((82, 841), "A study in light, shape and possibility.", fill=ink, font=sans(26))
-draw.text((82, 933), "COMPOSITOR  /  WINDOWS COMMUNITY PREVIEW", fill=ink, font=sans(18))
+draw.text((82, 933), "COMPOSITOR  /  WINDOWS PREVIEW", fill=ink, font=sans(18))
 image.save(root / "01-backdrop.png")

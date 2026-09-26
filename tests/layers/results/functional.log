@@ -1,8 +1,0 @@
-PASS layers.hierarchy
-PASS layers.grouping
-PASS layers.moves_duplicate
-PASS layers.clipping
-PASS layers.bake_delete
-PASS layers.multi_history
-PASS layers.copy_graph
-PASS layers.merge

@@ -1,10 +1,23 @@
-# Compositor Windows community preview 0.1.0
+# Compositor Windows preview 0.1.4
 
 This independent Windows 11 x64 port is based on Compositor 1.0.4 at
 `a19db9011282399785dc18efcfded904627bdcc2`. Compositor was created by
 [Robbie Tilton](https://github.com/robbietilton/Compositor); the original MIT
-copyright and dependency notices accompany this distribution. This community
+copyright and dependency notices accompany this distribution. This independent
 port does not imply upstream endorsement.
+
+Version 0.1.3 defaults to the native Windows title bar and system controls.
+**View > Appearance > Mac-style title bar** enables the optional colored controls
+on the left. Switching is immediate and the preference is saved. The rest of the
+interface retains the design introduced in 0.1.2.
+
+The 0.1.2 update applies a consistent dark visual design informed by rendered
+Mac references: custom window controls, bundled Inter typography, rounded fields,
+menus and tabs, compact adjustment panels, colored Hue/Saturation sliders and
+a project picker. Layer rows place visibility, image and mask thumbnails before
+the name. The vector tool rail and keyboard shortcuts remain available.
+
+Version 0.1.4 prepares the public repository, consolidates documentation, and updates Windows port credits and package naming. Editing behavior is unchanged from 0.1.3.
 
 ## What you can do
 
@@ -22,9 +35,9 @@ unknown-publisher warning. Do not disable Windows security to run it.
 ## Limits of this preview
 
 - Large soft brushes can fall short of 60 updates per second. On a Core Ultra 9
-  285K with RTX 5070, two native runs on 4000 × 4000 images with 800 px soft
-  brushes measured dispatch p95 of 11.7–15.5 ms on hardware and 19.1–24.4 ms on
-  software rendering. Event-to-display-flush p95 was 38.6–50.4 ms; stroke start
+  285K with RTX 5070, two native runs on 4000 Ã— 4000 images with 800 px soft
+  brushes measured dispatch p95 of 11.7â€“15.5 ms on hardware and 19.1â€“24.4 ms on
+  software rendering. Event-to-display-flush p95 was 38.6â€“50.4 ms; stroke start
   and release reached 427 and 522 ms. Both runs passed 6/10 unchanged 16.7 ms
   dispatch gates. Background CPU load was present; these are neither controlled
   idle measurements nor physical input-to-screen latency measurements. This is
@@ -45,15 +58,11 @@ also has an intermittent process-exit stall after successful test work, includin
 a captured ASAN allocator wait during CRT shutdown. Its cause remains unresolved.
 The distributed executable uses the normal build, whose full regression completed.
 
-Clean Windows installation acceptance and publication are pending. This file
-describes a release candidate; it is not a claim that a public release has
-already passed those requirements.
+Clean Windows installation has not been tested. The user accepts existing local
+verification for this preview. Downloads are published in the GitHub releases for this repository.
 
 ## Demonstration
 
 The separate demo ZIP contains redistributable inputs, **After the wind.comp**,
-its PNG export and native screenshots at 100% and 150% Qt scale. The editing
-recording uses the same application bytes as this distribution. Kept action and
-processing sequences play at normal speed; operator pauses and private file
-dialog navigation are cut. The dandelion photograph is public domain;
-credit and source are in the demo's README.
+its PNG export, and the backdrop generator. The dandelion photograph is public
+domain; credits and the editing exercise are in the demo's README.

@@ -8,9 +8,9 @@ here = Path(__file__).resolve().parent
 root = here.parents[2]
 source = root / "upstream/Compositor/Document/EditorSession.swift"
 groups = {
-    "implemented_tool_bundle": "showsSampleRing tool lastBrushPoint locksTransformRatio transformAutoSelect showsTransformControls brushSettings spotHealingMode blurMode brushMode parkedBrushTips maskPaintWhite backgroundColor gradientSettings marqueeKind shapeKind shapeCornerRadius selectionModeChoice selectionAntialiased wandSettings showsPixelGrid",
+    "implemented_tool_bundle": "showsSampleRing tool lastBrushPoint locksTransformRatio transformAutoSelect showsTransformControls brushSettings spotHealingMode blurMode brushMode parkedBrushTips maskPaintWhite backgroundColor gradientSettings marqueeKind shapeKind shapeCornerRadius selectionModeChoice selectionAntialiased wandSettings showsPixelGrid cropRatioChoice lassoKind filterSettings selectionExpandAmount selectionContractAmount",
     "already_project_owned": "document projectURL viewport collapsedGroupIDs cloneSource cloneSettings cloneOffset isMaskSelected selectedLayerIDs activeLayerID history",
-    "choice_not_yet_wired": "cropRatioChoice lassoKind filterSettings selectionExpandAmount selectionContractAmount",
+    "choice_not_yet_wired": "",
     "operation_or_pending_edit_excluded": "adjustmentOriginal adjustmentEditingID cropRect transformEdit transformDuplicate gradientEdit lassoDraft shapeDraft heldSelectionMode selectionMoveOrigin pixelMove levels hueSaturation filterEdit hueSampleMode hueTargeting hueTargetDrag pendingOpacityDigit colorPicker brushStroke warpStroke opacityEditLayerID blendPreview renamingLayerID",
     "derived_runtime_or_cache_excluded": "canvasFocusRequest isProjectBusy showsBusy busyIndicatorTask projectWaiters fileRequestWaiters cropError distortPreviewCache snapGuides maskDistortPreviewCache shapeTransformPreviewCache hueSaturationTask hueSaturationPending brushError brushRevision showsNewDocument showsImporter isImporting importError refreshCanvasPreview pendingImports",
     "workflow_or_clipboard_outside_bundle": "skipsInitialClipboardCanvasSize pixelClipboard",
@@ -38,7 +38,7 @@ report = {"baseline_sha": "a19db9011282399785dc18efcfded904627bdcc2", "source": 
         "Source Brush/Eraser mode is represented by current ProjectTool Brush/Eraser values; a separate parked rail-icon mode is not added in this bounded slice.",
         "Source parkedBrushTips is represented by separate native brushSettings, cloneSettings and blurSettings tip values; foreground is a shared QColor.",
         "Clone source, aligned flag, retained offset and sample-all-layers already belong to EditorProject. They are not duplicated in ProjectToolState.",
-        "Crop ratio, remembered lasso family, remembered filter settings and expand/contract defaults are explicit remaining source choices, not implemented by unused fields.",
+        "Crop ratio, remembered lasso family, all fifteen FilterSettings fields and independent expand/contract amounts now have native controls and per-project storage. See remembered-before-evidence.json for actual former failures and remembered-settings-map.json for current verification status.",
         "ProjectWorkspace.swift canSwitch prohibits some pending edits. MainWindow tab interruption behavior is a separate root-owned integration concern.",
     ]}
 (here / "source-inventory.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

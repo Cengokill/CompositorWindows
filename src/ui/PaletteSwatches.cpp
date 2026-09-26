@@ -47,7 +47,7 @@ protected:
 };
 }
 PaletteSwatches::PaletteSwatches(const std::array<QAction*,4>& actions,QWidget* parent):QWidget(parent){
-    setObjectName("paletteSwatches");setAccessibleName("Foreground and background colors");
+    setStyleSheet("QToolButton { padding: 0; border: 0; min-width: 0; min-height: 0; background: transparent; }");setObjectName("paletteSwatches");setAccessibleName("Foreground and background colors");
     // Nominal source frame36² has utility targets extending left1, right3,
     // top3 and bottom3. Reserve that overflow instead of clipping Qt children.
     setFixedSize(40,42);

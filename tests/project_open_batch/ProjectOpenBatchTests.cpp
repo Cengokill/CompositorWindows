@@ -5,6 +5,7 @@
 #undef main
 #include "ui/ProjectOpenDialog.h"
 #include "ui/ImportActions.h"
+#include "ui/VisualStyle.h"
 #include <Windows.h>
 #include <ShObjIdl.h>
 #include <wrl/client.h>
@@ -12,8 +13,36 @@
 #include <QElapsedTimer>
 #include <QSpinBox>
 #include <QTest>
+#include <QListWidget>
+#include <QLineEdit>
+#include <QDialogButtonBox>
+#include <QPushButton>
 
 namespace {
+void themed_picker(){
+    Fixture f;bool visited=false;std::exception_ptr failure;
+    QTimer::singleShot(80,&f.window,[&]{
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        try{
+            require(dialog&&dialog->windowFlags().testFlag(Qt::FramelessWindowHint)==ui::macTitleBarEnabled(),"picker respects selected title bar");
+            auto* list=dialog->findChild<QListWidget*>("projectFolders");QLineEdit* path=nullptr;
+            for(auto* edit:dialog->findChildren<QLineEdit*>())if(edit->accessibleName()=="Folder path")path=edit;
+            auto* box=dialog->findChild<QDialogButtonBox*>();require(list&&path&&box,"picker controls");
+            path->setText(f.directory.path());QTest::keyClick(path,Qt::Key_Return);
+            require(!box->button(QDialogButtonBox::Open)->isEnabled(),"browse does not accept an ordinary folder");
+            for(int i=0;i<list->count();++i){auto* item=list->item(i);const auto value=item->data(Qt::UserRole).toString();if(value==f.a||value==f.b)item->setSelected(true);}
+            require(list->selectedItems().size()==2&&box->button(QDialogButtonBox::Open)->isEnabled(),"multiple packages are selectable");
+            const auto output=qEnvironmentVariable("COMPOSITOR_UI_CAPTURE");if(!output.isEmpty())require(dialog->grab().save(output+"/project-picker.png"),"picker capture");
+            visited=true;box->button(QDialogButtonBox::Open)->click();
+        }catch(...){failure=std::current_exception();if(dialog)dialog->reject();}
+    });
+    const auto selected=ui::chooseProjectDirectories(&f.window);if(failure)std::rethrow_exception(failure);
+    require(visited&&selected&&selected->size()==2&&selected->contains(f.a)&&selected->contains(f.b),"picker returns both package paths");
+    QTimer::singleShot(80,&f.window,[]{if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->close();});
+    require(!ui::chooseProjectDirectories(&f.window),"close cancels picker");
+    QTimer::singleShot(80,&f.window,[&]{if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))for(auto* edit:dialog->findChildren<QLineEdit*>())if(edit->accessibleName()=="Folder path"){edit->setText(f.a);QTest::keyClick(edit,Qt::Key_Return);break;}});
+    const auto typed=ui::chooseProjectDirectories(&f.window);require(typed&&*typed==QStringList{f.a},"typed package is opened atomically");
+}
 void batch_empty(){Fixture f;auto* initial=f.tabs()->currentWidget();require(!f.window.openProjectPaths({}),"empty selection returns false");require(f.tabs()->count()==1&&f.tabs()->currentWidget()==initial&&command(f.window,"file.open")->isEnabled(),"empty selection preserves welcome and releases command eligibility");}
 void batch_order(){Fixture f;require(f.window.openProjectPaths({f.b,f.a}),"batch returns any-success true");require(f.tabs()->count()==2&&f.tabs()->currentIndex()==1&&f.tabs()->tabText(0).contains("B.comp")&&f.tabs()->tabText(1).contains("A.comp"),"batch preserves supplied order and selects final successful project");require(command(f.window,"file.open")->isEnabled(),"completed batch releases guard");}
 void batch_existing(){Fixture f;f.window.openPath(f.a);command(f.window,"pixels.invert")->trigger();auto* initial=f.tabs()->currentWidget();auto* canvas=f.window.canvas();require(f.window.openProjectPaths({f.b,f.a,f.b,f.a}),"duplicate batch succeeds");require(f.tabs()->count()==2&&f.tabs()->currentWidget()==initial&&f.window.canvas()==canvas&&command(f.window,"edit.undo")->isEnabled(),"duplicate batch preserves original unsaved session and order");}
@@ -43,4 +72,4 @@ thread_local CancelProbe* cancelProbe{};
 void CALLBACK cancelNative(HWND,UINT,UINT_PTR, DWORD){auto* probe=cancelProbe;if(!probe)return;++probe->ticks;EnumThreadWindows(probe->thread,[](HWND window,LPARAM value)->BOOL{auto* p=reinterpret_cast<CancelProbe*>(value);wchar_t title[256]{};GetWindowTextW(window,title,256);if(std::wstring_view(title)==L"Open Compositor Projects"&&IsWindowVisible(window)){p->seen=true;p->owned=GetWindow(window,GW_OWNER)==p->owner;PostMessageW(window,WM_COMMAND,MAKEWPARAM(IDCANCEL,BN_CLICKED),reinterpret_cast<LPARAM>(GetDlgItem(window,IDCANCEL)));}return TRUE;},reinterpret_cast<LPARAM>(probe));}
 void native_dialog_cancel(){Fixture f;f.window.show();QApplication::processEvents();auto* initial=f.tabs()->currentWidget();CancelProbe probe{reinterpret_cast<HWND>(f.window.winId()),GetCurrentThreadId()};cancelProbe=&probe;const auto timer=SetTimer(nullptr,0,50,cancelNative);require(timer!=0,"owned dialog cancellation timer");command(f.window,"file.open")->trigger();KillTimer(nullptr,timer);cancelProbe=nullptr;std::cout<<"dialog_seen="<<probe.seen<<" dialog_owned="<<probe.owned<<" timer_ticks="<<probe.ticks<<'\n';require(probe.seen&&probe.owned&&f.tabs()->count()==1&&f.tabs()->currentWidget()==initial&&command(f.window,"file.open")->isEnabled(),"actual native owned dialog Cancel preserves welcome and releases guard");}
 }
-int main(int argc,char** argv){QApplication app(argc,argv);std::cout<<std::unitbuf;QDir().mkpath(QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("fixtures"));const std::map<std::string,void(*)()> cases{{"drop_order",drop_order},{"drop_mixed_failure",drop_mixed_failure},{"drop_existing",drop_existing},{"drop_pending_guard",drop_pending_guard},{"batch_empty",batch_empty},{"batch_order",batch_order},{"batch_existing",batch_existing},{"batch_mixed_failure",batch_mixed_failure},{"batch_all_fail",batch_all_fail},{"batch_pending_guard",batch_pending_guard},{"batch_busy_guard",batch_busy_guard},{"batch_error_reentrancy",batch_error_reentrancy},{"welcome_fresh_session",welcome_fresh_session},{"welcome_failure_preserves_session",welcome_failure_preserves_session},{"welcome_project_then_image_skipped",welcome_project_then_image_skipped},{"package_policy",package_policy},{"native_options",native_options},{"native_dialog_cancel",native_dialog_cancel}};try{require(argc==2&&cases.contains(argv[1]),"provide named batch case");std::cout<<"START "<<argv[1]<<'\n';cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);std::cout<<std::unitbuf;QDir().mkpath(QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("fixtures"));const std::map<std::string,void(*)()> cases{{"themed_picker",themed_picker},{"drop_order",drop_order},{"drop_mixed_failure",drop_mixed_failure},{"drop_existing",drop_existing},{"drop_pending_guard",drop_pending_guard},{"batch_empty",batch_empty},{"batch_order",batch_order},{"batch_existing",batch_existing},{"batch_mixed_failure",batch_mixed_failure},{"batch_all_fail",batch_all_fail},{"batch_pending_guard",batch_pending_guard},{"batch_busy_guard",batch_busy_guard},{"batch_error_reentrancy",batch_error_reentrancy},{"welcome_fresh_session",welcome_fresh_session},{"welcome_failure_preserves_session",welcome_failure_preserves_session},{"welcome_project_then_image_skipped",welcome_project_then_image_skipped},{"package_policy",package_policy},{"native_options",native_options},{"native_dialog_cancel",native_dialog_cancel}};try{require(argc==2&&cases.contains(argv[1]),"provide named batch case");std::cout<<"START "<<argv[1]<<'\n';cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

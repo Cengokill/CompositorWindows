@@ -175,18 +175,22 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     preview.documentWidth=original.width;preview.documentHeight=original.height;preview.setMinimumSize(400,300);preview.setAlignment(Qt::AlignCenter);rightLayout.addWidget(&preview,1);status.setWordWrap(true);rightLayout.addWidget(&status);
     previewEnabled.setObjectName("adjustmentPreviewEnabled");previewEnabled.setChecked(true);rightLayout.addWidget(&previewEnabled);
     rightLayout.addWidget(&buttons);layout.addWidget(&right,1);
-    apply=buttons.button(QDialogButtonBox::Apply);apply->setEnabled(false);
+    apply=buttons.button(QDialogButtonBox::Apply);apply->setEnabled(false);apply->setDefault(true);buttons.button(QDialogButtonBox::Cancel)->setAutoDefault(false);
     debounce.setSingleShot(true);debounce.setInterval(100);
     changed=[this]{++revision;if(watcher.isRunning())previewCancelled->store(true);apply->setEnabled(false);if(!previewEnabled.isChecked()&&host_.preview)host_.preview({});status.setText("Updating preview…");debounce.start();};
     QObject::connect(&previewEnabled,&QCheckBox::toggled,&dialog,changed);
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        if(kind=="Exposure"||kind=="Grain"){
+        if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=label=="Gamma"||label=="Size";const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
-            slider->setValue(position(spin->value()));rowLayout->addWidget(slider,1);rowLayout->addWidget(spin);form.addRow(label,row);
+            slider->setValue(position(spin->value()));slider->setMinimumWidth(170);spin->setFixedWidth(82);rowLayout->addWidget(slider,1);rowLayout->addWidget(spin);form.addRow(label,row);
+            if(kind=="Hue/Saturation"){
+                const auto stops=label=="Hue"?"stop:0 #db6868, stop:0.17 #d5c46b, stop:0.33 #7bb878, stop:0.5 #6bbcc3, stop:0.67 #738cda, stop:0.83 #c879c5, stop:1 #db6868":label=="Saturation"?"stop:0 #777b84, stop:1 #629ee9":"stop:0 #17181c, stop:1 #edf0f4";
+                slider->setStyleSheet(QString("QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,%1); } QSlider::sub-page:horizontal { background: transparent; }").arg(stops));
+            }
             QObject::connect(slider,&QSlider::valueChanged,&dialog,[spin,first,last,logarithmic,stepDecimals](int v){const double normalized=first+(last-first)*v/10000.;const double factor=std::pow(10.,stepDecimals);spin->setValue(std::round((logarithmic?std::exp(normalized):normalized)*factor)/factor);});
             QObject::connect(spin,&QDoubleSpinBox::valueChanged,&dialog,[slider,position](double v){QSignalBlocker block(slider);slider->setValue(position(v));});
         }else form.addRow(label,spin);
@@ -208,6 +212,12 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         auto* controls=new LevelsAdvancedControls;levelsControls=controls;controls->setAdjustmentJson(encoded(settings));form.addRow(controls);
         std::array<QDoubleSpinBox*,5> values{};const QStringList labels{"Input black","Gamma","Input white","Output black","Output white"};
         for(int i=0;i<5;++i){values[size_t(i)]=number(labels[i],i==1?1:i>=2?255:0,i==1?.1:0,i==1?9.99:255,i==1?2:1,[&,controls,i](double value){auto typed=effects_tools::levelsFromAdjustmentJson(encoded(settings));auto& range=typed.ranges[size_t(typed.channel)];double* fields[]{&range.black,&range.gamma,&range.white,&range.outputBlack,&range.outputWhite};*fields[i]=value;settings=QJsonDocument::fromJson(QByteArray::fromStdString(effects_tools::withLevelsSettings(encoded(settings),typed))).object();controls->setAdjustmentJson(encoded(settings));});values[size_t(i)]->setObjectName(QString("levelsValue%1").arg(i));}
+        for(auto* value:values){auto row=form.takeRow(value);if(row.labelItem)delete row.labelItem->widget();delete row.labelItem;delete row.fieldItem;}
+        for(int startIndex:{0,3}){
+            auto* row=new QWidget;auto* columns=new QHBoxLayout(row);columns->setContentsMargins(0,0,0,0);columns->setSpacing(12);
+            for(int i=startIndex;i<(startIndex==0?3:5);++i){auto* column=new QVBoxLayout;column->setSpacing(5);auto* label=new QLabel(labels[i]);label->setStyleSheet("color: #989ba3; font-size: 11px;");column->addWidget(label);column->addWidget(values[size_t(i)]);columns->addLayout(column,1);}
+            form.addRow(row);
+        }
         auto load=[&,channel,values,controls]{auto typed=effects_tools::levelsFromAdjustmentJson(encoded(settings));QSignalBlocker block(channel);channel->setCurrentIndex(int(typed.channel));auto range=typed.ranges[size_t(typed.channel)].normalized();const double inputs[]{range.black,range.gamma,range.white,range.outputBlack,range.outputWhite};for(int i=0;i<5;++i){QSignalBlocker spin(values[size_t(i)]);values[size_t(i)]->setValue(inputs[i]);}controls->setAdjustmentJson(encoded(settings));};load();reloadControls.push_back(load);
         QObject::connect(channel,&QComboBox::currentIndexChanged,&dialog,[&,channel,load]{auto typed=effects_tools::levelsFromAdjustmentJson(encoded(settings));typed.channel=effects_tools::LevelsChannel(channel->currentIndex());settings=QJsonDocument::fromJson(QByteArray::fromStdString(effects_tools::withLevelsSettings(encoded(settings),typed))).object();load();changed();});
         for(auto* spin:values)QObject::connect(spin,&QDoubleSpinBox::valueChanged,&dialog,[load]{load();});
@@ -246,7 +256,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     }
     start=[this]{if(closing)return;if(watcher.isRunning()){pending=true;previewCancelled->store(true);return;}pending=false;previewCancelled=std::make_shared<std::atomic_bool>(false);runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked(),full=committing_;status.setText(full?"Applying adjustment…":"Updating preview…");watcher.setFuture(QtConcurrent::run([original=original,active=active,json,live=live,existing=existing,insertedId=insertedId,showPreview,full,previewCancelled=previewCancelled]{return makePreview(original,active,json,live,existing,insertedId,showPreview,full,[previewCancelled]{return previewCancelled->load();});}));};
     QObject::connect(&debounce,&QTimer::timeout,&dialog,start);
-    QObject::connect(&watcher,&QFutureWatcher<PreviewResult>::finished,&dialog,[&]{if(closing){retire();return;}auto result=watcher.result();if(pending||runningRevision!=revision){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);if(result.full){if(host_.error)host_.error(result.error);committing_=false;dialog.reject();}return;}completed=std::move(result.value);if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}if(result.full){dialog.accept();return;}if(host_.preview)host_.preview(previewEnabled.isChecked()?std::make_shared<const Document>(completed->document):nullptr);preview.setPixmap(QPixmap::fromImage(result.image));status.setText(previewEnabled.isChecked()?"Preview":"Original image  -  preview off");apply->setEnabled(true);});
+    QObject::connect(&watcher,&QFutureWatcher<PreviewResult>::finished,&dialog,[&]{if(closing){retire();return;}auto result=watcher.result();if(pending||runningRevision!=revision){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);if(result.full){if(host_.error)host_.error(result.error);committing_=false;dialog.reject();}return;}completed=std::move(result.value);if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}if(result.full){dialog.accept();return;}if(host_.preview)host_.preview(previewEnabled.isChecked()?std::make_shared<const Document>(completed->document):nullptr);preview.setPixmap(QPixmap::fromImage(result.image));status.setText(previewEnabled.isChecked()?"":"Original image");apply->setEnabled(true);});
     QObject::connect(apply,&QPushButton::clicked,&dialog,[&]{
         if(host_.valid&&!host_.valid()){cancel();return;}
         if(host_.closeColor)host_.closeColor(true);
@@ -260,7 +270,15 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         start();
     });QObject::connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
     QObject::connect(&dialog,&QDialog::finished,this,[this](int answer){finish(answer);});
-    if(modal){dialog.setWindowModality(Qt::WindowModal);}else{dialog.setWindowFlags(Qt::Tool|Qt::WindowTitleHint|Qt::WindowCloseButtonHint);dialog.setWindowModality(Qt::NonModal);preview.hide();dialog.resize(440,520);if(auto found=positions().find(kind_);found!=positions().end())dialog.move(found->second);}
+    if(modal){dialog.setWindowModality(Qt::WindowModal);}else{
+        dialog.setWindowFlags(Qt::Tool|Qt::WindowTitleHint|Qt::WindowCloseButtonHint);dialog.setWindowModality(Qt::NonModal);preview.hide();
+        layout.setDirection(QBoxLayout::TopToBottom);layout.setContentsMargins(18,16,18,16);layout.setSpacing(12);layout.setStretch(1,0);
+        fields.setMinimumWidth(360);form.setContentsMargins(0,0,0,0);form.setVerticalSpacing(12);form.setHorizontalSpacing(16);
+        rightLayout.setContentsMargins(0,0,0,0);rightLayout.removeWidget(&previewEnabled);rightLayout.removeWidget(&buttons);
+        auto* footer=new QHBoxLayout;footer->addWidget(&previewEnabled);footer->addStretch();footer->addWidget(&buttons);rightLayout.addLayout(footer);
+        status.setStyleSheet("color: #989ba3; font-size: 11px;");status.setMinimumHeight(16);
+        dialog.resize(dialog.sizeHint());if(auto found=positions().find(kind_);found!=positions().end())dialog.move(found->second);
+    }
     start();dialog.show();dialog.raise();dialog.activateWindow();
     if(auto* first=dialog.findChild<QDoubleSpinBox*>())first->setFocus(Qt::ActiveWindowFocusReason);
     else previewEnabled.setFocus(Qt::ActiveWindowFocusReason);

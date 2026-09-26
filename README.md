@@ -1,52 +1,55 @@
-# Compositor Windows community preview
+# Compositor for Windows
 
-A native Windows 11 x64 community port of **Compositor 1.0.4** by
-[Robbie Tilton](https://github.com/robbietilton/Compositor), pinned to upstream
-`a19db9011282399785dc18efcfded904627bdcc2`. This independent port preserves the
-original MIT notices and does not imply upstream endorsement. Full Mac equivalence
-and Photoshop compatibility are unverified.
+A native Windows 11 port of **Compositor**, the image editor created by **[Robbie Tilton](https://robbietilton.com/compositor)**.
 
-Use the MSI or extract the portable ZIP and run `Compositor.exe`. Codecs, Qt/MSVC
-runtimes and the offline foreground model are included. No account or first-run
-model download is required. The preview is unsigned and uses manual updates.
-Public download links are pending release acceptance and repository selection.
+Layers, masks, selections, painting, adjustments, filters, and offline background removal, with an interface closely informed by the original Mac app. Windows window controls are the default; an optional Mac-style title bar is available in **View → Appearance**.
 
-Read the [user guide](docs/user-guide.md), [release notes](docs/release-notes.md)
-and [installation instructions](docs/packaging.md). Projects are `.comp`
-directories; back up the complete directory. The [demo](demo/README.md) provides
-redistributable inputs for a complete editing task.
+![Compositor on Windows, editing the After the wind demonstration](docs/images/editor.png)
 
-## Build
+## Start here
 
-Use Windows 11 x64, PowerShell 7, Visual Studio 2022 C++ tools, Windows SDK
-10.0.26100.0 and Python 3.12 for the initial model conversion. Dependencies and
-hashes are pinned.
+**[Download the Windows preview](https://github.com/IAmTheBlurr/CompositorWindows/releases)** · **[User guide](docs/user-guide.md)** · **[Try the demo](demo/README.md)** · **[Report an issue](https://github.com/IAmTheBlurr/CompositorWindows/issues)**
+
+Use the **x64 MSI**, or extract the **portable ZIP** and run `Compositor.exe`. Windows 11 x64 is supported. Runtime libraries and the foreground removal model are bundled; no account or first-run model download is needed. These preview builds are unsigned and updates are manual.
+
+Projects are `.comp` directories. Keep the whole directory when copying or backing up a project. Export flattened PNG or JPEG images for other applications.
+
+This is a working preview with [known limitations](KNOWN-ISSUES.md). Large soft brushes can pause; difficult hair, fur, and transparent subjects can need mask cleanup. Full Mac parity and reciprocal project exchange have not been verified.
+
+## Robbie made Compositor
+
+The original application, its editing ideas, and its design came from Robbie. This port exists because he made Compositor and released its source. His work is the foundation and the continuing point of reference for this project.
+
+**[Original source](https://github.com/robbietilton/Compositor)** · **[Compositor for Mac](https://robbietilton.com/compositor)** · **[Robbie on X](https://x.com/robbietilton)**
+
+The Windows effort was initiated and directed by **[IAmTheBlurr](https://github.com/IAmTheBlurr)** and developed primarily with agentic AI using Codex. It is independently maintained. No affiliation or endorsement by Robbie is implied. Original copyright and MIT notices are preserved.
+
+## Following the original
+
+The intent is to stay in step with Robbie's Compositor: its core tools, editing behavior, design, and project format. Windows improvements and thoughtful enhancements are welcome when they fit that foundation.
+
+**The current port is based on Mac Compositor 1.0.4**, at [`a19db90`](https://github.com/robbietilton/Compositor/tree/a19db9011282399785dc18efcfded904627bdcc2). Newer Mac releases exist; the Windows port has not caught up with them. Windows preview numbers currently use `0.1.x`. Shared upstream version numbering and automated update handling are future work; they are not active synchronization today.
+
+## Have at it
+
+Fork it. Fix something annoying. Make something beautiful. Try something weird. Throw your Codex token budget at an idea and see what happens.
+
+Small fixes and ambitious experiments are welcome. Open an issue, send a PR, or take your fork somewhere surprising. Include what changed and how you checked it. **PRs are welcome; merging depends on fit.** Changes that preserve the core while making the Windows experience better are especially welcome. Useful discoveries may also belong in the original project.
+
+See [contributing](CONTRIBUTING.md) for the short version of working on the code.
+
+## Build and explore
+
+Use Windows 11 x64, PowerShell 7, Visual Studio 2022 C++ tools, Windows SDK 10.0.26100.0, and Python 3.12 for initial model conversion. Dependency inputs are pinned. For the locked codec binaries, retain an extracted matching portable download.
 
 ```powershell
-. ./scripts/bootstrap.ps1 -Python C:\Python312\python.exe
+. ./scripts/bootstrap.ps1 -Python C:\Python312\python.exe -RuntimeDirectory C:\Extracted\CompositorWindows
 cmake --preset windows-x64-release
-cmake --build --preset windows-x64-release --parallel 4
+cmake --build --preset windows-x64-release --target Compositor --parallel 4
 ```
 
-Use `-Offline` after dependencies have been prepared. In the bootstrapped shell,
-run `build/release/Release/Compositor.exe`.
+The [build instructions](docs/source-package.md) cover runtime assets and tests. The [documentation index](docs/README.md) groups tutorials, how-to guides, reference, and explanation for people and coding agents alike. The code is the authority for implementation; documentation explains how to use it and the decisions that need context.
 
-A fresh source-package build also needs `-RuntimeDirectory` pointing to the
-extracted portable directory containing `Compositor.exe` and the four locked
-imaging DLLs. Bootstrap builds the headers/import libraries and restores those
-verified DLLs. A codec rebuild is not claimed byte-identical; see
-[source-package instructions](docs/source-package.md).
+## License and credits
 
-Run `scripts/bootstrap-packaging.ps1`, then `scripts/package.ps1` for the MSI,
-portable ZIP and matching source. Packaging requires the pinned WiX tools and
-.NET on the build host only. Native application source is MIT; packaged notices
-and corresponding dependency sources describe the other licenses.
-
-## Contributing and verification
-
-[KNOWN-ISSUES.md](KNOWN-ISSUES.md) records retained test discrepancies and missing
-acceptance. In the complete development workspace, run
-`ctest --preset windows-x64-release --output-on-failure`; original source/test
-conflicts remain visible as failing tests. The standalone source ZIP supports
-an application rebuild. The historical parity workspace and all runtime
-fixtures are separate from that download; see the source-package instructions.
+Application source is [MIT licensed](LICENSE), retaining **Copyright (c) 2026 Wonder Assembly LLC**. Qt, image codecs, ONNX Runtime, model weights, and the Inter font have their own licenses and notices in `dependencies/` and `assets/`; downloads include the applicable notices and corresponding sources. Demo artwork and photography have [separate credits](demo/README.md#image-permissions).

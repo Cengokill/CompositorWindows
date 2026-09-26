@@ -1,6 +1,7 @@
 # After the wind
 
-A short editing demonstration for the Compositor Windows community preview.
+A short editing demonstration for the Compositor Windows preview.
+The project and input images below provide a complete editing exercise.
 Use the MSI-installed application or the matching portable `Compositor.exe`.
 Open the complete `After the wind.comp` directory for the editable result;
 `After the wind.png` is the actual exported 1600 × 1000 image.
@@ -21,10 +22,7 @@ Open the complete `After the wind.comp` directory for the editable result;
 
 The native workflow includes import, layers, linked masks, transformation,
 selection, painting, undo/redo, adjustment preview/cancel/apply, project
-save/reopen, PNG export and normal shutdown. The accompanying video retains
-normal action and processing speed; operator pauses and private file-dialog
-navigation are cut. The original capture is retained locally. Native screenshots
-show 100% and 150% Qt scale; this is not broad physical-display certification.
+save/reopen, PNG export and normal shutdown. The current editor is shown in [the repository screenshot](../docs/images/editor.png).
 
 Foreground removal can leave background colors around fine
 filaments; a mask cannot reconstruct clean foreground colors or transparency.
@@ -45,4 +43,4 @@ Windows, run `python create-backdrop.py` with Pillow installed.
 
 The demonstration does not imply endorsement by the photographer or the
 original Compositor author. Credit Robbie Tilton and
-https://github.com/robbietilton/Compositor when presenting the community port.
+https://github.com/robbietilton/Compositor when presenting the independent port.

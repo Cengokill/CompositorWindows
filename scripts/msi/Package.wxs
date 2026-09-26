@@ -1,9 +1,9 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="Compositor Windows Community Preview" Manufacturer="Compositor Windows community"
+  <Package Name="Compositor Windows Preview" Manufacturer="Compositor Windows"
            Version="$(var.Version)" Language="1033" Scope="perUser" InstallerVersion="500"
            UpgradeCode="93C45BB9-C849-4B5E-A7D9-E4291071609F" Compressed="yes">
-    <SummaryInformation Description="Compositor Windows 11 x64 community preview" />
+    <SummaryInformation Description="Compositor Windows 11 x64 preview" />
     <MajorUpgrade DowngradeErrorMessage="A newer Compositor Windows preview is already installed."
                   Schedule="afterInstallInitialize" />
     <Upgrade Id="93C45BB9-C849-4B5E-A7D9-E4291071609F">
@@ -34,8 +34,8 @@
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="*">
-        <Shortcut Id="CompositorShortcut" Name="Compositor Windows Community Preview"
-                  Description="Community Windows port of Compositor by Robbie Tilton"
+        <Shortcut Id="CompositorShortcut" Name="Compositor Windows Preview"
+                  Description="Independent Windows port of Compositor by Robbie Tilton"
                   Target="[INSTALLFOLDER]Compositor.exe" WorkingDirectory="INSTALLFOLDER"
                   Icon="CompositorIcon" />
         <RegistryValue Root="HKCU" Key="Software\CompositorWindows\CommunityPreview"

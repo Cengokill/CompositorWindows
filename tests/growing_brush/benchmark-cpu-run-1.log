@@ -1,3 +1,0 @@
-{"workload":"30000_blank_tiny","backend":"CPU","events":48,"gate_ms":16.7,"sparse_p50_ms":1.0257,"sparse_p95_ms":1.1114,"bridge_p50_ms":1.207,"bridge_p95_ms":1.3468,"sparse_pass":true,"bridge_pass":true,"materialized_tiles":48,"reused_tiles":0}
-{"workload":"4000_unaligned_expansion","backend":"CPU","events":48,"gate_ms":16.7,"sparse_p50_ms":2.6217,"sparse_p95_ms":3.443,"bridge_p50_ms":71.3615,"bridge_p95_ms":92.235,"sparse_pass":true,"bridge_pass":false,"materialized_tiles":12288,"reused_tiles":0}
-FAIL Fixed growing brush performance gate failed; retained as failure

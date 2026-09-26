@@ -1,4 +1,4 @@
-param([switch]$SkipBuild,[switch]$PortableOnly,[string]$Version='0.1.0')
+param([switch]$SkipBuild,[switch]$PortableOnly,[string]$Version='0.1.4')
 $ErrorActionPreference='Stop'
 $packageRoot=Split-Path $PSScriptRoot -Parent
 if($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'){throw 'Version must be a numeric semantic version'}
@@ -55,6 +55,7 @@ try {
   if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $repo.source_archive_sha256){throw "Corresponding source mismatch: $($repo.name)"}
   Copy-Item -LiteralPath $archive -Destination (Join-Path $payload 'sources')
  }
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'assets/fonts/Inter-LICENSE.txt') -Destination (Join-Path $payload 'licenses/Inter-LICENSE.txt')
  $source=Join-Path $output 'application-source'
  New-Item -ItemType Directory -Path $source | Out-Null
  function Copy-ApplicationSource([string]$from,[string]$to,[string[]]$extensions){
@@ -69,7 +70,7 @@ try {
   }
  }
  foreach($dir in @('src','shaders')){Copy-ApplicationSource (Join-Path $packageRoot $dir) (Join-Path $source $dir) @('.cpp','.c','.h','.hpp','.hlsl','.rc','.manifest','.in')}
- Copy-ApplicationSource (Join-Path $packageRoot 'assets') (Join-Path $source 'assets') @('.ico','.svg','.txt')
+ Copy-ApplicationSource (Join-Path $packageRoot 'assets') (Join-Path $source 'assets') @('.ico','.svg','.png','.txt','.ttf')
  $testSources=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
  $includeDirectories=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
  [void]$includeDirectories.Add((Join-Path $packageRoot 'src'))
@@ -123,11 +124,20 @@ try {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $source 'scripts')
  }
  Copy-ApplicationSource (Join-Path $PSScriptRoot 'msi') (Join-Path $source 'scripts\msi') @('.ps1','.wxs','.json','.txt')
- foreach($doc in @('source-package.md','packaging.md','user-guide.md','release-notes.md')){
+ foreach($doc in @('README.md','source-package.md','packaging.md','user-guide.md','release-notes.md','architecture.md','project-format-v7.md')){
   $docPath=Join-Path $packageRoot "docs\$doc"
   if(Test-Path -LiteralPath $docPath){Copy-Item -LiteralPath $docPath -Destination (Join-Path $source 'docs')}
  }
- foreach($file in @('CMakeLists.txt','CMakePresets.json','dependencies.lock.json','LICENSE','README.md','KNOWN-ISSUES.md')){Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $source}
+ foreach($file in @('CMakeLists.txt','CMakePresets.json','dependencies.lock.json','LICENSE','README.md','CONTRIBUTING.md','AGENTS.md','PROGRESS.md','VALIDATION.md','KNOWN-ISSUES.md')){Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $source}
+ Copy-ApplicationSource (Join-Path $packageRoot 'reference') (Join-Path $source 'reference') @('.py','.swift','.md')
+ Copy-ApplicationSource (Join-Path $packageRoot 'docs/images') (Join-Path $source 'docs/images') @('.png')
+ New-Item -ItemType Directory -Path (Join-Path $source 'demo') -Force | Out-Null
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'demo/README.md') -Destination (Join-Path $source 'demo/README.md')
+ foreach($fixture in @('tests/display_profile/fixtures/linear-rgb.icc','tests/display_profile/fixtures/manifest.json','tests/imaging/quality_criteria.json')){
+  $destination=Join-Path $source $fixture
+  New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $packageRoot $fixture) -Destination $destination
+ }
  foreach($dir in @('imaging','packaging')){
   New-Item -ItemType Directory -Path (Join-Path $source "dependencies\$dir") -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $packageRoot "dependencies\$dir\lock.json") -Destination (Join-Path $source "dependencies\$dir")
@@ -144,13 +154,13 @@ try {
  $policy=[ordered]@{schema=1;channel='community-preview';automaticUpdates=$false;upstream='a19db9011282399785dc18efcfded904627bdcc2'}
  [IO.File]::WriteAllText((Join-Path $payload 'release-policy.json'),($policy|ConvertTo-Json),$encoding)
  $readme=@"
-Compositor Windows $Version community preview
+Compositor Windows $Version preview
 
 Run Compositor.exe. Windows 11 x64 is required. Codecs, the offline foreground model and runtime DLLs are included.
 Read RELEASE-NOTES.md, USER-GUIDE.md and KNOWN-ISSUES.md. Save projects outside the application directory.
 Updates are manual: install a newer MSI or extract a newer portable download into a new directory.
 This build is unsigned. Windows may show a publisher warning. Keep Windows security enabled and obtain releases from the published project links.
-Community port of Compositor by Robbie Tilton: https://github.com/robbietilton/Compositor
+Independent port of Compositor by Robbie Tilton: https://github.com/robbietilton/Compositor
 Baseline a19db9011282399785dc18efcfded904627bdcc2 (1.0.4); no upstream endorsement or complete Mac parity is claimed.
 Licenses and corresponding sources are in licenses and sources.
 "@

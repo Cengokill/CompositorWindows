@@ -1,6 +1,6 @@
 # Project format at a19db9011282399785dc18efcfded904627bdcc2
 
-This is a source audit of the pinned application. macOS wire fixtures and exchange remain `blocked_reference`; `windows/reference` contains the unexecuted capture harness. The older upstream `docs/project-format.md` stops at v6 and incorrectly describes selection restoration. `EditorSession+Projects.swift:20–37` restores the active layer, resets history, fits the viewport, and starts with no document selection.
+This reference describes the pinned upstream storage contract. macOS wire fixtures and exchange remain unverified; [reference/README.md](../reference/README.md) describes the capture harness. The Windows implementation is in [src/persistence](../src/persistence). The older upstream `docs/project-format.md` stops at v6 and incorrectly describes selection restoration. `EditorSession+Projects.swift:20–37` restores the active layer, resets history, fits the viewport, and starts with no document selection.
 
 `.comp` is a directory containing `manifest.json` and `images/`. `ProjectStore.swift:10–42` defines the actual Codable records; saves default to **version 7**, and the reader accepts versions 1–7. Images are named `<UUID>.png`; masks are `<UUID>.mask.png`. The exact filename comparison uses Foundation's uppercase `UUID.uuidString`. JSON UUID values may be parsed case-insensitively, but asset names are checked against the normalized UUID string.
 

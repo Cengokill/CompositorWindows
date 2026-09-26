@@ -13,7 +13,7 @@
 #include <QTextStream>
 
 int main(int argc,char**argv){
-    QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion("0.1.0");
+    QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion("0.1.4");
     app.setProperty("manualUpdatesOnly", true);
     const auto args=app.arguments();
     if(args.contains("--update-health-check")){

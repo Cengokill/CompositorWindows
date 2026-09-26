@@ -1,4 +1,4 @@
-param([switch]$SkipBuild)
+param([switch]$SkipBuild,[string]$Executable)
 $ErrorActionPreference='Stop'
 $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $evidence=Join-Path $root 'evidence/imaging/quality-v1'
@@ -23,27 +23,31 @@ foreach($case in $manifest.cases){
     }
     if($case.reference_file){$path=Join-Path $evidence $case.reference_file;if(!(Test-Path $path) -or (Get-FileHash $path).Hash.ToLower() -ne $case.reference_sha256){throw 'Required independent reference absent or changed'}}
 }
-$bin=Join-Path $evidence 'bin'
-New-Item -ItemType Directory -Force $bin|Out-Null
-if(!$SkipBuild){
-    & 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\Launch-VsDevShell.ps1' -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-    Push-Location $bin
-    try{
-        & cl /nologo /std:c++20 /EHsc /W4 /WX /O2 /MD /utf-8 "/I$root/src/imaging" "/I$root/dependencies/imaging/onnxruntime-win-x64-1.30.0/include" "$root/src/imaging/wic_codec.cpp" "$root/src/imaging/project_png.cpp" "$root/src/imaging/subject_matte.cpp" "$root/src/imaging/onnx_subject_provider.cpp" "$PSScriptRoot/quality_native.cpp" "$root/dependencies/imaging/onnxruntime-win-x64-1.30.0/lib/onnxruntime.lib" windowscodecs.lib ole32.lib oleaut32.lib propsys.lib bcrypt.lib /Fe:quality_native.exe 2>&1|Tee-Object build.log
-        if($LASTEXITCODE){throw 'Native quality build failed'}
-        Copy-Item "$root/dependencies/imaging/onnxruntime-win-x64-1.30.0/lib/*.dll" .
-    }finally{Pop-Location}
+if(!$Executable){
+    $Executable=Join-Path $root 'build/release/Release/foreground_quality_tests.exe'
+    if(!$SkipBuild){
+        . (Join-Path $root 'scripts/bootstrap.ps1') -Offline
+        Push-Location $root
+        try{
+            & cmake --preset windows-x64-release
+            if($LASTEXITCODE){throw 'Native quality configuration failed'}
+            & cmake --build --preset windows-x64-release --target foreground_quality_tests --parallel 4
+            if($LASTEXITCODE){throw 'Native quality build failed'}
+        }finally{Pop-Location}
+    }
 }
+$Executable=(Resolve-Path -LiteralPath $Executable).Path
+if(!(Test-Path -LiteralPath $Executable -PathType Leaf)){throw 'Native quality executable is missing'}
 $run=Join-Path $evidence ('run-'+(Get-Date -AsUTC -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory $run|Out-Null
 $model=Join-Path $root 'dependencies/imaging/model/birefnet-lite.onnx'
-$provenance=[ordered]@{started_utc=(Get-Date -AsUTC -Format o);criteria_sha256=$expectedCriteria;manifest_sha256=$expectedManifest;model_sha256=(Get-FileHash $model).Hash.ToLower();executable_sha256=(Get-FileHash "$bin/quality_native.exe").Hash.ToLower();cpu=$env:PROCESSOR_IDENTIFIER;logical_processors=[Environment]::ProcessorCount;source_hashes=@{}}
-foreach($file in @('src/imaging/onnx_subject_provider.cpp','src/imaging/subject_matte.cpp','src/imaging/wic_codec.cpp','src/imaging/project_png.cpp','tests/imaging/quality_native.cpp','tests/imaging/quality_report.py')){$provenance.source_hashes[$file]=(Get-FileHash (Join-Path $root $file)).Hash.ToLower()}
+$provenance=[ordered]@{started_utc=(Get-Date -AsUTC -Format o);criteria_sha256=$expectedCriteria;manifest_sha256=$expectedManifest;model_sha256=(Get-FileHash $model).Hash.ToLower();executable=$Executable;executable_sha256=(Get-FileHash -LiteralPath $Executable).Hash.ToLower();cpu=$env:PROCESSOR_IDENTIFIER;logical_processors=[Environment]::ProcessorCount;source_hashes=@{}}
+foreach($file in @('src/imaging/onnx_subject_provider.cpp','src/imaging/subject_input.cpp','src/imaging/subject_matte.cpp','src/imaging/wic_codec.cpp','src/imaging/project_png.cpp','tests/imaging/quality_native.cpp','tests/imaging/quality_report.py')){$provenance.source_hashes[$file]=(Get-FileHash (Join-Path $root $file)).Hash.ToLower()}
 $provenance|ConvertTo-Json -Depth 6|Set-Content -Encoding utf8 "$run/provenance.json"
 foreach($case in $manifest.cases){
     $out=Join-Path $run $case.id
     New-Item -ItemType Directory $out|Out-Null
-    & "$bin/quality_native.exe" $model (Join-Path $evidence $case.input_file) $out 2>&1|Tee-Object "$out/run.log"
+    & $Executable $model (Join-Path $evidence $case.input_file) $out 2>&1|Tee-Object "$out/run.log"
     if($LASTEXITCODE){throw "Native inference failed: $($case.id)"}
 }
 & "$root/dependencies/imaging/model-venv/Scripts/python.exe" "$PSScriptRoot/quality_report.py" $run

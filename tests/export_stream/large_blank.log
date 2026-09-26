@@ -1,4 +1,0 @@
-format=png width=10000 height=10000 bytes=388384 owned_pixel_bytes=8846400 render_bound=4784128
-format=jpeg width=10000 height=10000 bytes=1566289 owned_pixel_bytes=12909600 render_bound=4784128
-peak_working_set=25321472 peak_commit=15212544 elapsed_ms=2421
-PASS large_blank
