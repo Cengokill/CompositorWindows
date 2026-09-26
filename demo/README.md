@@ -2,22 +2,31 @@
 
 A short editing demonstration for the Compositor Windows community preview.
 Use the MSI-installed application or the matching portable `Compositor.exe`.
-Keep recording at normal speed, including processing waits.
+Open the complete `After the wind.comp` directory for the editable result;
+`After the wind.png` is the actual exported 1600 × 1000 image.
 
 1. Import `01-backdrop.png` to create a 1600 × 1000 canvas.
-2. Import `02-dandelion.png` as a second layer. Use Remove Background in Basic
+2. Import `02-dandelion.png` as a second layer. Use Filters → Remove Background in Basic
    mode; inspect the preview and apply its layer mask.
 3. Use Move and the Transform panel to arrange the flower over the circle,
-   leaving the title readable. Keep the aspect ratio locked.
-4. Select the mask and paint black over unwanted edge fragments; undo and redo
-   one stroke. Return to the image thumbnail.
-5. Preview a Levels or Hue/Saturation adjustment, cancel once, then apply a
-   modest adjustment. Undo and redo to compare.
+   leaving the title readable. Keep the aspect ratio locked. This project uses
+   width 1900, X 187 and Y 37; click Apply Transform.
+4. Select the mask. Make a rectangular selection across the bottom of the stem
+   and paint black with a 120 px brush. Undo, redo, then undo to restore the stem.
+   Deselect and return to the image thumbnail.
+5. Preview Hue/Saturation with Hue 90, then Cancel. Reopen the adjustment and
+   apply Saturation −45 with Hue and Lightness at zero.
 6. Save the complete project as `After the wind.comp`, close and reopen it,
    then export `After the wind.png`.
 
-The reusable project and exported result are supplied when the demonstration
-is completed. Foreground removal can leave background colors around fine
+The native workflow includes import, layers, linked masks, transformation,
+selection, painting, undo/redo, adjustment preview/cancel/apply, project
+save/reopen, PNG export and normal shutdown. The accompanying video retains
+normal action and processing speed; operator pauses and private file-dialog
+navigation are cut. The original capture is retained locally. Native screenshots
+show 100% and 150% Qt scale; this is not broad physical-display certification.
+
+Foreground removal can leave background colors around fine
 filaments; a mask cannot reconstruct clean foreground colors or transparency.
 The broader quality check includes difficult fur, transparent-object and
 no-subject cases, as described in the release notes.

@@ -1,0 +1,61 @@
+{
+    "activeLayerID": "1AEA5D51-29DD-403F-8C9E-4DAF10EEABAD",
+    "colorSpace": "sRGB",
+    "documentID": "CC14361F-F62E-4DE6-A3BF-65B12C5CAFD4",
+    "format": "com.compositor.project",
+    "height": 1000,
+    "layers": [
+        {
+            "blendMode": "Normal",
+            "id": "A6B99DA6-BC13-485F-85B9-1C79F7602572",
+            "imageFile": "A6B99DA6-BC13-485F-85B9-1C79F7602572.png",
+            "isGroup": false,
+            "isVisible": true,
+            "name": "01-backdrop",
+            "opacity": 1,
+            "transform": {
+                "flipX": false,
+                "flipY": false,
+                "origin": [
+                    0,
+                    0
+                ],
+                "rotation": 0,
+                "sampling": "High quality",
+                "size": [
+                    1600,
+                    1000
+                ]
+            }
+        },
+        {
+            "blendMode": "Normal",
+            "id": "1AEA5D51-29DD-403F-8C9E-4DAF10EEABAD",
+            "imageFile": "1AEA5D51-29DD-403F-8C9E-4DAF10EEABAD.png",
+            "isGroup": false,
+            "isVisible": true,
+            "maskEnabled": true,
+            "maskFile": "1AEA5D51-29DD-403F-8C9E-4DAF10EEABAD.mask.png",
+            "maskLinked": true,
+            "name": "02-dandelion",
+            "opacity": 1,
+            "transform": {
+                "flipX": false,
+                "flipY": false,
+                "origin": [
+                    187,
+                    37
+                ],
+                "rotation": 0,
+                "sampling": "High quality",
+                "size": [
+                    1900,
+                    1266.6666666666665
+                ]
+            }
+        }
+    ],
+    "resolution": 72,
+    "version": 7,
+    "width": 1600
+}

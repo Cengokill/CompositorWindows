@@ -21,8 +21,14 @@ unknown-publisher warning. Do not disable Windows security to run it.
 
 ## Limits of this preview
 
-- Large soft brushes can fall short of 60 updates per second, particularly on
-  software rendering. Detailed measured timings will accompany the candidate.
+- Large soft brushes can fall short of 60 updates per second. On a Core Ultra 9
+  285K with RTX 5070, two native runs on 4000 × 4000 images with 800 px soft
+  brushes measured dispatch p95 of 11.7–15.5 ms on hardware and 19.1–24.4 ms on
+  software rendering. Event-to-display-flush p95 was 38.6–50.4 ms; stroke start
+  and release reached 427 and 522 ms. Both runs passed 6/10 unchanged 16.7 ms
+  dispatch gates. Background CPU load was present; these are neither controlled
+  idle measurements nor physical input-to-screen latency measurements. This is
+  an explicit preview performance exception.
 - Background removal can retain background color around fur and fine strands.
   Transparent objects such as soap bubbles are a known failure. Advanced
   refinement can worsen an edge; inspect before applying and use mask painting
@@ -45,7 +51,9 @@ already passed those requirements.
 
 ## Demonstration
 
-`demo/` contains redistributable inputs and the steps for **After the wind**,
-a layered botanical poster. The editing demonstration uses the distributed
-application at normal speed. The dandelion photograph is public domain;
-credit and source are in `demo/README.md`.
+The separate demo ZIP contains redistributable inputs, **After the wind.comp**,
+its PNG export and native screenshots at 100% and 150% Qt scale. The editing
+recording uses the same application bytes as this distribution. Kept action and
+processing sequences play at normal speed; operator pauses and private file
+dialog navigation are cut. The dandelion photograph is public domain;
+credit and source are in the demo's README.
