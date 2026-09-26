@@ -24,6 +24,8 @@ The original application, its editing ideas, and its design came from Robbie. Th
 
 The Windows effort was initiated and directed by **[IAmTheBlurr](https://github.com/IAmTheBlurr)** and developed primarily with agentic AI using Codex. It is independently maintained. No affiliation or endorsement by Robbie is implied. Original copyright and MIT notices are preserved.
 
+This Windows port was developed from Robbie Tilton's original Mac source. Its code was not forked from or derived from any other Windows port effort.
+
 ## Following the original
 
 The intent is to stay in step with Robbie's Compositor: its core tools, editing behavior, design, and project format. Windows improvements and thoughtful enhancements are welcome when they fit that foundation.
