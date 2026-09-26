@@ -5,6 +5,7 @@ Results below describe actual local checkpoints, not Mac equivalence or broad ha
 | Checkpoint | Result |
 | --- | --- |
 | Publication preview 0.1.4 | Release application builds from the staged source export using the prepared dependency cache. 24 selected CTest checks, the manual-update policy check, native window-control probe, and 18-step editing workflow pass. |
+| Preview 0.1.4 downloads | Six portable deployment checks pass, including hashes, matching source, manual-update distribution, cleaned-PATH health, native editing, and Unicode project reopen/export. Local MSI upgrade and installed cleaned-PATH health exit 0; the installed executable matches the package. |
 | Preview 0.1.3 window appearance | Release build; 43 affected UI checks pass. Native title bar switching, persistence, dialogs, and canvas probes pass at 100% and 150%. |
 | Preview 0.1.3 installed application | MSI upgrade and runtime health exit 0. The 18-check native editing workflow passes with a cleaned PATH. Four package hashes and 474 source entries match the packaged snapshot. |
 | Preview 0.1.2 visual update | 75 focused checks pass; 33 affected panel checks pass after final refinement; seven native visibility accessibility checks pass. |
