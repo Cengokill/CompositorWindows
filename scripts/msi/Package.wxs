@@ -1,0 +1,67 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Compositor Windows Community Preview" Manufacturer="Compositor Windows community"
+           Version="$(var.Version)" Language="1033" Scope="perUser" InstallerVersion="500"
+           UpgradeCode="93C45BB9-C849-4B5E-A7D9-E4291071609F" Compressed="yes">
+    <SummaryInformation Description="Compositor Windows 11 x64 community preview" />
+    <MajorUpgrade DowngradeErrorMessage="A newer Compositor Windows preview is already installed."
+                  Schedule="afterInstallInitialize" />
+    <Upgrade Id="93C45BB9-C849-4B5E-A7D9-E4291071609F">
+      <UpgradeVersion Minimum="$(var.Version)" Maximum="$(var.Version)" IncludeMinimum="yes" IncludeMaximum="yes"
+                      OnlyDetect="yes" Property="SAME_VERSION_FOUND" />
+    </Upgrade>
+    <Launch Condition="Installed OR NOT SAME_VERSION_FOUND" Message="This version is already installed. Use its original MSI to repair or uninstall it." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="medium" />
+    <Property Id="WINDOWSBUILD">
+      <RegistrySearch Id="WindowsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="ExistingInstallFolder" Root="HKCU" Key="Software\CompositorWindows\CommunityPreview"
+                      Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR (VersionNT64 AND WINDOWSBUILD &gt;= 22000)"
+            Message="This preview requires Windows 11 x64 (build 22000 or later)." />
+    <Property Id="ARPPRODUCTICON" Value="CompositorIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/robbietilton/Compositor" />
+    <Icon Id="CompositorIcon" SourceFile="$(var.Icon)" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="CompositorWindows" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="CompositorShortcut" Name="Compositor Windows Community Preview"
+                  Description="Community Windows port of Compositor by Robbie Tilton"
+                  Target="[INSTALLFOLDER]Compositor.exe" WorkingDirectory="INSTALLFOLDER"
+                  Icon="CompositorIcon" />
+        <RegistryValue Root="HKCU" Key="Software\CompositorWindows\CommunityPreview"
+                       Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ProjectFolderVerb" Guid="*">
+        <RemoveFolder Id="RemoveEmptyProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+        <RegistryKey Root="HKCU" Key="Software\Classes\Directory\shell\CompositorWindowsPreview">
+          <RegistryValue Type="string" Value="Open in Compositor" />
+          <RegistryValue Name="AppliesTo" Type="string" Value="System.FileName:~&gt;&quot;.comp&quot;" />
+          <RegistryValue Name="MultiSelectModel" Type="string" Value="Single" />
+          <RegistryValue Name="Icon" Type="string" Value="[INSTALLFOLDER]Compositor.exe" />
+          <RegistryKey Key="command">
+            <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]Compositor.exe&quot; &quot;%1&quot;" KeyPath="yes" />
+          </RegistryKey>
+        </RegistryKey>
+        <RegistryValue Root="HKCU" Key="Software\CompositorWindows\CommunityPreview"
+                       Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
+      </Component>
+    </DirectoryRef>
+    <Feature Id="Complete" Title="Compositor Windows" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="ProjectFolderVerb" />
+    </Feature>
+  </Package>
+</Wix>

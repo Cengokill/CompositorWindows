@@ -1,0 +1,52 @@
+// Additional source-derived assertions frozen before this harness's first run.
+// Original seven OLE predicates stay in NativeVirtualDropWitness.cpp unchanged.
+#define VIRTUAL_DROP_PROVIDER_ONLY
+#include "NegotiationContracts.cpp"
+#include <QMessageBox>
+#include <QProgressDialog>
+#include <QPushButton>
+#include <QTabBar>
+#include <QTimer>
+namespace {
+QAction* command(MainWindow& window,const char* id){for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()==id&&action->isEnabled())return action;throw std::runtime_error("Required enabled command unavailable");}
+QJsonObject dropAt(MainWindow& window,QPoint local,IDataObject* provider){
+    window.raise();window.activateWindow();pump(40);CursorRestore restore;const auto hwnd=reinterpret_cast<HWND>(window.winId());const auto dpr=window.devicePixelRatioF();POINT physical{LONG(local.x()*dpr),LONG(local.y()*dpr)};
+    require(ClientToScreen(hwnd,&physical)&&SetCursorPos(physical.x,physical.y),"map own native OLE drop point");require(GetAncestor(WindowFromPoint(physical),GA_ROOT)==hwnd,"own native window receives drop");
+    const auto thread=GetCurrentThreadId();const LPARAM point=MAKELPARAM(physical.x,physical.y);std::jthread pulse([thread,point](std::stop_token stop){while(!stop.stop_requested()){Sleep(20);PostThreadMessageW(thread,WM_MOUSEMOVE,0,point);PostThreadMessageW(thread,WM_LBUTTONUP,0,point);}});
+    auto* source=new DropSource(point);DWORD effect=0;const auto status=DoDragDrop(provider,source,DROPEFFECT_COPY,&effect);pulse.request_stop();pulse.join();source->Release();require(status==DRAGDROP_S_DROP&&effect==DROPEFFECT_COPY,"native application accepts provider as a copy");return{{"hr",qint64(status)},{"effect",qint64(effect)}};
+}
+struct Fixture {
+    std::unique_ptr<MainWindow> window=std::make_unique<MainWindow>(true);EditorProject* project{};QPointer<ui::VirtualDropJob> job;QStringList errors;std::vector<size_t> errorUndo;QTimer observe;QJsonArray errorEvents;
+    Fixture(){project=&window->addProject(document(),"Captured");window->resize(1180,880);window->move(40,40);window->setWindowFlag(Qt::WindowStaysOnTopHint);window->show();pump(50);
+        observe.setInterval(2);QObject::connect(&observe,&QTimer::timeout,[this]{if(!window)return;for(auto* message:window->findChildren<QMessageBox*>("virtualImageDropErrors"))if(message->isVisible()){errors.append(message->detailedText());if(project)errorUndo.push_back(project->history.undoCount());errorEvents.append(QJsonObject{{"undo",project?int(project->history.undoCount()):-1},{"layers",project?int(project->document->layers.size()):-1}});message->accept();}});observe.start();
+    }
+    QTabWidget* tabs(){return window->findChild<QTabWidget*>();}
+    QPoint point(){return project->canvas->mapTo(window.get(),project->canvas->rect().center());}
+    void locateJob(){for(auto* child:qApp->children())if(auto* found=dynamic_cast<ui::VirtualDropJob*>(child))job=found;require(job,"provider remains owned while async extraction runs");}
+    void finish(){QElapsedTimer elapsed;elapsed.start();while(elapsed.elapsed()<6000){pump(5);if(!job&&(!window||((!ui::ImportQueue::find(window.get())||ui::ImportQueue::find(window.get())->idle())&&(!ui::WorkspaceDropQueue::find(window.get())||ui::WorkspaceDropQueue::find(window.get())->idle())))){pump(15);return;}}throw std::runtime_error("Provider/import cleanup did not finish");}
+};
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::cout<<std::unitbuf;if(argc!=3)return 2;const std::string key=argv[1];const std::filesystem::path output(argv[2]);if(std::filesystem::exists(output))return 2;std::filesystem::create_directories(output);require(SUCCEEDED(OleInitialize(nullptr)),"owned OLE initialized");bool passed=false;std::string error;QJsonObject report;auto stats=std::make_shared<Stats>();auto negotiation=std::make_shared<Negotiation>();
+    try{Fixture f;const auto before=f.project->document;const bool mixed=key=="mixed_unreadable_order"||key=="mixed_bad_name_order";
+        std::vector<Item> items{item("First.png",{7,5},Qt::red),item("Second.png",{9,6},Qt::blue)};if(mixed)items.push_back(item("Third.png",{11,8},Qt::green));if(key=="mixed_bad_name_order")items[0].name="../Bad.png";
+        const std::string fault=key=="mixed_unreadable_order"?"unreadable":"slow";auto* raw=new Provider(items,true,{},stats);auto* provider=new NegotiatedProvider(raw,negotiation,true,true,fault);raw->Release();
+        auto location=f.point();const auto canvasPoint=f.project->canvas->documentPoint(f.project->canvas->mapFrom(f.window.get(),location));const Point expectedPoint{canvasPoint.x(),canvasPoint.y()};
+        if(key=="async_no_destination_new_tabs"){auto* corner=f.tabs()->cornerWidget(Qt::TopRightCorner);require(corner,"real new-project drop target exists");location=corner->mapTo(f.window.get(),corner->rect().center());}
+        report["ole"]=dropAt(*f.window,location,provider);provider->Release();f.locateJob();require(f.project->document==before&&f.project->history.undoCount()==0,"native provider resolution leaves canonical document/history untouched");
+        if(key=="async_tab_destination_preserved"){auto& other=f.window->addProject(document(),"Other");require(f.tabs()->currentWidget()==other.page,"user changes active tab while provider resolves");f.finish();require(other.document->layers.size()==1&&other.history.undoCount()==0,"late payload never retargets the new active tab");require(f.tabs()->currentWidget()==f.project->page,"captured destination is reselected for its import");}
+        else if(key=="async_destination_closed"){QPointer<NativeCanvas> captured=f.project->canvas;f.tabs()->tabCloseRequested(0);f.project=nullptr;QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);require(!captured,"captured project was actually removed while provider resolves");f.finish();require(f.tabs()->count()==1&&!ui::ImportQueue::find(f.window.get())&&f.errors.isEmpty(),"closed captured destination skips payload without making replacement imports");}
+        else if(key=="async_owner_destroyed"){f.project=nullptr;f.window.reset();f.finish();require(negotiation->ends==1&&negotiation->ending==E_ABORT,"destroyed window waits for provider cleanup and ends operation once");}
+        else if(key=="async_cancel_owner_alive"){auto* progress=f.window->findChild<QProgressDialog*>("virtualImageDropProgress");require(progress,"owned transfer progress exists");auto* cancel=progress->findChild<QPushButton*>();require(cancel,"owned transfer Cancel control exists");cancel->click();f.finish();require(f.project->document==before&&f.project->history.undoCount()==0&&f.errors.isEmpty()&&negotiation->ending==E_ABORT,"Cancel preserves document/history and suppresses provider-error alert");}
+        else if(key=="async_waits_for_later_busy"){f.project->projectBusy=true;QElapsedTimer elapsed;elapsed.start();while(f.job&&elapsed.elapsed()<3000)pump(5);require(!f.job,"async transfer finishes independently of editor busy state");require(f.project->document==before&&!ui::ImportQueue::find(f.window.get())&&!ui::WorkspaceDropQueue::find(f.window.get())->idle(),"captured payload waits without decoding into a later busy editor");f.project->projectBusy=false;f.finish();}
+        else if(key=="mixed_unreadable_order"||key=="mixed_bad_name_order"||key=="async_no_destination_new_tabs")f.finish();
+        else throw std::runtime_error("Unknown case");
+        if(mixed){require(f.errors.size()==1&&f.errors[0].startsWith("Item 1:")&&f.errorUndo==std::vector<size_t>{2},"provider error is reported once only after both readable siblings commit");require(f.project->document->layers.size()==3&&f.project->history.undoCount()==2,"readable siblings each import with one history entry");for(size_t i=1;i<items.size();++i){const auto& layer=f.project->document->layers[i];require(layer.name.starts_with(items[i].name.chopped(4).toStdString())&&layer.raster->width==items[i].size.width()&&layer.raster->pixel(0,0).a==255,"mixed siblings retain names, source dimensions and alpha in order");}require(negotiation->ending==S_OK,"partial successful extraction ends with COPY success");}
+        else if(key=="async_no_destination_new_tabs"){require(f.tabs()->count()==3&&f.project->document==before&&f.project->history.undoCount()==0,"originally absent destination opens one new project per image");require(f.tabs()->tabText(1).startsWith("Untitled")&&f.tabs()->currentIndex()==2,"new projects preserve provider item order");}
+        else if(key=="async_tab_destination_preserved"||key=="async_waits_for_later_busy"){
+            require(f.project->document->layers.size()==3&&f.project->history.undoCount()==2,"captured async request imports both items once");const auto& first=f.project->document->layers[1];require(first.transform.x==std::round(expectedPoint.x-double(items[0].size.width())/2)&&first.transform.y==std::round(expectedPoint.y-double(items[0].size.height())/2),"captured document drop point survives asynchronous extraction");
+            command(*f.window,"edit.undo")->trigger();require(f.project->document->layers.size()==2,"first undo removes only second imported item");command(*f.window,"edit.undo")->trigger();require(f.project->document==before,"second undo restores original document exactly");
+        }
+        require(negotiation->starts==1&&negotiation->ends==1&&!negotiation->inOperation,"all native async integration paths settle one operation");require(stats->providerDestroyed==1,"provider references are released after cleanup");report["errors"]=QJsonArray::fromStringList(f.errors);report["error_events"]=f.errorEvents;if(f.window){f.window->grab().save(QString::fromStdWString((output/L"window.png").wstring()));if(f.project){report["layers"]=int(f.project->document->layers.size());report["undo"]=int(f.project->history.undoCount());}}passed=true;
+    }catch(const std::exception& e){error=e.what();}
+    report["schema"]="VIRTUAL_DROP_INTEGRATION_V1";report["case"]=QString::fromStdString(key);report["passed"]=passed;report["failed_predicate"]=QString::fromStdString(error);report["starts"]=negotiation->starts.load();report["ends"]=negotiation->ends.load();report["ending_hr"]=qint64(negotiation->ending);report["get_data"]=stats->gets;report["mac_differential"]=false;QFile file(QString::fromStdWString((output/L"results.json").wstring()));if(!file.open(QIODevice::WriteOnly))return 3;file.write(QJsonDocument(report).toJson());std::cout<<(passed?"PASS ":"FAIL ")<<key<<" "<<error<<'\n';OleUninitialize();return passed?0:1;
+}

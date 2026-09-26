@@ -23,13 +23,14 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.clipboardImage=mime&&(mime->hasImage()||mime->hasFormat("image/png"));
     if(!project)return state;
     state.projectBusy=project->projectBusy;state.importing=project->importing;
+    populateEditPanelCommandState(state,project);
     state.historyUndo=project->history.canUndo();state.historyRedo=project->history.canRedo();
     state.document=project->document.has_value();if(!state.document)return state;
     const auto& document=*project->document;
     state.selection=document.selection.has_value();
     if(document.selection){
         if(document.selection->outline)state.selectionEmpty=document.selection->outline->empty();
-        else {const auto& coverage=document.selection->coverage;state.selectionEmpty=!coverage||std::none_of(coverage->pixels.begin(),coverage->pixels.end(),[](uint8_t value){return value!=0;});}
+        else {const auto& coverage=document.selection->coverage;state.selectionEmpty=!coverage||!coverage->hasCoverage();}
     }
     state.renderHasPixels=std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.visible&&bool(layer.raster);});
     const auto found=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.id==project->active;});

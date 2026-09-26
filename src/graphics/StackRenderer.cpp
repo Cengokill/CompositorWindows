@@ -7,6 +7,7 @@
 #include "Downsample.h"
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -18,9 +19,16 @@ Pixel interpolate(Pixel a,Pixel b,double t){return{byte(a.r+(b.r-a.r)*t),byte(a.
 Pixel opaque(Pixel p){unsigned a=p.a;auto c=[&](unsigned v){return uint8_t(a?std::min(255u,(v*255+a/2)/a):0);};return{c(p.r),c(p.g),c(p.b),255};}
 Pixel restore(Pixel p,uint8_t alpha){auto c=[&](unsigned v){return uint8_t((v*alpha+127)/255);};return{c(p.r),c(p.g),c(p.b),alpha};}
 struct Inverse {
-    double a,b,c,d,tx,ty;
-    explicit Inverse(const Transform& t){auto o=t.toUnit({0,0}),x=t.toUnit({1,0}),y=t.toUnit({0,1});a=x.x-o.x;b=x.y-o.y;c=y.x-o.x;d=y.y-o.y;tx=o.x;ty=o.y;}
-    Point operator()(Point p)const{return{tx+a*p.x+c*p.y,ty+b*p.x+d*p.y};}
+    double cosine,sine,x,y,width,height,flipX,flipY;
+    explicit Inverse(const Transform& t):x(t.x),y(t.y),width(t.width),height(t.height),flipX(t.flipX?-1.:1.),flipY(t.flipY?-1.:1.){
+        const double angle=std::remainder(t.rotation,360.)*std::numbers::pi/180;cosine=std::cos(angle);sine=std::sin(angle);
+    }
+    Point operator()(Point p)const{
+        // Subtract the local origin before transforming. Finite differences of
+        // far-away unit coordinates lose precision and change half-byte rounds.
+        const double px=p.x-x-width/2,py=p.y-y-height/2;
+        return {.5+(px*cosine+py*sine)/width*flipX,.5+(-px*sine+py*cosine)/height*flipY};
+    }
 };
 std::shared_ptr<const Raster> rasterFromPixels(const std::vector<Pixel>& pixels,int w,int h){
     auto out=std::make_shared<Raster>();out->width=w;out->height=h;int columns=(w+255)/256,rows=(h+255)/256;
@@ -48,7 +56,8 @@ class Render {
     std::vector<LayerInfo> layers;std::unordered_map<std::string,int> ids;
     std::vector<std::vector<int>> children,stacks;std::vector<int> order;std::vector<bool> stacked;
     size_t pixelCount;
-    Point position(size_t i)const{return{region.x+(double(i%size_t(region.width))+0.5)*region.unitsPerPixel,region.y+(double(i/size_t(region.width))+0.5)*region.unitsPerPixel};}
+    int offsetX{},offsetY{};
+    Point position(size_t i)const{return{region.x+(double(i%size_t(region.width)+offsetX)+0.5)*region.unitsPerPixel,region.y+(double(i/size_t(region.width)+offsetY)+0.5)*region.unitsPerPixel};}
     double mask(int index,Point p,bool layerPlacement=false)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;
         if(!l.mask||!l.mask->enabled||!l.mask->raster)return 1;
@@ -89,7 +98,7 @@ class Render {
             auto p=position(i);pixels[i]=interpolate(original,value,mask(index,p,true)*(folderClip?folders(index,p):1));}
     }
 public:
-    Render(const Document& input,RenderRegion r,const AdjustmentCallback& cb,std::shared_ptr<const LayerRenderPreview> overridePreview):document(input),region(r),callback(cb),preview(std::move(overridePreview)),pixelCount(size_t(r.width)*r.height){
+    Render(const Document& input,RenderRegion r,const AdjustmentCallback& cb,std::shared_ptr<const LayerRenderPreview> overridePreview,int ox=0,int oy=0):document(input),region(r),callback(cb),preview(std::move(overridePreview)),pixelCount(size_t(r.width)*r.height),offsetX(ox),offsetY(oy){
         if(preview){auto found=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==document.layers.end()||!preview->identity)throw std::invalid_argument("Invalid layer render preview");*found=preview->layer;}
         const auto& d=document;
         validateDocument(document);layers.reserve(d.layers.size());
@@ -136,6 +145,18 @@ std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,doub
        !std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
        !std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768)
         throw std::invalid_argument("Invalid scaled render region");
+    return Render(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_).run();
+}
+std::shared_ptr<const Raster> StackRenderer::renderScaledPatch(const Document& d,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const{
+    if(offsetX<0||offsetY<0||width<1||height<1||offsetX>255||offsetY>255||width>256-offsetX||height>256-offsetY||!std::isfinite(tileX)||!std::isfinite(tileY)||std::abs(tileX)>10000000||std::abs(tileY)>10000000||!std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768||std::any_of(d.layers.begin(),d.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();}))throw std::invalid_argument("Invalid bounded non-adjustment render patch");
+    return Render(d,{tileX,tileY,width,height,unitsPerPixel},adjustment_,preview_,offsetX,offsetY).run();
+}
+std::shared_ptr<const Raster> StackRenderer::renderCursorRegion(const Document& d,double x,double y,int width,int height,double unitsPerPixel)const{
+    if(width<1||height<1||width>1024||height>1024||
+       !std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
+       !std::isfinite(unitsPerPixel)||unitsPerPixel<=0||unitsPerPixel>32768||
+       !std::isfinite(x+width*unitsPerPixel)||!std::isfinite(y+height*unitsPerPixel))
+        throw std::invalid_argument("Invalid bounded cursor region");
     return Render(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_).run();
 }
 

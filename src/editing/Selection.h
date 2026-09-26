@@ -3,6 +3,8 @@
 #include <optional>
 #include <span>
 
+struct ID2D1SimplifiedGeometrySink;
+
 namespace compositor::editing {
 struct Rect {
     double x{}, y{}, width{}, height{};
@@ -41,7 +43,15 @@ public:
     SelectionOutline transformed(const Transform&, int sourceWidth, int sourceHeight) const;
     SelectionOutline resized(double delta, int canvasWidth, int canvasHeight) const;
     SelectionOutline mirrored(bool horizontally, double axis) const;
+    SelectionOutline affineMapped(std::array<double,6> matrix)const;
+    SelectionOutline projected(const std::function<Point(Point)>&)const;
     std::shared_ptr<const GrayRaster> rasterize(int width, int height) const;
+    // Dense bounded region, using the same global Direct2D tile phase.
+    std::shared_ptr<const GrayRaster> rasterizeRegion(int x,int y,int width,int height)const;
+    std::vector<std::pair<Point,Point>> boundarySegments()const;
+    // Retains cubic curves and contour boundaries; the caller owns the sink
+    // and closes it. Coordinates are transformed into the caller's view space.
+    void writeGeometry(ID2D1SimplifiedGeometrySink*,const std::array<float,6>& documentToView)const;
 private:
     std::shared_ptr<const Impl> impl_;
     explicit SelectionOutline(std::shared_ptr<const Impl>);

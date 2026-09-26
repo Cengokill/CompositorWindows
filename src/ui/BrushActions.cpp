@@ -1,4 +1,7 @@
 #include "MainWindow.h"
+#include "PropertyControls.h"
+#include "WrappingToolOptions.h"
+#include "CropViewport.h"
 #include <QToolBar>
 #include <QLabel>
 #include <QApplication>
@@ -13,33 +16,55 @@
 #include <QTextEdit>
 #include <QPlainTextEdit>
 #include <QAbstractSpinBox>
+#include <QButtonGroup>
+#include <QToolButton>
 #include <cmath>
 
 namespace compositor {
 void MainWindow::setupBrushControls(){
     auto*bar=addToolBar("Brush Options");bar->setObjectName("brushOptions");
-    target_=new QComboBox;target_->addItems({"Image","Mask"});target_->setAccessibleName("Editing target");bar->addWidget(target_);connect(target_,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_||!current())return;applyGradient();pointerCancel();current()->maskSelected=i==1;refresh();});
-    auto*maskWhite=new QCheckBox("Paint mask white");maskWhite->setChecked(maskPaintWhite_);bar->addWidget(maskWhite);connect(maskWhite,&QCheckBox::toggled,this,[this](bool v){maskPaintWhite_=v;});
-    auto*brush=bar->addAction("Brush (B)");connect(brush,&QAction::triggered,this,[this]{selectTool(Tool::Brush);});
-    auto*eraser=bar->addAction("Eraser (E)");connect(eraser,&QAction::triggered,this,[this]{selectTool(Tool::Eraser);});
-    bar->addWidget(new QLabel(" Size "));auto*size=new QDoubleSpinBox;size->setRange(1,2000);size->setValue(40);size->setAccessibleName("Brush diameter");bar->addWidget(size);
-    bar->addWidget(new QLabel(" Hardness "));auto*hardness=new QDoubleSpinBox;hardness->setRange(0,100);hardness->setValue(100);hardness->setSuffix("%");bar->addWidget(hardness);
-    bar->addWidget(new QLabel(" Opacity "));auto*opacity=new QDoubleSpinBox;opacity->setRange(0,100);opacity->setValue(100);opacity->setSuffix("%");bar->addWidget(opacity);
+    auto* options=new ui::WrappingToolOptions;options->setObjectName("brushOptionsContents");bar->addWidget(options);
+    target_=new QComboBox;target_->addItems({"Image","Mask"});target_->setAccessibleName("Editing target");options->addControl(target_);connect(target_,&QComboBox::currentIndexChanged,this,[this](int i){
+        if(refreshing_)return;
+        if(auto* project=current();project&&project->document&&active())selectLayerTarget(project->active,i==1);
+        // Rejected busy/stroke or stale callbacks must show the actual target.
+        if(target_){QSignalBlocker block(target_);target_->setCurrentIndex(current()&&current()->maskSelected?1:0);}
+        refreshBrushControls();
+    });
+    auto*maskWhite=new QCheckBox("Paint mask white");maskWhite->setObjectName("paintMaskWhite");maskWhite->setChecked(maskPaintWhite_);options->addControl(maskWhite);connect(maskWhite,&QCheckBox::toggled,this,[this](bool v){maskPaintWhite_=v;refreshPaletteControls();});
+    auto* modes=new QButtonGroup(this);modes->setExclusive(true);
+    std::array<QToolButton*,2> modeButtons{};
+    for(bool erase:{false,true}){auto* button=new QToolButton;modeButtons[size_t(erase)]=button;button->setText(erase?"Erase":"Paint");button->setAccessibleName(erase?"Erase":"Paint");button->setObjectName(erase?"brushModeErase":"brushModePaint");button->setCheckable(true);modes->addButton(button);connect(button,&QToolButton::clicked,this,[this,erase]{selectTool(erase?Tool::Eraser:Tool::Brush);refreshBrushControls();});}
+    options->addGroup({modeButtons[0],modeButtons[1]});
+    auto slider=[&](int index){auto* value=new ui::TrackSlider(Qt::Horizontal);value->setObjectName(index?"brushOpacitySlider":"brushHardnessSlider");value->setAccessibleName(index?"Brush opacity slider":"Brush hardness slider");value->setRange(index?100:0,10000);value->setFixedWidth(100);brushSliders_[size_t(index)]=value;return value;};
+    auto*size=new ui::PropertyNumber;size->setDecimals(0);size->setRange(1,2000);size->setValue(40);size->setAccessibleName("Brush diameter");options->addGroup({new QLabel("Size"),size});
+    auto*hardness=new ui::PropertyNumber;hardness->setDecimals(0);hardness->setRange(0,100);hardness->setValue(100);hardness->setSuffix("%");options->addGroup({new QLabel("Hardness"),slider(0),hardness});
+    auto*opacity=new ui::PropertyNumber;opacity->setDecimals(0);opacity->setRange(1,100);opacity->setValue(100);opacity->setSuffix("%");options->addGroup({new QLabel("Opacity"),slider(1),opacity});
+    for(auto* number:{size,hardness,opacity})number->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
+    hardness->setAccessibleName("Brush hardness");opacity->setAccessibleName("Brush opacity");
     brushTip_={size,hardness,opacity};
-    connect(size,&QDoubleSpinBox::valueChanged,this,[this](double v){if(!stroke_)brushSettings_.radius=v/2;});
-    connect(hardness,&QDoubleSpinBox::valueChanged,this,[this](double v){if(!stroke_)brushSettings_.hardness=v/100;});
-    connect(opacity,&QDoubleSpinBox::valueChanged,this,[this](double v){if(!stroke_)brushSettings_.opacity=v/100;});
+    connect(size,&QDoubleSpinBox::valueChanged,this,[this](double v){if(!refreshing_&&!stroke_){brushSettings_.radius=v/2;refreshBrushControls();}});
+    connect(hardness,&QDoubleSpinBox::valueChanged,this,[this](double v){if(!refreshing_&&!stroke_){brushSettings_.hardness=v/100;refreshBrushControls();}});
+    connect(opacity,&QDoubleSpinBox::valueChanged,this,[this](double v){if(!refreshing_&&!stroke_){brushSettings_.opacity=v/100;refreshBrushControls();}});
+    for(size_t i=0;i<brushSliders_.size();++i)connect(brushSliders_[i],&QSlider::valueChanged,this,[this,i](int value){if(refreshing_||stroke_||retouch_)return;(i?brushSettings_.opacity:brushSettings_.hardness)=value/10000.;refreshBrushControls();});
 }
 void MainWindow::refreshBrushControls(){
+    const auto* project=current();const bool enabled=project&&!project->projectBusy&&!project->importing&&!stroke_&&!retouch_;
+    if(target_){const auto state=commandState();const auto* layer=active();
+        target_->setEnabled(project&&project->document&&layer&&layer->mask&&!state.projectBusy&&!state.importing&&!state.modalDialog);
+    }
     const double values[]{brushSettings_.radius*2,brushSettings_.hardness*100,brushSettings_.opacity*100};
-    for(size_t i=0;i<brushTip_.size();++i)if(brushTip_[i]){QSignalBlocker block(brushTip_[i]);brushTip_[i]->setValue(values[i]);}
+    for(size_t i=0;i<brushTip_.size();++i)if(brushTip_[i]){QSignalBlocker block(brushTip_[i]);ui::synchronizeNumber(brushTip_[i],values[i]);brushTip_[i]->setEnabled(enabled);}
+    for(size_t i=0;i<brushSliders_.size();++i)if(auto* slider=brushSliders_[i]){const QSignalBlocker block(slider);slider->setValue(int(std::lround(values[i+1]*100)));slider->setEnabled(enabled);}
+    const bool modeEnabled=ui::commandEnabled(ui::CommandGate::Tool,commandState());
+    for(bool erase:{false,true})if(auto* button=findChild<QToolButton*>(erase?"brushModeErase":"brushModePaint")){const QSignalBlocker block(button);button->setChecked((brushMode_==ProjectBrushMode::Erase)==erase);button->setEnabled(modeEnabled);}
 }
 bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers){
     if(tool_!=Tool::Brush&&tool_!=Tool::Eraser)return false;
     auto*p=current();auto*l=active();if(!p||!p->document||!l||layerSelection().ids.size()!=1)return true;
     strokeMask_=p->maskSelected;if(strokeMask_&&(!l->mask||!l->mask->enabled))return true;if(!strokeMask_&&(l->group||!l->adjustmentJson.empty()))return true;
     auto visible=layers::entries(*p->document);if(std::none_of(visible.begin(),visible.end(),[&](const auto&item){return item.id==l->id&&item.visible;}))return true;
-    if(p->document->selection&&(!p->document->selection->coverage||std::none_of(p->document->selection->coverage->pixels.begin(),p->document->selection->coverage->pixels.end(),[](uint8_t v){return v!=0;})))return true;
+    if(p->document->selection&&(!p->document->selection->coverage||!p->document->selection->coverage->hasCoverage()))return true;
     p->history.begin(tool_==Tool::Eraser?"Erase":"Brush",p->document,p->active);
     try{
         if(!brushGpu_){auto shader=QDir(QApplication::applicationDirPath()).filePath("shaders/BrushCoverage.hlsl");if(!QFileInfo::exists(shader))shader=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/shaders/BrushCoverage.hlsl";try{brushGpu_=std::make_shared<graphics::D3D11BrushCoverage>(std::filesystem::path(shader.toStdWString()),warp_);}catch(const std::exception&e){statusBar()->showMessage(QString("Using software brush: ")+e.what());}}
@@ -65,14 +90,21 @@ void MainWindow::publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapsh
 }
 CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,double y,double width,double height,double requestedUnits){
     if(!project.document)return {};
-    if(project.gradientPreview){
+    auto render=[&](const Document& document,std::shared_ptr<const LayerRenderPreview> layerPreview={}){
+        if(tool_==Tool::Crop&&current()==&project&&cropDraft_)
+            return ui::renderCropViewport(document,*cropDraft_,x,y,width,height,requestedUnits,std::move(layerPreview));
+        return project.composite.renderViewport(document,x,y,width,height,requestedUnits,64,256,std::move(layerPreview));
+    };
+    if(auto preview=editPanelPreview(project))return render(*preview);
+    if(project.blendPreview&&project.active==project.blendPreview->first){
         auto preview=*project.document;
-        for(auto& layer:preview.layers)if(layer.id==project.gradientPreview->id){layer=*project.gradientPreview;break;}
-        return project.composite.renderViewport(preview,x,y,width,height,requestedUnits);
+        for(auto& layer:preview.layers)if(layer.id==project.blendPreview->first){layer.blend=project.blendPreview->second;break;}
+        return render(preview);
     }
-    if(project.retouchPreview)return project.composite.renderViewport(*project.document,x,y,width,height,requestedUnits,64,256,project.retouchPreview);
-    if(!project.brushPreview)return project.composite.renderViewport(*project.document,x,y,width,height,requestedUnits);
-    return project.composite.renderViewport(*project.document,x,y,width,height,requestedUnits,64,256,project.brushPreview->renderPreview());
+    if(project.gradientPreview)return render(*project.document,project.gradientPreview->renderPreview());
+    if(project.retouchPreview)return render(*project.document,project.retouchPreview);
+    if(!project.brushPreview)return render(*project.document);
+    return render(*project.document,project.brushPreview->renderPreview());
 }
 bool MainWindow::updateBrush(Point point,bool finish){
     if(!stroke_)return false;
@@ -82,6 +114,7 @@ bool MainWindow::updateBrush(Point point,bool finish){
 }
 void MainWindow::keyPressEvent(QKeyEvent*e){
     auto*focus=QApplication::focusWidget();if(qobject_cast<QLineEdit*>(focus)||qobject_cast<QAbstractSpinBox*>(focus)||qobject_cast<QTextEdit*>(focus)||qobject_cast<QPlainTextEdit*>(focus)){QMainWindow::keyPressEvent(e);return;}
+    if(e->key()==Qt::Key_Escape&&editPanel_){cancelEditPanel();e->accept();return;}
     if(handleEditingKey(e))return;
     const bool brushTool=tool_==Tool::Brush||tool_==Tool::Eraser||tool_==Tool::SpotHealing||tool_==Tool::CloneStamp||tool_==Tool::Blur;
     if(brushTool&&!stroke_&&!retouch_&&(e->modifiers()==Qt::NoModifier||e->modifiers()==Qt::ShiftModifier)){

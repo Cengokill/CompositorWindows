@@ -1,4 +1,5 @@
 #pragma once
+#include "ParallelBatch.h"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -33,6 +34,16 @@ struct BrushTile {
 void validateBrush(const BrushTile&,const BrushUniforms&,std::span<const BrushSegment> settled,std::span<const BrushSegment> tail);
 void renderBrushCpu(BrushTile&,BrushUniforms,std::span<const BrushSegment> settled,std::span<const BrushSegment> tail={});
 struct BrushTileRender { BrushTile* tile; BrushUniforms uniforms; };
+inline constexpr uint32_t brushCpuMaxWorkers=parallelBatchMaxWorkers;
+// Synchronous, disjoint32-row jobs within independently owned tiles. Preflight validates the entire
+// batch before writes; missing/duplicate tiles and batches over4096 reject.
+// 0 selects min(logical CPUs,16), 1 executes sequentially. The private native
+// pool bounds its workers across concurrent calls and retains no caller data
+// after return. Unexpected worker exceptions propagate after all callbacks
+// finish; callers must discard the batch's scratch tiles on such a failure.
+// Scheduling uses at most32768 row descriptors and never copies tile states.
+void renderBrushCpuBatch(std::span<const BrushTileRender>,std::span<const BrushSegment> settled,
+                         std::span<const BrushSegment> tail={},uint32_t workerLimit=0);
 class D3D11BrushCoverage {
 public:
     explicit D3D11BrushCoverage(const std::filesystem::path& shader,bool preferWarp=true);

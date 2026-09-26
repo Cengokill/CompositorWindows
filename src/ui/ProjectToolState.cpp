@@ -52,6 +52,7 @@ void check(QObject* root,const char* objectName,const char* toolbar,const char* 
 void MainWindow::captureToolState(EditorProject& project) const {
     auto& state=project.toolState;
     state.tool=tool_;state.foreground=foreground_;state.background=background_;
+    state.brushMode=brushMode_;
     state.brushSettings=brushSettings_;state.cloneSettings=cloneSettings_;state.blurSettings=blurSettings_;state.healingMode=healingMode_;
     state.gradientSettings=gradientSettings_;state.shapeStyle=shapeStyle_;
     state.ellipse=ellipse_;state.selectionAntialias=selectionAntialias_;state.selectionMode=selectionMode_;
@@ -66,6 +67,7 @@ void MainWindow::captureToolState(EditorProject& project) const {
 void MainWindow::restoreToolState(const EditorProject& project) {
     const auto& state=project.toolState;
     tool_=state.tool;foreground_=state.foreground;background_=state.background;
+    brushMode_=state.brushMode;
     brushSettings_=state.brushSettings;cloneSettings_=state.cloneSettings;blurSettings_=state.blurSettings;healingMode_=state.healingMode;
     gradientSettings_=state.gradientSettings;shapeStyle_=state.shapeStyle;
     ellipse_=state.ellipse;selectionAntialias_=state.selectionAntialias;selectionMode_=state.selectionMode;

@@ -1,11 +1,16 @@
 #include "MainWindow.h"
 #include "AdjustmentDialog.h"
+#include "SubjectPanel.h"
+#include "effects/Adjustments.h"
 #include "imaging/SubjectDialog.h"
 #include <QApplication>
 #include <QMenuBar>
 #include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRandomGenerator>
 #include <cmath>
 
 namespace compositor {
@@ -25,34 +30,42 @@ void MainWindow::setupAdjustmentActions(){
 void MainWindow::adjust(const QString&kind,bool live,bool existing){
     auto*p=current();auto*l=active();
     if(!p||!p->document||(!live&&(!l||!l->raster||l->group||!l->adjustmentJson.empty())))return;
+    if(editPanel_)return;
+    if(live&&!existing){
+        if(p->document->layers.size()>=10000)return;
+        Layer added;added.id=newId();added.name=kind.toStdString();added.transform={0,0,double(p->document->width),double(p->document->height)};
+        auto settings=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson(kind.toStdString()))).object();
+        if(kind=="Gradient Map"){
+            auto color=[](const QColor& value){return QJsonObject{{"red",value.redF()},{"green",value.greenF()},{"blue",value.blueF()}};};
+            settings["gradientMapSettings"]=QJsonObject{{"shadows",color(foreground_)},{"highlights",color(background_)},{"reversed",false}};
+        }
+        if(kind=="Grain")settings["grainSettings"]=QJsonObject{{"amount",25},{"size",1.5},{"roughness",50},{"seed",double(QRandomGenerator::global()->generate())}};
+        added.adjustmentJson=QJsonDocument(settings).toJson(QJsonDocument::Compact).toStdString();
+        if(l)added.parentId=l->group?l->id:l->parentId;
+        const auto at=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& value){return value.id==p->active;});
+        const auto index=at==p->document->layers.end()?p->document->layers.size():size_t(at-p->document->layers.begin()+1);
+        auto selected=std::vector<std::string>{added.id};auto collapsed=p->collapsedGroups;collapsed.erase(added.parentId);
+        const auto name="New "+kind.toStdString()+" Adjustment";
+        edit(name.c_str(),[&](Document& document){document.layers.insert(document.layers.begin()+index,added);p->active=added.id;});
+        p->selected=std::move(selected);p->collapsedGroups=std::move(collapsed);p->maskSelected=false;existing=true;
+    }
     const auto before=*p->document;const auto id=p->active;
     AdjustmentDialogOptions options;
     if(!live){options.initialAdjustmentJson=p->toolState.filterSettings.beginAdjustment(kind,foreground_,background_);options.onApply=[p](const std::string& json){p->toolState.filterSettings.rememberAdjustment(json);};}
-    auto result=showAdjustmentDialog(this,before,id,kind,live,existing,options);
-    if(!result)return;
-    if(p!=current()||!p->document||*p->document!=before){QMessageBox::information(this,"Adjustment","The project changed while the adjustment was open. Reopen the adjustment to apply it.");return;}
-    edit(existing?"Edit Adjustment":live?"Add Adjustment Layer":"Adjust Image",[&](Document&d){d=std::move(result->document);p->active=result->active;});
+    const auto title=live?QJsonDocument::fromJson(QByteArray::fromStdString(active()->adjustmentJson)).object()["kind"].toString():kind;
+    auto host=makeEditPanelHost(*p,before,live?"Edit "+title.toStdString()+" Adjustment":title.toStdString());
+    try{editPanel_=openAdjustmentPanel(this,before,id,kind,live,existing,options,std::move(host));}
+    catch(...){if(live)if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}throw;}
+    refresh(false,false);
 }
 void MainWindow::removeBackground(){
-    auto*p=current();auto*l=active();if(!p||!p->document||!l||!l->raster||l->group||!l->adjustmentJson.empty())return;
-    auto original=*l;auto selection=p->document->selection;
-    imaging::RgbaImage image{uint32_t(l->raster->width),uint32_t(l->raster->height),size_t(l->raster->width)*4,l->raster->rgba()};
-    std::optional<imaging::GrayMask> old;
-    if(l->mask&&!l->mask->placement&&l->mask->raster&&l->mask->raster->width==int(image.width)&&l->mask->raster->height==int(image.height))old=imaging::GrayMask{image.width,image.height,image.width,l->mask->raster->pixels};
+    auto*p=current();auto*l=active();if(editPanel_||!p||!p->document||!l||!l->raster||l->group||!l->adjustmentJson.empty())return;
+    const auto before=*p->document;const auto original=*l;
     auto model=QDir(QApplication::applicationDirPath()).filePath("models/birefnet-lite.onnx");
     if(!QFileInfo::exists(model))model=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/dependencies/imaging/model/birefnet-lite.onnx";
     imaging::SubjectDialogOptions options;options.initial=p->toolState.filterSettings.background;
     options.onApply=[p](const imaging::MatteSettings& settings){p->toolState.filterSettings.background=settings;};
-    auto result=imaging::showSubjectDialog(this,image,old?&*old:nullptr,std::filesystem::path(model.toStdWString()),options);
-    if(!result)return;
-    if(p!=current()||!active()||active()->id!=original.id||active()->raster!=original.raster||active()->transform!=original.transform)return;
-    auto mask=std::make_shared<GrayRaster>();mask->width=int(result->width);mask->height=int(result->height);mask->pixels=std::move(result->pixels);
-    if(selection)for(int y=0;y<mask->height;++y)for(int x=0;x<mask->width;++x){
-        auto point=original.transform.fromUnit({(x+.5)/mask->width,(y+.5)/mask->height});
-        unsigned c=selection->coverage?selection->coverage->pixel(int(std::floor(point.x)),int(std::floor(point.y))):0;
-        auto i=size_t(y)*mask->width+x;unsigned base=old?old->pixels[size_t(y)*old->stride+x]:255;
-        mask->pixels[i]=uint8_t((mask->pixels[i]*c+base*(255-c)+127)/255);
-    }
-    edit("Remove Background",[&](Document&){auto&target=*active();if(target.mask){target.mask->raster=mask;target.mask->enabled=true;}else target.mask=Mask{mask};});
+    auto host=makeEditPanelHost(*p,before,"Remove Background");
+    editPanel_=openSubjectPanel(this,before,original,std::filesystem::path(model.toStdWString()),options,std::move(host));refresh(false,false);
 }
 }

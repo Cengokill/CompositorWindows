@@ -58,7 +58,15 @@ Document imageResize(const Document& doc,const ImageSizeOptions& options){
 Transform mirroredTransform(const Transform& t,bool horizontal,double axis){if(!t.valid()||!std::isfinite(axis))throw std::runtime_error("Invalid mirror transform");auto result=t;if(horizontal){result.flipX=!result.flipX;result.x=2*axis-(t.x+t.width/2)-t.width/2;}else{result.flipY=!result.flipY;result.y=2*axis-(t.y+t.height/2)-t.height/2;}result.rotation=-t.rotation;if(!result.valid())throw std::runtime_error("Mirrored transform exceeds project limits");return result;}
 Document flipCanvas(const Document& doc,bool horizontal){
     validateDocument(doc);auto result=doc;double axis=(horizontal?doc.width:doc.height)/2.;for(auto& layer:result.layers){layer.transform=mirroredTransform(layer.transform,horizontal,axis);if(layer.mask&&layer.mask->placement)layer.mask->placement=mirroredTransform(*layer.mask->placement,horizontal,axis);}
-    if(doc.selection){if(!doc.selection->coverage)throw std::runtime_error("Present selection has no coverage");if(doc.selection->outline)result.selection=rasterSelection(doc.selection->outline->mirrored(horizontal,axis),doc.width,doc.height);else{const auto& source=*doc.selection->coverage;auto gray=std::make_shared<GrayRaster>(source);for(int y=0;y<source.height;++y)for(int x=0;x<source.width;++x)gray->pixels[size_t(y)*source.width+x]=source.pixel(horizontal?source.width-1-x:x,horizontal?y:source.height-1-y);result.selection=Selection{gray};}}
+    if(doc.selection){
+        if(!doc.selection->coverage)throw std::runtime_error("Present selection has no coverage");
+        if(doc.selection->outline)result.selection=rasterSelection(doc.selection->outline->mirrored(horizontal,axis),doc.width,doc.height);
+        else if(doc.selection->coverage->source){
+            auto source=doc.selection->coverage;auto b=source->nonzeroBounds();if(horizontal)b.x=source->width-b.x-b.width;else b.y=source->height-b.y-b.height;
+            std::shared_ptr<const SelectionOutline> outline;if(auto path=source->source->vectorOutline())outline=std::make_shared<SelectionOutline>(path->mirrored(horizontal,axis));
+            result.selection=Selection{GrayRaster::sampled(source->width,source->height,b,[source,horizontal](int x,int y){return source->pixel(horizontal?source->width-1-x:x,horizontal?y:source->height-1-y);},source->retainedBytes(),std::move(outline))};
+        }else{const auto& source=*doc.selection->coverage;auto gray=std::make_shared<GrayRaster>(source);for(int y=0;y<source.height;++y)for(int x=0;x<source.width;++x)gray->pixels[size_t(y)*source.width+x]=source.pixel(horizontal?source.width-1-x:x,horizontal?y:source.height-1-y);result.selection=Selection{gray};}
+    }
     validateDocument(result);return result;
 }
 Document flipLayers(const Document& doc,std::span<const std::string> selected,bool horizontal){

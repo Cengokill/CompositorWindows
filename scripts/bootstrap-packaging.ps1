@@ -16,18 +16,20 @@ function Get-LockedPackagingAsset([string]$Url,[string]$Path,[string]$Hash){
 $packagingTaskQt=$packagingTaskLock.qt.source
 Get-LockedPackagingAsset $packagingTaskQt.url (Join-Path $packagingTaskRoot $packagingTaskQt.path) $packagingTaskQt.sha256
 if(-not $PortableOnly){
-    $packagingTaskNsisRoot=Join-Path $packagingTaskRoot 'dependencies\packaging'
-    $packagingTaskNsis=(Get-Content -LiteralPath (Join-Path $packagingTaskNsisRoot 'lock.json') -Raw | ConvertFrom-Json).nsis
-    $packagingTaskArchive=Join-Path $packagingTaskNsisRoot $packagingTaskNsis.archive
-    Get-LockedPackagingAsset $packagingTaskNsis.url $packagingTaskArchive $packagingTaskNsis.sha256
-    $packagingTaskCompiler=Join-Path $packagingTaskNsisRoot "nsis-$($packagingTaskNsis.version)\makensis.exe"
-    if(-not (Test-Path -LiteralPath $packagingTaskCompiler)){
-        Expand-Archive -LiteralPath $packagingTaskArchive -DestinationPath $packagingTaskNsisRoot
+    if(-not(Get-Command dotnet -ErrorAction SilentlyContinue)){throw 'MSI packaging requires a .NET runtime (6 or later); application users do not need .NET.'}
+    $packagingTaskTools=Join-Path $packagingTaskRoot 'dependencies\packaging'
+    $packagingTaskWix=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'msi\toolchain.json') -Raw | ConvertFrom-Json
+    foreach($packagingTaskAsset in $packagingTaskWix.assets){
+        $packagingTaskArchive=Join-Path $packagingTaskTools $packagingTaskAsset.archive
+        Get-LockedPackagingAsset $packagingTaskAsset.url $packagingTaskArchive $packagingTaskAsset.sha256
+        $packagingTaskExtract=Join-Path $packagingTaskTools $packagingTaskAsset.directory
+        if(-not(Test-Path -LiteralPath (Join-Path $packagingTaskExtract $packagingTaskAsset.entry))){
+            [IO.Compression.ZipFile]::ExtractToDirectory($packagingTaskArchive,$packagingTaskExtract)
+        }
     }
-    if(-not (Test-Path -LiteralPath $packagingTaskCompiler)){throw 'NSIS archive did not contain the locked compiler path'}
-    $packagingTaskLicense=Join-Path (Split-Path $packagingTaskCompiler -Parent) 'COPYING'
-    if(-not (Test-Path -LiteralPath $packagingTaskLicense)){throw 'NSIS license is missing from its verified archive'}
-    New-Item -ItemType Directory -Path (Join-Path $packagingTaskNsisRoot 'notices') -Force | Out-Null
-    Copy-Item -LiteralPath $packagingTaskLicense -Destination (Join-Path $packagingTaskNsisRoot $packagingTaskNsis.license_file)
+    $packagingTaskCompiler=Join-Path (Join-Path $packagingTaskTools $packagingTaskWix.assets[0].directory) $packagingTaskWix.assets[0].entry
+    $packagingTaskVersion=& dotnet exec --roll-forward Major $packagingTaskCompiler --version
+    if($LASTEXITCODE -or $packagingTaskVersion -notlike "$($packagingTaskWix.version)+*"){throw 'The locked WiX compiler could not run'}
+    Get-LockedPackagingAsset $packagingTaskWix.license.url (Join-Path $packagingTaskTools $packagingTaskWix.license.path) $packagingTaskWix.license.sha256
 }
 Write-Output 'Locked packaging source and installer assets are ready.'

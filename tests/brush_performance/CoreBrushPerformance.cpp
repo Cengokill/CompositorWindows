@@ -1,0 +1,39 @@
+#include "graphics/GrowingBrushSession.h"
+#include "graphics/SamplingSource.h"
+#include <QCoreApplication>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <windows.h>
+#include <psapi.h>
+using namespace compositor;
+using namespace compositor::graphics;
+using Clock=std::chrono::steady_clock;
+namespace {
+void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+double ms(Clock::time_point a,Clock::time_point b){return std::chrono::duration<double,std::milli>(b-a).count();}
+void progress(const char* stage,int pass,int event,double append=0,double viewport=0){
+    auto& cache=ReducedSourceCache::shared();
+    std::printf("PROGRESS stage=%s pass=%d event=%d append_ms=%.4f viewport_ms=%.4f reduced_generated=%llu reduced_reused=%llu\n",stage,pass,event,append,viewport,static_cast<unsigned long long>(cache.generatedTiles()),static_cast<unsigned long long>(cache.reusedTiles()));std::fflush(stdout);
+}
+QJsonArray numbers(const std::vector<double>& values){QJsonArray result;for(double v:values)result.append(v);return result;}
+QJsonObject summary(std::vector<double> values){std::sort(values.begin(),values.end());require(!values.empty(),"Missing timing values");return {{"p50_ms",values[values.size()/2]},{"p95_ms",values[size_t(std::ceil(.95*values.size()))-1]},{"max_ms",values.back()}};}
+Document fixture(const QString& kind){Document d;d.id="core-brush-performance";d.width=d.height=4000;const int count=kind=="multiple"?3:1;for(int i=0;i<count;++i){Layer layer;layer.id="layer-"+std::to_string(i);layer.name=layer.id;layer.transform={0,0,4000,4000};layer.raster=Raster::filled(4000,4000,kind=="transparent"?Pixel{}:Pixel{80,100,160,255});if(kind=="mask"&&i==0)layer.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{4000,4000,std::vector<uint8_t>(16000000,255)})};d.layers.push_back(std::move(layer));}return d;}
+Point trajectory(int i){return i<=60?Point{700.,3200.-i*40.}:Point{700.+(i-60)*40.,800.};}
+}
+int main(int argc,char** argv){QCoreApplication app(argc,argv);if(argc!=5){std::fprintf(stderr,"Usage: core_brush_performance transparent|opaque|small|mask|multiple cpu|warp|hardware shader report.json\n");return 2;}const QString kind=QString::fromLocal8Bit(argv[1]),backend=QString::fromLocal8Bit(argv[2]);QJsonObject report{{"schema","CORE_BRUSH_PERFORMANCE_V1"},{"case",kind},{"backend",backend},{"append_gate_p95_ms",16.7},{"append_and_viewport_gate_p95_ms",16.7},{"includes_native_present",false}};int exit=2;try{
+    require(QStringList{"transparent","opaque","small","mask","multiple"}.contains(kind),"Unknown case");require(QStringList{"cpu","warp","hardware"}.contains(backend),"Unknown backend");std::shared_ptr<D3D11BrushCoverage> gpu;if(backend!="cpu"){gpu=std::make_shared<D3D11BrushCoverage>(std::filesystem::path(argv[3]),backend=="warp");report["adapter"]=QString::fromStdString(gpu->adapterName());}
+    Document document=fixture(kind);const auto original=document;CompositeCache cache;BrushSessionSettings settings{kind=="small"?10.:400.,kind=="small"?1.:0.,1,{0,0,0},false};
+    // Same document-space window as the native640DIP canvas at DPR1/zoom0.15.
+    const auto render=[&](std::shared_ptr<const LayerRenderPreview> preview={}){return cache.renderViewport(document,-400./3,-400./3,12800./3,12800./3,20./3,64,256,std::move(preview));};
+    progress("initial_render_begin",-1,-1);render();progress("initial_render_end",-1,-1);std::vector<double> appends,renders,totals;QJsonArray passes;uint64_t outputAllocations=0,coverageAllocations=0,snapshots=0,materialized=0;size_t coverage=0,pixels=0,maxVisible=0;Raster::resetMaterializationCount();
+    for(int pass=0;pass<2;++pass){const auto before=document;GrowingBrushSession stroke(document.layers.back(),settings,4000,4000,gpu,{},kind=="mask");progress("press_begin",pass,0);auto begin=Clock::now();stroke.begin(trajectory(0));render(stroke.preview()->renderPreview());const double press=ms(begin,Clock::now());progress("press_end",pass,0,0,press);for(int i=1;i<=120;++i){auto start=Clock::now();stroke.append(trajectory(i));auto appended=Clock::now();auto viewport=render(stroke.preview()->renderPreview());auto finished=Clock::now();appends.push_back(ms(start,appended));renders.push_back(ms(appended,finished));totals.push_back(ms(start,finished));progress("move",pass,i,appends.back(),renders.back());require(document==before,"Stroke changed immutable canonical document");require(bool(viewport.raster),"Viewport missing");maxVisible=std::max(maxVisible,viewport.raster->tiles.size());auto m=stroke.metrics();coverage=std::max(coverage,m.coverage.coverageStorageBytes);pixels=std::max(pixels,m.sparsePixelBytes);}
+        auto started=Clock::now();document.layers.back()=stroke.commit()->materializeLayer();auto committed=Clock::now();render();auto displayed=Clock::now();auto m=stroke.metrics();require(stroke.acceleratorError().empty()&&m.coverage.acceleratorFallbacks==0,"Brush accelerator fallback");outputAllocations+=m.coverage.outputTileAllocations;coverageAllocations+=m.coverage.coverageTileAllocations;snapshots+=m.snapshots;materialized+=m.materializedTiles;passes.append(QJsonObject{{"pass",pass},{"press_and_viewport_ms",press},{"commit_ms",ms(started,committed)},{"commit_viewport_ms",ms(committed,displayed)},{"tile_preparation_ms",m.coverage.tilePreparationMilliseconds},{"coverage_render_ms",m.coverage.coverageRenderMilliseconds},{"tile_composition_ms",m.coverage.tileCompositionMilliseconds}});
+    }
+    for(size_t i=0;i+1<original.layers.size();++i)require(document.layers[i]==original.layers[i],"Non-target layer changed");const auto& painted=document.layers.back();require(painted.raster->pixel(3500,3500)==original.layers.back().raster->pixel(3500,3500),"Far pixel changed");if(kind=="mask")require(painted.mask->raster->pixel(700,2000)<255&&painted.mask->raster->pixel(3500,3500)==255,"Mask coverage wrong");else require(painted.raster->pixel(700,2000)!=original.layers.back().raster->pixel(700,2000),"Painted center unchanged");require(Raster::materializationCount()==0,"Full rgba materialization observed");PROCESS_MEMORY_COUNTERS_EX counters{};require(GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),sizeof(counters)),"Memory counter unavailable");const auto append=summary(appends),combined=summary(totals);const bool met=append["p95_ms"].toDouble()<=16.7&&combined["p95_ms"].toDouble()<=16.7;report["status"]="valid";report["gate_met"]=met;report["append"]=append;report["viewport"]=summary(renders);report["combined"]=combined;report["append_ms"]=numbers(appends);report["viewport_ms"]=numbers(renders);report["combined_ms"]=numbers(totals);report["passes"]=passes;report["events"]=240;report["coverage_tile_allocations"]=qint64(coverageAllocations);report["output_tile_allocations"]=qint64(outputAllocations);report["published_snapshots"]=qint64(snapshots);report["materialized_source_tiles_including_commit"]=qint64(materialized);report["max_live_coverage_bytes"]=qint64(coverage);report["max_sparse_pixel_bytes"]=qint64(pixels);report["max_visible_tiles"]=qint64(maxVisible);report["full_rgba_materializations"]=qint64(Raster::materializationCount());report["peak_working_set_bytes"]=qint64(counters.PeakWorkingSetSize);report["private_bytes_at_end"]=qint64(counters.PrivateUsage);report["gpu_sync"]=gpu?"D3D11 coverage staging Map readback inside append":"CPU";exit=met?0:1;
+}catch(const std::exception& e){report["status"]="invalid";report["error"]=e.what();}QFile output(QString::fromLocal8Bit(argv[4]));if(!output.open(QIODevice::WriteOnly)||output.write(QJsonDocument(report).toJson())<0)return 2;std::printf("%s\n",QJsonDocument(report).toJson(QJsonDocument::Compact).constData());return exit;}

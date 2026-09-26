@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <functional>
 
 namespace compositor::graphics {
 namespace {
@@ -57,9 +58,9 @@ void validateBrush(const BrushTile& t,const BrushUniforms& u,std::span<const Bru
     for(float value:t.permanent)if(!std::isfinite(value) || value<0 || value>(u.geometry[3]>=1 ? 1.0f : 20.0f))
         throw std::invalid_argument("Invalid permanent brush state");
 }
-void renderBrushCpu(BrushTile& tile,BrushUniforms u,std::span<const BrushSegment> settled,std::span<const BrushSegment> tail) {
-    validateBrush(tile,u,settled,tail);
-    for(uint32_t y=0;y<tile.height;++y)for(uint32_t x=0;x<tile.width;++x){
+namespace {
+void renderBrushCpuRows(BrushTile& tile,BrushUniforms u,std::span<const BrushSegment> settled,std::span<const BrushSegment> tail,uint32_t firstRow,uint32_t lastRow) {
+    for(uint32_t y=firstRow;y<lastRow;++y)for(uint32_t x=0;x<tile.width;++x){
         const size_t i=size_t(y)*tile.width+x; float lx=float(x)+0.5f,ly=float(y)+0.5f;
         Vec p{u.geometry[0]+lx*u.mapping[0]+ly*u.mapping[2],u.geometry[1]+lx*u.mapping[1]+ly*u.mapping[3]};
         if(p.x<0 || p.y<0 || p.x>=u.canvas[0] || p.y>=u.canvas[1]){tile.preview[i]=0;continue;}
@@ -71,5 +72,37 @@ void renderBrushCpu(BrushTile& tile,BrushUniforms u,std::span<const BrushSegment
             tile.permanent[i]=std::min(value,20.0f);preview=1-std::exp(-std::min(value+transient,20.0f));}
         tile.preview[i]=static_cast<uint8_t>(std::lround(255*preview));
     }
+}
+}
+void renderBrushCpu(BrushTile& tile,BrushUniforms u,std::span<const BrushSegment> settled,std::span<const BrushSegment> tail) {
+    validateBrush(tile,u,settled,tail);
+    renderBrushCpuRows(tile,u,settled,tail,0,tile.height);
+}
+#ifdef COMPOSITOR_BRUSH_BATCH_TESTING
+// Deterministic exception/concurrency injection in the standalone test target.
+// This symbol and callback are absent from the production compilation.
+void brushCpuBatchTestHook(size_t jobIndex);
+#endif
+void renderBrushCpuBatch(std::span<const BrushTileRender> requests,std::span<const BrushSegment> settled,
+                         std::span<const BrushSegment> tail,uint32_t workerLimit){
+    if(workerLimit>brushCpuMaxWorkers)throw std::invalid_argument("Brush CPU worker limit must be0..16");
+    if(requests.empty())return;
+    if(requests.size()>4096)throw std::length_error("Brush batch exceeds bounded tile count");
+    std::vector<const BrushTile*> unique;unique.reserve(requests.size());
+    for(const auto& request:requests){if(!request.tile)throw std::invalid_argument("Missing brush batch tile");unique.push_back(request.tile);}
+    std::sort(unique.begin(),unique.end(),std::less<const BrushTile*>{});
+    if(std::adjacent_find(unique.begin(),unique.end())!=unique.end())throw std::invalid_argument("Duplicate brush batch tile");
+    for(const auto& request:requests)validateBrush(*request.tile,request.uniforms,settled,tail);
+    struct Rows {const BrushTileRender* request;uint32_t first,last;};
+    std::vector<Rows> rows;rows.reserve(requests.size()*8);
+    for(const auto& request:requests)for(uint32_t first=0;first<request.tile->height;first+=32)
+        rows.push_back({&request,first,std::min(first+32,request.tile->height)});
+    runParallelBatch(rows.size(),workerLimit,[&](size_t index){
+#ifdef COMPOSITOR_BRUSH_BATCH_TESTING
+        brushCpuBatchTestHook(index);
+#endif
+        const auto& job=rows[index];const auto& request=*job.request;
+        renderBrushCpuRows(*request.tile,request.uniforms,settled,tail,job.first,job.last);
+    });
 }
 } // namespace compositor::graphics

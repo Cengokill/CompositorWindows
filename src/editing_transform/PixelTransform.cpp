@@ -2,6 +2,7 @@
 // SelectionClipboard.renderSelectedPixels, SelectionEdits. MIT: LICENSE.
 #include "PixelTransform.h"
 #include "graphics/RasterSampling.h"
+#include "editing/Selection.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -21,7 +22,7 @@ std::shared_ptr<const Raster> makeRaster(int width,int height,const std::functio
     auto out=std::make_shared<Raster>();out->width=width;out->height=height;
     for(int ty=0;ty<(height+255)/256;++ty)for(int tx=0;tx<(width+255)/256;++tx){auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<std::min(256,height-ty*256);++y){cancelled(check);for(int x=0;x<std::min(256,width-tx*256);++x)tile->pixels[size_t(y)*256+x]=pixel(tx*256+x,ty*256+y);}out->tiles.push_back(std::move(tile));}return out;
 }
-Rect selectionBounds(const GrayRaster& gray){int x0=gray.width,y0=gray.height,x1=0,y1=0;for(int y=0;y<gray.height;++y)for(int x=0;x<gray.width;++x)if(gray.pixel(x,y)){x0=std::min(x0,x);y0=std::min(y0,y);x1=std::max(x1,x+1);y1=std::max(y1,y+1);}return x0<x1&&y0<y1?Rect{double(x0),double(y0),double(x1-x0),double(y1-y0)}:Rect{};}
+Rect selectionBounds(const GrayRaster& gray){auto b=gray.nonzeroBounds();return {double(b.x),double(b.y),double(b.width),double(b.height)};}
 }
 struct PixelTransformSession::Impl {
     Layer original;
@@ -39,8 +40,8 @@ struct PixelTransformSession::Impl {
     PixelTransformResult result;
     Impl(Layer source,std::shared_ptr<const GrayRaster> clip,PixelTransformKind mode,bool copy):original(std::move(source)),selection(std::move(clip)),kind(mode),duplicate(copy){
         if(!original.raster||original.group||!original.transform.valid()||!selection)throw std::invalid_argument("Selected pixel transform requires image pixels and selection");
-        budget({0,0,double(original.raster->width),double(original.raster->height)});budget({0,0,double(selection->width),double(selection->height)});
-        if(selection->pixels.size()!=size_t(selection->width)*selection->height||original.raster->tiles.size()!=size_t((original.raster->width+255)/256)*size_t((original.raster->height+255)/256))throw std::invalid_argument("Invalid selected pixel storage");for(auto& tile:original.raster->tiles)if(!tile)throw std::invalid_argument("Missing selected pixel tile");
+        budget({0,0,double(original.raster->width),double(original.raster->height)});
+        if(!selection->validStorage()||original.raster->tiles.size()!=size_t((original.raster->width+255)/256)*size_t((original.raster->height+255)/256))throw std::invalid_argument("Invalid selected pixel storage");for(auto& tile:original.raster->tiles)if(!tile)throw std::invalid_argument("Missing selected pixel tile");
         if(original.mask&&(!original.mask->raster||original.mask->raster->width<1||original.mask->raster->height<1||original.mask->raster->pixels.size()!=size_t(original.mask->raster->width)*original.mask->raster->height))throw std::invalid_argument("Invalid selected layer mask");
         const auto& t=original.transform;const double angle=std::fmod(t.rotation,360)*std::numbers::pi/180,sx=t.width/original.raster->width*(t.flipX?-1:1),sy=t.height/original.raster->height*(t.flipY?-1:1);
         mapA=std::cos(angle)*sx;mapB=std::sin(angle)*sx;mapC=-std::sin(angle)*sy;mapD=std::cos(angle)*sy;const auto middle=center(t);mapX=middle.x-mapA*original.raster->width/2-mapC*original.raster->height/2;mapY=middle.y-mapB*original.raster->width/2-mapD*original.raster->height/2;determinant=mapA*mapD-mapB*mapC;
@@ -58,6 +59,27 @@ struct PixelTransformSession::Impl {
         return floatingDraft.fromUnit(unit);
     }
     std::shared_ptr<const GrayRaster> movedSelection(CancelCheck check,bool affineOnly=false)const{
+        if(selection->source){
+            cancelled(check);std::optional<Homography> inverse;if(distortion&&!affineOnly)inverse=Homography::fromCorners(*distortion).inverse();
+            auto clip=selection;auto mode=kind;auto shift=offset;auto draft=floatingDraft;auto initial=floatingOriginal;
+            auto sample=[clip,mode,shift,draft,initial,inverse](int x,int y){Point p{x+.5,y+.5},source;
+                if(mode==PixelTransformKind::Move)source={p.x-shift.x,p.y-shift.y};
+                else if(inverse){auto u=inverse->map(p);if(draft.flipX)u.x=1-u.x;if(draft.flipY)u.y=1-u.y;source=initial.fromUnit(u);}
+                else source=initial.fromUnit(draft.toUnit(p));
+                return byte(graphics::sampleGray(*clip,{source.x/clip->width,source.y/clip->height},mode==PixelTransformKind::Move?Transform::Sampling::Nearest:Transform::Sampling::Smooth)*255);
+            };
+            // Linear interpolation can extend nonzero coverage by one pixel.
+            auto box=mapped(selectionBox,[&](Point p){if(affineOnly&&kind==PixelTransformKind::Affine)return floatingDraft.fromUnit(floatingOriginal.toUnit(p));return mapSelection(p);});
+            int l=std::clamp(int(std::floor(box.x))-2,0,clip->width),t=std::clamp(int(std::floor(box.y))-2,0,clip->height);
+            int r=std::clamp(int(std::ceil(box.x+box.width))+2,0,clip->width),b=std::clamp(int(std::ceil(box.y+box.height))+2,0,clip->height);
+            std::shared_ptr<const editing::SelectionOutline> outline;
+            if(auto path=clip->source->vectorOutline();path&&(!distortion||affineOnly)){
+                auto map=[&](Point p){return kind==PixelTransformKind::Move?Point{p.x+offset.x,p.y+offset.y}:floatingDraft.fromUnit(floatingOriginal.toUnit(p));};
+                auto a=map({0,0}),x=map({1,0}),y=map({0,1});outline=std::make_shared<editing::SelectionOutline>(path->affineMapped({x.x-a.x,x.y-a.y,y.x-a.x,y.y-a.y,a.x,a.y}));
+            }
+            if(!outline)if(auto path=clip->source->vectorOutline())outline=std::make_shared<editing::SelectionOutline>(path->projected([this](Point p){return mapSelection(p);}));
+            return GrayRaster::sampled(clip->width,clip->height,{l,t,std::max(0,r-l),std::max(0,b-t)},std::move(sample),clip->retainedBytes(),std::move(outline));
+        }
         auto out=std::make_shared<GrayRaster>();out->width=selection->width;out->height=selection->height;out->pixels.resize(selection->pixels.size());std::optional<Homography> inverse;if(distortion&&!affineOnly)inverse=Homography::fromCorners(*distortion).inverse();
         for(int y=0;y<out->height;++y){cancelled(check);for(int x=0;x<out->width;++x){Point p{x+.5,y+.5},source;
             if(kind==PixelTransformKind::Move)source={p.x-offset.x,p.y-offset.y};
@@ -100,7 +122,7 @@ bool PixelTransformSession::begin(CancelCheck check){auto& s=*impl_;if(s.started
     const auto& source=*s.original.raster;
     if(s.kind==PixelTransformKind::Move){s.liftBox=intersected(integral(mapped(s.selectionBox,[&](Point p){return s.toPixels(p);})),{0,0,double(source.width),double(source.height)});if(s.liftBox.width<1||s.liftBox.height<1)return false;
         s.lifted=makeRaster(int(s.liftBox.width),int(s.liftBox.height),[&](int x,int y){const int xx=int(s.liftBox.x)+x,yy=int(s.liftBox.y)+y;return scale(source.pixel(xx,yy),s.selected(s.toDocument({xx+.5,yy+.5})));},check);s.floatingOriginal=s.sourceExtentTransform(s.liftBox);
-    }else{s.liftBox=s.selectionBox;s.lifted=makeRaster(int(s.liftBox.width),int(s.liftBox.height),[&](int x,int y){const Point doc{s.liftBox.x+x+.5,s.liftBox.y+y+.5};return scale(graphics::sampleRaster(source,s.original.transform.toUnit(doc),s.original.transform.sampling),s.selected(doc));},check);s.floatingOriginal={s.liftBox.x,s.liftBox.y,s.liftBox.width,s.liftBox.height};}
+    }else{s.liftBox=s.selectionBox;budget(s.liftBox);s.lifted=makeRaster(int(s.liftBox.width),int(s.liftBox.height),[&](int x,int y){const Point doc{s.liftBox.x+x+.5,s.liftBox.y+y+.5};return scale(graphics::sampleRaster(source,s.original.transform.toUnit(doc),s.original.transform.sampling),s.selected(doc));},check);s.floatingOriginal={s.liftBox.x,s.liftBox.y,s.liftBox.width,s.liftBox.height};}
     s.floatingDraft=s.floatingOriginal;s.started=true;return true;
 }
 bool PixelTransformSession::move(Point offset){auto& s=*impl_;if(!s.started||s.finished)throw std::logic_error("Pixel transform not active");if(!std::isfinite(offset.x)||!std::isfinite(offset.y)||std::abs(offset.x)>1000000||std::abs(offset.y)>1000000)return false;offset={std::round(offset.x),std::round(offset.y)};s.offset=offset;s.floatingDraft=s.floatingOriginal;s.floatingDraft.x+=offset.x;s.floatingDraft.y+=offset.y;s.distortion.reset();s.dirty=true;return true;}

@@ -12,6 +12,7 @@
 namespace compositor {
 // Values preserve the existing tool action/property order.
 enum class ProjectTool { Move,Hand,Brush,Eraser,Marquee,Lasso,Polygon,Wand,Gradient,Shape,Crop,CloneStamp,SpotHealing,Blur,Eyedropper,Zoom };
+enum class ProjectBrushMode { Paint,Erase };
 
 // Filters.swift33-83: one remembered bundle per EditorSession. Adjustment JSON
 // contains the same typed settings used by the dialog/persistent live layers;
@@ -50,5 +51,6 @@ struct ProjectToolState {
     std::optional<Point> lastBrushPoint;
     std::string lastBrushLayer;
     bool lastBrushMask{};
+    ProjectBrushMode brushMode{ProjectBrushMode::Paint};
 };
 }

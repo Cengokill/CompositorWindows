@@ -1,25 +1,21 @@
-# Source package and verification inputs
+# Building the packaged source
 
-The development package includes application source, native test sources, build scripts, dependency locks and corresponding dependency-source archives. The application build uses the pinned Qt/MSVC kit described in `VALIDATION.md`; bootstrap prepares the locked dependencies and model before CMake runs. The installed application uses bundled runtime DLLs and model data.
+The community preview is a Windows port of [Compositor by Robbie Tilton](https://github.com/robbietilton/Compositor), pinned to `a19db9011282399785dc18efcfded904627bdcc2` (1.0.4). Upstream copyright and MIT notices are preserved. The port does not imply upstream endorsement or verified full Mac parity.
 
-The HEIC dependency build does not promise byte-identical DLLs: the recorded libheif/libde265 binaries contain ordinary build timestamps. The application CMake configuration and deployment steps deliberately verify the original four runtime hashes. When building this source snapshot in a fresh location, keep the extracted application payload and provide it to bootstrap:
+The source ZIP accompanying each download is identical to `sources/CompositorWindows-source.zip` inside its runtime payload. It contains production code, native test sources and frozen reference code, build/package scripts, dependency locks/notices and user/build instructions. Generated results, dumps, compiled binaries, development signing keys and historical coordination reports are excluded. The demo images, reusable project, export and generator are supplied in a separate demo ZIP; recording files are separate release assets. The package manifest records the source ZIP's SHA256 and source revision; the public release identifies the corresponding commit/tag.
+
+Use Windows 11 x64, PowerShell 7, Visual Studio 2022 C++ tools with MSVC 14.44, Windows SDK 10.0.26100.0, CMake 3.31.6 or later, and Python 3.12 for the offline-model conversion. Extract the source ZIP into an empty folder. Retain the matching portable payload, because the four recorded codec/ONNX runtime DLLs include build timestamps and do not promise byte-identical rebuilding.
 
 ```powershell
-. .\scripts\bootstrap.ps1 -Python C:\Python312\python.exe -RuntimeDirectory C:\Extracted\CompositorWindows\versions\0.1.0
+. ./scripts/bootstrap.ps1 -Python C:\Python312\python.exe -RuntimeDirectory C:\Extracted\CompositorWindows
 cmake --preset windows-x64-release
-cmake --build --preset windows-x64-release
+cmake --build --preset windows-x64-release --target Compositor --parallel 4
 ```
 
-Replace the example Python and payload paths with real paths. `RuntimeDirectory` is the directory containing `heif.dll`, `libde265.dll`, `onnxruntime.dll` and `onnxruntime_providers_shared.dll`. Bootstrap still builds/prepares the codec and ORT headers and import libraries needed to link the application; it then restores the four verified checkpoint runtime DLLs. On a workspace with complete dependencies, `-Offline -RuntimeDirectory <payload>` performs the same verification without downloading dependencies. A fresh setup requires the locked downloads and Python conversion dependencies unless already cached.
+Substitute actual paths. Bootstrap acquires the locked Qt/dependency inputs, builds headers/import libraries and converts the foreground model, then restores the four verified DLLs from `RuntimeDirectory`. The directory must contain `heif.dll`, `libde265.dll`, `onnxruntime.dll` and `onnxruntime_providers_shared.dll`. A prepared dependency cache supports `-Offline`. Initial setup needs network access and the pinned Python conversion dependencies. No Python is needed to run the packaged editor.
 
-The standalone `scripts/restore-imaging-runtime.ps1 -RuntimeDirectory <payload>` validates all four input hashes before staging or copying any file. Its destinations come only from the existing imaging lock. Already verified files are left in place. A differing previous file is preserved beside its original path as `<file>.before-runtime-<old SHA256>-<unique id>.bak`; failed installation attempts preserve staged/installed bytes and attempt to restore the prior files. No lock hashes or system settings are changed. The helper restores runtime files only; it does not supply missing headers, import libraries or the model.
+`restore-imaging-runtime.ps1` validates all four source hashes before changing any destination. It preserves differing previous files beside their original paths and leaves verified files unchanged. The recorded locks and system settings are retained. Corresponding Qt/libheif/libde265 sources are included beside the application-source archive. Users may build modified libraries, replace the application-local DLLs, and run `Compositor.exe` directly.
 
-The isolated verification at `tests/runtime_restore/run-20260920-052849-b5855d/result.json` confirms four installed hashes, previous-file preservation, an unchanged repeat run, and rejection of a corrupt fourth input before any destination copy. It also verifies that the live workspace's original DLLs remain unchanged. This is a tested restoration path, not evidence of a fresh-machine build or deterministic codec/model rebuild. For experiments with modified runtime libraries, retain the verified build and backups, replace the desired application-local DLLs afterward, and run `Compositor.exe` directly as described in the packaged notices; its update receipt will no longer validate those modified bytes.
+For MSI/ZIP reproduction, follow [packaging.md](packaging.md). The build recipe and pinned inputs are reproducible; executable timestamps, archive timestamps and MSI identifiers can differ. Rebuilding from the source archive is a separate check from reproducing the full historical parity report.
 
-The full source-attributable parity verifier also needs the working reference packet. It is retained in the development workspace and is not embedded in the application source ZIP:
-
-- A sibling `upstream` checkout at `a19db9011282399785dc18efcfded904627bdcc2`.
-- The sibling `research` inventory and reference-harness inputs.
-- The Windows workspace's `audit`, `evidence`, `parity-ledger.json` and current native build outputs.
-
-Preserve these inputs when transferring the verification workspace. Rebuild and recapture checks on the destination machine; copied historical reports do not certify its runtime. The source ZIP alone cannot reproduce the complete parity report. Mac-generated fixtures and foreground-quality acceptance remain separate prerequisites.
+The full historical parity verifier needs additional reference inputs outside this application-source delivery: the pinned upstream checkout, sibling research inventory, Windows audit/evidence corpus, and applicable reference fixtures. Generated test-result JSON files are intentionally absent. Native source targets are included, but some diagnostic/quality tests require those external fixtures. Run appropriate checks on the destination machine; copied historical evidence does not certify a new build.

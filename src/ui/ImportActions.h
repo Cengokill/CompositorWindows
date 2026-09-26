@@ -20,6 +20,11 @@ struct ImportBatch {
     std::optional<Point> point;
     // Keeps copied clipboard/promised image data alive until the queued request finishes.
     std::shared_ptr<void> lifetime;
+    // Explicit File>Import has already passed its command/picker gates. Source
+    // importImages waits only for project access; deferred drops retain their
+    // stricter workspace guard before they can begin.
+    enum class Origin { Deferred, Explicit };
+    Origin origin{Origin::Deferred};
 };
 struct ImportResult {
     ImportState before, after;
@@ -46,6 +51,8 @@ public:
         // Must atomically compare before, install after and record one history entry.
         std::function<void(QObject*,const ImportResult&)> commit;
         std::function<void(QObject*,const ImportResult&)> completed;
+        // Optional request-aware guard; existing hosts keep their blocked rule.
+        std::function<bool(QObject*,const ImportBatch&)> blockedRequest;
     };
     ImportQueue(Host,QObject* parent=nullptr,ImportDecoder = decodeImportImage);
     ~ImportQueue() override;

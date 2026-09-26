@@ -92,7 +92,17 @@ std::optional<MergePlan> mergePlan(const Document& d,SelectionState selected){
 }
 EditResult merge(const Document& d,SelectionState selected,const IRasterBackend& backend,const Limits& limits){
     auto plan=mergePlan(d,selected);if(!plan)return result(d,d,std::move(selected),"Merge Down");cancel(limits);budget(d.width,d.height,limits);Document subset=d;std::erase_if(subset.layers,[&](const Layer& l){return !plan->removed.contains(l.id);});for(auto& l:subset.layers){if(!plan->removed.contains(l.parentId))l.parentId.clear();if(!plan->removed.contains(l.maskSourceId))l.maskSourceId.clear();}subset.selection.reset();
-    auto full=backend.render(subset,0,0,d.width,d.height);cancel(limits);if(!full||full->width!=d.width||full->height!=d.height)throw std::runtime_error("Merge renderer returned invalid dimensions");int loX=d.width,loY=d.height,hiX=0,hiY=0;for(int y=0;y<d.height;++y){cancel(limits);for(int x=0;x<d.width;++x)if(full->pixel(x,y).a){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
+    // Keep each uncancellable backend call bounded. The document and result
+    // remain private until every tile, crop and metadata edit has succeeded.
+    auto tiled=std::make_shared<Raster>();tiled->width=d.width;tiled->height=d.height;
+    tiled->tiles.reserve(size_t((d.width+255)/256)*size_t((d.height+255)/256));
+    for(int y=0;y<d.height;y+=256)for(int x=0;x<d.width;x+=256){
+        cancel(limits);const int width=std::min(256,d.width-x),height=std::min(256,d.height-y);
+        const auto tile=backend.render(subset,x,y,width,height);cancel(limits);
+        if(!tile||tile->width!=width||tile->height!=height||tile->tiles.size()!=1||!tile->tiles[0])throw std::runtime_error("Merge renderer returned invalid dimensions");
+        tiled->tiles.push_back(tile->tiles[0]);
+    }
+    std::shared_ptr<const Raster> full=std::move(tiled);int loX=d.width,loY=d.height,hiX=0,hiY=0;for(int y=0;y<d.height;++y){cancel(limits);for(int x=0;x<d.width;++x)if(full->pixel(x,y).a){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
     if(hiX<=loX||hiY<=loY){loX=loY=0;hiX=d.width;hiY=d.height;}int w=hiX-loX,h=hiY-loY;auto pixels=full;if(w!=d.width||h!=d.height){std::vector<std::uint8_t> bytes(std::size_t(w)*h*4);for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto p=full->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;bytes[i]=p.r;bytes[i+1]=p.g;bytes[i+2]=p.b;bytes[i+3]=p.a;}}pixels=Raster::fromRgba(w,h,bytes.data(),std::size_t(w)*4);}
     Layer merged;merged.id=newId();merged.name=plan->name;merged.parentId=plan->parent;merged.raster=std::move(pixels);merged.transform={double(loX),double(loY),double(w),double(h)};auto next=d;std::erase_if(next.layers,[&](const Layer& l){return plan->removed.contains(l.id);});for(auto& l:next.layers)if(plan->removed.contains(l.maskSourceId))l.maskSourceId=merged.id;auto anchor=indexOf(d,plan->anchor);std::size_t slot=0;for(std::size_t i=0;i<anchor;++i)slot+=!plan->removed.contains(d.layers[i].id);next.layers.insert(next.layers.begin()+std::min(slot,next.layers.size()),merged);cancel(limits);return result(d,std::move(next),single(merged.id),plan->action);
 }

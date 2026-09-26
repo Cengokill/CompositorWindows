@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <numbers>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -23,6 +24,26 @@ std::vector<Bounds> paintedBounds(const Document& doc,double units=1,const Layer
     return result;
 }
 bool touches(const std::vector<Bounds>& painted,double x,double y,double width,double height){return std::any_of(painted.begin(),painted.end(),[&](Bounds b){return b.right>x&&b.bottom>y&&b.left<x+width&&b.top<y+height;});}
+bool samePreviewGrid(const LayerRenderPreview* a,const LayerRenderPreview* b){
+    if(!a||!b||a->layer.transform!=b->layer.transform||bool(a->layer.mask)!=bool(b->layer.mask))return false;
+    const auto same=[](const std::shared_ptr<const graphics::SamplingSource>& x,const std::shared_ptr<const graphics::SamplingSource>& y){return !x&&!y||x&&y&&x->width==y->width&&x->height==y->height&&x->alignmentX==y->alignmentX&&x->alignmentY==y->alignmentY&&bool(x->gray)==bool(y->gray);};
+    if(!same(a->imageSource?a->imageSource:graphics::samplingSource(a->layer.raster),b->imageSource?b->imageSource:graphics::samplingSource(b->layer.raster)))return false;
+    if(a->layer.mask){if(a->layer.mask->enabled!=b->layer.mask->enabled||a->layer.mask->placement!=b->layer.mask->placement)return false;if(!same(a->maskSource?a->maskSource:graphics::samplingSource(a->layer.mask->raster),b->maskSource?b->maskSource:graphics::samplingSource(b->layer.mask->raster)))return false;}
+    return true;
+}
+Point filterHalo(const LayerRenderPreview& preview,double units){
+    Point result{};const auto add=[&](const std::shared_ptr<const graphics::SamplingSource>& source,const Transform& transform){
+        if(!source||transform.sampling==Transform::Sampling::Nearest)return;
+        const int level=graphics::DownsampleCache::levelFor(transform.width/(units*source->width));if(!level)return;
+        const double step=double(uint64_t(1)<<level),radius=10*(step-1)+step;
+        const double angle=std::remainder(transform.rotation,360.)*std::numbers::pi/180,c=std::abs(std::cos(angle)),s=std::abs(std::sin(angle));
+        const double x=radius*transform.width/source->width,y=radius*transform.height/source->height;
+        result.x=std::max(result.x,c*x+s*y);result.y=std::max(result.y,s*x+c*y);
+    };
+    add(preview.imageSource?preview.imageSource:graphics::samplingSource(preview.layer.raster),preview.layer.transform);
+    if(preview.layer.mask&&preview.layer.mask->enabled)add(preview.maskSource?preview.maskSource:graphics::samplingSource(preview.layer.mask->raster),preview.layer.mask->placement.value_or(preview.layer.transform));
+    return result;
+}
 std::shared_ptr<const Raster> directRaster(const Document& doc){
     if(doc.layers.size()!=1)return {};const auto& layer=doc.layers.front();
     if(layer.visible&&!layer.group&&layer.raster&&layer.raster->width==doc.width&&layer.raster->height==doc.height&&
@@ -106,13 +127,16 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
         std::optional<std::vector<LayerRenderPreview::Damage>> changed;
         if(preview&&preview->damageComparedWith)changed=preview->damageComparedWith(viewportPreview_.get());
         else if(!preview&&viewportPreview_&&viewportPreview_->damageComparedWith)changed=viewportPreview_->damageComparedWith(nullptr);
-        const auto reduced=[&](const LayerRenderPreview* source){if(!source)return false;const auto& layer=source->layer;const auto image=source->imageSource?source->imageSource:graphics::samplingSource(layer.raster);if(image&&layer.transform.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(layer.transform.width/(units*image->width)))return true;if(layer.mask&&layer.mask->enabled){const auto mask=source->maskSource?source->maskSource:graphics::samplingSource(layer.mask->raster);const auto placement=layer.mask->placement.value_or(layer.transform);if(mask&&placement.sampling!=Transform::Sampling::Nearest&&graphics::DownsampleCache::levelFor(placement.width/(units*mask->width)))return true;}return false;};
-        // Reduced filter support is broader than the level-zero brush damage.
-        if(!changed||dependent||reduced(preview.get())||reduced(viewportPreview_.get()))all=true;
-        else for(const auto& rect:*changed)damage.push_back({rect.left,rect.top,rect.right,rect.bottom});
+        if(!changed||dependent||!samePreviewGrid(preview.get(),viewportPreview_.get()))all=true;
+        else{const auto current=filterHalo(*preview,units),previous=filterHalo(*viewportPreview_,units);const double hx=std::max(current.x,previous.x),hy=std::max(current.y,previous.y);for(const auto& rect:*changed)damage.push_back({rect.left-hx,rect.top-hy,rect.right+hx,rect.bottom+hy});}
     }
+    std::map<std::pair<int,int>,Bounds> partial;
     if(all)viewportTiles_.clear();
-    else if(!damage.empty())for(auto it=viewportTiles_.begin();it!=viewportTiles_.end();){const double dx=px+it->first.first*256*units,dy=py+it->first.second*256*units;if(touches(damage,dx,dy,256*units,256*units))it=viewportTiles_.erase(it);else ++it;}
+    else if(!damage.empty())for(auto it=viewportTiles_.begin();it!=viewportTiles_.end();){const auto [tx,ty]=it->first;const double dx=px+tx*256*units,dy=py+ty*256*units;if(!touches(damage,dx,dy,256*units,256*units)){++it;continue;}
+        // Offscreen dirty entries cannot retain stale pixels until a later pan.
+        if(tx<tx0||tx>=tx1||ty<ty0||ty>=ty1||dependent){it=viewportTiles_.erase(it);continue;}
+        Bounds region{INFINITY,INFINITY,-INFINITY,-INFINITY};for(const auto& box:damage)if(box.right>dx&&box.bottom>dy&&box.left<dx+256*units&&box.top<dy+256*units){region.left=std::min(region.left,box.left);region.top=std::min(region.top,box.top);region.right=std::max(region.right,box.right);region.bottom=std::max(region.bottom,box.bottom);}partial.emplace(it->first,region);++it;
+    }
     if(all||!damage.empty())validateCulledAdjustments(doc,preview);
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
     auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);
@@ -122,7 +146,14 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             if(direct)tile=direct->tiles[size_t(ty)*((direct->width+255)/256)+tx];else if(!touches(painted,dx,dy,w*units,h*units))tile=zeroTile();else tile=renderer.renderScaled(doc,dx,dy,w,h,units)->tiles.front();
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
-        }else found->second.use=viewportTick_;patch->tiles.push_back(found->second.pixels);
+        }else{
+            if(auto dirty=partial.find(key);dirty!=partial.end()){
+                const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;const auto& box=dirty->second;
+                const int sx=std::clamp(int(std::floor((box.left-dx)/units))-1,0,w),sy=std::clamp(int(std::floor((box.top-dy)/units))-1,0,h),ex=std::clamp(int(std::ceil((box.right-dx)/units))+1,0,w),ey=std::clamp(int(std::ceil((box.bottom-dy)/units))+1,0,h);
+                if(ex>sx&&ey>sy){auto updated=std::make_shared<Raster::Tile>(*found->second.pixels);auto region=renderer.renderScaledPatch(doc,dx,dy,sx,sy,ex-sx,ey-sy,units);for(int row=0;row<ey-sy;++row)std::copy_n(region->tiles.front()->pixels.data()+size_t(row)*256,ex-sx,updated->pixels.data()+size_t(sy+row)*256+sx);found->second.pixels=std::move(updated);}
+            }
+            found->second.use=viewportTick_;
+        }patch->tiles.push_back(found->second.pixels);
     }
     // The returned patch owns its visible immutable tiles; cache entries and
     // their metadata are bounded independently of document area and zoom.

@@ -14,6 +14,7 @@
 
 int main(int argc,char**argv){
     QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion("0.1.0");
+    app.setProperty("manualUpdatesOnly", true);
     const auto args=app.arguments();
     if(args.contains("--update-health-check")){
         try{
@@ -44,7 +45,7 @@ int main(int argc,char**argv){
         QTimer::singleShot(200,&app,[&,dir]{try{window.exerciseNativeUi(dir);app.exit(0);}catch(const std::exception&e){QFile error(dir+"/failure.txt");if(error.open(QIODevice::WriteOnly))error.write(e.what());app.exit(1);}});
     }else{
         QStringList paths;for(int i=1;i<args.size();++i)if(!args[i].startsWith("--"))paths.append(args[i]);
-        QTimer::singleShot(0,&window,[&window,paths]{for(const auto&path:paths)try{window.openPath(path);}catch(const std::exception&e){QMessageBox::critical(&window,"Open",e.what());}});
+        QTimer::singleShot(0,&window,[&window,paths]{window.receiveDropPaths(paths);});
     }
     return app.exec();
 }

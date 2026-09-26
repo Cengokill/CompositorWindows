@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <atomic>
 #include <set>
+#include <type_traits>
+#include <mutex>
 
 namespace compositor {
 static std::atomic<uint64_t> materializations{0};
@@ -38,7 +40,42 @@ std::shared_ptr<const Raster> Raster::fromRgba(int w,int h,const uint8_t*data,si
 Pixel Raster::pixel(int x,int y)const{if(x<0||y<0||x>=width||y>=height)return {};return tiles[size_t(y/256)*((width+255)/256)+x/256]->pixels[size_t(y%256)*256+x%256];}
 std::shared_ptr<const Raster> Raster::replacing(int x,int y,int w,int h,const Pixel* src,size_t stride)const{if(x<0||y<0||w<0||h<0||w>width-x||h>height-y||stride<size_t(w)||(!src&&w*h))throw std::runtime_error("Invalid raster patch");auto out=std::make_shared<Raster>(*this);std::unordered_map<size_t,std::shared_ptr<Tile>> changed;for(int py=0;py<h;++py)for(int px=0;px<w;++px){int dx=x+px,dy=y+py;size_t idx=size_t(dy/256)*((width+255)/256)+dx/256;auto& tile=changed[idx];if(!tile){tile=std::make_shared<Tile>(*tiles[idx]);out->tiles[idx]=tile;}auto p=src[size_t(py)*stride+px];p.r=std::min(p.r,p.a);p.g=std::min(p.g,p.a);p.b=std::min(p.b,p.a);tile->pixels[size_t(dy%256)*256+dx%256]=p;}return out;}
 std::vector<uint8_t> Raster::rgba()const{++materializations;std::vector<uint8_t> bytes(size_t(width)*height*4);for(int y=0;y<height;++y)for(int x=0;x<width;++x){auto p=pixel(x,y);auto i=(size_t(y)*width+x)*4;bytes[i]=p.r;bytes[i+1]=p.g;bytes[i+2]=p.b;bytes[i+3]=p.a;}return bytes;}
-uint8_t GrayRaster::pixel(int x,int y,uint8_t exterior)const{return x<0||y<0||x>=width||y>=height?exterior:pixels[size_t(y)*width+x];}
+uint8_t GrayRaster::pixel(int x,int y,uint8_t exterior)const{return x<0||y<0||x>=width||y>=height?exterior:source?source->pixel(x,y):pixels[size_t(y)*width+x];}
+bool GrayRaster::validStorage()const{return width>0&&height>0&&width<=30000&&height<=30000&&(source?pixels.empty():pixels.size()==size_t(width)*height);}
+GrayBounds GrayRaster::nonzeroBounds()const{
+    if(!validStorage())throw std::runtime_error("Invalid gray coverage storage");
+    if(source)return source->nonzeroBounds();
+    int l=width,t=height,r=0,b=0;for(int y=0;y<height;++y)for(int x=0;x<width;++x)if(pixels[size_t(y)*width+x]){l=std::min(l,x);t=std::min(t,y);r=std::max(r,x+1);b=std::max(b,y+1);}
+    return r>l?GrayBounds{l,t,r-l,b-t}:GrayBounds{};
+}
+namespace {
+class SampledGray final:public GrayRasterSource {
+    GrayBounds support_;
+    std::function<uint8_t(int,int)> pixel_;
+    size_t retained_;
+    std::shared_ptr<const editing::SelectionOutline> outline_;
+    mutable std::once_flag once_;
+    mutable GrayBounds bounds_;
+public:
+    SampledGray(GrayBounds support,std::function<uint8_t(int,int)> pixel,size_t retained,std::shared_ptr<const editing::SelectionOutline> outline):support_(support),pixel_(std::move(pixel)),retained_(retained),outline_(std::move(outline)){}
+    uint8_t pixel(int x,int y)const override{return x<support_.x||y<support_.y||x>=support_.x+support_.width||y>=support_.y+support_.height?0:pixel_(x,y);}
+    GrayBounds nonzeroBounds()const override{
+        std::call_once(once_,[this]{
+            int l=support_.x,t=support_.y,r=l+support_.width,b=t+support_.height;
+            auto row=[&](int y){for(int x=l;x<r;++x)if(pixel_(x,y))return true;return false;};
+            auto col=[&](int x){for(int y=t;y<b;++y)if(pixel_(x,y))return true;return false;};
+            while(t<b&&!row(t))++t;while(b>t&&!row(b-1))--b;if(t==b)return;
+            while(l<r&&!col(l))++l;while(r>l&&!col(r-1))--r;if(r>l)bounds_={l,t,r-l,b-t};
+        });return bounds_;
+    }
+    size_t retainedBytes()const override{return sizeof(*this)+retained_;}
+    std::shared_ptr<const editing::SelectionOutline> vectorOutline()const override{return outline_;}
+};
+}
+std::shared_ptr<const GrayRaster> GrayRaster::sampled(int w,int h,GrayBounds support,std::function<uint8_t(int,int)> pixel,size_t retained,std::shared_ptr<const editing::SelectionOutline> outline){
+    if(w<1||h<1||w>30000||h>30000||support.x<0||support.y<0||support.width<0||support.height<0||support.x>w||support.y>h||support.width>w-support.x||support.height>h-support.y||!pixel)throw std::runtime_error("Invalid sampled coverage");
+    auto out=std::make_shared<GrayRaster>();out->width=w;out->height=h;out->source=std::make_shared<SampledGray>(support,std::move(pixel),retained,std::move(outline));return out;
+}
 void validateDocument(const Document& d) {
     if (d.width < 1 || d.height < 1 || d.width > 30000 || d.height > 30000 ||
         d.layers.size() > 10000 || !std::isfinite(d.resolution) || d.resolution < 1 || d.resolution > 9600)
@@ -64,7 +101,7 @@ void validateDocument(const Document& d) {
             const auto& mask = *layer.mask->raster;
             sizeCheck(mask.width, mask.height);
             maskPixels += uint64_t(mask.width) * mask.height;
-            if (mask.pixels.size() != size_t(mask.width) * mask.height ||
+            if (mask.source || mask.pixels.size() != size_t(mask.width) * mask.height ||
                 (layer.mask->placement && !layer.mask->placement->valid()))
                 throw std::runtime_error("Invalid mask");
         }
@@ -73,7 +110,7 @@ void validateDocument(const Document& d) {
         throw std::runtime_error("Project pixel budget exceeded");
     if(d.selection && d.selection->coverage) {
         const auto& coverage=*d.selection->coverage;
-        if(coverage.width!=d.width || coverage.height!=d.height || coverage.pixels.size()!=size_t(d.width)*d.height)
+        if(coverage.width!=d.width || coverage.height!=d.height || !coverage.validStorage())
             throw std::runtime_error("Invalid selection coverage");
     }
     for (const auto& layer : d.layers) {
@@ -102,13 +139,71 @@ void validateDocument(const Document& d) {
 }
 Pixel blendPixel(Pixel dst,Pixel src,Blend mode){double da=dst.a/255.,sa=src.a/255.;if(sa==0)return dst;if(da==0)return src;Color b{dst.r/(255.*da),dst.g/(255.*da),dst.b/(255.*da)},s{src.r/(255.*sa),src.g/(255.*sa),src.b/(255.*sa)},v{};switch(mode){case Blend::Hue:v=setLum(setSat(s,sat(b)),lum(b));break;case Blend::Saturation:v=setLum(setSat(b,sat(s)),lum(b));break;case Blend::Color:v=setLum(s,lum(b));break;case Blend::Luminosity:v=setLum(b,lum(s));break;default:for(int i=0;i<3;++i)v[i]=separable(b[i],s[i],mode);}Pixel out;out.a=byte((sa+da-sa*da)*255);out.r=std::min(out.a,byte(255*(sa*(1-da)*s[0]+da*(1-sa)*b[0]+sa*da*v[0])));out.g=std::min(out.a,byte(255*(sa*(1-da)*s[1]+da*(1-sa)*b[1]+sa*da*v[1])));out.b=std::min(out.a,byte(255*(sa*(1-da)*s[2]+da*(1-sa)*b[2]+sa*da*v[2])));return out;}
 
-void History::begin(std::string name,const std::optional<Document>&d,const std::string&a){if(depth_++==0){pending_=Snapshot{d,a,revision_};pendingName_=std::move(name);}}
-void History::end(const std::optional<Document>&d,const std::string&a){if(depth_==0||--depth_>0)return;auto before=std::move(*pending_);pending_.reset();if(before.document==d)return;revision_=nextRevision_++;past_.push_back({pendingName_,std::move(before),{d,a,revision_}});future_.clear();trim(d);}
-std::optional<Snapshot> History::cancel(){auto s=pending_;pending_.reset();depth_=0;return s;}
-std::optional<Snapshot> History::undo(){if(!canUndo())return {};auto e=std::move(past_.back());past_.pop_back();revision_=e.before.revision;auto s=e.before;future_.push_back(std::move(e));trim(s.document);return s;}
-std::optional<Snapshot> History::redo(){if(!canRedo())return {};auto e=std::move(future_.back());future_.pop_back();revision_=e.after.revision;auto s=e.after;past_.push_back(std::move(e));trim(s.document);return s;}
+void History::begin(std::string name,const std::optional<Document>& d,const std::string& active) {
+    if (depth_ == std::numeric_limits<int>::max()) throw std::length_error("History nesting limit exceeded");
+    if (depth_ == 0) {
+        Snapshot before{d,active,revision_}; // Copy before publishing transaction state.
+        pending_ = std::move(before);
+        pendingName_ = std::move(name);
+    }
+    ++depth_;
+}
+void History::end(const std::optional<Document>& d,const std::string& active) {
+    if (depth_ == 0) return;
+    if (depth_ > 1) { --depth_; return; }
+    if (pending_->document == d) { pending_.reset(); depth_ = 0; return; }
+    // Pending remains available to cancel() until every allocation, including
+    // retention accounting, succeeds. No intermediate revision is published.
+    past_.push_back({pendingName_,*pending_,{d,active,nextRevision_}});
+    TrimPlan plan;
+    try { plan = planTrim(d,past_,{}); }
+    catch (...) { past_.pop_back(); throw; }
+    future_.clear();
+    applyTrim(plan);
+    revision_ = nextRevision_++;
+    pending_.reset();
+    depth_ = 0;
+}
+std::optional<Snapshot> History::cancel() noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<std::optional<Snapshot>>);
+    auto result = std::move(pending_);
+    pending_.reset(); depth_ = 0;
+    return result;
+}
+std::optional<Snapshot> History::undo() {
+    if (!canUndo()) return {};
+    Snapshot result = past_.back().before;
+    future_.reserve(future_.size()+1);
+    future_.push_back(std::move(past_.back()));
+    past_.pop_back();
+    TrimPlan plan;
+    try { plan = planTrim(result.document,past_,future_); }
+    catch (...) {
+        // pop_back retained enough capacity for allocation-free rollback.
+        past_.push_back(std::move(future_.back())); future_.pop_back(); throw;
+    }
+    applyTrim(plan); revision_ = result.revision;
+    return result;
+}
+std::optional<Snapshot> History::redo() {
+    if (!canRedo()) return {};
+    Snapshot result = future_.back().after;
+    past_.reserve(past_.size()+1);
+    past_.push_back(std::move(future_.back()));
+    future_.pop_back();
+    TrimPlan plan;
+    try { plan = planTrim(result.document,past_,future_); }
+    catch (...) {
+        future_.push_back(std::move(past_.back())); past_.pop_back(); throw;
+    }
+    applyTrim(plan); revision_ = result.revision;
+    return result;
+}
 void History::reset(){past_.clear();future_.clear();pending_.reset();depth_=0;revision_=nextRevision_++;savedRevision_=revision_;}
 size_t History::retainedBytes(const std::optional<Document>& doc) const {
+    return retainedBytes(doc,past_,future_);
+}
+size_t History::retainedBytes(const std::optional<Document>& doc,std::span<const Entry> past,std::span<const Entry> future) {
     std::unordered_set<const void*> seen;
     auto scan=[&](const std::optional<Document>& document,bool count){
         size_t bytes=0;
@@ -120,13 +215,26 @@ size_t History::retainedBytes(const std::optional<Document>& doc) const {
                 bytes+=layer.mask->raster->pixels.size();
         }
         if(document->selection&&document->selection->coverage&&seen.insert(document->selection->coverage.get()).second&&count)
-            bytes+=document->selection->coverage->pixels.size();
+            bytes+=document->selection->coverage->retainedBytes();
         return bytes;
     };
     scan(doc,false);size_t bytes=0;
-    for(const auto&e:past_)bytes+=scan(e.before.document,true)+scan(e.after.document,true);
-    for(const auto&e:future_)bytes+=scan(e.before.document,true)+scan(e.after.document,true);
+    for(const auto&e:past)bytes+=scan(e.before.document,true)+scan(e.after.document,true);
+    for(const auto&e:future)bytes+=scan(e.before.document,true)+scan(e.after.document,true);
     return bytes;
 }
-void History::trim(const std::optional<Document>&d){while(past_.size()+future_.size()>entryLimit||retainedBytes(d)>byteLimit){if(!past_.empty())past_.erase(past_.begin());else if(!future_.empty())future_.erase(future_.begin());else break;}}
+History::TrimPlan History::planTrim(const std::optional<Document>& doc,std::span<const Entry> past,std::span<const Entry> future) const {
+    TrimPlan plan;
+    while (past.size()+future.size()>entryLimit || retainedBytes(doc,past,future)>byteLimit) {
+        if (!past.empty()) { ++plan.past; past=past.subspan(1); }
+        else if (!future.empty()) { ++plan.future; future=future.subspan(1); }
+        else break;
+    }
+    return plan;
+}
+void History::applyTrim(TrimPlan plan) noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<Entry> && std::is_nothrow_move_assignable_v<Entry>);
+    past_.erase(past_.begin(),past_.begin()+plan.past);
+    future_.erase(future_.begin(),future_.begin()+plan.future);
+}
 }

@@ -9,4 +9,7 @@
 // Each pixel's noise depends only on its position and `seed`, so the same seed gives the same grain.
 void noise_add(uint8_t *rgba, size_t width, size_t height, size_t stride,
                float amount, int gaussian, int monochromatic, uint32_t seed);
+// Windows cancellation adapter: original arithmetic/order retained; -2 means cancelled.
+int noise_add_cancellable(uint8_t *rgba, size_t width, size_t height, size_t stride,
+               float amount, int gaussian, int monochromatic, uint32_t seed, int (*cancelled)(void *), void *context);
 #endif

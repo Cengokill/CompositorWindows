@@ -4,8 +4,7 @@
 #include "graphics/GrowingBrushSession.h"
 
 namespace compositor::retouch {
-// Existing document-sized sample/working-buffer limit; call before rendering
-// an all-layer sample. Sparse destination growth does not remove this limit.
+// Canvas dimensions are independent of the storage allocated for a stroke.
 void validateCanvasExtent(int width,int height);
 enum class Mode { Clone,HealContentAware,HealCreateTexture,HealProximity,Blur,Smudge,Liquify };
 struct Settings {
@@ -30,7 +29,11 @@ struct Sources {
     // defaults to rendering the original layer alone, without opacity/masks.
     std::shared_ptr<const Raster> currentLayer,allLayers;
     std::optional<Point> cloneOffset;
+    // Immutable lazy document grids for canvases larger than the raster budget.
+    std::shared_ptr<const graphics::SamplingSource> currentLayerSource,allLayersSource;
 };
+// Freeze the layer stack and render requested sample tiles with bounded caching.
+std::shared_ptr<const graphics::SamplingSource> compositeSource(Document);
 struct Metrics {
     uint64_t publishedTileCopies{},documentRasterizations{},workingBufferPixels{},gaussianScratchPixels{},healingRegionPixels{},warpDabs{};
 };

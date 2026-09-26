@@ -6,6 +6,7 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QDir>
 #include <QFile>
 #include <QScreen>
@@ -63,10 +64,27 @@ void MainWindow::exerciseNativeUi(const QString&dir){
     selectTool(Tool::Move);auto*owner=current();auto beforeMove=*owner->document;pointerBegin(QPointF(200,160),Qt::NoModifier);pointerUpdate(QPointF(240,180),Qt::NoModifier);Document blank;blank.id=newId();blank.width=32;blank.height=32;addProject(blank);
     require(*owner->document==beforeMove,"Tab switch did not cancel original transaction");closeProject(tabs_->currentIndex());passed("tab switch cancels captured transaction");
     const auto beforeAdjustment=*current()->document;
-    bool applied=false,timedOut=false;QElapsedTimer elapsed;elapsed.start();QTimer drive;drive.setInterval(40);
-    connect(&drive,&QTimer::timeout,this,[&]{auto*d=qobject_cast<QDialog*>(QApplication::activeModalWidget());if(!d)return;if(elapsed.elapsed()>30000){timedOut=true;d->reject();return;}for(auto*spin:d->findChildren<QDoubleSpinBox*>())if(spin->accessibleName()=="Exposure"&&!applied){spin->setValue(1);applied=true;}for(auto*box:d->findChildren<QDialogButtonBox*>())if(auto*button=box->button(QDialogButtonBox::Apply);button&&button->isEnabled()&&applied)button->click();});
-    drive.start();adjust("Exposure",false);drive.stop();require(!timedOut&&applied&&*current()->document!=beforeAdjustment,"Native adjustment Apply failed");undo_->trigger();require(*current()->document==beforeAdjustment,"Adjustment undo failed");passed("Exposure dialog Apply / undo");
-    for(const QString kind:{"Hue/Saturation","Levels","Curves","Exposure","Gradient Map","Grain"}){auto before=*current()->document;QTimer::singleShot(180,this,[]{if(auto*d=qobject_cast<QDialog*>(QApplication::activeModalWidget()))d->reject();});adjust(kind,false);require(*current()->document==before,"Adjustment Cancel changed document");}passed("six adjustment dialogs Cancel preserve document");
+    bool applied=false,timedOut=false;
+    auto driveAdjustment=[&](const QString& kind,bool commit){
+        QPointer<QDialog> panel;bool finished=false,submitted=false;QEventLoop wait;QMetaObject::Connection completion;
+        QElapsedTimer elapsed;elapsed.start();QTimer drive;drive.setInterval(40);
+        connect(&drive,&QTimer::timeout,this,[&]{
+            if(elapsed.elapsed()>30000){timedOut=true;if(panel)panel->reject();wait.quit();return;}
+            if(!panel){
+                for(auto* object:findChildren<QObject*>())if(auto* session=dynamic_cast<ui::EditPanelSession*>(object))
+                    if(session->canvas()==canvas()&&session->panel()&&session->panel()->isVisible()){panel=session->panel();break;}
+                if(panel)completion=connect(panel,&QDialog::finished,&wait,[&]{finished=true;wait.quit();});
+            }
+            auto* d=panel.data();if(!d)return;
+            if(!commit){if(elapsed.elapsed()>=180)d->reject();return;}
+            for(auto*spin:d->findChildren<QDoubleSpinBox*>())if(spin->accessibleName()=="Exposure"&&!applied){spin->setValue(1);applied=true;}
+            for(auto*box:d->findChildren<QDialogButtonBox*>())if(auto*button=box->button(QDialogButtonBox::Apply);button&&button->isEnabled()&&applied&&!submitted){submitted=true;button->click();}
+        });
+        adjust(kind,false);drive.start();if(!finished)wait.exec();drive.stop();disconnect(completion);
+        if(!finished)throw std::runtime_error("Owned adjustment panel did not finish within the30-second limit");
+    };
+    driveAdjustment("Exposure",true);require(!timedOut&&applied&&*current()->document!=beforeAdjustment,"Native adjustment Apply failed");undo_->trigger();require(*current()->document==beforeAdjustment,"Adjustment undo failed");passed("Exposure dialog Apply / undo");
+    for(const QString kind:{"Hue/Saturation","Levels","Curves","Exposure","Gradient Map","Grain"}){auto before=*current()->document;driveAdjustment(kind,false);require(*current()->document==before,"Adjustment Cancel changed document");}passed("six adjustment dialogs Cancel preserve document");
     auto gesture=[&](Tool tool,Point a,Point b){selectTool(tool);QTest::qWait(30);auto start=viewPoint(a),end=viewPoint(b);QTest::mousePress(canvas(),Qt::LeftButton,Qt::NoModifier,start);QTest::mouseMove(canvas(),end);QTest::mouseRelease(canvas(),Qt::LeftButton,Qt::NoModifier,end);};
     {auto before=*current()->document;auto count=current()->history.undoCount();gesture(Tool::Shape,{40,40},{130,110});require(current()->document->layers.size()==before.layers.size()+1&&current()->history.undoCount()==count+1&&!active()->shapeJson.empty(),"Native shape transaction failed");undo_->trigger();require(*current()->document==before,"Shape undo failed");passed("shape mouse gesture / live metadata / one undo");}
     {auto before=*current()->document;const auto history=current()->history.undoCount();gesture(Tool::Gradient,{220,160},{330,240});require(*current()->document==before&&current()->gradientPreview&&current()->history.undoCount()==history,"Native pending gradient failed");findChild<QAction*>("applyGradient")->trigger();require(current()->history.undoCount()==history+1,"Native gradient Apply failed");undo_->trigger();require(*current()->document==before,"Gradient undo failed");passed("gradient mouse gesture / exact undo");}

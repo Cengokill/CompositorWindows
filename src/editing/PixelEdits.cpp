@@ -2,6 +2,7 @@
 // at the pinned revision. Copyright (c) 2026 Wonder Assembly LLC;
 // MIT notice in graphics/upstream/LICENSE.
 #include "PixelEdits.h"
+#include "GradientPreview.h"
 #include "graphics/MaskSampling.h"
 #include <algorithm>
 #include <cmath>
@@ -95,7 +96,8 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
     }
     if(layer.group||!layer.adjustmentJson.empty())throw std::runtime_error("This layer has no editable image pixel target");
     if(!layer.raster&&operation!=PixelEdit::Fill)return layer;
-    int baseWidth=layer.raster?layer.raster->width:int(std::round(layer.transform.width)),baseHeight=layer.raster?layer.raster->height:int(std::round(layer.transform.height));sizeCheck(baseWidth,baseHeight);
+    int baseWidth=layer.raster?layer.raster->width:int(std::round(layer.transform.width)),baseHeight=layer.raster?layer.raster->height:int(std::round(layer.transform.height));
+    if(baseWidth<1||baseHeight<1||baseWidth>30000||baseHeight>30000)throw std::runtime_error("Invalid pixel edit grid");if(layer.raster)sizeCheck(baseWidth,baseHeight);
     Rect grid=operation==PixelEdit::Invert?Rect{0,0,double(baseWidth),double(baseHeight)}:editGrid(layer,doc,baseWidth,baseHeight,operation,selectedBounds);if(grid.empty())return layer;
     auto transform=transformFor(layer.transform,grid,baseWidth,baseHeight);auto source=reframe(layer.raster,grid);auto coverage=mappedCoverage(doc,transform,source->width,source->height,operation!=PixelEdit::Invert);PixelMapping mapping(transform,source->width,source->height);
     auto changed=editRaster(source,[&](Pixel old,int x,int y){double a=coverage?coverage->pixel(x,y)/255.:1.;if(a==0)return old;
@@ -112,10 +114,7 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
 }
 Layer editLayer(const Layer& layer,const Document& doc,PixelEdit operation,Pixel color,bool targetMask,uint8_t maskBackground){return editLayerImpl(layer,doc,operation,color,targetMask,maskBackground,nullptr);}
 Layer gradientLayer(const Layer& layer,const Document& doc,Point start,Point end,GradientSettings settings,Pixel foreground,Pixel background,bool targetMask){
-    for(double coordinate:{start.x,start.y,end.x,end.y})if(!std::isfinite(coordinate)||std::abs(coordinate)>10000000)throw std::runtime_error("Invalid gradient endpoint");
-    if(!std::isfinite(settings.opacity))throw std::runtime_error("Invalid gradient opacity");
-    if(std::hypot(end.x-start.x,end.y-start.y)<.5||settings.opacity<=0)return layer;
-    GradientPaint paint{start,end,settings,foreground,background};return editLayerImpl(layer,doc,PixelEdit::Fill,foreground,targetMask,255,&paint);
+    return GradientPreview(layer,doc,start,end,settings,foreground,background,targetMask).materializeLayer();
 }
 std::optional<CopiedPixels> copyPixels(const Document& doc,std::optional<std::string_view> layerID,const IRasterBackend& backend,const SelectionOutline* outline,bool targetMask){
     Rect selectedBounds;if(noSelectionPixels(doc,selectedBounds))return {};

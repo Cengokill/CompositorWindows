@@ -15,6 +15,10 @@ public:
     // Physical display sampling on original geometry (steps 1/32 through 32768).
     // Export stays at step 1. x/y is the corner before the first pixel center.
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel)const;
+    // Bounded non-adjustment preview patch, preserving the parent tile's exact
+    // floating-point sample expressions through integer pixel offsets.
+    std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const;
+    std::shared_ptr<const Raster> renderCursorRegion(const Document&,double x,double y,int width,int height,double unitsPerPixel)const;
 private:
     AdjustmentCallback adjustment_;
     std::shared_ptr<const LayerRenderPreview> preview_;

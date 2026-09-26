@@ -15,9 +15,9 @@
 namespace compositor {
 using Microsoft::WRL::ComPtr;
 static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
-NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){ui::installCanvasAccessibility();setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);synchronizeViewport();}
-NativeCanvas::~NativeCanvas(){profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
-void NativeCanvas::releaseDevice(){resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
+NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){ui::installCanvasAccessibility();setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);selectionTimer_=new QTimer(this);selectionTimer_->setObjectName("selectionAntsTimer");selectionTimer_->setTimerType(Qt::PreciseTimer);selectionTimer_->setInterval(120);connect(selectionTimer_,&QTimer::timeout,this,[this]{selectionPhase_=(selectionPhase_+1)%8;update();});synchronizeViewport();}
+NativeCanvas::~NativeCanvas(){selectionTimer_->stop();profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
+void NativeCanvas::releaseDevice(){selectionGeometry_.Reset();selectionMatrix_.reset();brushPreviewBitmap_.Reset();brushPreviewSource_.reset();resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
 void NativeCanvas::createDevice(){UINT flags=D3D11_CREATE_DEVICE_BGRA_SUPPORT;D3D_FEATURE_LEVEL level{};auto hr=D3D11CreateDevice(nullptr,warp_?D3D_DRIVER_TYPE_WARP:D3D_DRIVER_TYPE_HARDWARE,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);if(FAILED(hr)&&!warp_)hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);check(hr,"D3D11 device");ComPtr<IDXGIDevice> dxgi;check(device_.As(&dxgi),"DXGI device");ComPtr<IDXGIAdapter> adapter;check(dxgi->GetAdapter(&adapter),"DXGI adapter");ComPtr<IDXGIFactory2> dxgiFactory;check(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)),"DXGI factory");DXGI_SWAP_CHAIN_DESC1 desc{};desc.Width=std::max(1,int(width()*devicePixelRatioF()));desc.Height=std::max(1,int(height()*devicePixelRatioF()));desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.SampleDesc.Count=1;desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.BufferCount=2;desc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;desc.Scaling=DXGI_SCALING_STRETCH;desc.AlphaMode=DXGI_ALPHA_MODE_IGNORE;check(dxgiFactory->CreateSwapChainForHwnd(device_.Get(),reinterpret_cast<HWND>(winId()),&desc,nullptr,nullptr,&swap_),"Canvas swap chain");dxgiFactory->MakeWindowAssociation(reinterpret_cast<HWND>(winId()),DXGI_MWA_NO_ALT_ENTER);check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,IID_PPV_ARGS(&factory_)),"D2D factory");check(factory_->CreateDevice(dxgi.Get(),&d2device_),"D2D device");check(d2device_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,&context_),"D2D context");createTarget();upload();}
 void NativeCanvas::createTarget(){resetPresentationResources();ComPtr<IDXGISurface> surface;check(swap_->GetBuffer(0,IID_PPV_ARGS(&surface)),"Canvas surface");float dpi=float(96*devicePixelRatioF());auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET|D2D1_BITMAP_OPTIONS_CANNOT_DRAW,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpi,dpi);check(context_->CreateBitmapFromDxgiSurface(surface.Get(),&props,&target_),"Canvas render target");context_->SetTarget(target_.Get());context_->SetDpi(dpi,dpi);}
 void NativeCanvas::upload(){
@@ -27,7 +27,7 @@ void NativeCanvas::upload(){
     for(const auto&tile:raster_->tiles)live[tile.get()]=true;
     std::erase_if(displayTiles_,[&](const auto&entry){return !live.contains(entry.first);});
 }
-void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));context_->PushAxisAlignedClip(bounds,D2D1_ANTIALIAS_MODE_ALIASED);ComPtr<ID2D1SolidColorBrush> light,dark;check(context_->CreateSolidColorBrush(D2D1::ColorF(.77f,.78f,.79f),&light),"Checker brush");check(context_->CreateSolidColorBrush(D2D1::ColorF(.91f,.92f,.93f),&dark),"Checker brush");for(int y=0;y<height();y+=12)for(int x=0;x<width();x+=12)context_->FillRectangle(D2D1::RectF(float(x),float(y),float(x+12),float(y+12)),((x/12+y/12)%2?light:dark).Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
+void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);ComPtr<ID2D1SolidColorBrush> light,dark;check(context_->CreateSolidColorBrush(D2D1::ColorF(.77f,.78f,.79f),&light),"Checker brush");check(context_->CreateSolidColorBrush(D2D1::ColorF(.91f,.92f,.93f),&dark),"Checker brush");for(int y=0;y<height();y+=12)for(int x=0;x<width();x+=12)context_->FillRectangle(D2D1::RectF(float(x),float(y),float(x+12),float(y+12)),((x/12+y/12)%2?light:dark).Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
 // Upload bounded tiles so a valid 30,000-pixel narrow document remains displayable.
 for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;auto tile=raster_->tiles[size_t(ty/256)*((raster_->width+255)/256)+tx/256];auto found=displayTiles_.find(tile.get());
 if(found==displayTiles_.end()){
@@ -56,14 +56,9 @@ if(showPixelGrid&&zoom>=8){
         check(context_->CreateSolidColorBrush(D2D1::ColorF(.55f,.55f,.55f,.45f),&grid),"Grid brush");
         context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);context_->FillGeometry(path.Get(),grid.Get());context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
     }
-}if(!selectionEdges_.empty()){
-ComPtr<ID2D1SolidColorBrush> edgeDark,edgeLight;
-check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,1),&edgeDark),"Selection edge");
-check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1),&edgeLight),"Selection edge");
-ComPtr<ID2D1StrokeStyle> dashed;auto style=D2D1::StrokeStyleProperties();style.dashStyle=D2D1_DASH_STYLE_DASH;
-check(factory_->CreateStrokeStyle(style,nullptr,0,&dashed),"Selection dash");
-for(const auto&edge:selectionEdges_){auto a=D2D1::Point2F(left+float(edge.first.x*scale),top+float(edge.first.y*scale));auto b=D2D1::Point2F(left+float(edge.second.x*scale),top+float(edge.second.y*scale));context_->DrawLine(a,b,edgeDark.Get(),1.5f);context_->DrawLine(a,b,edgeLight.Get(),1,dashed.Get());}}
+}
 context_->PopAxisAlignedClip();}
+drawSelection();
 if(selectionDraft_&&!selectionDraft_->points.empty()&&documentWidth_>0&&documentHeight_>0){
     auto points=selectionDraft_->points;
     if(selectionDraft_->kind==editing::LassoKind::Polygonal&&selectionDraft_->cursor)points.push_back(*selectionDraft_->cursor);
@@ -85,6 +80,43 @@ if(selectionDraft_&&!selectionDraft_->points.empty()&&documentWidth_>0&&document
     if(selectionDraft_->kind==editing::LassoKind::Polygonal){const auto first=points.front();const auto handle=D2D1::RectF(float(first.x-4),float(first.y-4),float(first.x+4),float(first.y+4));context_->FillRectangle(handle,white.Get());context_->DrawRectangle(handle,black.Get(),1);}
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
+if(shapeDraft_&&documentWidth_>0&&documentHeight_>0){
+    // TransformOverlay.drawShapeDraft: a transient document-space fill with a
+    // one-DIP black outline. No layer pixels or history exist before release.
+    const auto& draft=*shapeDraft_;const auto mapping=viewMapping();
+    const auto a=mapping.toView({draft.rect.x,draft.rect.y}),b=mapping.toView({draft.rect.x+draft.rect.width,draft.rect.y+draft.rect.height});
+    const auto bounds=D2D1::RectF(float(a.x),float(a.y),float(b.x),float(b.y));
+    ComPtr<ID2D1SolidColorBrush> fill,outline;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(draft.fill.r/255.f,draft.fill.g/255.f,draft.fill.b/255.f,draft.fill.a/255.f),&fill),"Shape draft fill");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.6f),&outline),"Shape draft outline");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    if(draft.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
+    else{const float radius=float(std::clamp(draft.cornerRadius,0.,std::min(draft.rect.width,draft.rect.height)/2)*pointsPerPixel());const auto rounded=D2D1::RoundedRect(bounds,radius,radius);context_->FillRoundedRectangle(rounded,fill.Get());context_->DrawRoundedRectangle(rounded,outline.Get(),1);}
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
+if(cropOverlay_&&documentWidth_>0&&documentHeight_>0){
+    const auto& crop=*cropOverlay_;const auto mapping=viewMapping();
+    const auto a=mapping.toView({crop.x,crop.y}),b=mapping.toView({crop.x+crop.width,crop.y+crop.height});
+    const auto box=D2D1::RectF(float(a.x),float(a.y),float(b.x),float(b.y));
+    ComPtr<ID2D1SolidColorBrush> dim,white,thirds,black;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.6f),&dim),"Crop shade");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Crop outline");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,.4f),&thirds),"Crop thirds");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0),&black),"Crop handles");
+    ComPtr<ID2D1PathGeometry> shade;ComPtr<ID2D1GeometrySink> sink;
+    check(factory_->CreatePathGeometry(&shade),"Crop shade geometry");check(shade->Open(&sink),"Crop shade sink");sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+    for(const auto bounds:{D2D1::RectF(0,0,float(width()),float(height())),box}){
+        sink->BeginFigure(D2D1::Point2F(bounds.left,bounds.top),D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLine(D2D1::Point2F(bounds.right,bounds.top));sink->AddLine(D2D1::Point2F(bounds.right,bounds.bottom));sink->AddLine(D2D1::Point2F(bounds.left,bounds.bottom));sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    }check(sink->Close(),"Crop shade close");context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    context_->FillGeometry(shade.Get(),dim.Get());context_->DrawRectangle(box,white.Get(),1);
+    for(int index=1;index<=2;++index){const float fraction=float(index)/3;const float x=box.left+(box.right-box.left)*fraction,y=box.top+(box.bottom-box.top)*fraction;
+        context_->DrawLine(D2D1::Point2F(x,box.top),D2D1::Point2F(x,box.bottom),thirds.Get(),1);
+        context_->DrawLine(D2D1::Point2F(box.left,y),D2D1::Point2F(box.right,y),thirds.Get(),1);}
+    const auto geometry=editing_transform::OverlayGeometry::fromTransform({crop.x,crop.y,crop.width,crop.height},mapping);
+    for(const auto handle:geometry.handles){const auto bounds=D2D1::RectF(float(handle.x-4),float(handle.y-4),float(handle.x+4),float(handle.y+4));context_->FillRectangle(bounds,white.Get());context_->DrawRectangle(bounds,black.Get(),1);}
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
 if(gradientLine_&&documentWidth_>0&&documentHeight_>0){
     const auto a=viewMapping().toView(gradientLine_->first),b=viewMapping().toView(gradientLine_->second);
     const auto start=D2D1::Point2F(float(a.x),float(a.y)),end=D2D1::Point2F(float(b.x),float(b.y));
@@ -102,7 +134,22 @@ if(brushCursor_){
     const auto& cursor=*brushCursor_;const auto center=D2D1::Point2F(float(cursor.center.x),float(cursor.center.y));const float radius=float(cursor.diameter/2);
     ComPtr<ID2D1SolidColorBrush> black,white;check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0),&black),"Brush cursor black");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Brush cursor white");
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    const auto circle=D2D1::Ellipse(center,radius,radius);context_->DrawEllipse(circle,white.Get(),2.5f);context_->DrawEllipse(circle,black.Get(),1);
+    const auto circle=D2D1::Ellipse(center,radius,radius);
+    if(cursor.preview&&cursor.opacity>0){
+        const auto& image=*cursor.preview;
+        if(image.width<1||image.height<1||image.width>1024||image.height>1024)throw std::invalid_argument("Invalid clone cursor bitmap extent");
+        if(brushPreviewSource_!=cursor.preview||!brushPreviewBitmap_){
+            std::vector<Pixel> pixels(size_t(image.width)*image.height);
+            for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x)pixels[size_t(y)*image.width+x]=image.pixel(x,y);
+            auto properties=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+            brushPreviewBitmap_.Reset();check(context_->CreateBitmap(D2D1::SizeU(UINT32(image.width),UINT32(image.height)),pixels.data(),UINT32(image.width*4),&properties,&brushPreviewBitmap_),"Clone cursor bitmap");brushPreviewSource_=cursor.preview;
+        }
+        ComPtr<ID2D1EllipseGeometry> mask;check(factory_->CreateEllipseGeometry(circle,&mask),"Clone cursor clip");
+        context_->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(),mask.Get()),nullptr);
+        context_->DrawBitmap(brushPreviewBitmap_.Get(),D2D1::RectF(center.x-radius,center.y-radius,center.x+radius,center.y+radius),float(std::clamp(cursor.opacity,0.,1.)),D2D1_INTERPOLATION_MODE_LINEAR);
+        context_->PopLayer();
+    }
+    context_->DrawEllipse(circle,white.Get(),2.5f);context_->DrawEllipse(circle,black.Get(),1);
     if(cursor.hardness&&*cursor.hardness>0){
         auto style=D2D1::StrokeStyleProperties();style.dashStyle=D2D1_DASH_STYLE_CUSTOM;
         const float whiteDashes[]{4/2.5f,3/2.5f},blackDashes[]{4,3};ComPtr<ID2D1StrokeStyle> whiteDash,blackDash;
@@ -112,23 +159,71 @@ if(brushCursor_){
     if(cursor.marker){const float x=float(cursor.marker->x),y=float(cursor.marker->y);for(const bool horizontal:{true,false}){const auto a=D2D1::Point2F(x-(horizontal?7:0),y-(horizontal?0:7)),b=D2D1::Point2F(x+(horizontal?7:0),y+(horizontal?0:7));context_->DrawLine(a,b,white.Get(),3);context_->DrawLine(a,b,black.Get(),1);}}
 }
 if(sampleRing_){auto center=viewMapping().toView(sampleRing_->position);auto ring=D2D1::Ellipse(D2D1::Point2F(float(center.x),float(center.y)),43,43);ComPtr<ID2D1SolidColorBrush> brush;check(context_->CreateSolidColorBrush(D2D1::ColorF(.45f,.45f,.45f),&brush),"Sample ring");context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);context_->DrawEllipse(ring,brush.Get(),24);for(int half=0;half<2;++half){auto color=half?sampleRing_->original:sampleRing_->sampled;brush->SetColor(D2D1::ColorF(color.r/255.f,color.g/255.f,color.b/255.f));context_->PushAxisAlignedClip(D2D1::RectF(float(center.x-58),float(center.y+(half?0:-58)),float(center.x+58),float(center.y+(half?58:0))),D2D1_ANTIALIAS_MODE_ALIASED);context_->DrawEllipse(ring,brush.Get(),16);context_->PopAxisAlignedClip();}}
+if((snapGuideX_||snapGuideY_)&&documentWidth_>0&&documentHeight_>0){
+    const auto color=palette().color(QPalette::Highlight);ComPtr<ID2D1SolidColorBrush> accent;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(float(color.redF()),float(color.greenF()),float(color.blueF())),&accent),"Snap guide");
+    const auto mapping=viewMapping();const auto point=[&](Point p){auto view=mapping.toView(p);return D2D1::Point2F(float(view.x),float(view.y));};
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    if(snapGuideX_)context_->DrawLine(point({*snapGuideX_,0}),point({*snapGuideX_,double(documentHeight_)}),accent.Get(),1);
+    if(snapGuideY_)context_->DrawLine(point({0,*snapGuideY_}),point({double(documentWidth_),*snapGuideY_}),accent.Get(),1);
+}
 auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas draw");hr=finishPresentation();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas presentation");if(!present)return;hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
-void NativeCanvas::setSelection(std::shared_ptr<const GrayRaster> value){
-if(selection_==value)return;selection_=std::move(value);selectionEdges_.clear();
-if(selection_){auto inside=[&](int x,int y){return selection_->pixel(x,y)>=128;};
-for(int y=0;y<=selection_->height;++y){int start=-1;for(int x=0;x<=selection_->width;++x){bool edge=x<selection_->width&&(inside(x,y)!=inside(x,y-1));if(edge&&start<0)start=x;if(!edge&&start>=0){selectionEdges_.push_back({{double(start),double(y)},{double(x),double(y)}});start=-1;}}}
-for(int x=0;x<=selection_->width;++x){int start=-1;for(int y=0;y<=selection_->height;++y){bool edge=y<selection_->height&&(inside(x,y)!=inside(x-1,y));if(edge&&start<0)start=y;if(!edge&&start>=0){selectionEdges_.push_back({{double(x),double(start)},{double(x),double(y)}});start=-1;}}}}
-update();}
+std::optional<int> NativeCanvas::cropResizeHandle(editing::Rect crop,Point point,const editing_transform::ViewMapping& mapping){
+    const auto geometry=editing_transform::OverlayGeometry::fromTransform({crop.x,crop.y,crop.width,crop.height},mapping);
+    const auto contains=[&](double x,double y,double w,double h){return point.x>=x&&point.y>=y&&point.x<x+w&&point.y<y+h;};
+    for(const int index:{0,2,4,6}){const auto p=geometry.handles[size_t(index)];if(contains(p.x-10,p.y-10,20,20))return index;}
+    const auto a=geometry.handles[0],b=geometry.handles[4];
+    for(const int index:{1,5})if(contains(a.x+10,geometry.handles[size_t(index)].y-10,std::max(0.,b.x-a.x-20),20))return index;
+    for(const int index:{3,7})if(contains(geometry.handles[size_t(index)].x-10,a.y+10,20,std::max(0.,b.y-a.y-20)))return index;
+    return {};
+}
+void NativeCanvas::setSelection(std::shared_ptr<const GrayRaster> value,std::shared_ptr<const editing::SelectionOutline> outline){
+    if(selection_==value&&selectionInputOutline_==outline)return;
+    auto path=outline;
+    if(!path&&value&&value->source)path=value->source->vectorOutline();
+    if(!path&&value)path=std::make_shared<editing::SelectionOutline>(editing::SelectionOutline::fromCoverage(*value));
+    selection_=std::move(value);selectionInputOutline_=std::move(outline);selectionOutline_=std::move(path);
+    selectionGeometry_.Reset();selectionMatrix_.reset();updateSelectionAnimation();update();
+}
+void NativeCanvas::updateSelectionAnimation(){
+    if(selectionTimer_){const bool active=selectionOutline_&&!selectionOutline_->empty()&&documentWidth_>0&&documentHeight_>0&&isVisible();
+        if(active&&!selectionTimer_->isActive())selectionTimer_->start();else if(!active)selectionTimer_->stop();}
+}
+void NativeCanvas::drawSelection(){
+    if(!selectionOutline_||selectionOutline_->empty()||documentWidth_<=0||documentHeight_<=0)return;
+    const auto mapping=viewMapping();const std::array<float,6> matrix{float(mapping.pointsPerPixel),0,0,float(mapping.pointsPerPixel),float(mapping.origin.x),float(mapping.origin.y)};
+    if(!selectionGeometry_||selectionMatrix_!=matrix){
+        ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Selection path");
+        ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink),"Selection path sink");
+        selectionOutline_->writeGeometry(sink.Get(),matrix);check(sink->Close(),"Selection path close");
+        selectionGeometry_=std::move(path);selectionMatrix_=matrix;
+    }
+    ComPtr<ID2D1SolidColorBrush> black,white;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,1),&black),"Selection black");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1),&white),"Selection white");
+    auto style=D2D1::StrokeStyleProperties();style.dashStyle=D2D1_DASH_STYLE_CUSTOM;style.dashOffset=float(selectionPhase_);
+    const float lengths[]{4,4};ComPtr<ID2D1StrokeStyle> dashed;check(factory_->CreateStrokeStyle(style,lengths,2,&dashed),"Selection dash");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    context_->DrawGeometry(selectionGeometry_.Get(),white.Get(),1);
+    context_->DrawGeometry(selectionGeometry_.Get(),black.Get(),1,dashed.Get());
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
 void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(r);setDocumentSize(raster_?raster_->width:0,raster_?raster_->height:0);rasterX_=rasterY_=0;rasterUnits_=1;try{upload();}catch(const std::exception&e){error_=e.what();releaseDevice();}update();}
 graphics::CanvasViewport NativeCanvas::viewportState()const{return {{double(width()),double(height())},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
 void NativeCanvas::installViewport(const graphics::CanvasViewport& state){zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;update();}
 void NativeCanvas::synchronizeViewport(){auto state=viewportState();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({double(width()),double(height())},devicePixelRatioF(),document);installViewport(state);}
-void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionEdges_.clear();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();}if(changed)synchronizeViewport();else update();}
+void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();}updateSelectionAnimation();if(changed)synchronizeViewport();else update();}
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
 editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto state=viewportState();return {state.pointsPerPixel(),state.origin({double(documentWidth_),double(documentHeight_)})};}
 QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto point=viewportState().documentPoint({p.x(),p.y()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}
 void NativeCanvas::zoomAt(double value,QPointF anchor){if(documentWidth_<=0||documentHeight_<=0)return;auto state=viewportState();state.setZoom(value,{anchor.x(),anchor.y()},{double(documentWidth_),double(documentHeight_)});installViewport(state);}
 void NativeCanvas::panBy(QPointF delta){auto state=viewportState();state.translate({delta.x(),delta.y()});installViewport(state);}
+QString NativeCanvas::adapterName()const{
+    if(!device_)return {};
+    ComPtr<IDXGIDevice> device;ComPtr<IDXGIAdapter> adapter;DXGI_ADAPTER_DESC description{};
+    if(FAILED(device_.As(&device))||FAILED(device->GetAdapter(&adapter))||FAILED(adapter->GetDesc(&description)))return {};
+    return QString::fromWCharArray(description.Description);
+}
 void NativeCanvas::recreateDevice(){releaseDevice();error_.clear();update();}
 QImage NativeCanvas::captureRendered(){
     // Read the freshly rendered back buffer before Present advances the flip chain.
@@ -156,6 +251,11 @@ void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
     if(pointerHover)pointerHover(e->position(),e->modifiers());
     if(rightDragging_){if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),false);last_=e->position();return;}
+    if(!dragging_&&cropOverlay_){
+        const auto hit=cropResizeHandle(*cropOverlay_,{e->position().x(),e->position().y()},viewMapping());
+        if(hit){constexpr Qt::CursorShape cursors[]{Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor,Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor};setCursor(cursors[*hit]);}
+        else unsetCursor();
+    }
     if(!dragging_&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({e->position().x(),e->position().y()});auto cursor=mode?geometry.cursor(*mode,{e->modifiers().testFlag(Qt::ShiftModifier),e->modifiers().testFlag(Qt::AltModifier),e->modifiers().testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
     if((e->buttons()&Qt::MiddleButton)&&(!navigationAllowed||navigationAllowed()))panBy(e->position()-last_);else if(dragging_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());last_=e->position();
 }
@@ -186,12 +286,15 @@ void NativeCanvas::tabletEvent(QTabletEvent*e){
     // The pinned source has no pressure mapping. Accept prevents Qt's duplicate synthesized mouse stroke.
 }
 void NativeCanvas::leaveEvent(QEvent*e){if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}
-bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();}
+bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();updateSelectionAnimation();}
+    if(e->type()==QEvent::Hide&&selectionTimer_)selectionTimer_->stop();
     const bool focusLost=e->type()==QEvent::WindowDeactivate||e->type()==QEvent::FocusOut;
-    if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){dragging_=rightDragging_=tabletActive_=false;if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
+    if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){setSnapGuides();dragging_=rightDragging_=tabletActive_=false;if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
     if(e->type()==QEvent::DevicePixelRatioChange){releaseDevice();synchronizeViewport();}
     if(e->type()==QEvent::NativeGesture){auto*gesture=static_cast<QNativeGestureEvent*>(e);if(gesture->gestureType()==Qt::ZoomNativeGesture){if(documentWidth_>0&&(!navigationAllowed||navigationAllowed()))zoomAt(zoom*(1+gesture->value()),gesture->position());gesture->accept();return true;}}
     return QWidget::event(e);
 }
 }
+
+
 

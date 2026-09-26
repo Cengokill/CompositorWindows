@@ -1,10 +1,13 @@
+// Windows cancellation adapter: original arithmetic/order retained; -2 means cancelled.
 #include "LensPixels.h"
 #include <math.h>
 
-void lens_distort(const uint8_t *source, uint8_t *destination, size_t width, size_t height, size_t stride, double k) {
+int lens_distort_cancellable(const uint8_t *source, uint8_t *destination, size_t width, size_t height, size_t stride, double k, int (*cancelled)(void *), void *context) {
+    if (cancelled && cancelled(context)) return -2;
     double cx = width * 0.5, cy = height * 0.5;
     double halfDiagonal2 = cx * cx + cy * cy;
     for (size_t y = 0; y < height; ++y) {
+        if (cancelled && cancelled(context)) return -2;
         double dy = y + 0.5 - cy;
         uint8_t *out = destination + y * stride;
         for (size_t x = 0; x < width; ++x) {
@@ -34,4 +37,8 @@ void lens_distort(const uint8_t *source, uint8_t *destination, size_t width, siz
             for (int c = 0; c < 4; ++c) out[x * 4 + c] = (uint8_t)lround(sums[c]);
         }
     }
+    return 0;
+}
+void lens_distort(const uint8_t *source, uint8_t *destination, size_t width, size_t height, size_t stride, double k) {
+    (void)lens_distort_cancellable(source,destination,width,height,stride,k,NULL,NULL);
 }

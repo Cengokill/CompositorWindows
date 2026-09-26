@@ -18,6 +18,17 @@ struct PanelState {
     bool maskSelected{};
     std::unordered_set<std::string> collapsed;
 };
+enum class LayerControlKind { Image, Mask, Link };
+struct LayerActionControl {
+    QString name, description;
+    QRect globalRect;
+    bool enabled{}, exposed{};
+};
+struct LayerVisibilityControl {
+    QString name;
+    QRect globalRect;
+    bool visible{}, enabled{}, exposed{};
+};
 // All changes are calculated on immutable snapshots before the host starts history.
 layers::EditResult dropLayers(const Document&,layers::SelectionState,const std::vector<std::string>&,
     const std::string& target,DropZone,bool copy);
@@ -44,6 +55,11 @@ public:
         std::function<std::optional<bool>(const std::string&)> beginVisibilitySwipe;
         std::function<void(const std::string&,bool)> setVisibilityInSwipe;
         std::function<void()> endVisibilitySwipe;
+        std::function<QObject*()> dragOwner;
+        // Thumbnail enablement and target selection have a narrower source
+        // guard than structural layer edits. Selection may retain a draft.
+        std::function<bool()> targetEnabled;
+        std::function<void(const std::string&,bool)> selectTarget;
     };
     LayerPanelController(QTreeWidget*,Host);
     ~LayerPanelController() override;
@@ -55,6 +71,12 @@ public:
     static LayerPanelController* find(QTreeWidget*);
     void finishVisibilitySwipe();
     void refreshCursor(Qt::KeyboardModifiers,const QPoint& viewportPoint);
+    std::vector<std::string> exposedVisibilityControls() const;
+    std::optional<LayerVisibilityControl> visibilityControl(const std::string& id) const;
+    void toggleVisibilityControl(const std::string& id);
+    std::vector<std::pair<std::string,LayerControlKind>> exposedActionControls() const;
+    std::optional<LayerActionControl> actionControl(const std::string&,LayerControlKind) const;
+    void invokeActionControl(std::string,LayerControlKind);
     uint64_t thumbnailRenderCount()const{return thumbnailRenderCount_;}
 protected:
     bool eventFilter(QObject*,QEvent*) override;

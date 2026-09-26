@@ -1,0 +1,23 @@
+#include "ui/MainWindow.h"
+#include <Windows.h>
+#include <QApplication>
+#include <QTest>
+#include <QTreeWidgetItemIterator>
+#include <cstdio>
+#include <map>
+using namespace compositor;
+namespace {
+void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+Document fixture(){Document document;document.id=newId();document.width=document.height=2;Layer layer;layer.id=newId();layer.name="Pixels";layer.transform={0,0,2,2};layer.raster=Raster::filled(2,2,{128,64,32,255});document.layers={layer};return document;}
+void flush(){QApplication::processEvents();QTest::qWait(1);QApplication::processEvents();}
+QTreeWidgetItem* item(MainWindow& window,const std::string& id){auto* tree=window.findChild<QTreeWidget*>();require(tree,"Layer tree exists");for(QTreeWidgetItemIterator it(tree);*it;++it)if((*it)->data(0,Qt::UserRole).toString().toStdString()==id)return *it;throw std::runtime_error("Layer tree item exists");}
+void trigger(MainWindow& window,const char* id){for(auto* action:window.findChildren<QAction*>())if(action->property("commandId")==id){require(action->isEnabled(),"Action enabled");action->trigger();return;}throw std::runtime_error("Action exists");}
+struct Fixture {MainWindow window{true};EditorProject& project;std::string id;Fixture():project(window.addProject(fixture())),id(project.active){window.show();flush();}};
+void checkbox_repeated(){Fixture f;for(int i=0;i<64;++i){const bool visible=i%2==1;item(f.window,f.id)->setCheckState(0,visible?Qt::Checked:Qt::Unchecked);flush();require(f.project.document->layers[0].visible==visible,"Checkbox commit follows captured value");require(f.project.history.undoCount()==size_t(i+1),"One history transaction per checkbox change");}}
+void rename_repeated(){Fixture f;for(int i=0;i<64;++i){const auto name=QString("Name %1").arg(i);item(f.window,f.id)->setText(0,name);flush();require(f.project.document->layers[0].name==name.toStdString(),"Rename survives model setData return and rebuild");require(f.project.history.undoCount()==size_t(i+1),"One history transaction per rename");}}
+void rapid_toggles(){Fixture f;auto* row=item(f.window,f.id);row->setCheckState(0,Qt::Unchecked);row->setCheckState(0,Qt::Checked);row->setCheckState(0,Qt::Unchecked);flush();require(!f.project.document->layers[0].visible,"Queued rapid changes preserve final value");require(f.project.history.undoCount()==3,"Three distinct rapid changes preserve ordered history");trigger(f.window,"edit.undo");require(f.project.document->layers[0].visible,"Undo restores middle rapid state");}
+void owner_switch(){Fixture f;auto& other=f.window.addProject(fixture());auto* tabs=f.window.findChild<QTabWidget*>();require(tabs&&tabs->count()==2,"Two owner tabs exist");tabs->setCurrentIndex(0);flush();item(f.window,f.id)->setCheckState(0,Qt::Unchecked);tabs->setCurrentIndex(1);flush();require(f.project.document->layers[0].visible&&f.project.history.undoCount()==0,"Queued old-owner checkbox is discarded after tab switch");require(other.document->layers[0].visible&&other.history.undoCount()==0,"Other owner is unchanged");}
+void deleted_target(){Fixture f;item(f.window,f.id)->setCheckState(0,Qt::Unchecked);trigger(f.window,"layer.delete");flush();require(f.project.document->layers.empty(),"Queued change cannot resurrect deleted target");require(f.project.history.undoCount()==1,"Deleted target adds only deletion history");}
+void busy_guards(){Fixture f;f.project.projectBusy=true;item(f.window,f.id)->setText(0,"Blocked at schedule");f.project.projectBusy=false;flush();require(f.project.document->layers[0].name=="Pixels"&&f.project.history.undoCount()==0,"Eligibility checked when scheduling");trigger(f.window,"tool.move");flush();item(f.window,f.id)->setText(0,"Blocked at apply");f.project.projectBusy=true;flush();f.project.projectBusy=false;require(f.project.document->layers[0].name=="Pixels"&&f.project.history.undoCount()==0,"Eligibility checked again when applying");trigger(f.window,"tool.move");flush();require(f.project.history.undoCount()==0,"Programmatic refresh does not create edits");}
+}
+int main(int argc,char** argv){SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"checkbox_repeated",checkbox_repeated},{"rename_repeated",rename_repeated},{"rapid_toggles",rapid_toggles},{"owner_switch",owner_switch},{"deleted_target",deleted_target},{"busy_guards",busy_guards}};try{require(argc==2&&cases.contains(argv[1]),"Specify layer-item contract");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}

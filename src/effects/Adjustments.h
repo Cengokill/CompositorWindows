@@ -1,6 +1,7 @@
 #pragma once
 #include "core/Document.h"
 #include <memory>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -14,5 +15,6 @@ void validateAdjustmentJson(std::string_view json);
 // All-zero coverage edits nothing. Each immutable tile is copied only if its pixels change.
 // Levels intentionally retains the pinned Swift wrapper's documented double-alpha conflict.
 std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,
-    std::string_view adjustmentJson,const GrayRaster* selection=nullptr,AdjustmentRegion region={});
+    std::string_view adjustmentJson,const GrayRaster* selection=nullptr,AdjustmentRegion region={},
+    const std::function<bool()>& cancelled={});
 }

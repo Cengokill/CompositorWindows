@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "SelectionCursors.h"
 #include "editing/PixelEdits.h"
 #include <QMenuBar>
 #include <QToolBar>
@@ -35,7 +36,14 @@ void MainWindow::setupSelectionActions(){
     });
     action(menu,"All",QKeySequence::SelectAll,[this]{edit("Select All",[&](Document&d){d.selection=editing::rasterSelection(editing::SelectionOutline::rectangle({0,0,double(d.width),double(d.height)}),d.width,d.height);});});
     action(menu,"Deselect",QKeySequence("Ctrl+D"),[this]{edit("Deselect",[](Document&d){d.selection.reset();});});
-    action(menu,"Inverse",QKeySequence("Ctrl+Shift+I"),[this]{if(current()&&current()->document&&current()->document->selection)edit("Inverse",[](Document&d){if(d.selection->outline)d.selection=editing::rasterSelection(editing::inverseSelection(*d.selection->outline,d.width,d.height),d.width,d.height);else{auto gray=std::make_shared<GrayRaster>();gray->width=d.width;gray->height=d.height;gray->pixels.resize(size_t(d.width)*d.height);for(size_t i=0;i<gray->pixels.size();++i)gray->pixels[i]=d.selection->coverage?255-d.selection->coverage->pixels[i]:255;d.selection=Selection{gray};}});});
+    action(menu,"Inverse",QKeySequence("Ctrl+Shift+I"),[this]{if(current()&&current()->document&&current()->document->selection)edit("Inverse",[](Document&d){
+        if(d.selection->outline)d.selection=editing::rasterSelection(editing::inverseSelection(*d.selection->outline,d.width,d.height),d.width,d.height);
+        else if(d.selection->coverage&&d.selection->coverage->source){
+            auto input=d.selection->coverage;std::shared_ptr<const editing::SelectionOutline> outline;
+            if(auto path=input->source->vectorOutline())outline=std::make_shared<editing::SelectionOutline>(*editing::inverseSelection(*path,d.width,d.height));
+            d.selection=Selection{GrayRaster::sampled(d.width,d.height,{0,0,d.width,d.height},[input](int x,int y){return uint8_t(255-input->pixel(x,y));},input->retainedBytes(),std::move(outline))};
+        }else{auto gray=std::make_shared<GrayRaster>();gray->width=d.width;gray->height=d.height;gray->pixels.resize(size_t(d.width)*d.height);for(size_t i=0;i<gray->pixels.size();++i)gray->pixels[i]=d.selection->coverage?255-d.selection->coverage->pixels[i]:255;d.selection=Selection{gray};}
+    });});
     auto*clipboard=menuBar()->addMenu("&Clipboard");
     action(clipboard,"Cut",QKeySequence::Cut,[this]{copySelection(false,true);});
     action(clipboard,"Copy",QKeySequence::Copy,[this]{copySelection(false);});
@@ -79,7 +87,7 @@ bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int 
     }
     const auto mode=editing::selectionMode(modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),selectionMode_);
     const auto before=outlineOf(p->document->selection);
-    const bool inside=before&&!before->empty()&&before->contains(point);
+    const bool inside=!selectionGesture_.active()&&before&&!before->empty()&&before->contains(point);
     if(mode==editing::SelectionMode::Replace&&inside){
         finishOpacityEdit();selectionOwner_=p;selectionBefore_=p->document->selection;press_=point;movingSelection_=true;
         p->history.begin("Move Selection",p->document,p->active);refreshSelectionGesture();return true;
@@ -134,7 +142,17 @@ void MainWindow::refreshSelectionGesture(){
     auto* p=current();if(p&&p->canvas)p->canvas->setSelectionDraft(selectionOwner_==p?selectionGesture_.draft():std::nullopt);
     const auto mode=selectionGesture_.cursorMode(selectionModifiers_.testFlag(Qt::ShiftModifier),selectionModifiers_.testFlag(Qt::AltModifier),selectionMode_);
     if(auto* box=findChild<QComboBox*>("selectionMode")){QSignalBlocker block(box);box->setCurrentIndex(int(mode));}
-    if(p&&p->canvas){p->canvas->setProperty("selectionCursorMode",int(mode));if(tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand){if(!spaceHeld_&&!spaceDragging_)p->canvas->setCursor(movingSelection_?Qt::SizeAllCursor:Qt::CrossCursor);}}
+    if(p&&p->canvas){
+        p->canvas->setProperty("selectionCursorMode",int(mode));
+        if((tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand)&&!spaceHeld_&&!spaceDragging_){
+            if(movingSelection_)p->canvas->setCursor(Qt::SizeAllCursor);
+            else if(tool_==Tool::Wand)p->canvas->setCursor(Qt::CrossCursor);
+            else{
+                const auto kind=tool_==Tool::Marquee?(ellipse_?editing::LassoKind::Ellipse:editing::LassoKind::Rectangle):tool_==Tool::Polygon?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;
+                p->canvas->setCursor(ui::selectionToolCursor(kind,mode,p->canvas->devicePixelRatioF()));
+            }
+        }
+    }
 }
 void MainWindow::hoverSelection(QPointF view,Qt::KeyboardModifiers flags){
     selectionModifiers_=flags;

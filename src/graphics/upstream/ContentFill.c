@@ -1,3 +1,4 @@
+// Windows cancellation adapter: original arithmetic/order retained; -2 means cancelled.
 #include "ContentFill.h"
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +21,9 @@ static double match(const uint8_t *pixels, size_t stride, const uint8_t *known,
     }
     return count ? sum/count : DBL_MAX;
 }
-int content_fill(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms, int w, int h) {
+int content_fill_cancellable(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms, int w, int h, int (*cancelled)(void *), void *context) {
+    if (cancelled && cancelled(context)) return -2;
+    int was_cancelled=0;
     size_t n=(size_t)w*h;
     uint8_t *known=calloc(n,1), *target=calloc(n,1), *valid=calloc(n,1), *queued=calloc(n,1);
     int *donors=malloc(n*sizeof(int)), *queue=malloc(n*sizeof(int)), *chosen=malloc(n*sizeof(int));
@@ -32,11 +35,13 @@ int content_fill(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms,
     // Selected pixels are filled. Unselected opaque pixels are the image to match and copy from; unselected
     // transparent ones are neither — nothing to match against, and left as they are.
     for(int y=0;y<h;++y) for(int x=0;x<w;++x) {
+        if((x&255)==0) {if(cancelled && cancelled(context)) {was_cancelled=1;goto done;}}
         int p=y*w+x; target[p]=mask[y*ms+x]!=0; known[p]=!target[p] && pixels[y*stride+x*4+3]==255; chosen[p]=-1;
         if(target[p]) ++missing;
     }
     if(!missing) { donorCount=1; goto done; }
     for(int y=0;y<h;++y) for(int x=0;x<w;++x) {
+        if((x&255)==0) {if(cancelled && cancelled(context)) {was_cancelled=1;goto done;}}
         int p=y*w+x;
         if(!known[p]) continue;
         int ok=1;
@@ -48,6 +53,7 @@ int content_fill(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms,
     }
     if(!donorCount) goto done;
     for(int y=0;y<h;++y) for(int x=0;x<w;++x) {
+        if((x&255)==0) {if(cancelled && cancelled(context)) {was_cancelled=1;goto done;}}
         int p=y*w+x;
         if(target[p] && ((x&&known[p-1])||(x+1<w&&known[p+1])||(y&&known[p-w])||(y+1<h&&known[p+w]))) {
             queue[tail++]=p;queued[p]=1;
@@ -56,6 +62,7 @@ int content_fill(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms,
     uint32_t seed=0x6d2b79f5;
     for(;;) {
     while(head<tail) {
+        if(cancelled && cancelled(context)) {was_cancelled=1;goto done;}
         int p=queue[head++],x=p%w,y=p/w,best=-1;
         double score=DBL_MAX;
         int neighbors[4]={x?p-1:-1,x+1<w?p+1:-1,y?p-w:-1,y+1<h?p+w:-1};
@@ -83,11 +90,15 @@ int content_fill(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms,
         for(int k=0;k<4;++k) { int q=neighbors[k]; if(q>=0&&target[q]&&!known[q]&&!queued[q]) {queued[q]=1;queue[tail++]=q;} }
     }
     // A selected area that only transparency touches starts from the best random donor, then spreads.
-    while(scan<n && (!target[scan]||known[scan])) ++scan;
+    while(scan<n && (!target[scan]||known[scan])) {if((scan&4095)==0) {if(cancelled && cancelled(context)) {was_cancelled=1;goto done;}} ++scan;}
     if(scan>=n) break;
     queue[tail++]=(int)scan; queued[scan]=1;
     }
 done:
     free(known);free(target);free(valid);free(queued);free(donors);free(queue);free(chosen);
-    return donorCount ? 1 : 0;
+    return was_cancelled ? -2 : donorCount ? 1 : 0;
+}
+
+int content_fill(uint8_t *pixels, size_t stride, const uint8_t *mask, size_t ms, int w, int h) {
+    return content_fill_cancellable(pixels,stride,mask,ms,w,h,NULL,NULL);
 }

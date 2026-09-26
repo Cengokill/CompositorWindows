@@ -4,12 +4,27 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 
 namespace compositor::graphics {
 namespace {
+struct KernelCancellation {
+    const Cancellation& callback;
+    std::exception_ptr exception;
+    static int poll(void* context) noexcept {
+        auto& state = *static_cast<KernelCancellation*>(context);
+        try { return state.callback() ? 1 : 0; }
+        catch (...) { state.exception = std::current_exception(); return 1; }
+    }
+    auto function() const -> int (*)(void*) { return callback ? poll : nullptr; }
+    void finish(int result) const {
+        if (exception) std::rethrow_exception(exception);
+        if (result == -2) throw std::runtime_error("Filter cancelled");
+    }
+};
 void check(size_t size, uint32_t w, uint32_t h, size_t stride, size_t channels) {
     // The editor's 30,000px source dimension limit also keeps signed int C indices
     // and the LLP64 wand result count within range (900,000,000 pixels).
@@ -78,9 +93,10 @@ void gradientMap(Rgba8View v,std::span<const uint8_t,768> table) {
     validate(v); if(overlap(v.bytes,table))throw std::invalid_argument("Gradient table overlaps pixels");
     adjust_gradient_map(v.bytes.data(),v.width,v.height,v.stride,table.data());
 }
-void addNoise(Rgba8View v,float amount,bool gaussian,bool monochromatic,uint32_t seed) {
+void addNoise(Rgba8View v,float amount,bool gaussian,bool monochromatic,uint32_t seed,const Cancellation& cancelled) {
     validate(v); range(amount,0,400,"Noise amount outside [0,400]");
-    noise_add(v.bytes.data(),v.width,v.height,v.stride,amount,gaussian,monochromatic,seed);
+    KernelCancellation state{cancelled,{}};
+    state.finish(noise_add_cancellable(v.bytes.data(),v.width,v.height,v.stride,amount,gaussian,monochromatic,seed,state.function(),&state));
 }
 void grain(Rgba8View v,double amount,double size,double roughness,uint32_t seed,double ox,double oy,double scale) {
     validate(v); range(amount,0,100,"Grain amount"); range(size,0.001,10000000,"Grain size");
@@ -89,11 +105,12 @@ void grain(Rgba8View v,double amount,double size,double roughness,uint32_t seed,
     // Bounds keep floor(position/size) far inside int64_t, including neighbors.
     adjust_grain(v.bytes.data(),v.width,v.height,v.stride,amount,size,roughness,seed,ox,oy,scale);
 }
-void lensDistort(ConstRgba8View a,Rgba8View b,double k) {
+void lensDistort(ConstRgba8View a,Rgba8View b,double k,const Cancellation& cancelled) {
     sameSize(a,b); range(k,-1,1,"Lens coefficient outside [-1,1]");
     if(a.stride!=b.stride) throw std::invalid_argument("Lens source/destination strides differ");
     if(overlap(a.bytes,b.bytes))throw std::invalid_argument("Lens source and destination overlap");
-    lens_distort(a.bytes.data(),b.bytes.data(),a.width,a.height,a.stride,k);
+    KernelCancellation state{cancelled,{}};
+    state.finish(lens_distort_cancellable(a.bytes.data(),b.bytes.data(),a.width,a.height,a.stride,k,state.function(),&state));
 }
 long wandMask(ConstRgba8View a,size_t x,size_t y,size_t radius,int tolerance,bool contiguous,Gray8View b) {
     sameSize(a,b); if(radius>30000 || tolerance<0 || tolerance>255) throw std::invalid_argument("Wand parameters");
@@ -110,8 +127,10 @@ WandOutline wandOutline(ConstGray8View v) {
     if(status==-1) throw std::bad_alloc(); if(status==-2) throw std::length_error("Wand outline exceeds 8000000 edges");
     WandOutline result; if(np) result.points.assign(p,p+np*2); if(nl) result.loopLengths.assign(l,l+nl); return result;
 }
-bool contentFill(Rgba8View v,ConstGray8View mask) {
-    sameSize(v,mask); int result=content_fill(v.bytes.data(),v.stride,mask.bytes.data(),mask.stride,int(v.width),int(v.height));
+bool contentFill(Rgba8View v,ConstGray8View mask,const Cancellation& cancelled) {
+    sameSize(v,mask); KernelCancellation state{cancelled,{}};
+    int result=content_fill_cancellable(v.bytes.data(),v.stride,mask.bytes.data(),mask.stride,int(v.width),int(v.height),state.function(),&state);
+    state.finish(result);
     if(result<0) throw std::bad_alloc(); return result!=0;
 }
 void spotHeal(Rgba8View v,ConstGray8View mask,float opacity,int mode,uint32_t seed) {

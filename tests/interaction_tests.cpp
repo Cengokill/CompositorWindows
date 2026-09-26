@@ -52,7 +52,7 @@ test("gradient_handle_drag_click_cancel_and_tool_resolve",[]{
 });
 test("gradient_mask_uses_binary_palette_and_preserves_image",[]{
  MainWindow w(true);auto d=example();auto mask=std::make_shared<GrayRaster>();mask->width=128;mask->height=96;mask->pixels.resize(128*96,255);d.layers.front().mask=Mask{mask};auto&p=w.addProject(d);p.maskSelected=true;
- action(w,"Gradient (G)");const auto raster=p.document->layers.front().raster;drag(p,{10,40},{100,40});require(p.document->layers.front().raster==raster&&p.document->layers.front().mask==d.layers.front().mask&&p.gradientPreview&&p.gradientPreview->mask!=d.layers.front().mask,"Mask gradient changed image or omitted preview");
+ action(w,"Gradient (G)");const auto raster=p.document->layers.front().raster;drag(p,{10,40},{100,40});require(p.document->layers.front().raster==raster&&p.document->layers.front().mask==d.layers.front().mask&&p.gradientPreview&&p.gradientPreview->materializeLayer().mask!=d.layers.front().mask,"Mask gradient changed image or omitted preview");
  QTest::keyClick(&w,Qt::Key_Return);require(p.history.undoName()=="Gradient Mask"&&p.history.undoCount()==1,"Mask gradient history target wrong");
 });
 test("gradient_save_keeps_preview_out_of_package_and_history",[]{

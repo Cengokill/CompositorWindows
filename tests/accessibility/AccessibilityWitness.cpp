@@ -149,8 +149,8 @@ int main(int argc,char** argv){
             check("main_uia_focus",forward["uia_focus_missing_count"].toInt()==0&&backward["uia_focus_missing_count"].toInt()==0,"every Qt focus step is exposed as focused inside owned UIA root");
             std::optional<Document> before;size_t undo=0;gui(window,[&]{before=alpha.document;undo=alpha.history.undoCount();auto* action=command(window,"adjust.exposure");require(action->isEnabled(),"Exposure action enabled");
                 QTimer::singleShot(0,&window,[action]{action->trigger();});});
-            QDialog* dialog=nullptr;HWND dialogHwnd=nullptr;
-            for(int i=0;i<100&&!dialog;++i){gui(window,[&]{auto* candidate=qobject_cast<QDialog*>(QApplication::activeModalWidget());if(candidate&&ownedBy(candidate,&window)){dialog=candidate;dialogHwnd=reinterpret_cast<HWND>(candidate->winId());}});if(!dialog)std::this_thread::sleep_for(std::chrono::milliseconds(20));}
+            QDialog* dialog=nullptr;QPointer<QDialog> dialogGuard;HWND dialogHwnd=nullptr;
+            for(int i=0;i<100&&!dialog;++i){gui(window,[&]{for(auto* candidate:window.findChildren<QDialog*>())if(candidate->isVisible()&&candidate->objectName()=="adjustmentDialog"&&candidate->windowTitle()=="Exposure"&&ownedBy(candidate,&window)){dialog=candidate;dialogGuard=candidate;dialogHwnd=reinterpret_cast<HWND>(candidate->winId());break;}});if(!dialog)std::this_thread::sleep_for(std::chrono::milliseconds(20));}
             require(dialog&&dialogHwnd,"Exposure dialog opened within 2 seconds");auto dialogRoot=client.root(dialogHwnd);const auto dialogTree=client.snapshot(dialogRoot.Get());report["dialog_tree"]=dialogTree;
             for(const auto* name:{"Exposure","Offset","Gamma"})check(name,role(dialogTree,name,{UIA_SpinnerControlTypeId,UIA_EditControlTypeId}),"named numeric adjustment field");
             check("dialog_preview",role(dialogTree,"Preview",{UIA_CheckBoxControlTypeId}),"named Preview checkbox");
@@ -161,7 +161,7 @@ int main(int argc,char** argv){
             auto cancel=client.named(dialogRoot.Get(),L"Cancel");ComPtr<IUIAutomationInvokePattern> invoke;HRESULT invocation=UIA_E_NOTSUPPORTED;
             if(cancel&&SUCCEEDED(cancel->GetCurrentPatternAs(UIA_InvokePatternId,IID_PPV_ARGS(&invoke)))&&invoke)invocation=invoke->Invoke();
             check("uia_cancel_invoke",SUCCEEDED(invocation),QString("HRESULT 0x%1").arg(static_cast<unsigned long>(invocation),0,16));
-            bool closed=false;for(int i=0;i<100&&!closed;++i){gui(window,[&]{closed=!QApplication::activeModalWidget();});if(!closed)std::this_thread::sleep_for(std::chrono::milliseconds(20));}
+            bool closed=false;for(int i=0;i<100&&!closed;++i){gui(window,[&]{closed=!dialogGuard||!dialogGuard->isVisible();});if(!closed)std::this_thread::sleep_for(std::chrono::milliseconds(20));}
             check("cancel_closed",closed,"UIA Invoke closes actual owned Exposure dialog within 2 seconds");
             gui(window,[&]{check("cancel_immutable",alpha.document==before&&alpha.history.undoCount()==undo,"Cancel preserves canonical document and undo count");});
             }
@@ -169,7 +169,7 @@ int main(int argc,char** argv){
         }catch(const std::exception& e){report["status"]="error";report["error"]=e.what();result=2;}
         if(initialized)CoUninitialize();report["checks"]=checks;
         try{write(output,report);}catch(const std::exception& e){std::cerr<<e.what()<<'\n';result=2;}
-        QMetaObject::invokeMethod(&window,[&]{if(auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget()))if(ownedBy(modal,&window))modal->reject();app.quit();},Qt::QueuedConnection);
+        QMetaObject::invokeMethod(&window,[&]{for(auto* panel:window.findChildren<QDialog*>())if(panel->isVisible()&&ownedBy(panel,&window))panel->reject();app.quit();},Qt::QueuedConnection);
     });});
     app.exec();if(worker.joinable())worker.join();std::cout<<"accessibility witness exit="<<result.load()<<'\n';return result.load();
 }

@@ -1,5 +1,8 @@
 #include "MainWindow.h"
 #include "ImportActions.h"
+#include "WorkspaceDropQueue.h"
+#include "ProjectLayerCopyJob.h"
+#include "LayerMergeJob.h"
 #include "LayerPanel.h"
 #include <QApplication>
 #include <QClipboard>
@@ -12,6 +15,7 @@
 #include <QScopeGuard>
 #include <QStatusBar>
 #include <QTabBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace compositor {
@@ -22,17 +26,31 @@ void detach(NativeCanvas*canvas){
 }
 }
 MainWindow::~MainWindow(){
+    detachOpacityPercent();
     qApp->removeEventFilter(this);stopSelectionAutoscroll();
+    cancelEditPanel();
+    std::vector<QPointer<ui::EditPanelSession>> panels;
+    for(auto* object:findChildren<QObject*>())if(auto* session=dynamic_cast<ui::EditPanelSession*>(object))panels.push_back(session);
+    for(const auto& session:panels)if(session)delete session.data();
     // Qt destroys child widgets after derived members. No callback may then use
     // the already-destroyed project vector or a worker's completion host.
     for(auto&p:projects_)detach(p->canvas);
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();
     finishVisibilitySwipe();
     delete ui::LayerPanelController::find(layers_);
+    delete workspaceDrops_;workspaceDrops_=nullptr;
+    delete ui::ProjectLayerCopyJob::find(this);
+    delete ui::LayerMergeJob::find(this);
     delete commands_;commands_=nullptr;
     delete importQueue_;importQueue_=nullptr;
 }
 void MainWindow::initializeProject(EditorProject&project){
+    if(!tabs_->cornerWidget(Qt::TopRightCorner)){
+        auto* button=new QToolButton(tabs_);button->setObjectName("newProjectDropTarget");
+        for(auto* action:findChildren<QAction*>())if(action->property("commandId").toString()=="file.new"){button->setDefaultAction(action);break;}
+        if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
+        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");tabs_->setCornerWidget(button,Qt::TopRightCorner);
+    }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;
     project.canvas->pointerDown=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerBegin(p,m);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};

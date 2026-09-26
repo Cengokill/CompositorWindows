@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "version": "5.0.2",
+  "assets": [
+    {
+      "url": "https://api.nuget.org/v3-flatcontainer/wix/5.0.2/wix.5.0.2.nupkg",
+      "archive": "wix.5.0.2.nupkg",
+      "sha256": "f30ef0c74e2a986126539c5780be93ac24e8136eaf723b1937b26272703ae173",
+      "directory": "wix-5.0.2",
+      "entry": "tools/net6.0/any/wix.dll"
+    },
+    {
+      "url": "https://api.nuget.org/v3-flatcontainer/wixtoolset.ui.wixext/5.0.2/wixtoolset.ui.wixext.5.0.2.nupkg",
+      "archive": "wixtoolset.ui.wixext.5.0.2.nupkg",
+      "sha256": "5ef2c707614b9f70b6bbadd2d4abcb4124efee215e9b16bfbc80113079a604c7",
+      "directory": "wixtoolset.ui.wixext-5.0.2",
+      "entry": "wixext5/WixToolset.UI.wixext.dll"
+    }
+  ],
+  "license": {
+    "url": "https://raw.githubusercontent.com/wixtoolset/wix/aa65968c419420d32e3e1b647aea0082f5ca5b78/LICENSE.TXT",
+    "path": "WIX-LICENSE.txt",
+    "sha256": "dfdf2048787635215a6baf3b9d461dee89a2904d246787258a44f072a98d4786"
+  }
+}

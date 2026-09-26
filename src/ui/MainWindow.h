@@ -2,11 +2,13 @@
 #include "NativeCanvas.h"
 #include "graphics/BrushSession.h"
 #include "graphics/GrowingBrushSession.h"
+#include "graphics/CloneCursorPreview.h"
 #include "editing/Selection.h"
 #include "editing/SelectionGesture.h"
 #include <QChronoTimer>
 #include "layers/LayerOperations.h"
 #include "editing/PixelEdits.h"
+#include "editing/GradientPreview.h"
 #include "editing/Shapes.h"
 #include "editing/DocumentGeometry.h"
 #include "retouch/RetouchSession.h"
@@ -14,6 +16,7 @@
 #include <QToolBar>
 #include <QCheckBox>
 #include "PaletteDialog.h"
+#include "EditPanelSession.h"
 #include "ProjectToolState.h"
 #include "CommandRegistry.h"
 #include <QStackedWidget>
@@ -28,9 +31,10 @@
 #include <QColor>
 #include <memory>
 #include <unordered_set>
+class QMimeData;
 
 namespace compositor {
-namespace ui {class ImportQueue;}
+namespace ui {class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
 struct EditorProject {
     std::optional<Document> document;
     std::string active;
@@ -45,7 +49,9 @@ struct EditorProject {
     CompositeCache composite;
     std::shared_ptr<const graphics::GrowingBrushSnapshot> brushPreview;
     std::shared_ptr<const LayerRenderPreview> retouchPreview;
-    std::optional<Layer> gradientPreview;
+    std::shared_ptr<const editing::GradientPreview> gradientPreview;
+    std::optional<std::pair<std::string,Blend>> blendPreview;
+    std::shared_ptr<const Document> effectPreview;
     std::string brushLayerId;
     QString path;
     QString defaultTitle{"Untitled"};
@@ -60,19 +66,27 @@ class MainWindow final:public QMainWindow {
     QTreeWidget* layers_{};
     QComboBox* blend_{};
     QSlider* opacity_{};
+    ui::LayerOpacityField* opacityPercent_{};
     QComboBox* target_{};
     std::array<QDoubleSpinBox*,5> geometry_{};
     QAction *undo_{},*redo_{};
     std::vector<std::unique_ptr<EditorProject>> projects_;
     EditorProject* activeProject_{};
     ui::ImportQueue* importQueue_{};
+    ui::WorkspaceDropQueue* workspaceDrops_{};
     ui::CommandRegistry* commands_{};
     bool closingWindow_{};
     int nextProjectNumber_{2};
     QColor foreground_{Qt::black};
     using Tool=ProjectTool;
     Tool tool_{Tool::Move};
+    ProjectBrushMode brushMode_{ProjectBrushMode::Paint};
     QPointer<PaletteDialog> colorPicker_;
+    ui::PaletteSwatches* paletteSwatches_{};
+    QPointer<QWidget> maskPalettePopup_;
+    EditorProject* paletteTarget_{};
+    bool paletteWasMaskSelected_{};
+    QPointer<ui::EditPanelSession> editPanel_;
     std::optional<QPoint> palettePosition_;
     bool samplingPalette_{},showSampleRing_{true};
     QColor sampleOriginal_;
@@ -91,6 +105,7 @@ class MainWindow final:public QMainWindow {
     std::optional<Point> retouchAxisAnchor_;
     std::optional<bool> retouchAxisHorizontal_;
     std::array<QDoubleSpinBox*,3> retouchTip_{};
+    std::array<QSlider*,2> retouchSliders_{};
     QComboBox *healingModes_{}, *blurModes_{};
     QToolBar* retouchBar_{};
     QCheckBox *cloneAligned_{}, *cloneAllLayers_{};
@@ -103,11 +118,14 @@ class MainWindow final:public QMainWindow {
     int gradientHandle_{-1};
     bool gradientMask_{};
     std::string shapeDraftId_;
+    editing::ShapeStyle shapeDraftStyle_;
+    std::optional<editing::Rect> shapeDraftRect_;
     std::optional<editing::Rect> cropDraft_;
     QString cropRatioChoice_{"Free"};
     editing::LassoKind lassoKind_{editing::LassoKind::Freehand};
     int selectionExpandAmount_{1},selectionContractAmount_{1};
     std::optional<editing::CropDrag> cropDrag_;
+    std::optional<editing::CropSnap> cropSnap_;
     bool ellipse_{},selectionAntialias_{true},movingSelection_{};
     editing::SelectionMode selectionMode_{editing::SelectionMode::Replace};
     std::optional<Selection> selectionBefore_;
@@ -122,6 +140,7 @@ class MainWindow final:public QMainWindow {
     std::optional<QPointF> brushPointer_;
     Qt::KeyboardModifiers brushPointerModifiers_{};
     std::array<QDoubleSpinBox*,3> brushTip_{};
+    std::array<QSlider*,2> brushSliders_{};
     std::optional<std::pair<int,qint64>> opacityDigit_;
     EditorProject* opacityOwner_{};
     bool strokeMask_{},maskPaintWhite_{};
@@ -131,6 +150,8 @@ class MainWindow final:public QMainWindow {
     std::unique_ptr<graphics::GrowingBrushSession> stroke_;
     EditorProject* pointerOwner_{};
     std::shared_ptr<graphics::D3D11BrushCoverage> brushGpu_;
+    graphics::CloneCursorPreview cloneCursorPreview_;
+    bool cloneCrosshairShown_{};
     Point press_;
     std::optional<Transform> moving_;
     std::optional<editing_transform::Drag> transformDrag_;
@@ -148,17 +169,22 @@ class MainWindow final:public QMainWindow {
     void captureToolState(EditorProject&)const;
     void restoreToolState(const EditorProject&);
     void initializeProject(EditorProject&);
+    EditorProject* dropDestinationAt(QPoint,std::optional<Point>&);
+    bool canReceiveLayerDrop(const QMimeData*,QPoint,Qt::KeyboardModifiers);
+    bool receiveLayerDrop(const QMimeData*,QPoint,Qt::KeyboardModifiers);
     void switchProject();
     bool canSwitchProjects();
     ui::CommandState commandState(EditorProject* owner=nullptr);
     void initializeCommands();
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
+    ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
     void queueImageImports(const QStringList&,EditorProject*,std::optional<Point> = {});
     void refresh(bool render=true,bool rebuildLayers=true);
     void edit(const char* name,const std::function<void(Document&)>& operation);
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);
     void newDialog();
+    void checkForUpdates();
     void importImage();
     void exportImage();
     void openProjectDialog();
@@ -173,6 +199,10 @@ class MainWindow final:public QMainWindow {
     void selectTool(Tool);
     std::optional<double> cropRatio();
     void changeCropRatio();
+    void cancelShape();
+    void refreshShapeControls();
+    void cancelCrop();
+    void refreshCropControls();
     void resizeSelection(bool expand,double amount);
     bool handleEditingKey(QKeyEvent*);
     bool beginTemporaryHand(Point);
@@ -180,6 +210,10 @@ class MainWindow final:public QMainWindow {
     void cancelTemporaryHand();
     void setupBrushControls();
     void openPalette(bool background=false);
+    void setupPaletteControls(QToolBar*);
+    void refreshPaletteControls();
+    void openEditPanelColor(effects_tools::PaletteColor,const QString&,std::function<void(effects_tools::PaletteColor)>);
+    void closeEditPanelColor(bool commit);
     void swapPalette();
     void resetPalette();
     bool beginPalette(Point,Qt::KeyboardModifiers);
@@ -193,7 +227,15 @@ class MainWindow final:public QMainWindow {
     void cancelBrushTip();
     bool canvasNavigationAllowed();
     void finishOpacityEdit();
-    void restoreHistorySnapshot(const Snapshot&);
+    QWidget* createLayerOpacityControl();
+    void refreshOpacityPercent();
+    void detachOpacityPercent();
+    void restoreHistorySnapshot(Snapshot);
+    void previewBlendMode(std::optional<Blend>);
+    void setLayerBlendMode(Blend);
+    void editTransformGeometry(int,double);
+    void changeTransformDraft(const std::function<void(Transform&)>&);
+    Point transformScalePixelSize();
     void setupRetouchActions();
     void refreshRetouchControls();
     bool beginRetouch(Point,Qt::KeyboardModifiers);
@@ -207,6 +249,12 @@ class MainWindow final:public QMainWindow {
     void publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapshot>,bool finish=false);
     CompositeViewport brushViewport(EditorProject&,double,double,double,double,double);
     void setupAdjustmentActions();
+    ui::EditPanelHost makeEditPanelHost(EditorProject&,const Document&,std::string action);
+    std::shared_ptr<const Document> editPanelPreview(EditorProject&)const;
+    void populateEditPanelCommandState(ui::CommandState&,EditorProject*) const;
+    bool beginEditPanelPointer(Point,Qt::KeyboardModifiers);
+    bool updateEditPanelPointer(Point,Qt::KeyboardModifiers,bool finish);
+    void cancelEditPanel();
     void adjust(const QString& kind,bool live,bool existing=false);
     void removeBackground();
     void runFilter(int);
@@ -240,6 +288,7 @@ class MainWindow final:public QMainWindow {
     void loadLayerSelection(const std::string&,bool,Qt::KeyboardModifiers);
     layers::SelectionState layerSelection() const;
     void applyLayerEdit(layers::EditResult);
+    void mergeLayers();
     void layerCommand(int);
     void setupTransformActions();
     bool startTransformSession(bool persistent,bool distort=false);
@@ -274,8 +323,10 @@ public:
     EditorProject& addProject(Document d,QString title="Untitled",bool reuseEmpty=true);
     void addFeasibilityDocument();
     void openPath(const QString&);
+    void receiveDropPaths(const QStringList&,NativeCanvas* destination=nullptr,std::optional<Point> point={});
     bool openProjectPaths(const QStringList&);
     NativeCanvas* canvas(){auto*p=current();return p?p->canvas:nullptr;}
+    QString brushAdapterName()const{return brushGpu_?QString::fromStdString(brushGpu_->adapterName()):QString{};}
     void exerciseNativeUi(const QString& evidenceDirectory);
 };
 }

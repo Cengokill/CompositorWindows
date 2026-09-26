@@ -100,7 +100,7 @@ void ImportQueue::drain(){
     while(!p.pending.empty()){
         auto& next=p.pending.front();
         if(!next.target){p.pending.pop_front();continue;}
-        if(p.host.blocked(next.target)){p.retry.start();return;}
+        if(p.host.blockedRequest?p.host.blockedRequest(next.target,next.batch):p.host.blocked(next.target)){p.retry.start();return;}
         auto before=p.host.snapshot(next.target);if(!before){p.pending.pop_front();continue;}
         p.running=std::move(next);p.pending.pop_front();p.cancellation=std::make_shared<std::atomic_bool>(false);
         auto cancelled=p.cancellation;auto batch=p.running->batch;auto decoder=p.decoder;

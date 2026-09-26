@@ -1,6 +1,6 @@
 param(
     [string]$VsRoot='C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools',
-    [string]$Python='C:\Users\blurr\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe',
+    [string]$Python=(Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'),
     [switch]$SkipModel
 )
 $ErrorActionPreference='Stop'

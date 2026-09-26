@@ -1,3 +1,4 @@
+// Windows cancellation adapter: original arithmetic/order retained; -2 means cancelled.
 #include "NoisePixels.h"
 #include <math.h>
 
@@ -12,10 +13,12 @@ static inline uint32_t noise_hash(uint32_t x) {
 // Uniform in [0, 1).
 static inline float noise_unit(uint32_t key) { return (float)(noise_hash(key) >> 8) * (1.0f / 16777216.0f); }
 
-void noise_add(uint8_t *rgba, size_t width, size_t height, size_t stride,
-               float amount, int gaussian, int monochromatic, uint32_t seed) {
+int noise_add_cancellable(uint8_t *rgba, size_t width, size_t height, size_t stride,
+               float amount, int gaussian, int monochromatic, uint32_t seed, int (*cancelled)(void *), void *context) {
+    if (cancelled && cancelled(context)) return -2;
     float spread = amount / 100.0f * 127.5f;
     for (size_t y = 0; y < height; ++y) {
+        if (cancelled && cancelled(context)) return -2;
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
@@ -38,4 +41,9 @@ void noise_add(uint8_t *rgba, size_t width, size_t height, size_t stride,
             }
         }
     }
+    return 0;
+}
+void noise_add(uint8_t *rgba, size_t width, size_t height, size_t stride,
+               float amount, int gaussian, int monochromatic, uint32_t seed) {
+    (void)noise_add_cancellable(rgba,width,height,stride,amount,gaussian,monochromatic,seed,NULL,NULL);
 }

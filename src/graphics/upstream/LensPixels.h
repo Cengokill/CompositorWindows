@@ -9,4 +9,6 @@
 // pushes them outward (straightens pincushion distortion, corners turn transparent). Pixels
 // outside the source are transparent. k = 0 copies the source exactly.
 void lens_distort(const uint8_t *source, uint8_t *destination, size_t width, size_t height, size_t stride, double k);
+// Windows cancellation adapter: original arithmetic/order retained; -2 means cancelled.
+int lens_distort_cancellable(const uint8_t *source, uint8_t *destination, size_t width, size_t height, size_t stride, double k, int (*cancelled)(void *), void *context);
 #endif

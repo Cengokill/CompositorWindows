@@ -46,9 +46,24 @@ std::optional<Selection> loadedSelection(const Document& d,const std::string& id
 
 namespace compositor {
 void MainWindow::selectLayerTarget(const std::string& id,bool mask){
-    applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();auto* p=current();if(!p||!p->document)return;
-    auto found=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& l){return l.id==id;});if(found==p->document->layers.end())return;
-    p->active=id;p->selected={id};p->maskSelected=mask&&found->mask.has_value();refresh(false,false);if(auto* controller=ui::LayerPanelController::find(layers_))controller->updateSelection();
+    auto* project=current();if(!project||!project->document)return;
+    const auto state=commandState(project);
+    if(state.projectBusy||state.importing||state.brushStroke||state.modalDialog)return;
+    if(std::none_of(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==id;}))return;
+    // LayerMask.swift222 first resolves the gradient, then selectLayer277
+    // commits a transform only when the selected layer ID actually changes.
+    // Crop/polygon drafts and captured color/filter editors remain attached.
+    applyGradient();
+    if(!state.warpStroke&&!state.levels){
+        if(project->active!=id){
+            project->blendPreview.reset();finishOpacityEdit();
+            if(transformSession_)applyTransformSession();
+        }
+        project->active=id;project->selected={id};
+    }
+    const auto found=std::find_if(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==project->active;});
+    project->maskSelected=mask&&found!=project->document->layers.end()&&found->mask.has_value();
+    refresh(false,false);if(auto* controller=ui::LayerPanelController::find(layers_))controller->updateSelection();
 }
 void MainWindow::loadLayerSelection(const std::string& id,bool mask,Qt::KeyboardModifiers modifiers){
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();auto* p=current();if(!p||!p->document)return;
@@ -57,8 +72,17 @@ void MainWindow::loadLayerSelection(const std::string& id,bool mask,Qt::Keyboard
     edit(mask?"Load Mask Selection":"Load Layer Selection",[&](Document& d){d.selection=std::move(selection);});
 }
 void MainWindow::maskCommand(int value){
+    const auto command=ui::MaskCommand(value);
+    if(command==ui::MaskCommand::EditImage||command==ui::MaskCommand::EditMask){
+        // Alternate target controls follow LayerMask.swift222 directly. They
+        // must not cancel crop/lasso or commit a same-layer transform first.
+        if(auto* project=current();project&&project->document&&active())selectLayerTarget(project->active,command==ui::MaskCommand::EditMask);
+        // A stale/programmatic combo signal can arrive while its target is
+        // guarded. Restore the actual choice without emitting another edit.
+        if(auto* controller=ui::LayerPanelController::find(layers_))controller->updateSelection();
+        return;
+    }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();auto* p=current();if(!p||!p->document||!active())return;
-    const auto command=ui::MaskCommand(value);if(command==ui::MaskCommand::EditImage||command==ui::MaskCommand::EditMask){selectLayerTarget(p->active,command==ui::MaskCommand::EditMask);return;}
     if(command==ui::MaskCommand::LoadAlpha||command==ui::MaskCommand::LoadBlack){loadLayerSelection(p->active,command==ui::MaskCommand::LoadBlack,Qt::NoModifier);return;}
     auto result=ui::editMask(*p->document,layerSelection(),p->active,command);if(!result.changed)return;
     if(command==ui::MaskCommand::Delete)p->maskSelected=false;

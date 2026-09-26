@@ -62,27 +62,26 @@ std::array<uint8_t,768> gradient(const Settings&s){auto dark=s.reverse?s.highlig
 }
 std::string defaultAdjustmentJson(std::string_view kind){named(text(kind),kinds);QJsonObject range{{"black",0},{"white",255},{"gamma",1},{"outputBlack",0},{"outputWhite",255}};QJsonArray ls,cs;for(int i=0;i<4;++i){ls.append(range);cs.append(QJsonArray{QJsonObject{{"x",0},{"y",0}},QJsonObject{{"x",255},{"y",255}}});}return QJsonDocument(QJsonObject{{"kind",text(kind)},{"hue",0},{"saturation",0},{"lightness",0},{"colorize",false},{"levels",QJsonObject{{"channel","RGB"},{"ranges",ls}}},{"curves",QJsonObject{{"channel","RGB"},{"channels",cs}}}}).toJson(QJsonDocument::Compact).toStdString();}
 void validateAdjustmentJson(std::string_view json){settings(parse(json));}
-std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region){
+std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region,const std::function<bool()>& cancelled){
+ auto cancel=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};cancel();
  if(!source||source->width<1||source->height<1||source->width>30000||source->height>30000||uint64_t(source->width)*source->height>100000000)throw std::invalid_argument("Invalid source raster");
  auto expectedTiles=size_t((source->width+255)/256)*size_t((source->height+255)/256);if(source->tiles.size()!=expectedTiles||std::any_of(source->tiles.begin(),source->tiles.end(),[](const auto&t){return !t;}))throw std::invalid_argument("Invalid immutable tile storage");
  if(selection&&(selection->width!=source->width||selection->height!=source->height||selection->pixels.size()!=size_t(source->width)*source->height))throw std::invalid_argument("Selection must match source pixel grid");
  if(!std::isfinite(region.originX)||!std::isfinite(region.originY)||!std::isfinite(region.unitsPerPixel)||region.unitsPerPixel<=0)throw std::invalid_argument("Invalid adjustment region");auto s=settings(parse(json));
  if(s.identity()||(selection&&std::none_of(selection->pixels.begin(),selection->pixels.end(),[](auto v){return v!=0;})))return source;
  std::vector<std::array<float,3>> colors;if(s.kind==0)colors=cube(s);std::array<float,768> lut{};if(s.kind>=1&&s.kind<=3)lut=tables(s);std::array<uint8_t,768> gradientLut{};if(s.kind==4)gradientLut=gradient(s);
- auto result=std::make_shared<Raster>(*source);bool any=false;const int columns=(source->width+255)/256;
- for(int ty=0;ty<source->height;ty+=256)for(int tx=0;tx<source->width;tx+=256){int w=std::min(256,source->width-tx),h=std::min(256,source->height-ty);size_t index=size_t(ty/256)*columns+tx/256;auto original=source->tiles[index];
+ cancel();auto result=std::make_shared<Raster>(*source);bool any=false;const int columns=(source->width+255)/256;
+ for(int ty=0;ty<source->height;ty+=256)for(int tx=0;tx<source->width;tx+=256){cancel();int w=std::min(256,source->width-tx),h=std::min(256,source->height-ty);size_t index=size_t(ty/256)*columns+tx/256;auto original=source->tiles[index];
     if(selection){bool selected=false;for(int y=0;y<h&&!selected;++y)for(int x=0;x<w;++x)if(selection->pixels[size_t(ty+y)*source->width+tx+x]){selected=true;break;}if(!selected)continue;}
     auto tile=std::make_shared<Raster::Tile>(*original);auto bytes=std::span<uint8_t>(reinterpret_cast<uint8_t*>(tile->pixels.data()),sizeof(Raster::Tile));graphics::Rgba8View view{bytes,uint32_t(w),uint32_t(h),256*4};
     if(s.kind==0){for(int y=0;y<h;++y)for(int x=0;x<w;++x)tile->pixels[size_t(y)*256+x]=sampleCube(tile->pixels[size_t(y)*256+x],colors);}
     else if(s.kind<=3){
-        if(s.kind==1)for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto&p=tile->pixels[size_t(y)*256+x];if(p.a&&p.a<255){p.r=uint8_t(std::min(255,(int(p.r)*255+p.a/2)/p.a));p.g=uint8_t(std::min(255,(int(p.g)*255+p.a/2)/p.a));p.b=uint8_t(std::min(255,(int(p.b)*255+p.a/2)/p.a));}}
         graphics::applyLevels(view,lut);
-        if(s.kind==1)for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto&p=tile->pixels[size_t(y)*256+x];if(p.a&&p.a<255){p.r=uint8_t((int(p.r)*p.a+127)/255);p.g=uint8_t((int(p.g)*p.a+127)/255);p.b=uint8_t((int(p.b)*p.a+127)/255);}}
     }else if(s.kind==4)graphics::gradientMap(view,gradientLut);
     else if(s.kind==5)graphics::grain(view,s.amount,s.size,s.roughness,s.seed,region.originX+tx*region.unitsPerPixel,region.originY+ty*region.unitsPerPixel,region.unitsPerPixel);
     else bad();
     if(selection)for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto i=size_t(y)*256+x;auto mask=selection->pixels[size_t(ty+y)*source->width+tx+x];auto a=original->pixels[i],b=tile->pixels[i];auto mix=[&](uint8_t av,uint8_t bv){return uint8_t((int(av)*(255-mask)+int(bv)*mask+127)/255);};tile->pixels[i]={mix(a.r,b.r),mix(a.g,b.g),mix(a.b,b.b),mix(a.a,b.a)};}
     if(tile->pixels!=original->pixels){result->tiles[index]=tile;any=true;}
- }return any?std::shared_ptr<const Raster>(result):source;
+ }cancel();return any?std::shared_ptr<const Raster>(result):source;
 }
 }

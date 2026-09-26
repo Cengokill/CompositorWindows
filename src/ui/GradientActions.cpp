@@ -42,9 +42,9 @@ void MainWindow::refreshGradient(){
         else{
             auto fg=foreground_,bg=background_;
             if(gradientMask_){fg=maskPaintWhite_?Qt::white:Qt::black;bg=maskPaintWhite_?Qt::black:Qt::white;}
-            gradientOwner_->gradientPreview=editing::gradientLayer(*drawingOriginal_,d,gradientStart_,gradientEnd_,gradientSettings_,
-                {uint8_t(fg.red()),uint8_t(fg.green()),uint8_t(fg.blue()),255},
-                {uint8_t(bg.red()),uint8_t(bg.green()),uint8_t(bg.blue()),255},gradientMask_);
+            gradientOwner_->gradientPreview=std::make_shared<editing::GradientPreview>(*drawingOriginal_,d,gradientStart_,gradientEnd_,gradientSettings_,
+                Pixel{uint8_t(fg.red()),uint8_t(fg.green()),uint8_t(fg.blue()),255},
+                Pixel{uint8_t(bg.red()),uint8_t(bg.green()),uint8_t(bg.blue()),255},gradientMask_);
         }
         if(gradientOwner_==current())refresh();
     }catch(const std::exception&e){cancelGradient();statusBar()->showMessage(e.what());}
@@ -53,12 +53,19 @@ void MainWindow::applyGradient(){
     auto*owner=gradientOwner_;if(!drawingOriginal_||!owner)return;
     if(std::hypot(gradientEnd_.x-gradientStart_.x,gradientEnd_.y-gradientStart_.y)<.5){cancelGradient();return;}
     if(!owner->document||!owner->gradientPreview){cancelGradient();return;}
-    auto next=*owner->document;auto target=std::find_if(next.layers.begin(),next.layers.end(),[&](const Layer& layer){return layer.id==drawingOriginal_->id;});
-    if(target==next.layers.end()){cancelGradient();return;}
-    *target=*owner->gradientPreview;validateDocument(next);
-    owner->history.begin(gradientMask_?"Gradient Mask":"Gradient",owner->document,owner->active);
-    owner->document=std::move(next);owner->history.end(owner->document,owner->active);owner->gradientPreview.reset();
-    drawingOriginal_.reset();gradientOwner_=nullptr;gradientHandle_=-1;refresh(false);
+    bool began=false;
+    try{
+        auto next=*owner->document;auto target=std::find_if(next.layers.begin(),next.layers.end(),[&](const Layer& layer){return layer.id==drawingOriginal_->id;});
+        if(target==next.layers.end()){cancelGradient();return;}
+        if(*target!=*drawingOriginal_)throw std::runtime_error("The gradient target changed during preview");
+        *target=owner->gradientPreview->materializeLayer();validateDocument(next);
+        owner->history.begin(gradientMask_?"Gradient Mask":"Gradient",owner->document,owner->active);began=true;
+        owner->document=std::move(next);owner->history.end(owner->document,owner->active);owner->gradientPreview.reset();
+        drawingOriginal_.reset();gradientOwner_=nullptr;gradientHandle_=-1;refresh(false);
+    }catch(const std::exception& e){
+        if(began)if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}
+        cancelGradient();statusBar()->showMessage(e.what());
+    }
 }
 void MainWindow::cancelGradient(){
     auto*owner=gradientOwner_;if(!drawingOriginal_||!owner)return;

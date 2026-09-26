@@ -94,6 +94,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("file.close","File","Close Project","Ctrl+W",C::Workspace,G::WorkspaceSwitch,P::ProjectOperation,"Compositor/Document/ProjectWorkspace.swift:107");
         add("app.exit","File","Exit","Alt+F4",C::Application,G::WorkspaceSwitch,P::None,"Compositor/IO/CompositorApplicationDelegate.swift:39");
         add("app.about","Help","About Compositor","",C::Application,G::Always,P::None,"Native Windows application information");
+        add("help.check_updates","Help","Check for Updates…","",C::Application,G::Always,P::None,"Windows signed development updater");
         add("edit.undo","Edit","Undo","Ctrl+Z",C::Document,G::Undo,P::None,"Compositor/Document/EditorSession.swift:444",T::Undo);
         add("edit.redo","Edit","Redo","Ctrl+Shift+Z",C::Document,G::Redo,P::None,"Compositor/Document/EditorSession.swift:444",T::Redo);
         add("clipboard.cut","Clipboard","Cut","Ctrl+X",C::Pixels,G::Cut,P::FinishAppearance,"Compositor/CompositorApp.swift:113",T::Cut);
@@ -118,6 +119,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("canvas.flip_vertical","Canvas","Flip Canvas Vertically","",C::Document,G::Layers,P::FinishAppearance,"Compositor/CompositorApp.swift:206");
         add("canvas.crop_tool","Canvas","Crop Tool","",C::Tool,G::Tool,P::None,"Compositor/Document/EditorSession.swift:282");
         add("crop.apply","Canvas","Apply Crop","",C::Pending,G::ApplyCrop,P::None,"Compositor/Document/Crop.swift:187");
+        add("crop.cancel","Canvas","Cancel Crop","",C::Pending,G::ApplyCrop,P::None,"Compositor/Document/Crop.swift:178");
         add("layer.new","Layer","New Layer","Ctrl+Shift+N",C::Layer,G::Layers,P::FinishAppearance,"Compositor/CompositorApp.swift:241");
         add("layer.duplicate","Layer","Duplicate Layer","",C::Layer,G::Duplicate,P::FinishAppearance,"Compositor/CompositorApp.swift:228");
         add("layer.rename","Layer","Rename Layer…","",C::Layer,G::ActiveLayer,P::FinishAppearance,"Compositor/CompositorApp.swift:243");
@@ -141,7 +143,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("transform.cancel","Transform","Cancel Transform","",C::Pending,G::ApplyTransform,P::None,"Compositor/Rendering/EditorCanvas.swift:1493");
         add("transform.flip_horizontal","Transform","Flip Layer Horizontally","",C::Layer,G::Transform,P::FinishAppearance,"Compositor/CompositorApp.swift:257");
         add("transform.flip_vertical","Transform","Flip Layer Vertically","",C::Layer,G::Transform,P::FinishAppearance,"Compositor/CompositorApp.swift:259");
-        add("transform.scale","Transform","Scale…","",C::Layer,G::Transform,P::FinishAppearance,"Compositor/Document/EditorSession.swift:246");
+        add("transform.scale","Transform","Scale…","",C::Layer,G::TransformDraft,P::FinishAppearance,"Compositor/Document/EditorSession.swift:246");
         const char*adjustments[]{"Hue/Saturation…","Levels…","Curves…","Exposure…","Gradient Map…","Grain…"};
         const char*slugs[]{"hue_saturation","levels","curves","exposure","gradient_map","grain"};
         for(int i=0;i<6;++i){auto id=QString("adjust.%1").arg(slugs[i]).toUtf8();add(id.constData(),"Adjustments",adjustments[i],i==0?"Ctrl+U":i==1?"Ctrl+L":i==2?"Ctrl+M":"",C::Adjustment,G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/HueSaturation.swift:414");id=QString("adjust.new.%1").arg(slugs[i]).toUtf8();add(id.constData(),"New Adjustment Layer",adjustments[i],"",C::Adjustment,G::NewAdjustment,P::FinishAppearance,"Compositor/CompositorApp.swift:217");}

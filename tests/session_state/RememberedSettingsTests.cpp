@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+#include "ui/EditPanelSession.h"
+#include <QEventLoop>
 #include <QApplication>
 #include <QDialogButtonBox>
 #include <QElapsedTimer>
@@ -22,13 +24,25 @@ struct Fixture {
  void select(EditorProject* p){window.findChild<QTabWidget*>()->setCurrentWidget(p->page);require(window.findChild<QTabWidget*>()->currentWidget()==p->page,"tab switch accepted");}
  void trigger(const char* id){auto* action=command(window,id);require(action->isEnabled(),"command must be enabled");action->trigger();}
  void modal(const char* id,std::function<void(QDialog&)> configure,bool apply=false){
-  std::exception_ptr failure;bool visited=false;QTimer poll;poll.setInterval(5);QElapsedTimer elapsed;elapsed.start();
-  QObject::connect(&poll,&QTimer::timeout,&window,[&]{auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());if(!dialog)return;
-   try{if(!visited){visited=true;configure(*dialog);if(!apply){dialog->reject();return;}}
-    auto* box=dialog->findChild<QDialogButtonBox*>();if(box&&box->button(QDialogButtonBox::Apply)&&box->button(QDialogButtonBox::Apply)->isEnabled()){poll.stop();box->button(QDialogButtonBox::Apply)->click();}
-    else if(elapsed.elapsed()>15000)throw std::runtime_error("Apply did not become ready within frozen 15-second limit");
-   }catch(...){failure=std::current_exception();poll.stop();dialog->reject();}
-  });poll.start();trigger(id);poll.stop();require(visited,"actual modal opened");if(failure)std::rethrow_exception(failure);
+  std::exception_ptr failure;bool visited=false,finished=false,submitted=false;QPointer<QDialog> panel;
+  QMetaObject::Connection completion;QEventLoop wait;QTimer poll;poll.setInterval(5);QElapsedTimer elapsed;elapsed.start();
+  auto owned=[&](QObject* value){for(auto* current=value;current;current=current->parent())if(current==&window)return true;return false;};
+  auto discover=[&]()->QDialog*{
+   for(auto* object:window.findChildren<QObject*>())if(auto* session=dynamic_cast<ui::EditPanelSession*>(object))
+    if(session->canvas()==window.canvas()&&session->panel()&&session->panel()->isVisible())return session->panel();
+   auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());return dialog&&owned(dialog)?dialog:nullptr;
+  };
+  QObject::connect(&poll,&QTimer::timeout,&window,[&]{
+   try{
+    if(elapsed.elapsed()>15000)throw std::runtime_error("Panel did not finish within frozen 15-second limit");
+    auto* dialog=panel?panel.data():discover();if(!dialog)return;
+    if(!visited){visited=true;panel=dialog;completion=QObject::connect(dialog,&QDialog::finished,&wait,[&]{finished=true;wait.quit();});configure(*dialog);if(!apply){dialog->reject();return;}}
+    auto* box=dialog->findChild<QDialogButtonBox*>();
+    if(!submitted&&box&&box->button(QDialogButtonBox::Apply)&&box->button(QDialogButtonBox::Apply)->isEnabled()){submitted=true;box->button(QDialogButtonBox::Apply)->click();}
+   }catch(...){failure=std::current_exception();poll.stop();if(panel)panel->reject();wait.quit();}
+  });
+  poll.start();trigger(id);if(!finished&&!failure)wait.exec();poll.stop();QObject::disconnect(completion);
+  if(failure)std::rethrow_exception(failure);require(visited,"actual owned panel opened");require(finished,"actual panel finished before assertions");
  }
 };
 void lasso_return(){Fixture f;f.trigger("tool.polygon");f.trigger("tool.move");f.trigger("tool.lasso");auto* rail=f.window.findChild<QToolBar*>("tools");bool polygon=false;for(auto* a:rail->actions())if(a->property("editorTool").toInt()==int(ProjectTool::Polygon)&&a->isChecked())polygon=true;std::cout<<"returned_polygon="<<polygon<<'\n';require(polygon,"EditorSession.lassoKind survives leaving Lasso; pressing L selects remembered Polygonal");}

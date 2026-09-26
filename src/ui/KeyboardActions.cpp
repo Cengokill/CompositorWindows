@@ -9,7 +9,7 @@
 
 namespace compositor {
 namespace {
-bool hasSelection(const Document& document){if(!document.selection)return false;if(document.selection->outline)return !document.selection->outline->empty();const auto& coverage=document.selection->coverage;return coverage&&std::any_of(coverage->pixels.begin(),coverage->pixels.end(),[](uint8_t value){return value!=0;});}
+bool hasSelection(const Document& document){if(!document.selection)return false;if(document.selection->outline)return !document.selection->outline->empty();const auto& coverage=document.selection->coverage;return coverage&&coverage->hasCoverage();}
 bool visible(const Document& document,const std::string& id){const auto entries=layers::entries(document);return std::any_of(entries.begin(),entries.end(),[&](const layers::Entry& item){return item.id==id&&item.visible;});}
 }
 
@@ -74,7 +74,7 @@ bool MainWindow::handleEditingKey(QKeyEvent* event){
         }
         if(key==Qt::Key_Space){spaceHeld_=true;refreshBrushPointer();if(canvas())canvas()->setCursor(spaceDragging_?Qt::ClosedHandCursor:Qt::OpenHandCursor);return true;}
         if(plain&&shift&&(key==Qt::Key_Plus||key==Qt::Key_Equal||key==Qt::Key_Minus||key==Qt::Key_Underscore)){
-            if(canEditAppearance()){const bool forward=key==Qt::Key_Plus||key==Qt::Key_Equal;const int count=int(blendNames.size()),index=int(active()->blend);finishOpacityEdit();edit("Layer Blend Mode",[&](Document&){active()->blend=Blend((index+(forward?1:count-1))%count);});}return true;
+            if(canEditAppearance()){const bool forward=key==Qt::Key_Plus||key==Qt::Key_Equal;const int count=int(blendNames.size()),index=int(active()->blend);setLayerBlendMode(Blend((index+(forward?1:count-1))%count));}return true;
         }
         if(plain&&shift&&key==Qt::Key_U){
             if(tool_==Tool::Shape){if(!shapeDraftId_.empty())pointerCancel();shapeStyle_.kind=shapeStyle_.kind==editing::ShapeKind::Rectangle?editing::ShapeKind::Ellipse:editing::ShapeKind::Rectangle;if(auto* combo=findChild<QComboBox*>("shapeKind")){QSignalBlocker block(combo);combo->setCurrentIndex(int(shapeStyle_.kind));}refresh(false,false);}else selectTool(Tool::Shape);return true;
@@ -106,7 +106,7 @@ void MainWindow::interruptPointer(){
             try{publishTransformSession(false);}catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}}
         pointerOwner_=nullptr;refresh();return;
     }
-    if(cropDraft_){cropDrag_.reset();pointerOwner_=nullptr;refresh(false,false);return;}
+    if(cropDraft_){cropDrag_.reset();cropSnap_.reset();pointerOwner_=nullptr;refresh(false,false);return;}
     if(movingSelection_&&current()){auto* project=current();project->history.end(project->document,project->active);movingSelection_=false;selectionBefore_.reset();cancelSelectionGesture();pointerOwner_=nullptr;refresh(false);return;}
     if(tool_==Tool::Polygon&&selectionGesture_.active()){pointerOwner_=nullptr;return;}
     pointerCancel();

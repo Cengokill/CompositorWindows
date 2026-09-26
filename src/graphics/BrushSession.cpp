@@ -67,9 +67,9 @@ BrushSession::BrushSession(std::shared_ptr<const Raster> original,BrushSessionSe
         if(!std::isfinite(v)||std::abs(v)>1e7)throw std::invalid_argument("Invalid brush mapping");
     if(std::abs(geometry_.a*geometry_.d-geometry_.b*geometry_.c)<1e-12)throw std::invalid_argument("Singular brush mapping");
     if(selection_){
-        if(selection_->width!=geometry_.canvasWidth||selection_->height!=geometry_.canvasHeight||selection_->pixels.size()!=size_t(selection_->width)*selection_->height)
+        if(selection_->width!=geometry_.canvasWidth||selection_->height!=geometry_.canvasHeight||!selection_->validStorage())
             throw std::invalid_argument("Brush selection must use the document grid");
-        emptySelection_=std::none_of(selection_->pixels.begin(),selection_->pixels.end(),[](uint8_t v){return v!=0;});
+        emptySelection_=!selection_->hasCoverage();
     }
 }
 bool BrushSession::begin(Point p){
@@ -128,12 +128,12 @@ void BrushSession::render(std::span<const BrushSegment> settled,std::span<const 
     }
     const auto coverageStart=std::chrono::steady_clock::now();
     metrics_.tilePreparationMilliseconds+=std::chrono::duration<double,std::milli>(coverageStart-preparationStart).count();
+    std::vector<BrushTileRender> requests;requests.reserve(work.size());for(auto& item:work)requests.push_back({item.tile.get(),item.uniforms});
     if(accelerator_){
-        std::vector<BrushTileRender> requests;requests.reserve(work.size());for(auto& item:work)requests.push_back({item.tile.get(),item.uniforms});
         try{accelerator_->renderBatch(requests,settled,tail);}catch(const std::exception& e){
             acceleratorError_=e.what();accelerator_.reset();++metrics_.acceleratorFallbacks;
-            for(auto& item:work)renderBrushCpu(*item.tile,item.uniforms,settled,tail);}
-    }else for(auto& item:work)renderBrushCpu(*item.tile,item.uniforms,settled,tail);
+            renderBrushCpuBatch(requests,settled,tail);}
+    }else renderBrushCpuBatch(requests,settled,tail);
     const auto compositionStart=std::chrono::steady_clock::now();
     metrics_.coverageRenderMilliseconds+=std::chrono::duration<double,std::milli>(compositionStart-coverageStart).count();
     for(auto& item:work){

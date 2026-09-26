@@ -5,6 +5,7 @@
 #include <memory>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -44,11 +45,33 @@ public:
     static void resetMaterializationCount();
     size_t retainedBytes() const { return tiles.size()*sizeof(Tile); }
 };
+struct GrayBounds {
+    int x{},y{},width{},height{};
+    bool empty()const{return width<=0||height<=0;}
+};
+// Immutable document-coordinate coverage. Large vector selections rasterize
+// only requested tiles; dense image masks keep their existing byte storage.
+class GrayRasterSource {
+public:
+    virtual ~GrayRasterSource()=default;
+    virtual uint8_t pixel(int x,int y)const=0;
+    virtual GrayBounds nonzeroBounds()const=0;
+    virtual size_t retainedBytes()const=0;
+    virtual std::shared_ptr<const editing::SelectionOutline> vectorOutline()const{return {};}
+};
 struct GrayRaster {
     int width{},height{};
     std::vector<uint8_t> pixels;
     int samplingOriginX{},samplingOriginY{};
+    std::shared_ptr<const GrayRasterSource> source;
     uint8_t pixel(int x,int y,uint8_t exterior=0) const;
+    bool validStorage()const;
+    GrayBounds nonzeroBounds()const;
+    bool hasCoverage()const{return !nonzeroBounds().empty();}
+    size_t retainedBytes()const{return pixels.size()+(source?source->retainedBytes():0);}
+    static std::shared_ptr<const GrayRaster> sampled(int width,int height,GrayBounds support,
+        std::function<uint8_t(int,int)> pixel,size_t retainedBytes=0,
+        std::shared_ptr<const editing::SelectionOutline> outline={});
 };
 struct Mask {
     std::shared_ptr<const GrayRaster> raster;
@@ -112,6 +135,10 @@ public:
     explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={}):preview_(std::move(preview)){}
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel) const;
+    std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel) const;
+    // Cursor previews have at most1024 samples per axis; ceil-to-screen sizing
+    // can require a positive step slightly below the viewport minimum1/32.
+    std::shared_ptr<const Raster> renderCursorRegion(const Document&,double x,double y,int width,int height,double unitsPerPixel) const;
 };
 struct CompositeViewport {
     std::shared_ptr<const Raster> raster;
@@ -144,12 +171,15 @@ class History {
     std::string pendingName_;
     uint64_t revision_{1},savedRevision_{1},nextRevision_{2};
     int depth_{};
-    void trim(const std::optional<Document>&);
+    struct TrimPlan { size_t past{},future{}; };
+    static size_t retainedBytes(const std::optional<Document>&,std::span<const Entry>,std::span<const Entry>);
+    TrimPlan planTrim(const std::optional<Document>&,std::span<const Entry>,std::span<const Entry>) const;
+    void applyTrim(TrimPlan) noexcept;
 public:
     size_t entryLimit{100},byteLimit{256*1024*1024};
     void begin(std::string name,const std::optional<Document>& doc,const std::string& active);
     void end(const std::optional<Document>& doc,const std::string& active);
-    std::optional<Snapshot> cancel();
+    std::optional<Snapshot> cancel() noexcept;
     std::optional<Snapshot> undo();
     std::optional<Snapshot> redo();
     void markSaved(){ savedRevision_=revision_; }

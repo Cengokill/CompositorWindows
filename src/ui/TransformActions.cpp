@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "PropertyControls.h"
 #include "editing/DocumentGeometry.h"
 #include "editing/Shapes.h"
 #include <QToolBar>
@@ -67,6 +68,7 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
     auto*p=current();if(!p||!p->document||!transformDrag_||!transformSession_)return;
     if(p!=transformOwner_){cancelTransformSession();return;}
     try {
+        canvas()->setSnapGuides();
         auto& state=*transformSession_;
         if(state.pixelMove) {
             state.moveOffset={std::round(point.x-transformDrag_->start.x),std::round(point.y-transformDrag_->start.y)};
@@ -78,8 +80,10 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
                 Layer copy=*source;copy.id=newId();copy.name+=" Copy";state.target=copy.id;state.ids={copy.id};state.original.layers.insert(source+1,std::move(copy));state.duplicated=true;
             }
             auto visible=editing_transform::visiblePlacements(state.original);auto targets=editing_transform::collectSnapTargets({double(p->document->width),double(p->document->height)},visible,state.ids);
-            auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_},targets,canvas()->pointsPerPixel());
-            if(preview.accepted){state.draft=preview.transform;state.corners=preview.distortion;}
+            // Windows Ctrl retains handle distortion and temporarily suppresses
+            // move snapping. Source Command and Control are context-mapped here.
+            auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_||modifiers.testFlag(Qt::ControlModifier)},targets,canvas()->pointsPerPixel());
+            if(preview.accepted){state.draft=preview.transform;state.corners=preview.distortion;if(!finish)canvas()->setSnapGuides(preview.snap.x,preview.snap.y);}
         }
         if(finish&&!state.persistent){applyTransformSession();return;}
         publishTransformSession(false);
@@ -93,8 +97,9 @@ void MainWindow::setupTransformActions(){
     auto*controls=new QCheckBox("Show controls");controls->setObjectName("transformShowControls");controls->setChecked(true);bar->addWidget(controls);connect(controls,&QCheckBox::toggled,this,[this](bool value){transformControls_=value;refresh(false,false);});
     auto*ratio=new QCheckBox("Lock aspect ratio");ratio->setObjectName("transformLockRatio");bar->addWidget(ratio);connect(ratio,&QCheckBox::toggled,this,[this](bool v){lockRatio_=v;});
     auto*snap=new QCheckBox("Snap to edges and centers");snap->setObjectName("transformSnapping");snap->setChecked(true);bar->addWidget(snap);connect(snap,&QCheckBox::toggled,this,[this](bool v){snapping_=v;});
-    auto*sampling=new QComboBox;sampling->setObjectName("transformSampling");sampling->addItems({"Nearest","Smooth","High quality"});sampling->setCurrentIndex(2);sampling->setAccessibleName("Transform sampling");bar->addWidget(sampling);connect(sampling,&QComboBox::currentIndexChanged,this,[this](int i){if(transformSession_){transformSession_->draft.sampling=Transform::Sampling(i);publishTransformSession(false);refresh();}else if(active())edit("Transform Sampling",[&](Document&){active()->transform.sampling=Transform::Sampling(i);});});
-    for(bool horizontal:{true,false}){auto*flip=bar->addAction(horizontal?"Flip H":"Flip V");flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",horizontal?"Flip H":"Flip V",[this,horizontal]{try{const bool pending=bool(transformSession_);if(!pending&&!startTransformSession(false))return;transformSession_->draft=editing_transform::flippedLocal(transformSession_->draft,horizontal);publishTransformSession(false);if(pending)refresh();else applyTransformSession();}catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}});}
+    auto*scale=new ui::PropertyNumber;scale->releaseFocus=[this]{if(canvas())canvas()->setFocus();};scale->setObjectName("transformScale");scale->setAccessibleName("Transform scale percent");scale->setRange(.01,100000);scale->setDecimals(2);scale->setSuffix(" %");scale->setValue(100);bar->addWidget(scale);connect(scale,&QDoubleSpinBox::valueChanged,this,[this](double value){changeTransformDraft([&](Transform& draft){draft=editing_transform::scaledPercent(draft,value,transformScalePixelSize());});});
+    auto*sampling=new QComboBox;sampling->setObjectName("transformSampling");sampling->addItems({"Nearest","Smooth","High quality"});sampling->setCurrentIndex(2);sampling->setAccessibleName("Transform sampling");bar->addWidget(sampling);connect(sampling,&QComboBox::currentIndexChanged,this,[this](int i){if(i>=0&&i<=2)changeTransformDraft([&](Transform& draft){draft.sampling=Transform::Sampling(i);});});
+    for(bool horizontal:{true,false}){auto*flip=bar->addAction(horizontal?"Flip H":"Flip V");flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",horizontal?"Flip H":"Flip V",[this,horizontal]{changeTransformDraft([&](Transform& draft){draft=editing_transform::flippedLocal(draft,horizontal);});});}
     auto*menu=menuBar()->addMenu("&Transform");
     auto*free=menu->addAction("Free Transform");free->setObjectName("freeTransform");free->setShortcut(QKeySequence("Ctrl+T"));bindCommand(free,"Transform","Free Transform",[this]{startTransformSession(true);});
     auto*distort=menu->addAction("Distort");distort->setObjectName("distortTransform");bindCommand(distort,"Transform","Distort",[this]{startTransformSession(true,true);});
@@ -103,6 +108,6 @@ void MainWindow::setupTransformActions(){
     updateTransformActions();
     action(menu,"Flip Layer Horizontally",{},[this]{if(current()&&current()->document)edit("Flip Horizontal",[&](Document&d){d=editing::flipLayers(d,layerSelection().ids,true);});});
     action(menu,"Flip Layer Vertically",{},[this]{if(current()&&current()->document)edit("Flip Vertical",[&](Document&d){d=editing::flipLayers(d,layerSelection().ids,false);});});
-    action(menu,"Scale…",{},[this]{if(!active()||!active()->raster)return;bool ok;double value=QInputDialog::getDouble(this,"Scale Layer","Scale (%)",editing_transform::scalePercent(active()->transform,{double(active()->raster->width),double(active()->raster->height)}),.01,100000,2,&ok);if(ok)edit("Scale Layer",[&](Document&){auto*l=active();l->transform=editing_transform::scaledPercent(l->transform,value,{double(l->raster->width),double(l->raster->height)});if(!l->shapeJson.empty())*l=editing::redrawShape(*l);});});
+    action(menu,"Scale…",{},[this]{auto transform=selectedTransform();if(!transform||(transformSession_&&transformSession_->corners))return;bool ok;const double value=QInputDialog::getDouble(this,"Scale","Scale (%)",editing_transform::scalePercent(*transform,transformScalePixelSize()),.01,100000,2,&ok);if(ok)changeTransformDraft([&](Transform& draft){draft=editing_transform::scaledPercent(draft,value,transformScalePixelSize());});});
 }
 }

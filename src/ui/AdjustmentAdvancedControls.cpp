@@ -1,5 +1,7 @@
 #include "AdjustmentAdvancedControls.h"
+#include <QAccessibleWidget>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
@@ -8,20 +10,117 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
 
 namespace compositor {
 using namespace effects_tools;
 namespace {
+// Real child widgets give Qt's Windows UIA bridge stable object lifetimes and
+// keyboard focus. Pointer events still go to the original graph drag handler.
+class LevelsHandle final : public QWidget {
+public:
+    struct Value { double current{}, minimum{}, maximum{}, step{1}; };
+    std::function<Value()> read;
+    std::function<void(double)> write;
+    explicit LevelsHandle(QWidget* parent, const char* name) : QWidget(parent) {
+        setAccessibleName(QString::fromUtf8(name));
+        setObjectName(QStringLiteral("levelsHandle") + QString::fromUtf8(name).remove(' '));
+        setFocusPolicy(Qt::StrongFocus);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+    Value value() const { return read ? read() : Value{}; }
+    void setValue(double next) { if (isEnabled() && write && std::isfinite(next)) write(next); }
+    void step(int direction) { const auto current=value(); setValue(current.current+direction*current.step); }
+private:
+    void paintEvent(QPaintEvent*) override {
+        if (!hasFocus()) return;
+        QPainter painter(this); painter.setPen(QPen(palette().color(QPalette::Highlight),1,Qt::DashLine));
+        painter.setBrush(Qt::NoBrush); painter.drawRect(rect().adjusted(1,1,-2,-2));
+    }
+    void keyPressEvent(QKeyEvent* event) override {
+        if(event->key()==Qt::Key_Up||event->key()==Qt::Key_Right)step(1);
+        else if(event->key()==Qt::Key_Down||event->key()==Qt::Key_Left)step(-1);
+        else if(event->key()==Qt::Key_Home)setValue(value().minimum);
+        else if(event->key()==Qt::Key_End)setValue(value().maximum);
+        else {QWidget::keyPressEvent(event);return;}
+        event->accept();
+    }
+    void focusInEvent(QFocusEvent* event) override { QWidget::focusInEvent(event); update(); }
+    void focusOutEvent(QFocusEvent* event) override { QWidget::focusOutEvent(event); update(); }
+};
+class AccessibleLevelsHandle final : public QAccessibleWidget, public QAccessibleValueInterface {
+public:
+    explicit AccessibleLevelsHandle(LevelsHandle* handle):QAccessibleWidget(handle,QAccessible::Slider){}
+    LevelsHandle* handle() const { return static_cast<LevelsHandle*>(widget()); }
+    void* interface_cast(QAccessible::InterfaceType type) override {
+        return type==QAccessible::ValueInterface ? static_cast<QAccessibleValueInterface*>(this) : QAccessibleWidget::interface_cast(type);
+    }
+    QVariant currentValue() const override { return handle()->value().current; }
+    QVariant minimumValue() const override { return handle()->value().minimum; }
+    QVariant maximumValue() const override { return handle()->value().maximum; }
+    QVariant minimumStepSize() const override { return handle()->value().step; }
+    void setCurrentValue(const QVariant& input) override { bool valid=false; const double next=input.toDouble(&valid); if(valid)handle()->setValue(next); }
+    QString text(QAccessible::Text type) const override {
+        return type==QAccessible::Value ? QString::number(handle()->value().current,'g',12) : QAccessibleWidget::text(type);
+    }
+    QStringList actionNames() const override {
+        return {increaseAction(),decreaseAction(),setFocusAction()};
+    }
+    void doAction(const QString& action) override {
+        if(!handle()->isEnabled())return;
+        if(action==increaseAction())handle()->step(1);
+        else if(action==decreaseAction())handle()->step(-1);
+        else QAccessibleWidget::doAction(action);
+    }
+    QStringList keyBindingsForAction(const QString& action) const override {
+        if(action==increaseAction())return {QStringLiteral("Up"),QStringLiteral("Right")};
+        if(action==decreaseAction())return {QStringLiteral("Down"),QStringLiteral("Left")};
+        return QAccessibleWidget::keyBindingsForAction(action);
+    }
+};
+void installLevelsHandleAccessibility() {
+    static std::once_flag installed;
+    std::call_once(installed,[]{QAccessible::installFactory([](const QString&,QObject* object)->QAccessibleInterface*{
+        if(auto* handle=dynamic_cast<LevelsHandle*>(object))return new AccessibleLevelsHandle(handle);
+        return nullptr;
+    });});
+}
 class LevelsGraph final:public QWidget {
 public:
     LevelsSettings settings;
     LevelsHistogram bins{};
     bool ready{};
     std::function<void(LevelRange)> changed;
-    explicit LevelsGraph(QWidget* parent):QWidget(parent){setObjectName("levelsHistogramGraph");setAccessibleName("Original RGB histogram and Levels handles");setMinimumSize(240,210);setMouseTracking(true);}
+    explicit LevelsGraph(QWidget* parent):QWidget(parent){
+        installLevelsHandleAccessibility();
+        setObjectName("levelsHistogramGraph");setAccessibleName("Original RGB histogram and Levels handles");setMinimumSize(240,210);setMouseTracking(true);
+        setToolTip("Linear histogram with automatic vertical scaling. Tall spikes may extend beyond the graph; all tones from 0 to 255 remain included.");
+        setAccessibleDescription(toolTip());
+        const char* names[]{"Input black","Gamma","Input white","Output black","Output white"};
+        for(size_t i=0;i<handles_.size();++i){
+            auto* handle=handles_[i]=new LevelsHandle(this,names[i]);
+            handle->read=[this,i]{const auto r=settings.ranges[size_t(settings.channel)].normalized();
+                const double values[]{r.black,r.gamma,r.white,r.outputBlack,r.outputWhite};
+                return LevelsHandle::Value{values[i],i==1?.1:i==2?r.black+1:0,i==1?9.99:i==0?r.white-1:255,i==1?.01:1};};
+            handle->write=[this,i](double value){auto r=settings.ranges[size_t(settings.channel)].normalized();
+                if(i==1){r.gamma=std::clamp(value,.1,9.99);r=r.normalized();}
+                else r=moveLevelsHandle(r,i<3?int(i):int(i)-3,i>=3,value);
+                if(changed)changed(r);};
+        }
+        syncHandles();
+    }
+    void syncHandles(){
+        const auto r=settings.ranges[size_t(settings.channel)].normalized();const auto input=levelsInputHandles(r);
+        const double positions[]{input[0],input[1],input[2],r.outputBlack,r.outputWhite};
+        for(size_t i=0;i<handles_.size();++i){auto* handle=handles_[i];handle->setGeometry(int(std::lround(px(positions[i])))-11,i<3?149:187,22,20);handle->update();
+            if(QAccessible::isActive()){QAccessibleValueChangeEvent event(handle,handle->value().current);QAccessible::updateAccessibility(&event);}}
+    }
 private:
+    std::array<LevelsHandle*,5> handles_{};
     int dragging_{-1};bool output_{};
+    void resizeEvent(QResizeEvent* event)override{QWidget::resizeEvent(event);syncHandles();}
     double px(double value)const{return 10+value/255*std::max(1,width()-20);}
     double valueAt(double x)const{return std::clamp((x-10)/std::max(1,width()-20)*255,0.,255.);}
     void paintEvent(QPaintEvent*)override{
@@ -55,13 +154,15 @@ struct LevelsAdvancedControls::Impl {
         caption=new QLabel("Original pixels: histogram weighted by alpha and selection",parent);caption->setWordWrap(true);layout->addWidget(caption);
     }
     void arm(std::optional<LevelsSample> mode){armed=mode;for(int i=0;i<3;++i)samples[size_t(i)]->setChecked(mode==LevelsSample(i));if(owner->onSampleModeChanged)owner->onSampleModeChanged(mode);}
-    void publish(const LevelsSettings& next){if(json.empty()||next==settings)return;settings=next;json=withLevelsSettings(json,settings);graph->settings=settings;graph->update();if(owner->onChanged)owner->onChanged(json);}
+    void publish(const LevelsSettings& next){if(json.empty()||next==settings)return;settings=next;json=withLevelsSettings(json,settings);graph->settings=settings;graph->syncHandles();graph->update();if(owner->onChanged)owner->onChanged(json);}
 };
 LevelsAdvancedControls::LevelsAdvancedControls(QWidget* parent):QWidget(parent),impl_(std::make_unique<Impl>(this)){setObjectName("levelsAdvancedControls");}
 LevelsAdvancedControls::~LevelsAdvancedControls()=default;
-void LevelsAdvancedControls::setAdjustmentJson(std::string json){auto settings=levelsFromAdjustmentJson(json);impl_->json=std::move(json);impl_->settings=settings;impl_->graph->settings=settings;const char* names[]{"RGB","Red","Green","Blue"};impl_->graph->setAccessibleName(QString("Original %1 histogram and Levels handles").arg(names[int(settings.channel)]));impl_->graph->update();}
+void LevelsAdvancedControls::setAdjustmentJson(std::string json){auto settings=levelsFromAdjustmentJson(json);impl_->json=std::move(json);impl_->settings=settings;impl_->graph->settings=settings;const char* names[]{"RGB","Red","Green","Blue"};impl_->graph->setAccessibleName(QString("Original %1 histogram and Levels handles").arg(names[int(settings.channel)]));impl_->graph->syncHandles();impl_->graph->update();}
 std::string LevelsAdvancedControls::adjustmentJson()const{return impl_->json;}
 void LevelsAdvancedControls::setHistogram(LevelsHistogram histogram){for(const auto& channel:histogram)for(double value:channel)if(!std::isfinite(value)||value<0)throw std::invalid_argument("Invalid Levels histogram");impl_->graph->bins=std::move(histogram);impl_->graph->ready=true;for(auto* button:impl_->autos)button->setEnabled(true);impl_->graph->update();}
+const LevelsHistogram& LevelsAdvancedControls::histogram()const{return impl_->graph->bins;}
+bool LevelsAdvancedControls::histogramReady()const{return impl_->graph->ready;}
 std::optional<LevelsSample> LevelsAdvancedControls::sampleMode()const{return impl_->armed;}
 void LevelsAdvancedControls::applySample(std::array<double,3> rgb){if(impl_->armed)impl_->publish(sampleLevels(impl_->settings,rgb,*impl_->armed));}
 namespace {

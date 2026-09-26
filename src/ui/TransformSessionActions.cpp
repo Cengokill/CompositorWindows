@@ -1,8 +1,12 @@
 #include "MainWindow.h"
+#include "PropertyControls.h"
 #include "graphics/MaskSampling.h"
+#include "editing/Shapes.h"
 #include <QAction>
+#include <QSignalBlocker>
 #include <QStatusBar>
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 namespace compositor {
@@ -17,13 +21,52 @@ std::vector<std::string> visibleMembers(const Document& document,const std::vect
 }
 }
 
+void MainWindow::changeTransformDraft(const std::function<void(Transform&)>& change) {
+    auto* project=current();
+    if(refreshing_||!project||!project->document||project->importing||project->projectBusy||
+       (transformSession_&&transformSession_->corners))return;
+    try {
+        if(!transformSession_&&!startTransformSession(true))return;
+        auto next=transformSession_->draft;change(next);
+        if(!next.valid())return;
+        transformSession_->draft=next;publishTransformSession(false);refresh();
+    }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
+}
+void MainWindow::editTransformGeometry(int field,double value) {
+    if(field<0||field>4||!std::isfinite(value)||((field==2||field==3)&&value<1))return;
+    changeTransformDraft([&](Transform& t){
+        if(field==0)t.x=value;else if(field==1)t.y=value;
+        else if(field==2){if(lockRatio_)t.height*=value/t.width;t.width=value;}
+        else if(field==3){if(lockRatio_)t.width*=value/t.height;t.height=value;}
+        else t.rotation=std::fmod(value,360.);
+    });
+}
+Point MainWindow::transformScalePixelSize() {
+    if(transformSession_){const auto& state=*transformSession_;
+        if(state.group)return {state.originalBox.width,state.originalBox.height};
+        if(state.pixels){const auto& original=state.pixels->originalFloatingTransform();return {original.width,original.height};}
+        const auto layer=std::find_if(state.original.layers.begin(),state.original.layers.end(),[&](const Layer& item){return item.id==state.target;});
+        if(layer!=state.original.layers.end()){
+            // TransformInspector.pixelSize falls back to activeLayer.size for
+            // an unlinked mask, not to the mask bitmap or its placed dimensions.
+            if(state.maskOnly||!layer->raster)return {layer->transform.width,layer->transform.height};
+            return {double(layer->raster->width),double(layer->raster->height)};
+        }
+    }
+    auto* layer=active();auto* project=current();auto box=selectedTransform();
+    if(!layer||!project||!box)return {1,1};
+    if(layer->group||layerSelection().ids.size()>1)return {box->width,box->height};
+    if((project->maskSelected&&layer->mask&&!layer->mask->linked)||!layer->raster)return {layer->transform.width,layer->transform.height};
+    return {double(layer->raster->width),double(layer->raster->height)};
+}
+
 bool MainWindow::startTransformSession(bool persistent,bool distort) {
     if(transformSession_) {
         if(transformOwner_!=current())return false;
         if(distort&&!transformSession_->corners){transformSession_->corners=editing_transform::corners(transformSession_->draft);publishTransformSession(false);refresh();}
         return true;
     }
-    if(stroke_||retouch_||drawingOriginal_||!shapeDraftId_.empty()||selectionBefore_)return false;
+    if(!canEditLayers()||stroke_||retouch_||drawingOriginal_||!shapeDraftId_.empty()||selectionBefore_)return false;
     auto* project=current();auto* layer=active();if(!project||!project->document||!layer)return false;
     finishOpacityEdit();
     const auto selected=layerSelection();auto box=selectedTransform();if(!box)return false;
@@ -38,7 +81,7 @@ bool MainWindow::startTransformSession(bool persistent,bool distort) {
     state->maskOnly=!group&&project->maskSelected&&layer->mask&&!layer->mask->linked;
     const auto& selection=project->document->selection;
     if(persistent&&!group&&!project->maskSelected&&selection&&selection->coverage&&
-       std::any_of(selection->coverage->pixels.begin(),selection->coverage->pixels.end(),[](uint8_t value){return value!=0;})) {
+       selection->coverage->hasCoverage()) {
         state->pixels=std::make_unique<editing_transform::PixelTransformSession>(*layer,selection->coverage,editing_transform::PixelTransformKind::Affine);
         if(!state->pixels->begin())return false;
         state->draft=state->originalBox=state->pixels->originalFloatingTransform();
@@ -105,7 +148,10 @@ void MainWindow::publishTransformSession(bool finish) {
                         if(layer->mask->placement&&editing_transform::samePlacement(*layer->mask->placement,placement))layer->mask->placement.reset();
                     }
                 }
-                if(finish&&!layer->shapeJson.empty())*layer=editing::redrawShape(*layer);
+                if(!layer->shapeJson.empty()){
+                    if(finish)*layer=editing::redrawShape(*layer);
+                    else if(auto preview=editing::shapeTransformPreview(original,placement))layer->raster=std::move(preview);
+                }
             }
         }
         project->active=state.duplicated?state.target:state.originalActive;project->selected=state.duplicated?std::vector<std::string>{state.target}:state.originalSelected;
@@ -117,6 +163,7 @@ void MainWindow::publishTransformSession(bool finish) {
 void MainWindow::applyTransformSession() {
     if(!transformSession_||!transformOwner_)return;
     auto* owner=transformOwner_;
+    owner->canvas->setSnapGuides();
     try {
         if(transformSession_->corners&&!transformSession_->pixels) {
             const auto* name=transformSession_->maskOnly?"Distort Layer Mask":transformSession_->group?"Distort Layers":"Distort";
@@ -131,17 +178,24 @@ void MainWindow::applyTransformSession() {
 
 void MainWindow::cancelTransformSession() {
     if(!transformSession_)return;
-    auto* owner=transformOwner_;const auto activeId=transformSession_->originalActive;const auto selected=transformSession_->originalSelected;const bool mask=transformSession_->originalMaskSelected;
+    auto* owner=transformOwner_;auto activeId=std::move(transformSession_->originalActive);auto selected=std::move(transformSession_->originalSelected);const bool mask=transformSession_->originalMaskSelected;
+    if(owner)owner->canvas->setSnapGuides();
     transformSession_.reset();transformOwner_=nullptr;transformDrag_.reset();transformBefore_.reset();transformIds_.clear();
     if(owner) {
-        if(auto snapshot=owner->history.cancel()){owner->document=snapshot->document;owner->active=snapshot->activeLayer;}
-        else owner->active=activeId;
-        owner->selected=selected;owner->maskSelected=mask;
+        if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}
+        else owner->active=std::move(activeId);
+        owner->selected=std::move(selected);owner->maskSelected=mask;
     }
     refresh();
 }
 
 void MainWindow::updateTransformActions() {
     for(const auto* name:{"applyTransform","cancelTransform"})if(auto* item=findChild<QAction*>(name))item->setEnabled(bool(transformSession_));
+    const auto draft=selectedTransform();auto* project=current();auto* layer=active();
+    const bool editable=ui::commandEnabled(ui::CommandGate::TransformDraft,commandState())&&project&&project->document&&!project->importing&&!project->projectBusy&&draft&&layer&&
+        (layer->raster||layer->group||transformSession_)&&(!transformSession_||!transformSession_->corners);
+    if(auto* sampling=findChild<QComboBox*>("transformSampling")){QSignalBlocker block(sampling);sampling->setEnabled(editable);if(draft)sampling->setCurrentIndex(int(draft->sampling));}
+    if(auto* scale=findChild<QDoubleSpinBox*>("transformScale")){QSignalBlocker block(scale);scale->setEnabled(editable);if(draft)ui::synchronizeNumber(scale,editing_transform::scalePercent(*draft,transformScalePixelSize()));}
+    for(const auto* name:{"transformFlipH","transformFlipV"})if(auto* item=findChild<QAction*>(name))item->setEnabled(editable);
 }
 }

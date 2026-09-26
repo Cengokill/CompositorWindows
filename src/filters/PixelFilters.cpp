@@ -43,7 +43,15 @@ std::vector<std::uint8_t> motion(const std::vector<std::uint8_t>& source,int w,i
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&63)==0)cancel(limits);std::array<double,4> sum{};for(int k=-r;k<=r;++k)for(int c=0;c<4;++c)sum[c]+=sample(source,w,h,x+k*dx,y+k*dy,c)*weights[k+r];for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=byte(sum[c]);}}return out;
 }
 std::shared_ptr<const Raster> resize(const Raster& source,int w,int h,const Limits& limits){
-    count(w,h,limits);auto src=source.rgba();std::vector<std::uint8_t> out(std::size_t(w)*h*4);for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sx=std::clamp((x+.5)*source.width/w-.5,0.,double(source.width-1)),sy=std::clamp((y+.5)*source.height/h-.5,0.,double(source.height-1));for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=byte(sample(src,source.width,source.height,sx,sy,c));}}return Raster::fromRgba(w,h,out.data(),std::size_t(w)*4);
+    count(w,h,limits);std::vector<std::uint8_t> out(std::size_t(w)*h*4);
+    // Filters.prepared uses BrushRaster.draw with interpolationQuality=.none.
+    // Read source tiles at destination pixel centers, preserving premultiplication
+    // and avoiding a second full source RGBA allocation for the preview copy.
+    for(int y=0;y<h;++y){cancel(limits);const int sy=int((std::int64_t(2*y+1)*source.height)/(2*h));
+        for(int x=0;x<w;++x){const int sx=int((std::int64_t(2*x+1)*source.width)/(2*w));
+            const auto p=source.pixel(sx,sy);const auto i=(std::size_t(y)*w+x)*4;
+            out[i]=p.r;out[i+1]=p.g;out[i+2]=p.b;out[i+3]=p.a;}}
+    return Raster::fromRgba(w,h,out.data(),std::size_t(w)*4);
 }
 PixelRect coverageBounds(const SourceSelection& selected){const auto&m=*selected.coverage;int loX=m.width,loY=m.height,hiX=0,hiY=0;for(int y=0;y<m.height;++y)for(int x=0;x<m.width;++x)if(m.pixel(x,y)){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}return {selected.originX+loX,selected.originY+loY,hiX-loX,hiY-loY};}
 }
@@ -54,14 +62,14 @@ Transform placedGrid(const Transform& placed,int originalWidth,int originalHeigh
 }
 std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Settings& raw,double scale,std::uint32_t seed,const GrayRaster* selection,const Limits& limits){
     kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>1)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
-    if(kind==Kind::ContentAwareFill&&!selection)throw std::runtime_error("Content-Aware Fill needs a selection");const auto s=raw.normalized();auto original=source.rgba(),result=original;const int w=source.width,h=source.height;
+    if(kind==Kind::ContentAwareFill&&!selection)throw std::runtime_error("Content-Aware Fill needs a selection");const auto s=raw.normalized();auto original=source.rgba();cancel(limits);auto result=original;cancel(limits);const int w=source.width,h=source.height;
     if(selection&&empty(*selection))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);
     switch(kind){
         case Kind::GaussianBlur:result=gaussian(original,w,h,s.radius*scale,limits);break;
         case Kind::MotionBlur:result=motion(original,w,h,s.distance*scale/std::sqrt(12.),s.angle,limits);break;
-        case Kind::AddNoise:graphics::addNoise(view(result,w,h),float(s.amount),s.gaussian,s.monochromatic,seed);break;
-        case Kind::LensCorrection:graphics::lensDistort(graphics::readOnly(view(original,w,h)),view(result,w,h),s.distortion/100*.35);break;
-        case Kind::ContentAwareFill:{graphics::ConstGray8View mask{selection->pixels,std::uint32_t(w),std::uint32_t(h),std::size_t(w)};if(!graphics::contentFill(view(result,w,h),mask))throw std::runtime_error("Not enough unselected opaque pixels to synthesize a fill");break;}
+        case Kind::AddNoise:graphics::addNoise(view(result,w,h),float(s.amount),s.gaussian,s.monochromatic,seed,limits.cancelled);break;
+        case Kind::LensCorrection:graphics::lensDistort(graphics::readOnly(view(original,w,h)),view(result,w,h),s.distortion/100*.35,limits.cancelled);break;
+        case Kind::ContentAwareFill:{graphics::ConstGray8View mask{selection->pixels,std::uint32_t(w),std::uint32_t(h),std::size_t(w)};if(!graphics::contentFill(view(result,w,h),mask,limits.cancelled))throw std::runtime_error("Not enough unselected opaque pixels to synthesize a fill");break;}
     }
     cancel(limits);if(selection)for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=std::size_t(y)*w+x;unsigned coverage=selection->pixels[i];for(int c=0;c<4;++c)result[i*4+c]=std::uint8_t((unsigned(result[i*4+c])*coverage+unsigned(original[i*4+c])*(255-coverage)+127)/255);}}
     graphics::clampPremultiplied(view(result,w,h));return Raster::fromRgba(w,h,result.data(),std::size_t(w)*4);

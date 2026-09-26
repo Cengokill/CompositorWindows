@@ -1,12 +1,14 @@
 #pragma once
 #include "core/Document.h"
 #include "editing/SelectionGesture.h"
+#include "editing/Shapes.h"
 #include "editing_transform/TransformGeometry.h"
 #include "graphics/CanvasViewport.h"
 #include "platform/DisplayProfile.h"
 #include "platform/DisplayProfileWatcher.h"
 #include <QWidget>
 #include <QPointer>
+#include <QTimer>
 #include <functional>
 #include <unordered_map>
 #include <d3d11.h>
@@ -16,6 +18,9 @@
 
 namespace compositor {
 class NativeCanvas final:public QWidget {
+public:
+    struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;};
+private:
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_;
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_;
@@ -25,13 +30,22 @@ class NativeCanvas final:public QWidget {
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_,image_;
     std::shared_ptr<const Raster> raster_;
     std::shared_ptr<const GrayRaster> selection_;
-    std::vector<std::pair<Point,Point>> selectionEdges_;
+    std::shared_ptr<const editing::SelectionOutline> selectionInputOutline_,selectionOutline_;
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> selectionGeometry_;
+    std::optional<std::array<float,6>> selectionMatrix_;
+    QTimer* selectionTimer_{};
+    int selectionPhase_{};
     std::optional<Transform> transformOverlay_;
     std::optional<editing_transform::Corners> distortionOverlay_;
     std::optional<std::pair<Point,Point>> gradientLine_;
+    std::optional<ShapeDraftOverlay> shapeDraft_;
+    std::optional<editing::Rect> cropOverlay_;
+    std::optional<double> snapGuideX_,snapGuideY_;
     std::optional<editing::LassoDraft> selectionDraft_;
-    struct BrushCursor {Point center;double diameter;std::optional<double> hardness;std::optional<Point> marker;};
+    struct BrushCursor {Point center;double diameter;std::optional<double> hardness;std::optional<Point> marker;std::shared_ptr<const Raster> preview;double opacity{1};};
     std::optional<BrushCursor> brushCursor_;
+    std::shared_ptr<const Raster> brushPreviewSource_;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> brushPreviewBitmap_;
     struct SampleRing {Point position;Pixel original,sampled;};
     std::optional<SampleRing> sampleRing_;
     int documentWidth_{},documentHeight_{};
@@ -59,6 +73,8 @@ class NativeCanvas final:public QWidget {
     void upload();
     void releaseDevice();
     void draw(bool present=true);
+    void drawSelection();
+    void updateSelectionAnimation();
     graphics::CanvasViewport viewportState()const;
     void installViewport(const graphics::CanvasViewport&);
     void synchronizeViewport();
@@ -85,14 +101,20 @@ public:
     std::function<CompositeViewport(double,double,double,double,double)> viewportProvider;
     void setRaster(std::shared_ptr<const Raster>);
     void setDocumentSize(int width,int height);
-    void setSelection(std::shared_ptr<const GrayRaster>);
+    void setSelection(std::shared_ptr<const GrayRaster>,std::shared_ptr<const editing::SelectionOutline> outline={});
     void setSelectionDraft(std::optional<editing::LassoDraft> value){selectionDraft_=std::move(value);update();}
     const std::optional<editing::LassoDraft>& selectionDraft()const{return selectionDraft_;}
     void setTransformOverlay(std::optional<Transform> value){transformOverlay_=value;update();}
     void setDistortionOverlay(std::optional<editing_transform::Corners> value){distortionOverlay_=value;update();}
     // Document coordinates. Source endpoints draw at radius6 DIPs; caller hit radius10 DIPs.
     void setGradientLine(std::optional<std::pair<Point,Point>> value){gradientLine_=value;update();}
-    void setBrushCursor(std::optional<Point> logicalCenter,double logicalDiameter,std::optional<double> hardness={},std::optional<Point> marker={}){if(logicalCenter)brushCursor_=BrushCursor{*logicalCenter,logicalDiameter,hardness,marker};else brushCursor_.reset();update();}
+    void setShapeDraft(std::optional<ShapeDraftOverlay> value){shapeDraft_=std::move(value);update();}
+    const std::optional<ShapeDraftOverlay>& shapeDraft()const{return shapeDraft_;}
+    void setCropOverlay(std::optional<editing::Rect> value){cropOverlay_=value;update();}
+    const std::optional<editing::Rect>& cropOverlay()const{return cropOverlay_;}
+    static std::optional<int> cropResizeHandle(editing::Rect,Point viewPoint,const editing_transform::ViewMapping&);
+    void setSnapGuides(std::optional<double> x={},std::optional<double> y={}){snapGuideX_=x;snapGuideY_=y;update();}
+    void setBrushCursor(std::optional<Point> logicalCenter,double logicalDiameter,std::optional<double> hardness={},std::optional<Point> marker={},std::shared_ptr<const Raster> preview={},double opacity=1){if(logicalCenter)brushCursor_=BrushCursor{*logicalCenter,logicalDiameter,hardness,marker,std::move(preview),opacity};else brushCursor_.reset();update();}
     void setSampleRing(std::optional<Point> position,Pixel original={},Pixel sampled={}){if(position)sampleRing_=SampleRing{*position,original,sampled};else sampleRing_.reset();update();}
     editing_transform::ViewMapping viewMapping()const;
     void fit();
@@ -103,6 +125,7 @@ public:
     QPointF documentPoint(QPointF) const;
     QString deviceError()const{return error_;}
     bool deviceReady()const{return bool(context_);}
+    QString adapterName()const;
     void recreateDevice();
     QImage captureRendered();
     // Override is local to this canvas; null restores Windows monitor discovery.

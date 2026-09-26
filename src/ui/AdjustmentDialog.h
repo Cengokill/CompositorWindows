@@ -3,6 +3,7 @@
 #include <QString>
 #include <optional>
 #include <functional>
+#include "EditPanelSession.h"
 class QWidget;
 namespace compositor {
 struct AdjustmentDialogResult { Document document; std::string active; };
@@ -12,4 +13,6 @@ struct AdjustmentDialogOptions {
 };
 std::optional<AdjustmentDialogResult> showAdjustmentDialog(QWidget*,const Document&,
     const std::string& active,const QString& kind,bool live,bool existing,const AdjustmentDialogOptions& options={});
+ui::EditPanelSession* openAdjustmentPanel(QWidget*,const Document&,const std::string& active,
+    const QString& kind,bool live,bool existing,const AdjustmentDialogOptions&,ui::EditPanelHost);
 }

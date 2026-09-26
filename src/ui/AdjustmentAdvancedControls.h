@@ -16,6 +16,8 @@ public:
     void setAdjustmentJson(std::string);
     std::string adjustmentJson() const;
     void setHistogram(effects_tools::LevelsHistogram);
+    const effects_tools::LevelsHistogram& histogram() const;
+    bool histogramReady() const;
     std::optional<effects_tools::LevelsSample> sampleMode() const;
     void applySample(std::array<double,3> originalStraightRGB);
     std::function<void(const std::string&)> onChanged;

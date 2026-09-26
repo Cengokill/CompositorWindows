@@ -1,0 +1,30 @@
+Compositor Windows community preview
+
+Community Windows port of Compositor by Robbie Tilton:
+https://github.com/robbietilton/Compositor
+Baseline: a19db9011282399785dc18efcfded904627bdcc2 (Compositor 1.0.4).
+This port is not endorsed by the upstream author. Complete Mac equivalence
+and complete Photoshop compatibility are not claimed.
+
+The application and reused Compositor code are distributed under MIT; see
+Compositor-MIT.txt. The offline foreground replacement uses MIT-licensed
+BiRefNet_lite weights, pinned to the revision recorded in its model card.
+ONNX Runtime license and third party notices accompany its binary.
+
+Qt 6.8.3 is dynamically linked. Qt license texts and the upstream supplied
+SPDX inventory are in Qt and Qt-SBOM. This package uses Qt under LGPL-3.0
+where that license applies, with component-specific notices in SPDX.
+libheif and libde265 are dynamically linked under LGPL-3.0-or-later.
+Corresponding source archives, application source and dependency build
+scripts are in ../sources. Users may replace the application-local DLLs
+and run Compositor.exe directly. Automatic updates are disabled in this
+preview; no development update helper or update trust configuration ships.
+
+Microsoft Visual C++ runtime DLLs are redistributed app-locally from the
+installed Visual Studio redistributable directory; Microsoft terms apply.
+Windows system components are supplied by Windows 11.
+
+The MSI installer is produced with WiX 5.0.2 under the Microsoft Reciprocal
+License; WIX-LICENSE.txt contains the installer tool's notices. The portable
+application requires neither WiX nor .NET. The original geometric app icon
+is covered by the application MIT license. No Apple icons are used.

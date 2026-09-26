@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$Install)
+param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$Install,[string]$UpgradeInstaller)
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $package=[IO.Path]::GetFullPath($PackageDirectory)
@@ -22,6 +22,73 @@ function RunApp([string]$exe,[string[]]$arguments,[string]$name){
 $manifest=Get-Content -LiteralPath (Join-Path $package 'package-manifest.json') -Raw|ConvertFrom-Json
 $bad=@($manifest.files|Where-Object {(Get-FileHash -LiteralPath (Join-Path $portable $_.path) -Algorithm SHA256).Hash -ine $_.sha256})
 Record 'package_sha256' ($bad.Count -eq 0) @{files=$manifest.files.Count;bad=$bad}
+if($manifest.schema -eq 2){
+ $application=Join-Path $portable $manifest.entryPoint
+ $policy=Get-Content -LiteralPath (Join-Path $portable 'release-policy.json') -Raw | ConvertFrom-Json
+ $developmentFiles=@('CompositorLauncher.exe','CompositorUpdater.exe','install.json','state','update-source.json','update-receipt.json')
+ $unexpected=@($developmentFiles | Where-Object {Test-Path -LiteralPath (Join-Path $portable $_)})
+ Record 'preview_manual_update_distribution' ($policy.automaticUpdates -eq $false -and $manifest.automaticUpdates -eq $false -and $unexpected.Count -eq 0) @{unexpected=$unexpected;policy=$policy}
+ $sourceArchive=Join-Path $package $manifest.sourceSnapshot
+ Record 'matching_application_source' ((Get-FileHash -LiteralPath $sourceArchive).Hash -ieq $manifest.sourceSha256 -and (Get-FileHash -LiteralPath (Join-Path $portable 'sources\CompositorWindows-source.zip')).Hash -ieq $manifest.sourceSha256) @{sha256=$manifest.sourceSha256}
+ $health=RunApp $application @('--update-health-check') 'portable-health'
+ Record 'portable_clean_path_health' ($health.exitCode -eq 0) $health
+ $native=Join-Path $run 'native'
+ $ui=RunApp $application @('--warp','--ui-test','--evidence',$native) 'portable-native'
+ Record 'portable_native_workflow' ($ui.exitCode -eq 0) $ui
+ $project=Join-Path $native 'Project 実証 test.comp'
+ if(-not(Test-Path -LiteralPath $project)){throw 'Native test did not produce the Unicode project fixture'}
+ $render=Join-Path $run 'portable-reopen.png'
+ $reopened=RunApp $application @('--render-project',$project,'--output',$render) 'portable-reopen'
+ Record 'portable_unicode_project_reopen_export' ($reopened.exitCode -eq 0 -and (Test-Path -LiteralPath $render)) $reopened
+ if($Install){
+  $verb='HKCU:\Software\Classes\Directory\shell\CompositorWindowsPreview'
+  $registration='HKCU:\Software\CompositorWindows\CommunityPreview'
+  if((Test-Path -LiteralPath $verb) -or (Test-Path -LiteralPath $registration)){throw 'An existing community preview installation is registered; refusing to change it for testing'}
+  $installRoot=Join-Path $run 'standard-user-install'
+  $setup=Join-Path $package "CompositorWindows-$($manifest.version)-x64.msi"
+  $installedMsi=$null
+  try {
+   $installed=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/i',$setup,'/qn','/norestart',"INSTALLFOLDER=$installRoot",'/l*v',(Join-Path $run 'msi-install.log')) 'msi-install'
+   if($installed.exitCode -in @(0,3010)){$installedMsi=$setup}
+   Record 'msi_per_user_install' ($installed.exitCode -eq 0 -and (Get-ItemProperty -LiteralPath $registration).InstallLocation.TrimEnd('\') -eq $installRoot) $installed
+   $installedBad=@($manifest.files | Where-Object {(Get-FileHash -LiteralPath (Join-Path $installRoot $_.path)).Hash -ine $_.sha256})
+   Record 'msi_matches_portable_payload' ($installedBad.Count -eq 0) @{files=$manifest.files.Count;bad=$installedBad}
+   $verbCommand=(Get-ItemProperty -LiteralPath ($verb+'\command')).'(default)'
+   Record 'msi_project_folder_verb' ($verbCommand -eq ('"'+$installRoot+'\Compositor.exe" "%1"')) @{command=$verbCommand;explorerMenuInteraction='not verified'}
+   $sentinel=Join-Path $installRoot 'My preserved project.comp'
+   Copy-Item -LiteralPath $project -Destination $sentinel -Recurse
+   $projectHashes=@(Get-ChildItem -LiteralPath $sentinel -Recurse -File | ForEach-Object {[ordered]@{path=$_.FullName;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}})
+   $installedHealth=RunApp (Join-Path $installRoot 'Compositor.exe') @('--update-health-check') 'installed-health'
+   Record 'msi_installed_runtime' ($installedHealth.exitCode -eq 0) $installedHealth
+   $installedUi=RunApp (Join-Path $installRoot 'Compositor.exe') @('--warp','--ui-test','--evidence',(Join-Path $run 'installed-native')) 'installed-native'
+   Record 'msi_installed_native_workflow' ($installedUi.exitCode -eq 0) $installedUi
+   $repair=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/fa',$setup,'/qn','/norestart','/l*v',(Join-Path $run 'msi-repair.log')) 'msi-repair'
+   $repairBad=@($projectHashes | Where-Object {-not(Test-Path -LiteralPath $_.path) -or (Get-FileHash -LiteralPath $_.path).Hash -ne $_.sha256})
+   Record 'msi_repair_preserves_project' ($repair.exitCode -eq 0 -and $repairBad.Count -eq 0) @{process=$repair;projectFiles=$projectHashes.Count;changed=$repairBad}
+   if($UpgradeInstaller){
+    $upgradePath=[IO.Path]::GetFullPath($UpgradeInstaller)
+    $upgraded=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/i',$upgradePath,'/qn','/norestart','/l*v',(Join-Path $run 'msi-upgrade.log')) 'msi-upgrade'
+    if($upgraded.exitCode -in @(0,3010)){$installedMsi=$upgradePath}
+    $upgradeBad=@($projectHashes | Where-Object {-not(Test-Path -LiteralPath $_.path) -or (Get-FileHash -LiteralPath $_.path).Hash -ne $_.sha256})
+    $preservedLocation=(Get-ItemProperty -LiteralPath $registration).InstallLocation.TrimEnd('\') -eq $installRoot
+    Record 'msi_upgrade_preserves_project' ($upgraded.exitCode -eq 0 -and $upgradeBad.Count -eq 0 -and $preservedLocation) @{process=$upgraded;projectFiles=$projectHashes.Count;changed=$upgradeBad;customLocationPreserved=$preservedLocation}
+    $upgradedHealth=RunApp (Join-Path $installRoot 'Compositor.exe') @('--update-health-check') 'upgraded-health'
+    Record 'msi_upgraded_runtime' ($upgradedHealth.exitCode -eq 0) $upgradedHealth
+    $downgrade=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/i',$setup,'/qn','/norestart',"INSTALLFOLDER=$installRoot",'/l*v',(Join-Path $run 'msi-downgrade.log')) 'msi-downgrade'
+    Record 'msi_rejects_downgrade' ($downgrade.exitCode -eq 1603) $downgrade
+   }
+   $removed=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/x',$installedMsi,'/qn','/norestart','/l*v',(Join-Path $run 'msi-uninstall.log')) 'msi-uninstall'
+   if($removed.exitCode -eq 0){$installedMsi=$null}
+   $unchanged=@($projectHashes | Where-Object {-not(Test-Path -LiteralPath $_.path) -or (Get-FileHash -LiteralPath $_.path).Hash -ne $_.sha256})
+   Record 'msi_uninstall_preserves_project' ($removed.exitCode -eq 0 -and $unchanged.Count -eq 0 -and -not(Test-Path -LiteralPath (Join-Path $installRoot 'Compositor.exe')) -and -not(Test-Path -LiteralPath $verb)) @{process=$removed;projectFiles=$projectHashes.Count;changed=$unchanged}
+  }finally{
+   if($installedMsi){$cleanup=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/x',$installedMsi,'/qn','/norestart','/l*v',(Join-Path $run 'msi-failed-run-cleanup.log')) 'msi-failed-run-cleanup';if($cleanup.exitCode -ne 0){Write-Warning "Test installation remains at $installRoot; cleanup returned $($cleanup.exitCode)"}}
+  }
+ }
+ [ordered]@{timestamp=[DateTime]::UtcNow.ToString('o');machine=$env:COMPUTERNAME;checks=$checks;cleanVM=$false;humanAcceptance=$false;developmentPathsRemoved=$true;msiUpgradeExercised=[bool]$UpgradeInstaller} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $run 'report.json') -Encoding utf8
+ Write-Output "EVIDENCE=$run"
+ return
+}
 $health=RunApp (Join-Path $portable "versions\$($manifest.version)\Compositor.exe") @('--update-health-check') 'portable-health'
 Record 'portable_clean_path_health' ($health.exitCode -eq 0) $health
 $native=Join-Path $run 'native'

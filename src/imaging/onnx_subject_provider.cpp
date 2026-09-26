@@ -2,6 +2,7 @@
 #define NOMINMAX
 #endif
 #include "onnx_subject_provider.h"
+#include "subject_input.h"
 #define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
 #undef ORT_API_MANUAL_INIT
@@ -41,13 +42,9 @@ std::string hash(const std::filesystem::path& file){
     if(!stream.eof())throw std::runtime_error("Model read failed");std::array<UCHAR,32> digest{};if(BCryptFinishHash(value,digest.data(),ULONG(digest.size()),0)<0)throw std::runtime_error("Model hash finalization failed");
     std::string out;const char* hex="0123456789abcdef";for(auto c:digest){out+=hex[c>>4];out+=hex[c&15];}return out;
 }
-// Explicit bilinear resampling in straight RGB; transparent source contributes black.
-float source(const RgbaImage& image,int x,int y,int c){const auto* p=&image.pixels[std::size_t(y)*image.stride+std::size_t(x)*4];return p[3]?std::min(255.F,float(p[c])*255/p[3]):0;}
+// The pinned RGB input recipe is implemented by the bounded antialiased sampler.
 std::vector<float> preprocess(const RgbaImage& image,const ImportOptions& options){
-    constexpr int size=1024;constexpr float mean[]={.485F,.456F,.406F},sd[]={.229F,.224F,.225F};std::vector<float> input(3*size*size);
-    for(int y=0;y<size;++y){checkCancelled(options);double sy=std::clamp((y+.5)*image.height/size-.5,0.,double(image.height-1));int y0=int(sy),y1=std::min(y0+1,int(image.height)-1);float fy=float(sy-y0);
-        for(int x=0;x<size;++x){double sx=std::clamp((x+.5)*image.width/size-.5,0.,double(image.width-1));int x0=int(sx),x1=std::min(x0+1,int(image.width)-1);float fx=float(sx-x0);for(int c=0;c<3;++c){float value=(source(image,x0,y0,c)*(1-fx)+source(image,x1,y0,c)*fx)*(1-fy)+(source(image,x0,y1,c)*(1-fx)+source(image,x1,y1,c)*fx)*fy;input[std::size_t(c)*size*size+y*size+x]=(std::round(value)/255-mean[c])/sd[c];}}
-    }return input;
+    return subjectInputTensor(image,options);
 }
 }
 struct OnnxSubjectProvider::Impl {
@@ -75,7 +72,7 @@ void OnnxSubjectProvider::healthCheck(const ImportOptions& options){
     validate(inferImpl(image,options,false));
 }
 GrayMask OnnxSubjectProvider::inferImpl(const RgbaImage& image,const ImportOptions& options,bool requireSubject){
-    validate(image);checkCancelled(options);checkedBytes(image.width,image.height,4,options);auto data=preprocess(image,options);std::lock_guard lock(impl_->mutex);
+    auto data=preprocess(image,options);std::lock_guard lock(impl_->mutex);
     auto memory=Ort::MemoryInfo::CreateCpu(OrtArenaAllocator,OrtMemTypeDefault);const int64_t dims[]={1,3,1024,1024};auto tensor=Ort::Value::CreateTensor<float>(memory,data.data(),data.size(),dims,4);const char* names[]={"image"};const char* outputs[]={"mask"};Ort::RunOptions run;
     std::jthread cancellation([&](std::stop_token stop){while(!stop.stop_requested()){if(options.cancelled&&options.cancelled()){run.SetTerminate();return;}std::this_thread::sleep_for(std::chrono::milliseconds(20));}});
     auto result=impl_->session.Run(run,names,&tensor,1,outputs,1);cancellation.request_stop();checkCancelled(options);

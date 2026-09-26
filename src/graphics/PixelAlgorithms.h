@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -26,15 +27,20 @@ void clampPremultiplied(Rgba8View);
 void applyLevels(Rgba8View, std::span<const float, 768> tables);
 std::array<double, 1024> histogram(ConstRgba8View, const ConstGray8View* coverage = nullptr);
 void gradientMap(Rgba8View, std::span<const uint8_t, 768> table);
-void addNoise(Rgba8View, float amount, bool gaussian, bool monochromatic, uint32_t seed);
+// Cancellation is checked between bounded kernel chunks. A true result throws;
+// callback exceptions are rethrown only after the C kernel has released storage.
+using Cancellation = std::function<bool()>;
+void addNoise(Rgba8View, float amount, bool gaussian, bool monochromatic, uint32_t seed,
+              const Cancellation& cancelled = {});
 void grain(Rgba8View, double amount, double size, double roughness, uint32_t seed,
            double originX, double originY, double unitsPerPixel);
-void lensDistort(ConstRgba8View source, Rgba8View destination, double k);
+void lensDistort(ConstRgba8View source, Rgba8View destination, double k,
+                 const Cancellation& cancelled = {});
 long wandMask(ConstRgba8View, size_t seedX, size_t seedY, size_t radius,
               int tolerance, bool contiguous, Gray8View);
 struct WandOutline { std::vector<int32_t> points; std::vector<int32_t> loopLengths; };
 WandOutline wandOutline(ConstGray8View);
 // Return contracts are those of the upstream routines; -1 allocation errors throw.
-bool contentFill(Rgba8View, ConstGray8View);
+bool contentFill(Rgba8View, ConstGray8View, const Cancellation& cancelled = {});
 void spotHeal(Rgba8View, ConstGray8View, float opacity, int mode, uint32_t seed);
 } // namespace compositor::graphics
