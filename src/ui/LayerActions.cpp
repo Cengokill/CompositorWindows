@@ -10,6 +10,16 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QDoubleSpinBox>
+#include <QComboBox>
+#include <QCheckBox>
+#include <QColorDialog>
+#include <QToolButton>
+#include <QMenu>
+#include <algorithm>
 
 namespace compositor {
 layers::SelectionState MainWindow::layerSelection()const{
@@ -136,7 +146,55 @@ void MainWindow::setupLayerActions(){
     struct Entry{const char* text;const char* name;ui::MaskCommand command;};
     for(const auto& entry:std::vector<Entry>{{"Add White Mask (Reveal Selection)","maskAddReveal",ui::MaskCommand::AddReveal},{"Add Black Mask (Hide Selection)","maskAddHide",ui::MaskCommand::AddHide},{"Reveal All","maskRevealAll",ui::MaskCommand::RevealAll},{"Hide All","maskHideAll",ui::MaskCommand::HideAll},{"Enable / Disable Mask","maskToggleEnabled",ui::MaskCommand::ToggleEnabled},{"Link / Unlink Mask","maskToggleLink",ui::MaskCommand::ToggleLink},{"Delete Mask","maskDelete",ui::MaskCommand::Delete},{"Edit Image","maskEditImage",ui::MaskCommand::EditImage},{"Edit Mask","maskEditMask",ui::MaskCommand::EditMask},{"Select Image Alpha","maskLoadAlpha",ui::MaskCommand::LoadAlpha},{"Select Mask Black Areas","maskLoadBlack",ui::MaskCommand::LoadBlack}}){auto*a=action(masks,entry.text,{},[this,command=entry.command]{maskCommand(int(command));});a->setObjectName(entry.name);a->setProperty("maskCommand",int(entry.command));}
 
-    auto*parent=layers_->parentWidget();auto*layout=qobject_cast<QVBoxLayout*>(parent->layout());if(layout){auto*editTarget=new QComboBox(parent);editTarget->setObjectName("layerEditTarget");editTarget->setAccessibleName("Layer editing target");editTarget->addItems({"Edit image","Edit mask"});layout->addWidget(editTarget);editTarget->hide();connect(editTarget,&QComboBox::currentIndexChanged,this,[this](int value){if(!refreshing_)maskCommand(int(value?ui::MaskCommand::EditMask:ui::MaskCommand::EditImage));});auto*footer=new QHBoxLayout;auto addButton=[&](QString text,QString name,std::function<void()> fn){auto*button=new QPushButton(text,parent);button->setObjectName(name);button->setAccessibleName(text);connect(button,&QPushButton::clicked,this,[this,fn]{try{fn();}catch(const std::exception&e){statusBar()->showMessage(e.what());}});footer->addWidget(button);};addButton("Group","layerGroupButton",[this]{layerCommand(1);});addButton("Add Mask","layerAddMaskButton",[this]{maskCommand(int(ui::MaskCommand::AddReveal));});addButton("Delete","layerDeleteButton",[this]{auto*p=current();if(p&&p->maskSelected&&layerSelection().ids.size()==1)maskCommand(int(ui::MaskCommand::Delete));else layerCommand(6);});layout->addLayout(footer);}
+    auto*parent=layers_->parentWidget();auto*layout=qobject_cast<QVBoxLayout*>(parent->layout());if(layout){auto*editTarget=new QComboBox(parent);editTarget->setObjectName("layerEditTarget");editTarget->setAccessibleName("Layer editing target");editTarget->addItems({"Edit image","Edit mask"});layout->addWidget(editTarget);editTarget->hide();connect(editTarget,&QComboBox::currentIndexChanged,this,[this](int value){if(!refreshing_)maskCommand(int(value?ui::MaskCommand::EditMask:ui::MaskCommand::EditImage));});auto*footer=new QHBoxLayout;auto addButton=[&](QString text,QString name,std::function<void()> fn){auto*button=new QPushButton(text,parent);button->setObjectName(name);button->setAccessibleName(text);connect(button,&QPushButton::clicked,this,[this,fn]{try{fn();}catch(const std::exception&e){statusBar()->showMessage(e.what());}});footer->addWidget(button);};addButton("Group","layerGroupButton",[this]{layerCommand(1);});addButton("Add Mask","layerAddMaskButton",[this]{maskCommand(int(ui::MaskCommand::AddReveal));});auto*effectsButton=new QToolButton(parent);effectsButton->setObjectName("layerEffectsButton");effectsButton->setText("Effects");effectsButton->setAccessibleName("Effects");effectsButton->setPopupMode(QToolButton::InstantPopup);auto*effectsMenu=new QMenu(effectsButton);effectsMenu->setObjectName("layerEffectsMenu");const std::pair<const char*,int> effectKinds[]={{"Stroke",0},{"Drop Shadow",1},{"Color Overlay",2},{"Inner Shadow",3},{"Outer Glow",4},{"Inner Glow",5}};for(const auto& kind:effectKinds){auto*item=effectsMenu->addAction(kind.first);connect(item,&QAction::triggered,this,[this,which=kind.second]{editLayerEffect(which);});}effectsButton->setMenu(effectsMenu);footer->addWidget(effectsButton);addButton("Delete","layerDeleteButton",[this]{auto*p=current();if(p&&p->maskSelected&&layerSelection().ids.size()==1)maskCommand(int(ui::MaskCommand::Delete));else layerCommand(6);});layout->addLayout(footer);}}
+void MainWindow::editLayerEffect(int kind){
+    auto* project=current();if(!project||!project->document||!canEditLayers())return;
+    const auto id=project->active;if(id.empty())return;
+    auto locate=[&]()->Layer*{auto found=std::find_if(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==id;});return found==project->document->layers.end()||found->group?nullptr:&*found;};
+    auto* layer=locate();if(!layer)return;
+    const Document original=*project->document;
+    const char* titles[]={"Stroke","Drop Shadow","Color Overlay","Inner Shadow","Outer Glow","Inner Glow"};
+    QDialog dialog(this);dialog.setWindowTitle(titles[std::clamp(kind,0,5)]);dialog.setObjectName("layerEffectDialog");
+    auto* form=new QFormLayout(&dialog);
+    auto* enabled=new QCheckBox("Enabled",&dialog);enabled->setChecked(true);
+    auto* opacity=new QDoubleSpinBox(&dialog);opacity->setRange(0,1);opacity->setSingleStep(.05);opacity->setDecimals(2);
+    auto* size=new QDoubleSpinBox(&dialog);size->setRange(0,250);size->setDecimals(1);
+    auto* angle=new QDoubleSpinBox(&dialog);angle->setRange(-360,360);angle->setDecimals(1);
+    auto* distance=new QDoubleSpinBox(&dialog);distance->setRange(0,30000);distance->setDecimals(1);
+    auto* position=new QComboBox(&dialog);position->addItems({"Outside","Center","Inside"});
+    auto* blend=new QComboBox(&dialog);for(const char* name:blendNames)blend->addItem(name);
+    auto* colorButton=new QPushButton("Color",&dialog);
+    Pixel color{0,0,0,255};
+    if(kind==0){enabled->setChecked(layer->effects.stroke.enabled||!layer->effects.specified);size->setValue(layer->effects.stroke.size);position->setCurrentIndex(layer->effects.stroke.position);color=layer->effects.stroke.color;}
+    else if(kind==1||kind==3){auto& shadow=kind==1?layer->effects.dropShadow:layer->effects.innerShadow;enabled->setChecked(shadow.enabled||!layer->effects.specified);opacity->setValue(shadow.opacity);angle->setValue(shadow.angle);distance->setValue(shadow.distance);size->setValue(shadow.size);blend->setCurrentIndex(int(shadow.blend));color=shadow.color;}
+    else if(kind==4||kind==5){auto& glow=kind==4?layer->effects.outerGlow:layer->effects.innerGlow;enabled->setChecked(glow.enabled||!layer->effects.specified);opacity->setValue(glow.opacity);size->setValue(glow.size);blend->setCurrentIndex(int(glow.blend));color=glow.color;}
+    else{enabled->setChecked(layer->effects.colorOverlay.enabled||!layer->effects.specified);opacity->setValue(layer->effects.colorOverlay.opacity);blend->setCurrentIndex(int(layer->effects.colorOverlay.blend));color=layer->effects.colorOverlay.color;}
+    auto paint=[&]{colorButton->setStyleSheet(QString("background:%1").arg(QColor(color.r,color.g,color.b).name()));};
+    paint();
+    auto republish=[&]{
+        layer=locate();if(!layer)return;
+        layer->effects.specified=true;
+        if(kind==0){layer->effects.stroke.enabled=enabled->isChecked();layer->effects.stroke.size=size->value();layer->effects.stroke.position=position->currentIndex();layer->effects.stroke.color=color;}
+        else if(kind==1||kind==3){auto& shadow=kind==1?layer->effects.dropShadow:layer->effects.innerShadow;shadow.enabled=enabled->isChecked();shadow.opacity=opacity->value();shadow.angle=angle->value();shadow.distance=distance->value();shadow.size=size->value();shadow.blend=Blend(blend->currentIndex());shadow.color=color;}
+        else if(kind==4||kind==5){auto& glow=kind==4?layer->effects.outerGlow:layer->effects.innerGlow;glow.enabled=enabled->isChecked();glow.opacity=opacity->value();glow.size=size->value();glow.blend=Blend(blend->currentIndex());glow.color=color;}
+        else{layer->effects.colorOverlay.enabled=enabled->isChecked();layer->effects.colorOverlay.opacity=opacity->value();layer->effects.colorOverlay.blend=Blend(blend->currentIndex());layer->effects.colorOverlay.color=color;}
+        if(textSession_&&textSession_->owner==project&&textSession_->layerId==id)publishTextEdit();
+        else refresh(false,false);
+    };
+    form->addRow(enabled);
+    if(kind!=0)form->addRow("Opacity",opacity);
+    if(kind!=2)form->addRow("Size",size);
+    if(kind==1||kind==3){form->addRow("Angle",angle);form->addRow("Distance",distance);}
+    if(kind==0)form->addRow("Position",position);
+    if(kind!=0)form->addRow("Blend",blend);
+    form->addRow(colorButton);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);form->addRow(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    connect(enabled,&QCheckBox::toggled,&dialog,republish);connect(opacity,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(size,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(angle,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(distance,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(position,&QComboBox::currentIndexChanged,&dialog,republish);connect(blend,&QComboBox::currentIndexChanged,&dialog,republish);
+    connect(colorButton,&QPushButton::clicked,&dialog,[&]{auto chosen=QColorDialog::getColor(QColor(color.r,color.g,color.b),&dialog,"Effect Color");if(!chosen.isValid())return;color={uint8_t(chosen.red()),uint8_t(chosen.green()),uint8_t(chosen.blue()),255};paint();republish();});
+    republish();
+    if(dialog.exec()!=QDialog::Accepted){*project->document=original;if(textSession_&&textSession_->owner==project&&textSession_->layerId==id)publishTextEdit();else refresh(false,false);return;}
+    project->history.begin(titles[std::clamp(kind,0,5)],original,project->active);project->history.end(project->document,project->active);refresh();
 }
 void MainWindow::refreshLayerPanel(){if(auto* controller=ui::LayerPanelController::find(layers_))controller->rebuild();}
 }
