@@ -39,6 +39,7 @@ if(found==displayTiles_.end()){
 }
 auto sourceRect=D2D1::RectF(0,0,float(tw),float(th));
 context_->DrawBitmap(found->second.bitmap.Get(),rect,1,D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,sourceRect);}}
+if(showGuides){ComPtr<ID2D1SolidColorBrush> guide;check(context_->CreateSolidColorBrush(D2D1::ColorF(.2f,.75f,.95f,.85f),&guide),"Guide brush");for(auto [horizontal,position]:guides){if(horizontal){float y=top+float(position*scale);context_->DrawLine(D2D1::Point2F(0,y),D2D1::Point2F(float(width()),y),guide.Get(),1);}else{float x=left+float(position*scale);context_->DrawLine(D2D1::Point2F(x,0),D2D1::Point2F(x,float(height())),guide.Get(),1);}}}
 if(showPixelGrid&&zoom>=8){
     const auto area=D2D1::RectF(std::max(0.f,left),std::max(0.f,top),std::min(float(width()),bounds.right),std::min(float(height()),bounds.bottom));
     if(area.right>area.left&&area.bottom>area.top){
@@ -90,7 +91,8 @@ if(shapeDraft_&&documentWidth_>0&&documentHeight_>0){
     check(context_->CreateSolidColorBrush(D2D1::ColorF(draft.fill.r/255.f,draft.fill.g/255.f,draft.fill.b/255.f,draft.fill.a/255.f),&fill),"Shape draft fill");
     check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.6f),&outline),"Shape draft outline");
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    if(draft.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
+    if(draft.kind==editing::ShapeKind::Line){context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),fill.Get(),std::max(1.f,float(draft.lineWidth*pointsPerPixel())));context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),outline.Get(),1);}
+    else if(draft.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
     else{const float radius=float(std::clamp(draft.cornerRadius,0.,std::min(draft.rect.width,draft.rect.height)/2)*pointsPerPixel());const auto rounded=D2D1::RoundedRect(bounds,radius,radius);context_->FillRoundedRectangle(rounded,fill.Get());context_->DrawRoundedRectangle(rounded,outline.Get(),1);}
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
@@ -245,7 +247,8 @@ void NativeCanvas::mousePressEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
     setFocus();last_=e->position();if(pointerHover)pointerHover(e->position(),e->modifiers());
     if(e->button()==Qt::RightButton&&rightPointerDown&&rightPointerDown(e->position(),e->modifiers())){rightDragging_=true;grabMouse();e->accept();return;}
-    if(e->button()==Qt::LeftButton&&!rightDragging_){dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
+    if(e->button()==Qt::MiddleButton){panning_=true;grabMouse();e->accept();return;}
+    if(e->button()==Qt::LeftButton&&!rightDragging_&&!panning_){dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
 }
 void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
@@ -257,7 +260,7 @@ void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
         else unsetCursor();
     }
     if(!dragging_&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({e->position().x(),e->position().y()});auto cursor=mode?geometry.cursor(*mode,{e->modifiers().testFlag(Qt::ShiftModifier),e->modifiers().testFlag(Qt::AltModifier),e->modifiers().testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
-    if((e->buttons()&Qt::MiddleButton)&&(!navigationAllowed||navigationAllowed()))panBy(e->position()-last_);else if(dragging_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());last_=e->position();
+    if(panning_&&(!navigationAllowed||navigationAllowed()))panBy(e->position()-last_);else if(dragging_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());last_=e->position();
 }
 void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
     if(tabletActive_||e->button()!=Qt::LeftButton||rightDragging_){e->accept();return;}
@@ -266,6 +269,7 @@ void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
 }
 void NativeCanvas::mouseReleaseEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
+    if(panning_&&e->button()==Qt::MiddleButton){panning_=false;releaseMouse();return;}
     if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);return;}
     if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
 }

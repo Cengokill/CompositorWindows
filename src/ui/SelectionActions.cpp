@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "SelectionCursors.h"
 #include "editing/PixelEdits.h"
+#include "editing/SelectionExtras.h"
 #include <QMenuBar>
 #include <QToolBar>
 #include <QCheckBox>
@@ -36,6 +37,8 @@ void MainWindow::setupSelectionActions(){
     });
     action(menu,"All",QKeySequence::SelectAll,[this]{edit("Select All",[&](Document&d){d.selection=editing::rasterSelection(editing::SelectionOutline::rectangle({0,0,double(d.width),double(d.height)}),d.width,d.height);});});
     action(menu,"Deselect",QKeySequence("Ctrl+D"),[this]{edit("Deselect",[](Document&d){d.selection.reset();});});
+    action(menu,"Feather…",{},[this]{auto*p=current();if(!p||!p->document||!p->document->selection)return;bool ok=false;auto radius=QInputDialog::getDouble(this,"Feather Selection","Radius",2,0,250,1,&ok);if(ok)edit("Feather",[radius](Document&d){if(d.selection)d.selection=editing::featherSelection(*d.selection,radius);});});
+    action(menu,"Color Range…",{},[this]{auto*p=current();auto*l=active();if(!p||!p->document||!l||!l->raster)return;bool ok=false;auto tolerance=QInputDialog::getInt(this,"Color Range","Tolerance",32,0,255,1,&ok);if(!ok)return;edit("Color Range",[l,tolerance](Document&d){auto mask=editing::colorRangeMask(*l->raster,l->raster->width/2,l->raster->height/2,tolerance);if(mask->width!=d.width||mask->height!=d.height)throw std::runtime_error("Color range needs a canvas-sized layer");d.selection=Selection{mask};});});
     action(menu,"Inverse",QKeySequence("Ctrl+Shift+I"),[this]{if(current()&&current()->document&&current()->document->selection)edit("Inverse",[](Document&d){
         if(d.selection->outline)d.selection=editing::rasterSelection(editing::inverseSelection(*d.selection->outline,d.width,d.height),d.width,d.height);
         else if(d.selection->coverage&&d.selection->coverage->source){

@@ -3,6 +3,8 @@
 #include "persistence/ProjectStore.h"
 #include "imaging/wic_codec.h"
 #include "imaging/heif_codec.h"
+#include "imaging/psd/PsdDocument.h"
+#include <QSlider>
 #include "core/DocumentExport.h"
 #include "ImportActions.h"
 #include "ImportCommit.h"
@@ -281,7 +283,7 @@ void MainWindow::openPath(const QString&path){
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{});
 }
-void MainWindow::importImage(){auto* target=current();auto paths=QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif);;All files (*)");if(!paths.isEmpty())queueImageImports(paths,target,{});}
+void MainWindow::importImage(){auto* target=current();auto paths=QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif *.psd *.psb *.svg *.cr2 *.nef *.arw *.dng *.raw);;All files (*)");QStringList images;for(const auto& path:paths){auto ext=QFileInfo(path).suffix().toLower();if(ext=="psd"||ext=="psb"){try{auto imported=imaging::readPsd(nativePath(path));if(QMessageBox::question(this,"Import PSD",QString::fromStdString(imported.report)+"\nApply this import?")!=QMessageBox::Yes)continue;auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}refresh();project.canvas->fit();}catch(const std::exception& error){QMessageBox::critical(this,"Import PSD",error.what());}}else images.append(path);}if(!images.isEmpty())queueImageImports(images,target,{});}
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=QFileDialog::getSaveFileName(this,"Save Compositor Project",path.isEmpty()?"Untitled.comp":path,"Compositor project directory (*.comp)");if(path.isEmpty())return false;if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;
@@ -296,6 +298,7 @@ void MainWindow::exportImage(){
     ui::TrackSlider quality(Qt::Horizontal);quality.setObjectName("exportQuality");quality.setRange(0,100);quality.setValue(int(std::round(std::clamp(remembered,0.,1.)*100)));layout.addRow("JPEG quality",&quality);
     QPushButton matte("White");matte.setObjectName("exportMatte");QColor matteColor=Qt::white;layout.addRow("JPEG background",&matte);
     QLabel preview;preview.setObjectName("exportPreview");preview.setMinimumSize(520,320);preview.setAlignment(Qt::AlignCenter);layout.addRow(&preview);
+    QSlider previewZoom(Qt::Horizontal);previewZoom.setObjectName("exportPreviewZoom");previewZoom.setRange(25,400);previewZoom.setValue(100);layout.addRow("Preview zoom",&previewZoom);QPixmap previewSource;auto showPreview=[&]{if(previewSource.isNull())return;preview.setPixmap(previewSource.scaled(previewSource.size()*previewZoom.value()/100.,Qt::KeepAspectRatio,Qt::SmoothTransformation));};
     QLabel bytesLabel;bytesLabel.setObjectName("exportEncodedSize");layout.addRow("Encoded size",&bytesLabel);
     QDialogButtonBox buttons(QDialogButtonBox::Save|QDialogButtonBox::Cancel);buttons.setObjectName("exportButtons");layout.addRow(&buttons);
     struct Prepared {imaging::StreamingExportResult result;QString path,error;bool cancelled{};};
@@ -320,7 +323,7 @@ void MainWindow::exportImage(){
         const auto&image=prepared.result.preview;
         QImage shown(image.pixels.data(),int(image.width),int(image.height),qsizetype(image.stride),QImage::Format_RGBA8888_Premultiplied);
         if(shown.isNull()){bytesLabel.setText("Cannot display export preview");return;}
-        preview.setPixmap(QPixmap::fromImage(shown.copy()));readyPath=prepared.path;
+        previewSource=QPixmap::fromImage(shown.copy());showPreview();readyPath=prepared.path;
         bytesLabel.setText(QString::number(prepared.result.encodedBytes)+" bytes");buttons.button(QDialogButtonBox::Save)->setEnabled(true);
         dialog.setProperty("readyExportPath",readyPath);dialog.setProperty("readyExportGeneration",generation);
     });
@@ -328,6 +331,7 @@ void MainWindow::exportImage(){
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(100ULL*completed->load()/uint32_t(snapshot.height)));});
     connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{quality.setEnabled(format.currentIndex()==1);matte.setEnabled(format.currentIndex()==1);changed();});
     connect(&quality,&QSlider::valueChanged,&dialog,changed);
+    connect(&previewZoom,&QSlider::valueChanged,&dialog,showPreview);
     connect(&matte,&QPushButton::clicked,&dialog,[&]{auto color=QColorDialog::getColor(matteColor,&dialog,"JPEG background");if(color.isValid()){matteColor=color;matte.setText(color.name());changed();}});
     connect(&buttons,&QDialogButtonBox::accepted,&dialog,[&]{if(!readyPath.isEmpty()&&!running)dialog.accept();});
     connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);

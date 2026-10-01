@@ -108,7 +108,7 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
     });
     if(changed==source)return layer;
     if(operation!=PixelEdit::Invert){auto crop=alphaBounds(*changed);changed=reframe(changed,crop);grid.x+=crop.x;grid.y+=crop.y;grid.width=crop.width;grid.height=crop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
-    auto result=layer;result.raster=changed;result.transform=transform;result.shapeJson.clear();
+    auto result=layer;result.raster=changed;result.transform=transform;result.shapeJson.clear();result.text.reset();
     if(result.mask&&!result.mask->placement&&grid!=Rect{0,0,double(baseWidth),double(baseHeight)})result.mask->raster=reframeMask(*result.mask->raster,grid,baseWidth,baseHeight);
     return result;
 }

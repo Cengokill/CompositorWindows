@@ -4,10 +4,17 @@
 #include <optional>
 #include <string>
 namespace compositor::filters {
-enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill };
+enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw };
 struct Settings {
     double radius{1},angle{0},distance{10},amount{10},distortion{0};
     bool gaussian{},monochromatic{};
+    double vignette{},vignetteMidpoint{.5},vignetteFeather{.5};
+    bool vignetteRound{true};
+    double bloom{},bloomThreshold{.6},tonal{};
+    int ditherLevels{},ditherStyle{};
+    double scanline{},scanlineGlow{};
+    double exposure{},contrast{},highlights{},shadows{},temperature{},tint{},vibrance{},saturation{};
+    double clarity{},sharpen{},noiseReduction{},rawVignette{},rawRotate{},rawScale{100};
     Settings normalized() const;
 };
 struct PixelRect {int x{},y{},width{},height{};bool operator==(const PixelRect&) const=default;};

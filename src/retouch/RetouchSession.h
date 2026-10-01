@@ -10,6 +10,8 @@ enum class Mode { Clone,HealContentAware,HealCreateTexture,HealProximity,Blur,Sm
 struct Settings {
     Mode mode{Mode::Clone};
     double radius{20},hardness{},opacity{1};
+    // 0 keeps the 1.0.4 kernel, clamp(radius*2/10, 1.5, 30). A positive value is the blur kernel radius and does not reuse the brush size.
+    double blurRadius{};
     bool sampleAllLayers{};
     uint32_t healingSeed{1}; // Host chooses a fresh random seed per real stroke.
 };

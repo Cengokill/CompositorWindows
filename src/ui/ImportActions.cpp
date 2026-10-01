@@ -1,6 +1,8 @@
 #include "ImportActions.h"
 #include "imaging/wic_codec.h"
 #include "imaging/heif_codec.h"
+#include "imaging/svg_raster.h"
+#include "imaging/raw_develop.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -12,6 +14,9 @@
 
 namespace compositor::ui {
 imaging::DecodedImage decodeImportImage(const std::filesystem::path& path,const imaging::ImportOptions& options){
+    auto extension=QString::fromStdWString(path.extension().wstring()).toLower();
+    if(extension==".svg")return imaging::rasterizeSvg(path,options);
+    if(extension==".cr2"||extension==".nef"||extension==".arw"||extension==".dng"||extension==".raw"||extension==".rw2")return imaging::decodeRaw(path,{},options);
     QFile file(QString::fromStdWString(path.wstring()));
     if(!file.open(QIODevice::ReadOnly))throw std::runtime_error("Cannot open image");
     const auto signature=file.read(16);file.close();

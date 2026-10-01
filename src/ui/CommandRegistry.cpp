@@ -110,6 +110,14 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("selection.contract","Select","Contract…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift:274");
         add("pixels.fill","Image","Fill…","",C::Pixels,G::Paint,P::FinishAppearance,"Compositor/Document/SelectionEdits.swift:35");
         add("pixels.invert","Image","Invert","Ctrl+I",C::Pixels,G::Invert,P::CommitTransformAndGradient,"Compositor/Document/SelectionEdits.swift:77");
+        add("image.trim","Image","Trim","",C::Document,G::DocumentOperation,P::FinishAppearance,"Compositor/Document/Canvas.swift");
+        add("selection.feather","Select","Feather…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift");
+        add("selection.color_range","Select","Color Range…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift");
+        add("view.guides","View","Guides","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
+        add("view.mac_title_bar","Appearance","Mac-style title bar","",C::View,G::Always,P::None,"Windows title bar preference");
+        add("view.snap","View","Snap","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
+        add("layer.text","Layer","Text Layer…","",C::Layer,G::Layers,P::FinishAppearance,"Compositor/Document/Text.swift");
+        add("help.shortcuts","Help","Keyboard Shortcuts…","",C::Application,G::Always,P::None,"Windows shortcut window");
         add("view.fit","View","Fit Canvas","Ctrl+0",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:87");
         add("view.actual","View","Actual Pixels","Ctrl+1",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:88");
         add("view.pixel_grid","View","Pixel Grid","",C::View,G::Always,P::None,"Compositor/CompositorApp.swift:93");
@@ -128,11 +136,12 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("layer.lower","Layer","Lower Layer","Ctrl+[",C::Layer,G::MoveDown,P::FinishAppearance,"Compositor/CompositorApp.swift:251");
         add("layer.new_group","Layer","New Group","",C::Layer,G::Layers,P::FinishAppearance,"Compositor/Document/LayerGroups.swift");
         add("layer.group","Layer","Group Selected","Ctrl+G",C::Layer,G::Layers,P::FinishAppearance,"Compositor/CompositorApp.swift:237");
+        add("layer.ungroup","Layer","Ungroup","Shift+Ctrl+G",C::Layer,G::Layers,P::FinishAppearance,"Compositor/Document/LayerGroups.swift");
         add("layer.move_out","Layer","Move Out of Group","",C::Layer,G::Parent,P::FinishAppearance,"Compositor/CompositorApp.swift:239");
         add("layer.clipping","Layer","Create / Release Clipping Mask","Ctrl+Alt+G",C::Layer,G::Clipping,P::FinishAppearance,"Compositor/CompositorApp.swift:232");
         add("layer.merge","Layer","Merge Layers","Ctrl+E",C::Layer,G::Merge,P::FinishAppearance,"Compositor/CompositorApp.swift:254");
         add("layer.copy_project","Layer","Copy Layer to Project…","",C::Workspace,G::OtherProject,P::FinishAppearance,"Compositor/Document/ProjectWorkspace.swift:158");
-        const char*maskLabels[]{"Add White Mask (Hide Selection)","Add Black Mask (Reveal Selection)","Reveal All","Hide All","Enable / Disable Mask","Link / Unlink Mask","Delete Mask","Edit Image","Edit Mask","Select Image Alpha","Select Mask Black Areas"};
+        const char*maskLabels[]{"Add White Mask (Reveal Selection)","Add Black Mask (Hide Selection)","Reveal All","Hide All","Enable / Disable Mask","Link / Unlink Mask","Delete Mask","Edit Image","Edit Mask","Select Image Alpha","Select Mask Black Areas"};
         const char*maskIds[]{"mask.add_white","mask.add_black","mask.reveal_all","mask.hide_all","mask.enabled","mask.linked","mask.delete","mask.edit_image","mask.edit_mask","mask.load_alpha","mask.load_black"};
         for(int i=0;i<11;++i)add(maskIds[i],"Mask",maskLabels[i],"",C::Layer,i<4?G::AddMask:i==7?G::SingleLayer:i==9?G::ImageAlpha:G::Mask,P::None,"Compositor/Document/LayerMask.swift:221");
         add("transform.free","Transform","Free Transform","Ctrl+T",C::Layer,G::Transform,P::FinishAppearance,"Compositor/CompositorApp.swift:226");
@@ -144,13 +153,13 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("transform.flip_horizontal","Transform","Flip Layer Horizontally","",C::Layer,G::Transform,P::FinishAppearance,"Compositor/CompositorApp.swift:257");
         add("transform.flip_vertical","Transform","Flip Layer Vertically","",C::Layer,G::Transform,P::FinishAppearance,"Compositor/CompositorApp.swift:259");
         add("transform.scale","Transform","Scale…","",C::Layer,G::TransformDraft,P::FinishAppearance,"Compositor/Document/EditorSession.swift:246");
-        const char*adjustments[]{"Hue/Saturation…","Levels…","Curves…","Exposure…","Gradient Map…","Grain…"};
-        const char*slugs[]{"hue_saturation","levels","curves","exposure","gradient_map","grain"};
-        for(int i=0;i<6;++i){auto id=QString("adjust.%1").arg(slugs[i]).toUtf8();add(id.constData(),"Adjustments",adjustments[i],i==0?"Ctrl+U":i==1?"Ctrl+L":i==2?"Ctrl+M":"",C::Adjustment,G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/HueSaturation.swift:414");id=QString("adjust.new.%1").arg(slugs[i]).toUtf8();add(id.constData(),"New Adjustment Layer",adjustments[i],"",C::Adjustment,G::NewAdjustment,P::FinishAppearance,"Compositor/CompositorApp.swift:217");}
+        const char*adjustments[]{"Hue/Saturation…","Levels…","Curves…","Exposure…","Gradient Map…","Grain…","Invert…","Black and White…","Color Balance…","Gaussian Blur…","Motion Blur…","Add Noise…"};
+        const char*slugs[]{"hue_saturation","levels","curves","exposure","gradient_map","grain","invert","black_white","color_balance","gaussian","motion","noise"};
+        for(int i=0;i<12;++i){auto id=QString("adjust.%1").arg(slugs[i]).toUtf8();add(id.constData(),"Adjustments",adjustments[i],i==0?"Ctrl+U":i==1?"Ctrl+L":i==2?"Ctrl+M":"",C::Adjustment,G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/HueSaturation.swift:414");id=QString("adjust.new.%1").arg(slugs[i]).toUtf8();add(id.constData(),"New Adjustment Layer",adjustments[i],"",C::Adjustment,G::NewAdjustment,P::FinishAppearance,"Compositor/CompositorApp.swift:217");}
         add("adjust.edit","Adjustments","Edit Adjustment Layer…","",C::Adjustment,G::EditAdjustment,P::FinishAppearance,"Compositor/CompositorApp.swift:222");
-        const char*filters[]{"Gaussian Blur…","Motion Blur…","Add Noise…","Lens Correction…","Content-Aware Fill…","Remove Background…"};
-        const char*filterIds[]{"filter.gaussian","filter.motion","filter.noise","filter.lens","filter.content_aware","filter.subject"};
-        for(int i=0;i<6;++i)add(filterIds[i],"Filters",filters[i],i==4?"Shift+Delete":"",C::Adjustment,i==4?G::ContentAwareFill:G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/Filters.swift:299");
+        const char*filters[]{"Gaussian Blur…","Motion Blur…","Add Noise…","Lens Correction…","Content-Aware Fill…","Vignette…","Bloom…","Tonal Contrast…","Dither…","Scanlines…","Camera Raw…","Remove Background…"};
+        const char*filterIds[]{"filter.gaussian","filter.motion","filter.noise","filter.lens","filter.content_aware","filter.vignette","filter.bloom","filter.tonal","filter.dither","filter.scanlines","filter.camera_raw","filter.subject"};
+        for(int i=0;i<12;++i)add(filterIds[i],"Filters",filters[i],i==4?"Shift+Delete":"",C::Adjustment,i==4?G::ContentAwareFill:G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/Filters.swift:299");
         const char*toolLabels[]{"Move (V)","Hand (H)","Marquee (M)","Lasso (L)","Polygon","Wand (W)","Brush (B)","Eraser (E)","Clone (S)","Heal (J)","Retouch (R)","Gradient (G)","Shape (U)","Crop (C)","Eyedropper (I)","Zoom (Z)"};
         const char*toolIds[]{"move","hand","marquee","lasso","polygon","wand","brush","eraser","clone","heal","retouch","gradient","shape","crop","eyedropper","zoom"};
         const char*toolKeys[]{"V","H","M","L","","W","B","E","S","J","R","G","U","C","I","Z"};

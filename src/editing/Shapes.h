@@ -3,10 +3,11 @@
 #include <string_view>
 
 namespace compositor::editing {
-enum class ShapeKind { Rectangle, Ellipse };
+enum class ShapeKind { Rectangle, Ellipse, Line };
 struct ShapeStyle {
     ShapeKind kind{ShapeKind::Rectangle};
     double red{},green{},blue{},cornerRadius{};
+    double lineWidth{4},startX{},startY{},endX{1},endY{1};
     bool operator==(const ShapeStyle&) const = default;
 };
 ShapeStyle decodeShapeStyle(std::string_view);

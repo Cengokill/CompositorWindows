@@ -105,7 +105,7 @@ PreviewResult makePreview(Document doc,std::string active,const std::string&json
             if(found==doc.layers.end()||!found->raster)throw std::runtime_error("Select an image layer");
             if(!full)found->raster=adjustmentPreviewSource(found->raster,json,cancelled);
             auto selection=editing::mappedCoverage(doc,found->transform,found->raster->width,found->raster->height);
-            auto changed=effects::applyAdjustment(found->raster,json,selection.get(),{},cancelled);if(changed!=found->raster){found->raster=changed;found->shapeJson.clear();}
+            auto changed=effects::applyAdjustment(found->raster,json,selection.get(),{},cancelled);if(changed!=found->raster){found->raster=changed;found->shapeJson.clear();found->text.reset();}
         }
         check();validateDocument(doc);
         result.image=fittedDocumentPreview(showPreview?doc:before,{600,460});

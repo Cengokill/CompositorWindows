@@ -77,7 +77,7 @@ bool MainWindow::handleEditingKey(QKeyEvent* event){
             if(canEditAppearance()){const bool forward=key==Qt::Key_Plus||key==Qt::Key_Equal;const int count=int(blendNames.size()),index=int(active()->blend);setLayerBlendMode(Blend((index+(forward?1:count-1))%count));}return true;
         }
         if(plain&&shift&&key==Qt::Key_U){
-            if(tool_==Tool::Shape){if(!shapeDraftId_.empty())pointerCancel();shapeStyle_.kind=shapeStyle_.kind==editing::ShapeKind::Rectangle?editing::ShapeKind::Ellipse:editing::ShapeKind::Rectangle;if(auto* combo=findChild<QComboBox*>("shapeKind")){QSignalBlocker block(combo);combo->setCurrentIndex(int(shapeStyle_.kind));}refresh(false,false);}else selectTool(Tool::Shape);return true;
+            if(tool_==Tool::Shape){if(!shapeDraftId_.empty())pointerCancel();shapeStyle_.kind=shapeStyle_.kind==editing::ShapeKind::Rectangle?editing::ShapeKind::Ellipse:shapeStyle_.kind==editing::ShapeKind::Ellipse?editing::ShapeKind::Line:editing::ShapeKind::Rectangle;if(auto* combo=findChild<QComboBox*>("shapeKind")){QSignalBlocker block(combo);combo->setCurrentIndex(int(shapeStyle_.kind));}refresh(false,false);}else selectTool(Tool::Shape);return true;
         }
     }catch(const std::exception& error){if(transformSession_&&!transformSession_->persistent)cancelTransformSession();statusBar()->showMessage(error.what());return true;}
     return false;

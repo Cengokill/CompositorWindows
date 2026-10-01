@@ -27,7 +27,7 @@
 namespace compositor {
 namespace {
 std::optional<filters::SourceSelection> filterSelection(const Document&doc,const Layer&layer,filters::Kind kind){
-    if(!doc.selection)return {};
+    if(!doc.selection||!layer.raster)return {};
     filters::PixelRect rect{0,0,layer.raster->width,layer.raster->height};
     if(kind==filters::Kind::ContentAwareFill&&doc.selection->coverage){
         auto box=editing::coverageBounds(*doc.selection->coverage);double x0=1e100,y0=1e100,x1=-1e100,y1=-1e100;
@@ -85,7 +85,7 @@ Layer carryFilterMask(const Layer& original,Layer layer,const filters::Request& 
 }
 Layer filteredLayer(const Layer& original,const filters::Request& job){
     auto result=filters::apply(job);auto layer=original;
-    layer.raster=result.raster;layer.transform=result.transform;if(result.changed)layer.shapeJson.clear();
+    layer.raster=result.raster;layer.transform=result.transform;if(result.changed){layer.shapeJson.clear();layer.text.reset();}
     return carryFilterMask(original,std::move(layer),job,result.changed);
 }
 struct FilterOutput {std::optional<Document> document;QImage thumbnail;QString error;bool full{};};
@@ -178,6 +178,12 @@ public:
         case filters::Kind::AddNoise:{number("Amount",request_.settings.amount,.1,400,1);auto* gaussian=new QCheckBox("Gaussian");auto* mono=new QCheckBox("Monochromatic");gaussian->setChecked(request_.settings.gaussian);mono->setChecked(request_.settings.monochromatic);fields_.addRow(gaussian);fields_.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.gaussian=value;change();});connect(mono,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.monochromatic=value;change();});break;}
         case filters::Kind::LensCorrection:number("Distortion",request_.settings.distortion,-100,100,1);break;
         case filters::Kind::ContentAwareFill:break;
+        case filters::Kind::Vignette:number("Strength",request_.settings.vignette,0,100,1);number("Midpoint",request_.settings.vignetteMidpoint,0,1,2);break;
+        case filters::Kind::Bloom:number("Strength",request_.settings.bloom,0,100,1);number("Threshold",request_.settings.bloomThreshold,0,1,2);break;
+        case filters::Kind::TonalContrast:number("Strength",request_.settings.tonal,-100,100,1);break;
+        case filters::Kind::Dither:break;
+        case filters::Kind::Scanlines:number("Strength",request_.settings.scanline,0,100,1);number("Glow",request_.settings.scanlineGlow,0,100,1);break;
+        case filters::Kind::CameraRaw:number("Exposure",request_.settings.exposure,-5,5,2);number("Contrast",request_.settings.contrast,-100,100,1);number("Temperature",request_.settings.temperature,-1,1,2);number("Tint",request_.settings.tint,-1,1,2);number("Vibrance",request_.settings.vibrance,-100,100,1);number("Saturation",request_.settings.saturation,-100,100,1);break;
         }
         connect(&debounce_,&QTimer::timeout,&dialog_,[this]{start();});
         connect(&preview_,&QCheckBox::toggled,&dialog_,[this]{publishPreview();});
@@ -215,12 +221,14 @@ public:
 };
 }
 void MainWindow::runFilter(int kindIndex){
-    auto* p=current();auto* layer=active();if(editPanel_||!p||!p->document||!layer||!layer->raster||layer->group||!layer->adjustmentJson.empty())return;
-    const QStringList names{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill"};
+    auto* p=current();auto* layer=active();const bool vignette=kindIndex==int(filters::Kind::Vignette);
+    if(editPanel_||!p||!p->document||!layer||layer->group||!layer->adjustmentJson.empty()||(!layer->raster&&!vignette))return;
+    const QStringList names{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw"};
     if(kindIndex<0||kindIndex>=names.size())throw std::runtime_error("Unsupported filter kind");
     const auto kind=filters::Kind(kindIndex);if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
     const auto before=*p->document;const auto original=*layer;
-    filters::Request request;request.settings=p->toolState.filterSettings.pixels;request.kind=kind;request.source=layer->raster;request.transform=layer->transform;request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,original,kind);
+    filters::Request request;request.settings=p->toolState.filterSettings.pixels;request.kind=kind;request.source=layer->raster?layer->raster:Raster::filled(p->document->width,p->document->height);request.transform=layer->raster?layer->transform:Transform{0,0,double(p->document->width),double(p->document->height)};request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,original,kind);
+    if(kind==filters::Kind::Dither&&request.settings.ditherLevels<=0)request.settings.ditherLevels=4;if(kind==filters::Kind::Vignette&&request.settings.vignette==0)request.settings.vignette=40;if(kind==filters::Kind::Bloom&&request.settings.bloom==0)request.settings.bloom=30;if(kind==filters::Kind::Scanlines&&request.settings.scanline==0)request.settings.scanline=35;
     auto host=makeEditPanelHost(*p,before,names[kindIndex].toStdString());
     editPanel_=new FilterPanel(this,before,original,request,names[kindIndex],std::move(host),[p](const filters::Settings& value){p->toolState.filterSettings.pixels=value;});refresh(false,false);
 }

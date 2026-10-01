@@ -79,7 +79,7 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
                 if(source==state.original.layers.end())throw std::runtime_error("The duplicate target was removed");
                 Layer copy=*source;copy.id=newId();copy.name+=" Copy";state.target=copy.id;state.ids={copy.id};state.original.layers.insert(source+1,std::move(copy));state.duplicated=true;
             }
-            auto visible=editing_transform::visiblePlacements(state.original);auto targets=editing_transform::collectSnapTargets({double(p->document->width),double(p->document->height)},visible,state.ids);
+            auto visible=editing_transform::visiblePlacements(state.original);auto targets=editing_transform::collectSnapTargets({double(p->document->width),double(p->document->height)},visible,state.ids);if(snapToGuides_)for(const auto&guide:p->document->guides)(guide.horizontal?targets.ys:targets.xs).push_back(guide.position);
             // Windows Ctrl retains handle distortion and temporarily suppresses
             // move snapping. Source Command and Control are context-mapped here.
             auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_||modifiers.testFlag(Qt::ControlModifier)},targets,canvas()->pointsPerPixel());

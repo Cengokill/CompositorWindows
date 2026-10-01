@@ -19,7 +19,7 @@ layers::EditResult editMask(const Document& document,layers::SelectionState sele
         auto raster=std::make_shared<GrayRaster>();
         if(useSelection){raster->width=layer.raster?layer.raster->width:int(std::lround(layer.transform.width));raster->height=layer.raster?layer.raster->height:int(std::lround(layer.transform.height));
             if(raster->width<1||raster->height<1||raster->width>30000||raster->height>30000||uint64_t(raster->width)*raster->height>100000000)throw std::runtime_error("Mask exceeds image limits");
-            const auto coverage=editing::mappedCoverage(next,layer.transform,raster->width,raster->height);if(!coverage)throw std::runtime_error("Selection coverage is unavailable");raster->pixels=coverage->pixels;if(reveal)for(auto& byte:raster->pixels)byte=255-byte;next.selection.reset();name="Add Mask from Selection";
+            const auto coverage=editing::mappedCoverage(next,layer.transform,raster->width,raster->height);if(!coverage)throw std::runtime_error("Selection coverage is unavailable");raster->pixels.resize(size_t(raster->width)*raster->height);for(int y=0;y<raster->height;++y)for(int x=0;x<raster->width;++x)raster->pixels[size_t(y)*raster->width+x]=coverage->pixel(x,y);if(!reveal)for(auto& byte:raster->pixels)byte=uint8_t(255-byte);next.selection.reset();name="Add Mask from Selection";
         }else{raster->width=raster->height=1;raster->pixels={uint8_t(reveal?255:0)};name=reveal?"Add Reveal-All Mask":"Add Hide-All Mask";}
         layer.mask=Mask{raster};
     }else if(command==MaskCommand::ToggleEnabled&&layer.mask){name=layer.mask->enabled?"Disable Layer Mask":"Enable Layer Mask";layer.mask->enabled=!layer.mask->enabled;}

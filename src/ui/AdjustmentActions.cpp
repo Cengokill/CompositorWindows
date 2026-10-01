@@ -17,14 +17,15 @@ namespace compositor {
 void MainWindow::setupAdjustmentActions(){
     auto*menu=menuBar()->addMenu("&Adjustments");
     auto*live=menu->addMenu("New Adjustment Layer");
-    for(const QString kind:{"Hue/Saturation","Levels","Curves","Exposure","Gradient Map","Grain"}){
-        action(menu,kind+"…",{},[this,kind]{adjust(kind,false);});
-        action(live,kind+"…",{},[this,kind]{adjust(kind,true);});
+    for(const QString kind:{"Hue/Saturation","Levels","Curves","Exposure","Gradient Map","Grain","Invert","Black & White","Color Balance","Gaussian Blur","Motion Blur","Add Noise"}){
+        const QString label=kind=="Black & White"?"Black and White":kind;
+        action(menu,label+"…",{},[this,kind]{adjust(kind,false);});
+        action(live,label+"…",{},[this,kind]{adjust(kind,true);});
     }
     action(menu,"Edit Adjustment Layer…",{},[this]{if(active()&&!active()->adjustmentJson.empty())adjust({},true,true);});
     auto*filters=menuBar()->addMenu("&Filters");
     int filterIndex=0;
-    for(const QString name:{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill"}){int index=filterIndex++;action(filters,name+"…",{},[this,index]{runFilter(index);});}
+    for(const QString name:{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw"}){int index=filterIndex++;action(filters,name+"…",{},[this,index]{runFilter(index);});}
     action(filters,"Remove Background…",{},[this]{removeBackground();});
 }
 void MainWindow::adjust(const QString&kind,bool live,bool existing){

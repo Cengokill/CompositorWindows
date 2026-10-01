@@ -25,6 +25,7 @@ struct CanvasSizeOptions {
 // bottom layer and leaves the old canvas transparent. Changed size drops selection.
 Document canvasResize(const Document&,const CanvasSizeOptions&);
 Document cropDocument(const Document&,Rect);
+Document trimDocument(const Document&);
 struct ImageSizeOptions {
     int width,height;
     double resolution{72};

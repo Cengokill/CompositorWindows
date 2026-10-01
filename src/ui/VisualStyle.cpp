@@ -1,4 +1,5 @@
 #include "VisualStyle.h"
+#include "CommandRegistry.h"
 #include "EditorIcons.h"
 #include <QApplication>
 #include <QAbstractButton>
@@ -325,7 +326,7 @@ void styleWorkspace(QMainWindow* window) {
     auto menus=menu->actions();auto findMenu=[&](const QString& label)->QMenu*{for(auto* action:menus)if(action->text().remove('&')==label)return action->menu();return nullptr;};
     if(auto* view=findMenu("View")){
         view->addSeparator();auto* appearance=view->addMenu("Appearance");
-        auto* mac=appearance->addAction("Mac-style title bar");mac->setObjectName("macTitleBarAction");mac->setCheckable(true);mac->setChecked(macTitleBarEnabled());
+        auto* mac=appearance->addAction("Mac-style title bar");mac->setObjectName("macTitleBarAction");mac->setCheckable(true);mac->setChecked(macTitleBarEnabled());if(const auto* spec=ui::commandSpec("Appearance","Mac-style title bar"))mac->setProperty("commandId",spec->id);
         mac->setToolTip("Use colored window controls on the left. Turn off for the native Windows title bar.");
         QObject::connect(mac,&QAction::toggled,window,[](bool enabled){setMacTitleBarEnabled(enabled);});
     }

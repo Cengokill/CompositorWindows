@@ -3,6 +3,7 @@
 #include "graphics/SamplingSource.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <numeric>
 #include <numbers>
 #include <stdexcept>
@@ -76,6 +77,20 @@ void validateCulledAdjustments(const Document& doc,std::shared_ptr<const LayerRe
     if(std::any_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();}))SoftwareRenderer(std::move(preview)).render(doc,0,0,1,1);
 }
 std::shared_ptr<const Raster> tiled(int width,int height,Tile value){auto raster=std::make_shared<Raster>();raster->width=width;raster->height=height;raster->tiles.assign(size_t((width+255)/256)*((height+255)/256),std::move(value));return raster;}
+double jsonField(const std::string& json,std::size_t from,const char* key,double fallback){
+    const auto token=std::string("\"")+key+"\"";auto at=json.find(token,from);if(at==std::string::npos)return fallback;at=json.find(':',at+token.size());if(at==std::string::npos)return fallback;
+    char* end=nullptr;const double value=std::strtod(json.c_str()+at+1,&end);return end==json.c_str()+at+1?fallback:value;
+}
+int spatialMargin(const Document& doc){
+    int margin=0;
+    for(const auto& layer:doc.layers){const auto& json=layer.adjustmentJson;if(!layer.visible||json.empty())continue;
+        const bool gaussian=json.find("\"Gaussian Blur\"")!=std::string::npos,motion=json.find("\"Motion Blur\"")!=std::string::npos;if(!gaussian&&!motion)continue;
+        const auto settings=json.find("\"filterSettings\"");
+        if(gaussian){const double radius=settings==std::string::npos?8:jsonField(json,settings,"radius",8);if(radius>0)margin+=int(std::ceil(radius*3+2));}
+        if(motion){const double distance=settings==std::string::npos?16:jsonField(json,settings,"distance",16);if(distance>0)margin+=int(std::ceil(distance/2+2));}}
+    return std::clamp(margin,0,2048);
+}
+Tile cropTile(const Raster& raster,int ox,int oy,int w,int h){auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<h;++y)for(int x=0;x<w;++x)tile->pixels[std::size_t(y)*Raster::tileSide+x]=raster.pixel(ox+x,oy+y);return tile;}
 }
 std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
     validateDocument(doc);if(auto direct=directRaster(doc)){previous_=doc;output_=direct;return output_;}
@@ -84,8 +99,11 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
     validateCulledAdjustments(doc);auto painted=paintedBounds(doc);if(painted.empty()){previous_=doc;output_=tiled(doc.width,doc.height,zeroTile());return output_;}
     auto result=std::make_shared<Raster>();result->width=doc.width;result->height=doc.height;
     if(output_&&output_->width==doc.width&&output_->height==doc.height)result->tiles=output_->tiles;else result->tiles.resize(size_t(columns)*rows);
-    SoftwareRenderer renderer;
-    for(size_t index=0;index<dirty.size();++index)if(dirty[index]){int x=int(index%columns)*256,y=int(index/columns)*256,w=std::min(256,doc.width-x),h=std::min(256,doc.height-y);result->tiles[index]=touches(painted,x,y,w,h)?renderer.render(doc,x,y,w,h)->tiles.front():zeroTile();}
+    SoftwareRenderer renderer;const int margin=spatialMargin(doc);
+    for(size_t index=0;index<dirty.size();++index)if(dirty[index]){int x=int(index%columns)*256,y=int(index/columns)*256,w=std::min(256,doc.width-x),h=std::min(256,doc.height-y);
+        if(!touches(painted,x-margin,y-margin,w+margin*2.,h+margin*2.)){result->tiles[index]=zeroTile();continue;}
+        if(margin>0)result->tiles[index]=cropTile(*renderer.render(doc,x-margin,y-margin,w+margin*2,h+margin*2),margin,margin,w,h);
+        else result->tiles[index]=renderer.render(doc,x,y,w,h)->tiles.front();}
     previous_=doc;output_=result;return output_;
 }
 CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview){
@@ -139,11 +157,13 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     }
     if(all||!damage.empty())validateCulledAdjustments(doc,preview);
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
-    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);
+    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);const int margin=spatialMargin(doc);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
     for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){const std::pair<int,int> key{tx,ty};auto found=viewportTiles_.find(key);if(found==viewportTiles_.end()){
             const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;Tile tile;
-            if(direct)tile=direct->tiles[size_t(ty)*((direct->width+255)/256)+tx];else if(!touches(painted,dx,dy,w*units,h*units))tile=zeroTile();else tile=renderer.renderScaled(doc,dx,dy,w,h,units)->tiles.front();
+            if(direct)tile=direct->tiles[size_t(ty)*((direct->width+255)/256)+tx];else if(!touches(painted,dx-margin*units,dy-margin*units,(w+margin*2.)*units,(h+margin*2.)*units))tile=zeroTile();
+            else if(margin>0)tile=cropTile(*renderer.renderScaled(doc,dx-margin*units,dy-margin*units,w+margin*2,h+margin*2,units),margin,margin,w,h);
+            else tile=renderer.renderScaled(doc,dx,dy,w,h,units)->tiles.front();
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
         }else{

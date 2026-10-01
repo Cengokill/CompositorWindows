@@ -27,6 +27,11 @@ void testSettings(){
     s.radius=300;s.amount=-4;s.distance=3000;n=s.normalized();require(n.radius==250&&n.amount==.1&&n.distance==2000,"source setting limits");
     s.radius=3;s.distance=16;require(blurMargin(Kind::GaussianBlur,s)==11&&blurMargin(Kind::MotionBlur,s)==10,"source blur margins");
 }
+void testDither(){
+    auto white=image(8,8,[](int,int){return Pixel{255,255,255,255};});Settings s;s.ditherLevels=4;s.ditherStyle=0;
+    auto result=runPixels(Kind::Dither,*white,s,1,1);require(result->pixel(0,0).r>200&&result->pixel(0,0).a==255,"opaque white dither stays bright");
+    auto gray=image(8,8,[](int,int){return Pixel{128,128,128,255};});auto mid=runPixels(Kind::Dither,*gray,s,1,1);require(mid->pixel(0,0).r>0&&mid->pixel(0,0).r!=mid->pixel(1,0).r,"mid gray dither is not a black field");
+}
 void testMotion(){
     auto dot=image(41,41,[](int x,int y){return x==20&&y==20?Pixel{255,255,255,255}:Pixel{};});Settings s;s.distance=16;
     auto horizontal=runPixels(Kind::MotionBlur,*dot,s,1,0);require(horizontal->pixel(24,20).a>0&&horizontal->pixel(16,20).a>0&&horizontal->pixel(20,24).a==0,"source horizontal motion assertion");
@@ -90,5 +95,5 @@ int benchmark(){
     }return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testMotion();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

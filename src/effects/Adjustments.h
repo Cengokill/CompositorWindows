@@ -13,7 +13,7 @@ std::string defaultAdjustmentJson(std::string_view kind);
 void validateAdjustmentJson(std::string_view json);
 // Selection is optional grayscale coverage already mapped to the source pixel grid.
 // All-zero coverage edits nothing. Each immutable tile is copied only if its pixels change.
-// Levels intentionally retains the pinned Swift wrapper's documented double-alpha conflict.
+// Levels unpremultiplies once, matching the repaired shared C path. A second conversion would quarter a half-alpha gray.
 std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,
     std::string_view adjustmentJson,const GrayRaster* selection=nullptr,AdjustmentRegion region={},
     const std::function<bool()>& cancelled={});

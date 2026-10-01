@@ -261,6 +261,7 @@ class MainWindow final:public QMainWindow {
     void setupSelectionActions();
     void runWand(Point,Qt::KeyboardModifiers,std::optional<editing::SelectionMode> modeOverride={});
     int wandTolerance_{32},wandSampleRadius_{};
+    bool wandObjectMode_{},snapToGuides_{true};
     bool wandContiguous_{true},wandAllLayers_{};
     bool beginSelection(Point,Qt::KeyboardModifiers,int clickCount=1);
     bool updateSelection(Point,Qt::KeyboardModifiers,bool finish);

@@ -2,6 +2,7 @@
 // FolderMaskClip and ImageExporter.swift at the pinned Compositor revision.
 // Copyright (c) 2026 Wonder Assembly LLC; MIT notice in upstream/LICENSE.
 #include "StackRenderer.h"
+#include "LayerEffects.h"
 #include "RasterSampling.h"
 #include "SamplingSource.h"
 #include "Downsample.h"
@@ -66,11 +67,15 @@ class Render {
         if(preview&&preview->layer.id==l.id&&preview->mask)return preview->mask(layerPlacement?info.imageInverse(p):info.maskInverse(p),layerPlacement?l.transform.sampling:info.maskSampling,layerPlacement?0:info.maskExterior);
         return sampleMask(*l.mask->raster,layerPlacement?info.imageInverse(p):info.maskInverse(p),layerPlacement?l.transform.sampling:info.maskSampling,layerPlacement?0:info.maskExterior);
     }
-    double folders(int index,Point p)const{double result=1;for(int a:layers[size_t(index)].ancestors)result*=mask(a,p,true);return result;}
-    Pixel own(int index,Point p,double factor=1)const{
+    double folders(int index,Point p)const{double result=1;for(int a:layers[size_t(index)].ancestors)result*=layers[size_t(a)].layer.opacity*mask(a,p,true);return result;}
+    Pixel shaped(int index,Point p)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;if(!l.raster)return{};
         const auto value=info.reducedImage?info.reducedImage->sample(info.imageInverse(p),l.transform.sampling):preview&&preview->layer.id==l.id&&preview->image?preview->image(info.imageInverse(p),l.transform.sampling):sampleRaster(*l.raster,info.imageInverse(p),l.transform.sampling);
-        return scale(value,l.opacity*mask(index,p)*factor);
+        return scale(value,mask(index,p));
+    }
+    Pixel own(int index,Point p,double factor=1)const{
+        const auto& l=layers[size_t(index)].layer;if(!l.raster)return{};
+        return scale(shaped(index,p),l.opacity*factor);
     }
     double dependency(int source,Point p)const{
         // Source visibility and containing-folder masks are intentionally absent:
@@ -82,7 +87,9 @@ class Render {
     void drawOwn(int index,std::vector<Pixel>& pixels,bool externalClip)const{
         const auto& info=layers[size_t(index)];
         for(size_t i=0;i<pixelCount;++i){auto p=position(i);double factor=externalClip?folders(index,p)*dependency(info.source,p):1;
-            pixels[i]=blendPixel(pixels[i],own(index,p,factor),info.layer.blend);}
+            Pixel content=own(index,p,factor);
+            if(info.layer.effects.active()){auto shapedAt=[this,index](Point q){return shaped(index,q);};auto fx=shadeLayer(info.layer,p,content,info.layer.opacity*factor,shapedAt);if(fx.hasUnder)pixels[i]=blendPixel(pixels[i],fx.under,fx.underBlend);if(fx.hasGlow)pixels[i]=blendPixel(pixels[i],fx.glow,fx.glowBlend);content=fx.content;}
+            pixels[i]=blendPixel(pixels[i],content,info.layer.blend);}
     }
     void adjust(int index,std::vector<Pixel>& pixels,bool folderClip)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;

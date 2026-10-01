@@ -19,7 +19,7 @@
 namespace compositor {
 class NativeCanvas final:public QWidget {
 public:
-    struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;};
+    struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;double lineWidth{4};};
 private:
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_;
@@ -63,7 +63,7 @@ private:
     QString presentationDiagnostic_;
     uint64_t presentationBytes_{},profileDiscoveryCount_{};
     uint64_t presentationByteBudget_{128ULL*1024*1024};
-    bool warp_,dragging_{},rightDragging_{},tabletActive_{};
+    bool warp_,dragging_{},rightDragging_{},panning_{},tabletActive_{};
     double backingScale_{1};
     bool followsFit_{true};
     QPointF last_;
@@ -88,6 +88,8 @@ public:
     double zoom{1}; // Physical display pixels per document pixel.
     QPointF pan; // Logical view pixels (DIPs).
     bool showPixelGrid{};
+    bool showGuides{};
+    std::vector<std::pair<bool,double>> guides;
     std::function<void(QPointF,Qt::KeyboardModifiers)> pointerDown,pointerMove,pointerUp;
     std::function<void(QPointF,Qt::KeyboardModifiers)> pointerDoubleClick;
     std::function<void()> pointerCancel;

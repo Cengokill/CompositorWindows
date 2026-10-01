@@ -18,6 +18,7 @@ EditResult group(const Document&,SelectionState);
 bool canPlace(const Document&,const std::string& id,const std::string& parent);
 EditResult place(const Document&,SelectionState,const std::string& id,const Placement&);
 EditResult moveOut(const Document&,SelectionState);
+EditResult ungroup(const Document&,SelectionState);
 bool canMoveSibling(const Document&,const std::string&,int offset);
 EditResult moveSibling(const Document&,SelectionState,int offset);
 // This legacy list operation moves flat top-first offsets, as EditorSession does.

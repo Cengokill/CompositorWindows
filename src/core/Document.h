@@ -23,8 +23,8 @@ struct Transform {
     Point toUnit(Point) const;
     bool operator==(const Transform&) const = default;
 };
-enum class Blend { Normal,Multiply,Screen,Overlay,Darken,Lighten,Difference,ColorDodge,ColorBurn,Hue,Saturation,Color,Luminosity };
-inline constexpr std::array<const char*,13> blendNames{"Normal","Multiply","Screen","Overlay","Darken","Lighten","Difference","Color Dodge","Color Burn","Hue","Saturation","Color","Luminosity"};
+enum class Blend { Normal,Multiply,Screen,Overlay,Darken,Lighten,Difference,ColorDodge,ColorBurn,Hue,Saturation,Color,Luminosity,LinearBurn,LinearDodge,SoftLight,HardLight,VividLight,LinearLight,PinLight,HardMix,Exclusion,Subtract,Divide };
+inline constexpr std::array<const char*,24> blendNames{"Normal","Multiply","Screen","Overlay","Darken","Lighten","Difference","Color Dodge","Color Burn","Hue","Saturation","Color","Luminosity","Linear Burn","Linear Dodge","Soft Light","Hard Light","Vivid Light","Linear Light","Pin Light","Hard Mix","Exclusion","Subtract","Divide"};
 
 // Immutable 256x256 tiles. Editing copies only touched tiles. Flattening is explicit.
 class Raster {
@@ -81,6 +81,62 @@ struct Mask {
     std::optional<uint8_t> previewExterior;
     bool operator==(const Mask&) const = default;
 };
+struct EffectShadow {
+    bool enabled{};
+    double opacity{.75},angle{120},distance{5},size{5};
+    Pixel color{0,0,0,255};
+    Blend blend{Blend::Multiply};
+    bool operator==(const EffectShadow&) const = default;
+};
+struct EffectGlow {
+    bool enabled{};
+    double opacity{.75},size{8};
+    Pixel color{255,255,190,255};
+    Blend blend{Blend::Normal};
+    bool operator==(const EffectGlow&) const = default;
+};
+struct EffectStroke {
+    bool enabled{};
+    double size{2};
+    Pixel color{0,0,0,255};
+    int position{}; // 0 outside, 1 center, 2 inside
+    bool operator==(const EffectStroke&) const = default;
+};
+struct EffectOverlay {
+    bool enabled{};
+    double opacity{1};
+    Pixel color{255,0,0,255};
+    Blend blend{Blend::Normal};
+    bool operator==(const EffectOverlay&) const = default;
+};
+// Hidden effects keep their parameters. `specified` is the persistence bit:
+// an untouched layer omits the additive effects object.
+struct LayerEffects {
+    bool specified{};
+    EffectShadow dropShadow,innerShadow;
+    EffectGlow outerGlow,innerGlow;
+    EffectStroke stroke;
+    EffectOverlay colorOverlay;
+    bool active() const { return specified && (dropShadow.enabled || innerShadow.enabled || outerGlow.enabled || innerGlow.enabled || stroke.enabled || colorOverlay.enabled); }
+    bool operator==(const LayerEffects&) const = default;
+};
+struct TextRun {
+    int location{},length{};
+    double red{},green{},blue{1};
+    bool hasColor{};
+    std::string fontFamily;
+    double fontSize{};
+    bool hasFont{};
+    bool operator==(const TextRun&) const = default;
+};
+// UTF-16 code-unit location/length, matching the project format. The PNG remains
+// the appearance until the text is edited again.
+struct TextContent {
+    std::string value,fontFamily{"Segoe UI"};
+    double fontSize{48},red{},green{},blue{},alpha{1};
+    std::vector<TextRun> colorRuns,fontRuns;
+    bool operator==(const TextContent&) const = default;
+};
 struct Layer {
     std::string id,name{"Layer"},parentId,maskSourceId;
     bool visible{true},group{};
@@ -91,6 +147,8 @@ struct Layer {
     std::optional<Mask> mask;
     // Exact serialized live metadata is retained while its editing implementation lands.
     std::string adjustmentJson,shapeJson;
+    LayerEffects effects;
+    std::optional<TextContent> text;
     bool operator==(const Layer&) const = default;
 };
 struct Selection {
@@ -99,12 +157,19 @@ struct Selection {
     std::shared_ptr<const editing::SelectionOutline> outline;
     bool operator==(const Selection&) const = default;
 };
+struct Guide {
+    std::string id;
+    bool horizontal{};
+    double position{};
+    bool operator==(const Guide&) const = default;
+};
 struct Document {
     std::string id;
     int width{800},height{600};
     double resolution{72};
     std::vector<Layer> layers; // Bottom to top.
     std::optional<Selection> selection;
+    std::vector<Guide> guides;
     bool operator==(const Document&) const = default;
 };
 // Immutable render-only source override. It is never part of Document, history,
