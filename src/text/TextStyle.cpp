@@ -7,7 +7,8 @@ namespace compositor::text {
 namespace {
 QString unitsOf(std::string_view utf8){return QString::fromUtf8(utf8.data(),int(utf8.size()));}
 struct Color { double red,green,blue; bool operator==(const Color&) const = default; };
-struct Face { std::string family; double size; bool operator==(const Face&) const = default; };
+struct Face { std::string family,style{"Regular"}; double size; bool operator==(const Face&) const = default; };
+std::string styleName(const std::string& style){return style.empty()?std::string("Regular"):style;}
 std::pair<int,int> rangeOf(int location,int length,int count){
     if(count<0)count=0;
     if(location<0)location=0;
@@ -17,7 +18,7 @@ std::pair<int,int> rangeOf(int location,int length,int count){
     return {location,end};
 }
 Color baseColor(const TextContent& text){return {text.red,text.green,text.blue};}
-Face baseFace(const TextContent& text){return {text.fontFamily,text.fontSize};}
+Face baseFace(const TextContent& text){return {text.fontFamily,styleName(text.fontStyle),text.fontSize};}
 std::vector<Color> colorsOf(const TextContent& text,int count){
     std::vector<Color> colors(size_t(count),baseColor(text));
     for(const auto& run:text.colorRuns){
@@ -31,7 +32,7 @@ std::vector<Face> facesOf(const TextContent& text,int count){
     std::vector<Face> faces(size_t(count),baseFace(text));
     for(const auto& run:text.fontRuns){
         if(!run.hasFont||run.location<0||run.length<=0||run.fontFamily.empty())continue;
-        const Face face{run.fontFamily,run.fontSize};
+        const Face face{run.fontFamily,styleName(run.fontStyle),run.fontSize};
         for(int index=run.location;index<std::min(count,run.location+run.length);++index)faces[size_t(index)]=face;
     }
     return faces;
@@ -49,25 +50,35 @@ void writeColors(TextContent& text,const std::vector<Color>& colors){
 }
 void writeFaces(TextContent& text,const std::vector<Face>& faces){
     if(!faces.empty()&&std::all_of(faces.begin(),faces.end(),[&](const Face& face){return face==faces.front();})){
-        text.fontFamily=faces.front().family;text.fontSize=faces.front().size;text.fontRuns.clear();return;
+        text.fontFamily=faces.front().family;text.fontStyle=faces.front().style;text.fontSize=faces.front().size;text.fontRuns.clear();return;
     }
     const Face base=baseFace(text);
     std::vector<TextRun> runs;
     for(int index=0;index<int(faces.size());++index){
         const Face& face=faces[size_t(index)];
         if(face==base)continue;
-        if(!runs.empty()&&runs.back().location+runs.back().length==index&&runs.back().fontFamily==face.family&&runs.back().fontSize==face.size)++runs.back().length;
-        else{TextRun run;run.location=index;run.length=1;run.hasFont=true;run.fontFamily=face.family;run.fontSize=face.size;runs.push_back(run);}
+        if(!runs.empty()&&runs.back().location+runs.back().length==index&&runs.back().fontFamily==face.family&&runs.back().fontStyle==face.style&&runs.back().fontSize==face.size)++runs.back().length;
+        else{TextRun run;run.location=index;run.length=1;run.hasFont=true;run.fontFamily=face.family;run.fontStyle=face.style;run.fontSize=face.size;runs.push_back(run);}
     }
     text.fontRuns=std::move(runs);
 }
 bool colorInRange(double value){return std::isfinite(value)&&value>=0&&value<=1;}
 bool faceAllowed(const std::string& family){return !family.empty()&&family.size()<=256&&family.find('\n')==std::string::npos&&family.find('\r')==std::string::npos;}
+bool styleAllowed(const std::string& style){return style.size()<=256&&style.find('\n')==std::string::npos&&style.find('\r')==std::string::npos;}
+bool boxAllowed(const TextContent& text){
+    const bool width=text.boxWidth.has_value(),height=text.boxHeight.has_value();
+    if(width!=height)return false;
+    if(!width)return true;
+    return *text.boxWidth>=16&&*text.boxWidth<=30000&&*text.boxHeight>=16&&*text.boxHeight<=30000;
+}
 }
 int utf16Length(std::string_view utf8){return unitsOf(utf8).size();}
 bool textRunsValid(const TextContent& text){
-    if(text.value.size()>100000||!faceAllowed(text.fontFamily)||!(text.fontSize>=1)||text.fontSize>1000)return false;
+    if(text.value.size()>100000||!faceAllowed(text.fontFamily)||!styleAllowed(text.fontStyle)||!(text.fontSize>=1)||text.fontSize>1000)return false;
     if(!colorInRange(text.red)||!colorInRange(text.green)||!colorInRange(text.blue)||!colorInRange(text.alpha))return false;
+    if(!std::isfinite(text.tracking)||text.tracking<-100||text.tracking>1000)return false;
+    if(!std::isfinite(text.leading)||text.leading<0||text.leading>5000)return false;
+    if(!boxAllowed(text))return false;
     const int count=utf16Length(text.value);
     auto fits=[&](const std::vector<TextRun>& runs,bool font){
         if(runs.size()>256)return false;
@@ -75,7 +86,7 @@ bool textRunsValid(const TextContent& text){
         for(const auto& run:runs){
             if(run.location<end||run.length<=0||run.location>count||run.length>count-run.location)return false;
             end=run.location+run.length;
-            if(font){if(!run.hasFont||!faceAllowed(run.fontFamily)||!(run.fontSize>=1)||run.fontSize>1000)return false;}
+            if(font){if(!run.hasFont||!faceAllowed(run.fontFamily)||!styleAllowed(run.fontStyle)||!(run.fontSize>=1)||run.fontSize>1000)return false;}
             else if(!run.hasColor||!colorInRange(run.red)||!colorInRange(run.green)||!colorInRange(run.blue))return false;
         }
         return true;
@@ -91,13 +102,15 @@ void setTextColor(TextContent& text,double red,double green,double blue,int loca
     for(int index=start;index<end;++index)colors[size_t(index)]={red,green,blue};
     writeColors(text,colors);
 }
-void setTextFont(TextContent& text,std::string family,int location,int length){
-    if(!faceAllowed(family))return;
+void setTextFont(TextContent& text,std::string family,int location,int length){setTextFont(text,std::move(family),"Regular",location,length);}
+void setTextFont(TextContent& text,std::string family,std::string style,int location,int length){
+    if(!faceAllowed(family)||!styleAllowed(style))return;
+    style=styleName(style);
     const int count=utf16Length(text.value);
     const auto [start,end]=rangeOf(location,length,count);
-    if(start==end||(start==0&&end==count)){text.fontFamily=std::move(family);text.fontRuns.clear();return;}
+    if(start==end||(start==0&&end==count)){text.fontFamily=std::move(family);text.fontStyle=std::move(style);text.fontRuns.clear();return;}
     auto faces=facesOf(text,count);
-    for(int index=start;index<end;++index)faces[size_t(index)]={family,text.fontSize};
+    for(int index=start;index<end;++index)faces[size_t(index)]={family,style,text.fontSize};
     writeFaces(text,faces);
 }
 void setTextSize(TextContent& text,double size){
@@ -138,12 +151,33 @@ std::string fontAt(const TextContent& text,int index){
     for(const auto& run:text.fontRuns)if(run.hasFont&&run.location<=index&&index<run.location+run.length)return run.fontFamily;
     return text.fontFamily;
 }
+std::string styleAt(const TextContent& text,int index){
+    const int count=utf16Length(text.value);
+    if(count<=0)return styleName(text.fontStyle);
+    index=std::clamp(index,0,count-1);
+    for(const auto& run:text.fontRuns)if(run.hasFont&&run.location<=index&&index<run.location+run.length)return styleName(run.fontStyle);
+    return styleName(text.fontStyle);
+}
 std::string uniformFont(const TextContent& text,int location,int length){
     const int count=utf16Length(text.value);
     const auto [start,end]=rangeOf(location,length,count);
     if(end<=start)return {};
-    const std::string face=fontAt(text,start);
-    for(int index=start;index<end;++index)if(fontAt(text,index)!=face)return {};
-    return face;
+    const std::string family=fontAt(text,start),style=styleAt(text,start);
+    for(int index=start;index<end;++index)if(fontAt(text,index)!=family||styleAt(text,index)!=style)return {};
+    return family;
 }
+std::string uniformStyle(const TextContent& text,int location,int length){
+    if(uniformFont(text,location,length).empty())return {};
+    const auto [start,end]=rangeOf(location,length,utf16Length(text.value));
+    return styleAt(text,start);
+}
+void colorAt(const TextContent& text,int index,double& red,double& green,double& blue){
+    red=text.red;green=text.green;blue=text.blue;
+    const int count=utf16Length(text.value);
+    if(count<=0)return;
+    index=std::clamp(index,0,count-1);
+    for(const auto& run:text.colorRuns)if(run.hasColor&&run.location<=index&&index<run.location+run.length){red=run.red;green=run.green;blue=run.blue;return;}
+}
+bool hasTextBox(const TextContent& text){return text.boxWidth.has_value()&&text.boxHeight.has_value();}
+double lineHeight(const TextContent& text){return text.leading>0?text.leading:text.fontSize*1.2;}
 }
