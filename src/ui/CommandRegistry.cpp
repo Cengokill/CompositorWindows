@@ -129,7 +129,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("crop.apply","Canvas","Apply Crop","",C::Pending,G::ApplyCrop,P::None,"Compositor/Document/Crop.swift:187");
         add("crop.cancel","Canvas","Cancel Crop","",C::Pending,G::ApplyCrop,P::None,"Compositor/Document/Crop.swift:178");
         add("layer.new","Layer","New Layer","Ctrl+Shift+N",C::Layer,G::Layers,P::FinishAppearance,"Compositor/CompositorApp.swift:241");
-        add("layer.duplicate","Layer","Duplicate Layer","",C::Layer,G::Duplicate,P::FinishAppearance,"Compositor/CompositorApp.swift:228");
+        add("layer.duplicate","Layer","Duplicate Layer","Ctrl+Shift+J",C::Layer,G::Duplicate,P::FinishAppearance,"Compositor/CompositorApp.swift:228");
         add("layer.rename","Layer","Rename Layer…","",C::Layer,G::ActiveLayer,P::FinishAppearance,"Compositor/CompositorApp.swift:243");
         add("layer.delete","Layer","Delete Layer","",C::Layer,G::ActiveLayer,P::FinishAppearance,"Compositor/CompositorApp.swift:263");
         add("layer.raise","Layer","Raise Layer","Ctrl+]",C::Layer,G::MoveUp,P::FinishAppearance,"Compositor/CompositorApp.swift:249");
@@ -205,7 +205,7 @@ bool reservesTextShortcut(const QKeyEvent&e){
     const auto key=e.key();const auto mods=e.modifiers();
     if(key==Qt::Key_Delete||key==Qt::Key_Backspace||key==Qt::Key_Left||key==Qt::Key_Right||key==Qt::Key_Up||key==Qt::Key_Down||key==Qt::Key_Home||key==Qt::Key_End||key==Qt::Key_Return||key==Qt::Key_Enter)return true;
     if((mods&~Qt::ShiftModifier)==Qt::NoModifier)return key>=Qt::Key_Space&&key<=Qt::Key_AsciiTilde;
-    if((mods&Qt::ControlModifier)&&(mods&~(Qt::ControlModifier|Qt::ShiftModifier))==Qt::NoModifier)return key==Qt::Key_A||key==Qt::Key_C||key==Qt::Key_X||key==Qt::Key_V||key==Qt::Key_Z||key==Qt::Key_Y||key==Qt::Key_Insert;
+    if((mods&Qt::ControlModifier)&&(mods&~(Qt::ControlModifier|Qt::ShiftModifier))==Qt::NoModifier)return key==Qt::Key_A||key==Qt::Key_C||key==Qt::Key_X||key==Qt::Key_V||key==Qt::Key_Z||key==Qt::Key_Y||key==Qt::Key_Insert||key==Qt::Key_Left||key==Qt::Key_Right;
     return false;
 }
 CommandRegistry::CommandRegistry(QWidget*owner,StateProvider state,Prepare prepare):QObject(owner),owner_(owner),state_(std::move(state)),prepare_(std::move(prepare)){
