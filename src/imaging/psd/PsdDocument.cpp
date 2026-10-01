@@ -1,5 +1,7 @@
 #include "PsdDocument.h"
+#include "PsdText.h"
 #include "core/Document.h"
+#include "text/TextRaster.h"
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -62,6 +64,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     Reader in{bytes, size}; if (in.ascii(4) != "8BPS") throw std::runtime_error("Not a PSD");
     auto version = in.u16(); if (version != 1 && version != 2) throw std::runtime_error("Unsupported PSD version"); in.psb = version == 2; in.skip(6);
     auto channels = in.u16(); auto height = in.u32(); auto width = in.u32(); auto depth = in.u16(); auto mode = in.u16();
+    if (mode == 4) throw std::runtime_error("CMYK PSD files are not supported");
     if (channels < 3 || depth != 8 || mode != 3) throw std::runtime_error("Only 8-bit RGB PSD files are supported");
     if (!width || !height || width > 30000 || height > 30000 || uint64_t(width) * height > 100000000) throw std::runtime_error("PSD exceeds the canvas limit");
     in.skip(in.u32()); in.skip(in.u32());
@@ -69,7 +72,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     auto section = in.wide(); auto sectionEnd = in.at + size_t(section);
     if (section) {
         auto info = in.wide(); auto infoEnd = in.at + size_t(info); auto count = std::abs(in.i16()); if (count > 256) throw std::runtime_error("Too many PSD layers");
-        struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name; bool group{}, closer{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::string text; };
+        struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name; bool group{}, closer{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::vector<uint8_t> typeTool; };
         std::vector<Record> records;
         for (int i = 0; i < count; ++i) {
             Record record; record.top = in.i32(); record.left = in.i32(); record.bottom = in.i32(); record.right = in.i32();
@@ -81,7 +84,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             while (in.at + 12 <= extraEnd) {
                 if (in.ascii(4) != "8BIM") break; auto key = in.ascii(4); auto length = in.psb && (key == "LMsk" || key == "Lr16" || key == "Lr32" || key == "Layr" || key == "Mt16" || key == "Mt32" || key == "Mtrn" || key == "Alph" || key == "FMsk" || key == "lnk2" || key == "FEid" || key == "FXid" || key == "PxSD") ? in.u64() : in.u32(); auto start = in.at;
                 if (key == "lsct" || key == "lsdk") { auto kind = length >= 4 ? in.u32() : 0; record.group = kind == 1 || kind == 2; record.closer = kind == 3; }
-                else if (key == "TySh" || key == "txt2") { auto block = std::string(reinterpret_cast<const char*>(in.data + in.at), std::min(length, uint64_t(extraEnd - in.at))); auto marker = block.find("Txt "); if (marker != std::string::npos && marker + 8 < block.size()) { uint32_t chars = uint8_t(block[marker + 4]) << 24 | uint8_t(block[marker + 5]) << 16 | uint8_t(block[marker + 6]) << 8 | uint8_t(block[marker + 7]); size_t encoded = std::min(size_t(chars) * 2, block.size() - (marker + 8)); for (size_t n = 0; n + 1 < encoded; n += 2) { char16_t unit = char16_t(uint8_t(block[marker + 8 + n]) | uint8_t(block[marker + 8 + n + 1]) << 8); if (unit < 0x80) record.text.push_back(char(unit)); else if (unit < 0x800) { record.text.push_back(char(0xC0 | unit >> 6)); record.text.push_back(char(0x80 | (unit & 0x3F))); } else { record.text.push_back(char(0xE0 | unit >> 12)); record.text.push_back(char(0x80 | ((unit >> 6) & 0x3F))); record.text.push_back(char(0x80 | (unit & 0x3F))); } } } }
+                else if ((key == "TySh" || key == "txt2") && record.typeTool.empty()) { auto stored = std::min(length, uint64_t(extraEnd - in.at)); record.typeTool.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
                 in.at = start + size_t(length + (length & 1)); if (in.at > extraEnd) throw std::runtime_error("PSD extra data overrun");
             }
             in.at = extraEnd; records.push_back(std::move(record));
@@ -100,7 +103,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             layer.transform = {double(record.left), double(record.top), double(std::max(w, 1)), double(std::max(h, 1))}; layer.parentId = folders.empty() ? std::string{} : folders.back();
             if (record.group) folders.push_back(layer.id);
             else if (red.size() == size_t(w) * h && green.size() == red.size() && blue.size() == red.size()) layer.raster = compose(w, h, red, green, blue, alpha);
-            if (!record.group && !record.text.empty()) { TextContent text; text.value = record.text; text.fontFamily = "Segoe UI"; layer.text = text; }
+            if (!record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); } if (imported.editable) { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; } } }
             result.document.layers.push_back(std::move(layer));
         }
         in.at = std::max(in.at, infoEnd);
