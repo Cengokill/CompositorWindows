@@ -31,6 +31,9 @@ public:
         // Document-space corners, in order around the highlight: top-left, top-right, bottom-right, bottom-left.
         struct Quad { double x0{},y0{},x1{},y1{},x2{},y2{},x3{},y3{}; };
         std::vector<Quad> selection;
+        bool showFrame{};
+        std::array<Point,4> frame{};
+        std::array<Point,8> handles{};
     };
 private:
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
