@@ -120,6 +120,7 @@ struct LayerEffects {
     bool active() const { return specified && (dropShadow.enabled || innerShadow.enabled || outerGlow.enabled || innerGlow.enabled || stroke.enabled || colorOverlay.enabled); }
     bool operator==(const LayerEffects&) const = default;
 };
+enum class TextAlignment { Left, Center, Right };
 struct TextRun {
     int location{},length{};
     double red{},green{},blue{1};
@@ -127,14 +128,21 @@ struct TextRun {
     std::string fontFamily;
     double fontSize{};
     bool hasFont{};
+    // Empty means Regular, so older runs stay regular without a stored style.
+    std::string fontStyle;
     bool operator==(const TextRun&) const = default;
 };
 // UTF-16 code-unit location/length, matching the project format. The PNG remains
-// the appearance until the text is edited again.
+// the appearance until the text is edited again. Absent box dimensions are point
+// text. Leading 0 is automatic, at 120% of the font size.
 struct TextContent {
     std::string value,fontFamily{"Segoe UI"};
     double fontSize{48},red{},green{},blue{},alpha{1};
     std::vector<TextRun> colorRuns,fontRuns;
+    std::string fontStyle{"Regular"};
+    double tracking{},leading{};
+    TextAlignment alignment{TextAlignment::Left};
+    std::optional<double> boxWidth,boxHeight;
     bool operator==(const TextContent&) const = default;
 };
 struct Layer {
