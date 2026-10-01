@@ -196,9 +196,10 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event){
             if(key->key()==Qt::Key_Escape||ui::reservesTextShortcut(*key)){event->accept();return true;}
         }
     }
-    if(auto* fonts=findChild<QFontComboBox*>("textFont");fonts&&fonts->view()&&watched==fonts->view()->window()){
+    auto popupOf=[&](QComboBox* combo){return combo&&combo->view()&&watched==combo->view()->window();};
+    if(popupOf(findChild<QFontComboBox*>("textFont"))||popupOf(findChild<QComboBox*>("textStyle"))){
         if(event->type()==QEvent::Show)fontChoiceKept_=false;
-        if(event->type()==QEvent::Hide){if(!fontChoiceKept_)endTextFontPreview();fontChoiceKept_=false;}
+        if(event->type()==QEvent::Hide){if(!fontChoiceKept_)endTextFontPreview();fontChoiceKept_=false;focusTextCanvas();}
     }
     if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){
         auto* widget=qobject_cast<QWidget*>(watched);if(widget&&widget->window()==this){auto* key=static_cast<QKeyEvent*>(event);
