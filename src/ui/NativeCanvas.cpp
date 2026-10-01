@@ -307,6 +307,7 @@ void NativeCanvas::drawTextOverlay(){
         const auto origin=viewOf(overlay.originX,overlay.originY),opposite=viewOf(overlay.originX+overlay.width,overlay.originY+overlay.height);
         context_->DrawBitmap(textBitmap_.Get(),D2D1::RectF(origin.x,origin.y,opposite.x,opposite.y),1,D2D1_INTERPOLATION_MODE_LINEAR);
     }
+    if(overlay.showFrame){for(int i=0;i<4;++i){const auto& a=overlay.frame[size_t(i)];const auto& b=overlay.frame[size_t((i+1)%4)];context_->DrawLine(viewOf(a.x,a.y),viewOf(b.x,b.y),caret.Get(),std::max(1.f,float(pointsPerPixel())));}for(const auto& handle:overlay.handles){const auto center=viewOf(handle.x,handle.y);context_->FillRectangle(D2D1::RectF(center.x-4,center.y-4,center.x+4,center.y+4),caret.Get());}}
     if(overlay.caret>=0&&overlay.caret<int(overlay.carets.size())){const auto& line=overlay.carets[size_t(overlay.caret)];context_->DrawLine(viewOf(line.x0,line.y0),viewOf(line.x1,line.y1),caret.Get(),std::max(1.f,float(pointsPerPixel())));}
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
