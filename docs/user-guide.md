@@ -28,11 +28,13 @@ Brush and Eraser use the current tip controls. Clone, Heal and Retouch expose th
 
 Gradient keeps a pending preview until Apply. Cancel or Escape discards it. Shape creates rectangles or ellipses with editable style; Shift+U switches the shape kind. Crop has an explicit Apply action. Image and Canvas commands change the image dimensions, canvas bounds or resolution; check the selected anchor and units before applying.
 
-Each project remembers its Freehand/Polygonal lasso choice and separate Expand/Contract amounts. **L** returns to the remembered lasso kind. Crop offers Free, Original, 1:1, 4:3 and 16:9 ratios; starting a fresh crop resets the choice to Free.
+Each project remembers its Freehand/Polygonal lasso choice and separate Expand/Contract amounts. **L** returns to the remembered lasso kind. Crop offers Free, Original, 1:1, 4:3, 3:4, 16:9, and 9:16. When a selection exists, a new crop starts from that selection. The middle mouse button pans the canvas. View → Guides shows document guides and adds one at the vertical center when the document has none. View → Snap includes those guides while transforming.
 
 ## Adjust an image
 
-Image > Adjustments and the Filters menu provide color and tonal adjustments, blur, noise, lens correction and content-aware fill. Select an image layer first; a selection restricts applicable pixel edits. Inspect the preview, then Apply to commit one undoable change or Cancel to discard it. Adjustment-layer commands keep editable adjustment parameters in the layer stack.
+Image > Adjustments and the Filters menu provide color and tonal adjustments, blur, noise, lens correction, content-aware fill, vignette, bloom, tonal contrast, dither, scanlines, and Camera Raw. Select an image layer first; a selection restricts applicable pixel edits. A vignette can cover an empty layer. Inspect the preview, then Apply to commit one undoable change or Cancel to discard it. Adjustment-layer commands keep editable adjustment parameters in the layer stack, including Invert, Black and White, Color Balance, and blur or noise layers.
+
+Layer effects (drop shadow, inner shadow, outer and inner glow, stroke, and color overlay) are stored on the layer and rendered on the CPU. Hidden effects keep their settings. Text Layer creates a DirectWrite raster; a later destructive pixel edit flattens it. Layer → Ungroup promotes the folder's children. Help → Keyboard Shortcuts lists the catalogued shortcuts. Tab, with the wand active and no modifier, switches between color and object selection. Object selection needs the bundled BiRefNet model.
 
 Filter dialogs reopen the choices last used with Apply, including Curves, Exposure, Grain and background-removal controls. Cancel preserves the previously remembered choices, and each project keeps its own values. A new Gradient Map always starts from the current foreground and background colors. Live adjustment layers retain their own parameters.
 

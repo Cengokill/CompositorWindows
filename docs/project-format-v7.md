@@ -55,3 +55,20 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 `ProjectStore.swift:116–168, 216–231` limits the manifest to 4 MiB and each encoded asset to 512 MiB; assets must decode as one PNG frame with depth at most 8. Images and masks each have their own cumulative 100000000-pixel budget, each side 1–30000. A valid canvas may exceed 100 million pixels until an operation requiring a full raster/export enforces its own budget. Grayscale masks must be monochrome, 8-bit, no alpha, and not a CGImage mask (`LayerMask.swift:28–31`). Disabled masks are persisted. Asset and metadata files must resolve inside the package and be regular, non-symlink files. Windows reparse and replacement handling requires its own verified policy.
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
+
+## Windows reader through version 11
+
+The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–11 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
+
+| Version | Additional content |
+|---|---|
+| 8 | Folder opacity other than 1, and document guides |
+| 9 | Gaussian Blur, Motion Blur, and Add Noise adjustment layers |
+| 10 | Text `colorRuns` |
+| 11 | Text `fontRuns` |
+
+A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
+
+Blend names keep the original 13, then append `Linear Burn`, `Linear Dodge`, `Soft Light`, `Hard Light`, `Vivid Light`, `Linear Light`, `Pin Light`, `Hard Mix`, `Exclusion`, `Subtract`, and `Divide`. A folder may store opacity 0–1 from version 8 and still has to stay in Normal. Its opacity multiplies descendants.
+
+Additive fields do not raise the version by themselves: `effects`, base `text` without runs, and a line `shape` (`lineWidth`, `start`, `end`). Hidden effects keep their parameters. `colorRuns` and `fontRuns` use UTF-16 code-unit `location` and `length`. Guides are `{id, horizontal, position}` and are separate from the transient transform snap lines. Mac exchange of these fields remains unverified.
