@@ -284,9 +284,19 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
 }
 void NativeCanvas::setTextOverlay(std::optional<TextCaretOverlay> value){textOverlay_=std::move(value);setAttribute(Qt::WA_InputMethodEnabled,textOverlay_.has_value());if(!textOverlay_){textBitmap_.Reset();textRasterSource_.reset();}update();}
 void NativeCanvas::drawTextOverlay(){
-    if(!textOverlay_||!context_||documentWidth_<=0)return;
+    if(!textOverlay_||!context_||!factory_||documentWidth_<=0)return;
     const auto& overlay=*textOverlay_;const auto mapping=viewMapping();
     auto viewOf=[&](double x,double y){auto point=mapping.toView({x,y});return D2D1::Point2F(float(point.x),float(point.y));};
+    ComPtr<ID2D1SolidColorBrush> fill,caret;check(context_->CreateSolidColorBrush(D2D1::ColorF(0.2f,0.55f,1.f,0.45f),&fill),"Text selection");check(context_->CreateSolidColorBrush(D2D1::ColorF(0.15f,0.45f,1.f),&caret),"Text caret");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    for(const auto& quad:overlay.selection){
+        ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Text selection");
+        ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink),"Text selection");
+        sink->BeginFigure(viewOf(quad.x0,quad.y0),D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLine(viewOf(quad.x1,quad.y1));sink->AddLine(viewOf(quad.x2,quad.y2));sink->AddLine(viewOf(quad.x3,quad.y3));
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);check(sink->Close(),"Text selection");
+        context_->FillGeometry(path.Get(),fill.Get());
+    }
     if(overlay.raster&&overlay.raster->width>0&&overlay.raster->height>0&&overlay.raster->width<=30000&&overlay.raster->height<=30000){
         if(textRasterSource_!=overlay.raster||!textBitmap_){
             const auto& image=*overlay.raster;std::vector<Pixel> pixels(size_t(image.width)*image.height);
@@ -297,9 +307,6 @@ void NativeCanvas::drawTextOverlay(){
         const auto origin=viewOf(overlay.originX,overlay.originY),opposite=viewOf(overlay.originX+overlay.width,overlay.originY+overlay.height);
         context_->DrawBitmap(textBitmap_.Get(),D2D1::RectF(origin.x,origin.y,opposite.x,opposite.y),1,D2D1_INTERPOLATION_MODE_LINEAR);
     }
-    ComPtr<ID2D1SolidColorBrush> fill,caret;check(context_->CreateSolidColorBrush(D2D1::ColorF(0.2f,0.55f,1.f,0.35f),&fill),"Text selection");check(context_->CreateSolidColorBrush(D2D1::ColorF(0.15f,0.45f,1.f),&caret),"Text caret");
-    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    for(const auto& box:overlay.selection){const auto a=viewOf(box.x,box.y),b=viewOf(box.x+box.width,box.y+box.height);context_->FillRectangle(D2D1::RectF(a.x,a.y,b.x,b.y),fill.Get());}
     if(overlay.caret>=0&&overlay.caret<int(overlay.carets.size())){const auto& line=overlay.carets[size_t(overlay.caret)];context_->DrawLine(viewOf(line.x0,line.y0),viewOf(line.x1,line.y1),caret.Get(),std::max(1.f,float(pointsPerPixel())));}
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }

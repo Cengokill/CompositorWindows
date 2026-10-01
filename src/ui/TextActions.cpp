@@ -53,6 +53,53 @@ bool containsText(const Transform& transform,Point point){
     const auto unit=transform.toUnit(point);
     return unit.x>=-0.02&&unit.y>=-0.02&&unit.x<=1.02&&unit.y<=1.02;
 }
+bool shown(const Document& document,const std::string& id){const auto entries=layers::entries(document);return std::any_of(entries.begin(),entries.end(),[&](const layers::Entry& entry){return entry.id==id&&entry.visible;});}
+Transform textFrame(EditorProject* owner,const std::string& layerId,double originX,double originY,int layoutWidth,int layoutHeight){
+    Transform placed{originX,originY,double(std::max(layoutWidth,1)),double(std::max(layoutHeight,1))};
+    if(layerId.empty()||!owner||!owner->document)return placed;
+    auto found=std::find_if(owner->document->layers.begin(),owner->document->layers.end(),[&](const Layer& layer){return layer.id==layerId;});
+    if(found==owner->document->layers.end())return placed;
+    placed=found->transform;
+    const double scaleX=found->raster&&found->raster->width?found->transform.width/found->raster->width:1;
+    const double scaleY=found->raster&&found->raster->height?found->transform.height/found->raster->height:1;
+    placed.width=std::max(1.,layoutWidth*scaleX);placed.height=std::max(1.,layoutHeight*scaleY);
+    return placed;
+}
+int lineAt(const text::TextLayout& layout,float y){
+    if(layout.carets.empty())return 0;
+    for(const auto& caret:layout.carets)if(y>=caret.top&&y<caret.top+std::max(caret.height,1.f))return caret.line;
+    int line=layout.carets.front().line;float best=1e30f;
+    for(const auto& caret:layout.carets){const float delta=std::abs(caret.top+caret.height*.5f-y);if(delta<best){best=delta;line=caret.line;}}
+    return line;
+}
+int caretIndex(const text::TextLayout& layout,float x,float y){
+    if(layout.carets.empty())return 0;
+    const int line=lineAt(layout,y);
+    int best=0;float distance=1e30f;
+    for(int index=0;index<int(layout.carets.size());++index)if(layout.carets[size_t(index)].line==line){const float delta=std::abs(layout.carets[size_t(index)].x-x);if(delta<distance){distance=delta;best=index;}}
+    return best;
+}
+int characterIndex(const text::TextLayout& layout,float x,float y){
+    const int boundary=caretIndex(layout,x,y);
+    const int line=layout.carets.empty()?0:layout.carets[size_t(std::clamp(boundary,0,int(layout.carets.size())-1))].line;
+    for(int index=0;index+1<int(layout.carets.size());++index){
+        const auto& left=layout.carets[size_t(index)];const auto& right=layout.carets[size_t(index+1)];
+        if(left.line!=line||right.line!=line)continue;
+        const float lo=std::min(left.x,right.x),hi=std::max(left.x,right.x);
+        if(x>=lo&&x<hi)return index;
+    }
+    return boundary>0?boundary-1:boundary;
+}
+bool wordUnit(const QString& text,int index){if(index<0||index>=text.size())return false;const auto character=text.at(index);if(character.isLowSurrogate())return false;return character.isLetterOrNumber()||character==QLatin1Char('_')||character==QLatin1Char('\'');}
+std::pair<int,int> wordRange(const QString& text,int index){
+    if(text.isEmpty())return {0,0};
+    index=std::clamp(index,0,int(text.size())-1);
+    if(text.at(index).isLowSurrogate())index=previousUnit(text,index);
+    int start=index,end=nextUnit(text,index);
+    if(wordUnit(text,index)){while(start>0&&wordUnit(text,previousUnit(text,start)))start=previousUnit(text,start);while(end<text.size()&&wordUnit(text,end))end=nextUnit(text,end);}
+    else if(text.at(index).isSpace()){while(start>0&&text.at(previousUnit(text,start)).isSpace())start=previousUnit(text,start);while(end<text.size()&&text.at(end).isSpace())end=nextUnit(text,end);}
+    return {start,end};
+}
 }
 void MainWindow::setupTypeControls(){
     auto* bar=addToolBar("Type Options");bar->setObjectName("typeOptions");
@@ -102,11 +149,11 @@ void MainWindow::publishTextEdit(){
     if(!session.preedit.empty()){auto withMark=shown;if(text::replaceText(withMark,session.caret,0,session.preedit))shown=std::move(withMark);}
     try{session.layout=text::layoutText(shown);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
     const auto& layout=session.layout;
-    Transform placed{session.originX,session.originY,double(std::max(layout.width,1)),double(std::max(layout.height,1))};
     Layer* existing=nullptr;
+    Transform placed=textFrame(session.owner,session.layerId,session.originX,session.originY,layout.width,layout.height);
     if(!session.layerId.empty()&&session.owner->document){
         auto found=std::find_if(session.owner->document->layers.begin(),session.owner->document->layers.end(),[&](const Layer& layer){return layer.id==session.layerId;});
-        if(found!=session.owner->document->layers.end()){existing=&*found;placed=found->transform;const double scaleX=found->raster&&found->raster->width?found->transform.width/found->raster->width:1;const double scaleY=found->raster&&found->raster->height?found->transform.height/found->raster->height:1;placed.width=std::max(1.,layout.width*scaleX);placed.height=std::max(1.,layout.height*scaleY);}
+        if(found!=session.owner->document->layers.end())existing=&*found;
     }
     auto map=[&](float x,float y){return placed.fromUnit({layout.width?double(x)/layout.width:0,layout.height?double(y)/layout.height:0});};
     NativeCanvas::TextCaretOverlay overlay;
@@ -116,12 +163,22 @@ void MainWindow::publishTextEdit(){
     overlay.caret=visualCaret;
     for(const auto& caret:layout.carets){const auto top=map(caret.x,caret.top),bottom=map(caret.x,caret.top+caret.height);overlay.carets.push_back({top.x,top.y,bottom.x,bottom.y});}
     const int start=std::min(session.caret,session.anchor),end=std::max(session.caret,session.anchor);
-    for(int index=start;index<end&&index+1<int(layout.carets.size());++index){
-        const auto& left=layout.carets[size_t(index)];const auto& right=layout.carets[size_t(index+1)];
-        if(left.line!=right.line)continue;
-        const float x=std::min(left.x,right.x),width=std::abs(right.x-left.x);
-        const auto origin=map(x,left.top),opposite=map(x+width,left.top+left.height);
-        overlay.selection.push_back({std::min(origin.x,opposite.x),std::min(origin.y,opposite.y),std::abs(opposite.x-origin.x),std::abs(opposite.y-origin.y)});
+    const int limit=std::max(0,int(layout.carets.size())-1);
+    if(end>start&&!layout.carets.empty()){
+        int index=std::clamp(start,0,limit);const int stop=std::clamp(end,0,limit);
+        while(index<stop){
+            const int line=layout.carets[size_t(index)].line;int last=index;
+            while(last<stop&&last+1<=limit&&layout.carets[size_t(last+1)].line==line)++last;
+            const auto& from=layout.carets[size_t(index)];const auto& to=layout.carets[size_t(last)];
+            float left=std::min(from.x,to.x),right=std::max(from.x,to.x);
+            if(last==index&&index<end){for(const auto& caret:layout.carets)if(caret.line==line)right=std::max(right,caret.x);if(right<=left+0.5f)right=left+std::max(from.height*.4f,1.f);}
+            if(right>left+0.5f){
+                const float top=from.top,bottom=top+std::max(from.height,1.f);
+                const auto a=map(left,top),b=map(right,top),c=map(right,bottom),d=map(left,bottom);
+                overlay.selection.push_back({a.x,a.y,b.x,b.y,c.x,c.y,d.x,d.y});
+            }
+            if(last+1<=index)break;index=last+1;
+        }
     }
     if(existing){
         auto preview=std::make_shared<LayerRenderPreview>();preview->layer=*existing;preview->layer.transform=placed;preview->layer.text=session.style;
@@ -132,35 +189,67 @@ void MainWindow::publishTextEdit(){
     if(session.owner->canvas)session.owner->canvas->setTextOverlay(std::move(overlay));
     if(session.owner==current())refresh(true,false);
 }
-void MainWindow::beginText(Point point,bool forceNew,bool extend){
+void MainWindow::beginText(Point point,bool forceNew,bool extend,int clickCount){
     if(!canEditLayers()||!current()||!current()->document)return;
-    if(textSession_&&textSession_->owner==current()&&!forceNew){
-        Transform placed{textSession_->originX,textSession_->originY,double(std::max(textSession_->layout.width,1)),double(std::max(textSession_->layout.height,1))};
-        if(!textSession_->layerId.empty()){auto found=std::find_if(current()->document->layers.begin(),current()->document->layers.end(),[&](const Layer& layer){return layer.id==textSession_->layerId;});if(found!=current()->document->layers.end()){placed=found->transform;placed.width=std::max(1.,double(textSession_->layout.width));placed.height=std::max(1.,double(textSession_->layout.height));}}
-        if(containsText(placed,point)&&!textSession_->layout.carets.empty()){
-            const auto unit=placed.toUnit(point);
-            const float x=float(unit.x*textSession_->layout.width),y=float(unit.y*textSession_->layout.height);
-            int best=0;float distance=1e30f;
-            for(int index=0;index<int(textSession_->layout.carets.size());++index){const auto& caret=textSession_->layout.carets[size_t(index)];const float dx=caret.x-x,dy=caret.top+caret.height*.5f-y,delta=dx*dx+dy*dy;if(delta<distance){distance=delta;best=index;}}
-            textSession_->caret=best;if(!extend)textSession_->anchor=best;textSession_->preedit.clear();
-            if(canvas())canvas()->setFocus();publishTextEdit();return;
+    auto place=[&](TextSession& session)->bool{
+        const auto text=unitsOf(session.style.value);
+        const auto unit=textFrame(session.owner,session.layerId,session.originX,session.originY,session.layout.width,session.layout.height).toUnit(point);
+        const float x=float(unit.x*std::max(session.layout.width,1)),y=float(unit.y*std::max(session.layout.height,1));
+        session.preedit.clear();
+        if(clickCount>=2&&!text.isEmpty()){
+            if(clickCount>=3){const int index=caretIndex(session.layout,x,y);session.anchor=lineEdge(session.layout,index,true);session.caret=lineEdge(session.layout,index,false);}
+            else{const auto range=wordRange(text,characterIndex(session.layout,x,y));session.anchor=range.first;session.caret=range.second;}
+            return false;
         }
+        const int index=session.layout.carets.empty()?0:caretIndex(session.layout,x,y);session.caret=index;if(!extend)session.anchor=index;
+        return clickCount<2&&!text.isEmpty();
+    };
+    auto publish=[&](bool selecting){auto* owner=current();if(canvas())canvas()->setFocus();publishTextEdit();textSelecting_=selecting;if(selecting)pointerOwner_=owner;};
+    if(textSession_&&textSession_->owner==current()&&!forceNew){
+        const auto placed=textFrame(textSession_->owner,textSession_->layerId,textSession_->originX,textSession_->originY,textSession_->layout.width,textSession_->layout.height);
+        if(containsText(placed,point)&&!textSession_->layout.carets.empty()){publish(place(*textSession_));return;}
     }
+    textSelecting_=false;
     if(textSession_&&!finishText())return;
     auto* project=current();if(!project||!project->document)return;
     TextSession session;session.owner=project;session.originX=point.x;session.originY=point.y;session.style=textDefaults_;
     if(!forceNew){
         for(auto layer=project->document->layers.rbegin();layer!=project->document->layers.rend();++layer){
-            if(!layer->visible||layer->group||!layer->text||!containsText(layer->transform,point))continue;
+            if(layer->group||!layer->text||!shown(*project->document,layer->id)||!containsText(layer->transform,point))continue;
             session.layerId=layer->id;session.style=*layer->text;session.originX=layer->transform.x;session.originY=layer->transform.y;
             project->active=layer->id;project->selected={layer->id};project->maskSelected=false;break;
         }
     }
     if(session.layerId.empty()){session.style.value.clear();session.style.colorRuns.clear();session.style.fontRuns.clear();session.style.red=foreground_.redF();session.style.green=foreground_.greenF();session.style.blue=foreground_.blueF();session.style.alpha=foreground_.alphaF();}
-    const int count=text::utf16Length(session.style.value);session.caret=session.anchor=session.layerId.empty()?0:count;
-    textSession_=std::move(session);tool_=Tool::Text;if(canvas())canvas()->setFocus();publishTextEdit();
+    try{session.layout=text::layoutText(session.style);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    const bool selecting=session.layerId.empty()?false:place(session);
+    if(session.layerId.empty())session.caret=session.anchor=0;
+    textSession_=std::move(session);tool_=Tool::Text;publish(selecting);
+}
+bool MainWindow::editTextAt(Point point,int clickCount){
+    if(!canEditLayers()||!current()||!current()->document)return false;
+    if(transformSession_){if(transformSession_->persistent||transformSession_->corners)return false;cancelTransformSession();}
+    const Layer* hit=nullptr;
+    for(auto layer=current()->document->layers.rbegin();layer!=current()->document->layers.rend();++layer){
+        if(layer->group||!layer->text||!shown(*current()->document,layer->id)||!containsText(layer->transform,point))continue;
+        hit=&*layer;break;
+    }
+    if(!hit)return false;
+    if(textSession_&&!finishText())return false;
+    const auto id=hit->id;current()->active=id;current()->selected={id};current()->maskSelected=false;
+    beginText(point,false,false,clickCount);
+    return textSession_&&textSession_->layerId==id;
+}
+void MainWindow::updateTextCaret(Point point){
+    if(!textSelecting_||!textSession_||textSession_->owner!=current()||textSession_->layout.carets.empty())return;
+    const auto unit=textFrame(textSession_->owner,textSession_->layerId,textSession_->originX,textSession_->originY,textSession_->layout.width,textSession_->layout.height).toUnit(point);
+    const int index=caretIndex(textSession_->layout,float(unit.x*std::max(textSession_->layout.width,1)),float(unit.y*std::max(textSession_->layout.height,1)));
+    if(index==textSession_->caret)return;
+    textSession_->caret=index;textSession_->preedit.clear();
+    auto* owner=current();publishTextEdit();textSelecting_=true;pointerOwner_=owner;
 }
 bool MainWindow::finishText(){
+    textSelecting_=false;
     if(!textSession_)return true;
     endTextFontPreview();
     auto session=std::move(*textSession_);textSession_.reset();
@@ -198,6 +287,7 @@ bool MainWindow::finishText(){
     }catch(const std::exception& error){if(!textSession_)textSession_=std::move(session);statusBar()->showMessage(error.what());if(textSession_)publishTextEdit();return false;}
 }
 void MainWindow::cancelText(){
+    textSelecting_=false;
     if(!textSession_)return;auto* project=textSession_->owner;textSession_.reset();
     if(project){project->textPreview.reset();if(project->canvas)project->canvas->setTextOverlay({});}
     if(project==current())refresh(false,false);

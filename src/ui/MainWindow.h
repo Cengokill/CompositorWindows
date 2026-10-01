@@ -135,6 +135,7 @@ class MainWindow final:public QMainWindow {
     };
     std::optional<TextSession> textSession_;
     bool fontChoiceKept_{};
+    bool textSelecting_{};
     std::string shapeDraftId_;
     editing::ShapeStyle shapeDraftStyle_;
     std::optional<editing::Rect> shapeDraftRect_;
@@ -321,7 +322,9 @@ class MainWindow final:public QMainWindow {
     void setupDrawingActions();
     void setupTypeControls();
     void refreshTypeControls();
-    void beginText(Point,bool forceNew=false,bool extend=false);
+    void beginText(Point,bool forceNew=false,bool extend=false,int clickCount=1);
+    bool editTextAt(Point,int clickCount);
+    void updateTextCaret(Point);
     bool finishText();
     void cancelText();
     bool handleTextKey(QKeyEvent*);
