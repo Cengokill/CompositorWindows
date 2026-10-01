@@ -1,5 +1,6 @@
 #include "text/TextStyle.h"
 #include "text/TextRaster.h"
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <objbase.h>
@@ -68,6 +69,36 @@ void font_range(){
     setTextSize(text,72);
     REQUIRE(text.fontSize==72&&textRunsValid(text));
 }
+void paragraph_layout(){
+    const HRESULT started=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+    REQUIRE(SUCCEEDED(started)||started==RPC_E_CHANGED_MODE);
+    struct Cleanup{HRESULT hr;~Cleanup(){if(SUCCEEDED(hr))CoUninitialize();}} cleanup{started};
+    auto boxed=sample("Hello Hello Hello");
+    boxed.boxWidth=80;boxed.boxHeight=160;
+    REQUIRE(textRunsValid(boxed)&&hasTextBox(boxed));
+    auto wrapped=layoutText(boxed);
+    REQUIRE(wrapped.width==80&&wrapped.carets.size()>4);
+    int lines=0;for(const auto& caret:wrapped.carets)lines=std::max(lines,caret.line+1);
+    REQUIRE(lines>1);
+    auto left=sample("Hi");left.boxWidth=200;left.boxHeight=80;
+    auto center=left;center.alignment=TextAlignment::Center;
+    REQUIRE(layoutText(center).carets.front().x>layoutText(left).carets.front().x);
+    auto plain=sample("Hi");auto tracked=plain;tracked.tracking=40;
+    const float trackedX=layoutText(tracked).carets[1].x,plainX=layoutText(plain).carets[1].x;
+    if(!(trackedX>plainX+10))throw std::runtime_error("tracking "+std::to_string(plainX)+" -> "+std::to_string(trackedX));
+    auto led=sample("A\nB");led.boxWidth=200;led.boxHeight=200;led.leading=80;
+    auto automatic=led;automatic.leading=0;
+    REQUIRE(layoutText(led).carets.back().top>layoutText(automatic).carets.back().top+10);
+    boxed.alignment=TextAlignment::Center;boxed.tracking=20;boxed.leading=70;boxed.fontStyle="Bold";
+    auto regular=layoutText(sample("WWW"));
+    auto bold=sample("WWW");bold.fontStyle="Bold";auto boldLayout=layoutText(bold);
+    REQUIRE(boldLayout.carets.back().x!=regular.carets.back().x);
+    auto replaced=boxed;REQUIRE(replaceText(replaced,0,0,""));
+    REQUIRE(replaced.tracking==20&&replaced.leading==70&&replaced.alignment==TextAlignment::Center&&replaced.boxWidth==80&&replaced.fontStyle=="Bold");
+    boxed.tracking=1001;REQUIRE(!textRunsValid(boxed));
+    boxed.tracking=20;boxed.leading=5001;REQUIRE(!textRunsValid(boxed));
+    boxed.leading=70;boxed.boxWidth=8;REQUIRE(!textRunsValid(boxed));
+}
 void caret_positions(){
     const HRESULT started=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
     REQUIRE(SUCCEEDED(started)||started==RPC_E_CHANGED_MODE);
@@ -80,7 +111,7 @@ void caret_positions(){
 }
 
 int main(int argc,char** argv){
-    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions}};
+    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"paragraph_layout",paragraph_layout}};
     try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify one text style test case");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}
     catch(const std::exception& error){std::cerr<<"FAIL "<<(argc>1?argv[1]:"arguments")<<": "<<error.what()<<"\n";return 1;}
 }
