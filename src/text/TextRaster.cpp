@@ -4,6 +4,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -35,5 +36,33 @@ RasterizedText rasterize(const TextContent& text){
     std::vector<uint8_t> rgba(size_t(width)*height*4);
     for(int y=0;y<height;++y){auto row=data+y*stride;auto dest=rgba.data()+size_t(y)*width*4;for(int x=0;x<width;++x){dest[x*4]=row[x*4+2];dest[x*4+1]=row[x*4+1];dest[x*4+2]=row[x*4];dest[x*4+3]=row[x*4+3];}}
     return {Raster::fromRgba(width,height,rgba.data(),size_t(width)*4),width,height};
+}
+TextLayout layoutText(const TextContent& text){
+    TextLayout laid;
+    if(text.value.empty()){
+        const float size=float(std::clamp(text.fontSize,1.,1000.));
+        laid.carets.push_back({1,1,size,0});
+        laid.width=2;laid.height=int(std::ceil(size))+2;
+        return laid;
+    }
+    auto drawn=rasterize(text);
+    laid.raster=drawn.raster;laid.width=drawn.width;laid.height=drawn.height;
+    auto characters=wide(text.value);
+    ComPtr<IDWriteFactory> write;check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(write.GetAddressOf())));
+    ComPtr<IDWriteTextFormat> format;auto family=wide(text.fontFamily);check(write->CreateTextFormat(family.c_str(),nullptr,DWRITE_FONT_WEIGHT_REGULAR,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,float(text.fontSize),L"en-us",&format));
+    ComPtr<IDWriteTextLayout> layout;check(write->CreateTextLayout(characters.c_str(),UINT32(characters.size()),format.Get(),100000,100000,&layout));
+    for(const auto& run:text.fontRuns){auto name=wide(run.fontFamily);if(name.empty())continue;DWRITE_TEXT_RANGE range{UINT32(std::max(0,run.location)),UINT32(std::max(0,run.length))};if(range.startPosition>=characters.size())continue;range.length=std::min(range.length,UINT32(characters.size()-range.startPosition));layout->SetFontFamilyName(name.c_str(),range);if(run.fontSize>=1)layout->SetFontSize(float(run.fontSize),range);}
+    laid.carets.reserve(characters.size()+1);
+    for(size_t index=0;index<=characters.size();++index){
+        FLOAT x=0,y=0;DWRITE_HIT_TEST_METRICS metrics{};
+        check(layout->HitTestTextPosition(UINT32(index),FALSE,&x,&y,&metrics));
+        laid.carets.push_back({x+1,y+1,metrics.height>0?metrics.height:float(text.fontSize),0});
+    }
+    std::vector<float> tops;
+    for(auto& caret:laid.carets){
+        auto found=std::find_if(tops.begin(),tops.end(),[&](float top){return std::abs(top-caret.top)<0.5f;});
+        if(found==tops.end()){caret.line=int(tops.size());tops.push_back(caret.top);}else caret.line=int(found-tops.begin());
+    }
+    return laid;
 }
 }

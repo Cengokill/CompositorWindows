@@ -66,6 +66,8 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->rightPointerDown=[this](QPointF point,Qt::KeyboardModifiers flags){return beginBrushTip(point,flags);};
     project.canvas->rightPointerMove=[this](QPointF point,Qt::KeyboardModifiers flags,bool finish){updateBrushTip(point,flags,finish);};
     project.canvas->navigationAllowed=[this]{return canvasNavigationAllowed();};
+    project.canvas->textKey=[this](QKeyEvent* event){return handleTextKey(event);};
+    project.canvas->textInput=[this](QInputMethodEvent* event){handleTextInput(event);};
     auto*owner=&project;project.canvas->viewportProvider=[this,owner](double x,double y,double w,double h,double units){return brushViewport(*owner,x,y,w,h,units);};
 }
 bool MainWindow::canSwitchProjects(){
@@ -79,6 +81,7 @@ void MainWindow::switchProject(){
     }
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();
     finishVisibilitySwipe();finishOpacityEdit();
+    if(textSession_&&textSession_->owner==activeProject_)finishText();
     if(activeProject_)captureToolState(*activeProject_);
     if(transformSession_&&transformSession_->persistent)applyTransformSession();
     pointerCancel();activeProject_=next;

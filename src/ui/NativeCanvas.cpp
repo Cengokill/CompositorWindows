@@ -17,7 +17,7 @@ using Microsoft::WRL::ComPtr;
 static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
 NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){ui::installCanvasAccessibility();setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);selectionTimer_=new QTimer(this);selectionTimer_->setObjectName("selectionAntsTimer");selectionTimer_->setTimerType(Qt::PreciseTimer);selectionTimer_->setInterval(120);connect(selectionTimer_,&QTimer::timeout,this,[this]{selectionPhase_=(selectionPhase_+1)%8;update();});synchronizeViewport();}
 NativeCanvas::~NativeCanvas(){selectionTimer_->stop();profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
-void NativeCanvas::releaseDevice(){selectionGeometry_.Reset();selectionMatrix_.reset();brushPreviewBitmap_.Reset();brushPreviewSource_.reset();resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
+void NativeCanvas::releaseDevice(){selectionGeometry_.Reset();selectionMatrix_.reset();brushPreviewBitmap_.Reset();brushPreviewSource_.reset();textBitmap_.Reset();textRasterSource_.reset();resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
 void NativeCanvas::createDevice(){UINT flags=D3D11_CREATE_DEVICE_BGRA_SUPPORT;D3D_FEATURE_LEVEL level{};auto hr=D3D11CreateDevice(nullptr,warp_?D3D_DRIVER_TYPE_WARP:D3D_DRIVER_TYPE_HARDWARE,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);if(FAILED(hr)&&!warp_)hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&immediate_);check(hr,"D3D11 device");ComPtr<IDXGIDevice> dxgi;check(device_.As(&dxgi),"DXGI device");ComPtr<IDXGIAdapter> adapter;check(dxgi->GetAdapter(&adapter),"DXGI adapter");ComPtr<IDXGIFactory2> dxgiFactory;check(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)),"DXGI factory");DXGI_SWAP_CHAIN_DESC1 desc{};desc.Width=std::max(1,int(width()*devicePixelRatioF()));desc.Height=std::max(1,int(height()*devicePixelRatioF()));desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.SampleDesc.Count=1;desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.BufferCount=2;desc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;desc.Scaling=DXGI_SCALING_STRETCH;desc.AlphaMode=DXGI_ALPHA_MODE_IGNORE;check(dxgiFactory->CreateSwapChainForHwnd(device_.Get(),reinterpret_cast<HWND>(winId()),&desc,nullptr,nullptr,&swap_),"Canvas swap chain");dxgiFactory->MakeWindowAssociation(reinterpret_cast<HWND>(winId()),DXGI_MWA_NO_ALT_ENTER);check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,IID_PPV_ARGS(&factory_)),"D2D factory");check(factory_->CreateDevice(dxgi.Get(),&d2device_),"D2D device");check(d2device_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,&context_),"D2D context");createTarget();upload();}
 void NativeCanvas::createTarget(){resetPresentationResources();ComPtr<IDXGISurface> surface;check(swap_->GetBuffer(0,IID_PPV_ARGS(&surface)),"Canvas surface");float dpi=float(96*devicePixelRatioF());auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET|D2D1_BITMAP_OPTIONS_CANNOT_DRAW,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpi,dpi);check(context_->CreateBitmapFromDxgiSurface(surface.Get(),&props,&target_),"Canvas render target");context_->SetTarget(target_.Get());context_->SetDpi(dpi,dpi);}
 void NativeCanvas::upload(){
@@ -169,6 +169,7 @@ if((snapGuideX_||snapGuideY_)&&documentWidth_>0&&documentHeight_>0){
     if(snapGuideX_)context_->DrawLine(point({*snapGuideX_,0}),point({*snapGuideX_,double(documentHeight_)}),accent.Get(),1);
     if(snapGuideY_)context_->DrawLine(point({0,*snapGuideY_}),point({double(documentWidth_),*snapGuideY_}),accent.Get(),1);
 }
+if(textOverlay_)drawTextOverlay();
 auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas draw");hr=finishPresentation();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas presentation");if(!present)return;hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
 std::optional<int> NativeCanvas::cropResizeHandle(editing::Rect crop,Point point,const editing_transform::ViewMapping& mapping){
     const auto geometry=editing_transform::OverlayGeometry::fromTransform({crop.x,crop.y,crop.width,crop.height},mapping);
@@ -281,7 +282,38 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     if(e->modifiers()&(Qt::ControlModifier|Qt::AltModifier))zoomAt(zoom*std::exp(-delta.y()*.015),e->position());else panBy(delta*(precise?1:12));
     if(pointerHover)pointerHover(e->position(),e->modifiers());
 }
-void NativeCanvas::keyPressEvent(QKeyEvent*e){if(e->key()==Qt::Key_Escape&&(dragging_||rightDragging_)){dragging_=rightDragging_=tabletActive_=false;releaseMouse();if(pointerCancel)pointerCancel();e->accept();}else QWidget::keyPressEvent(e);}
+void NativeCanvas::setTextOverlay(std::optional<TextCaretOverlay> value){textOverlay_=std::move(value);setAttribute(Qt::WA_InputMethodEnabled,textOverlay_.has_value());if(!textOverlay_){textBitmap_.Reset();textRasterSource_.reset();}update();}
+void NativeCanvas::drawTextOverlay(){
+    if(!textOverlay_||!context_||documentWidth_<=0)return;
+    const auto& overlay=*textOverlay_;const auto mapping=viewMapping();
+    auto viewOf=[&](double x,double y){auto point=mapping.toView({x,y});return D2D1::Point2F(float(point.x),float(point.y));};
+    if(overlay.raster&&overlay.raster->width>0&&overlay.raster->height>0&&overlay.raster->width<=30000&&overlay.raster->height<=30000){
+        if(textRasterSource_!=overlay.raster||!textBitmap_){
+            const auto& image=*overlay.raster;std::vector<Pixel> pixels(size_t(image.width)*image.height);
+            for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x)pixels[size_t(y)*image.width+x]=image.pixel(x,y);
+            auto properties=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+            textBitmap_.Reset();check(context_->CreateBitmap(D2D1::SizeU(UINT32(image.width),UINT32(image.height)),pixels.data(),UINT32(image.width*4),&properties,&textBitmap_),"Text overlay bitmap");textRasterSource_=overlay.raster;
+        }
+        const auto origin=viewOf(overlay.originX,overlay.originY),opposite=viewOf(overlay.originX+overlay.width,overlay.originY+overlay.height);
+        context_->DrawBitmap(textBitmap_.Get(),D2D1::RectF(origin.x,origin.y,opposite.x,opposite.y),1,D2D1_INTERPOLATION_MODE_LINEAR);
+    }
+    ComPtr<ID2D1SolidColorBrush> fill,caret;check(context_->CreateSolidColorBrush(D2D1::ColorF(0.2f,0.55f,1.f,0.35f),&fill),"Text selection");check(context_->CreateSolidColorBrush(D2D1::ColorF(0.15f,0.45f,1.f),&caret),"Text caret");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    for(const auto& box:overlay.selection){const auto a=viewOf(box.x,box.y),b=viewOf(box.x+box.width,box.y+box.height);context_->FillRectangle(D2D1::RectF(a.x,a.y,b.x,b.y),fill.Get());}
+    if(overlay.caret>=0&&overlay.caret<int(overlay.carets.size())){const auto& line=overlay.carets[size_t(overlay.caret)];context_->DrawLine(viewOf(line.x0,line.y0),viewOf(line.x1,line.y1),caret.Get(),std::max(1.f,float(pointsPerPixel())));}
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
+void NativeCanvas::keyPressEvent(QKeyEvent*e){if(textKey&&textKey(e)){e->accept();return;}if(e->key()==Qt::Key_Escape&&(dragging_||rightDragging_)){dragging_=rightDragging_=tabletActive_=false;releaseMouse();if(pointerCancel)pointerCancel();e->accept();}else QWidget::keyPressEvent(e);}
+void NativeCanvas::inputMethodEvent(QInputMethodEvent*e){if(textInput){textInput(e);e->accept();return;}QWidget::inputMethodEvent(e);}
+QVariant NativeCanvas::inputMethodQuery(Qt::InputMethodQuery query) const{
+    if(query==Qt::ImEnabled)return textOverlay_.has_value();
+    if(textOverlay_&&query==Qt::ImCursorRectangle&&textOverlay_->caret>=0&&textOverlay_->caret<int(textOverlay_->carets.size())){
+        const auto& line=textOverlay_->carets[size_t(textOverlay_->caret)];const auto mapping=viewMapping();
+        const auto a=mapping.toView({line.x0,line.y0}),b=mapping.toView({line.x1,line.y1});
+        return QRect(QPoint(int(std::min(a.x,b.x)),int(std::min(a.y,b.y))),QPoint(int(std::max(a.x,b.x))+1,int(std::max(a.y,b.y))+1));
+    }
+    return QWidget::inputMethodQuery(query);
+}
 void NativeCanvas::tabletEvent(QTabletEvent*e){
     e->accept();if(pointerHover)pointerHover(e->position(),e->modifiers());
     if(e->type()==QEvent::TabletPress){setFocus();if(dragging_||rightDragging_)return;tabletActive_=dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}

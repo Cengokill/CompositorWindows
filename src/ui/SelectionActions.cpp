@@ -15,6 +15,8 @@
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QKeyEvent>
+#include <QFontComboBox>
+#include <QComboBox>
 #include <QSignalBlocker>
 #include <chrono>
 #include <QInputDialog>
@@ -187,6 +189,17 @@ void MainWindow::stepSelectionAutoscroll(){
     updateSelection({pixel.x(),pixel.y()},selectionModifiers_,false);
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event){
+    if(textSession_&&event->type()==QEvent::ShortcutOverride){
+        auto* focus=QApplication::focusWidget();
+        if(!qobject_cast<QLineEdit*>(focus)&&!qobject_cast<QAbstractSpinBox*>(focus)&&!qobject_cast<QComboBox*>(focus)){
+            auto* key=static_cast<QKeyEvent*>(event);
+            if(key->key()==Qt::Key_Escape||ui::reservesTextShortcut(*key)){event->accept();return true;}
+        }
+    }
+    if(auto* fonts=findChild<QFontComboBox*>("textFont");fonts&&fonts->view()&&watched==fonts->view()->window()){
+        if(event->type()==QEvent::Show)fontChoiceKept_=false;
+        if(event->type()==QEvent::Hide){if(!fontChoiceKept_)endTextFontPreview();fontChoiceKept_=false;}
+    }
     if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){
         auto* widget=qobject_cast<QWidget*>(watched);if(widget&&widget->window()==this){auto* key=static_cast<QKeyEvent*>(event);
             if(key->key()==Qt::Key_Shift||key->key()==Qt::Key_Alt||key->key()==Qt::Key_Control){

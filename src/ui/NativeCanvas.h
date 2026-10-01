@@ -6,6 +6,8 @@
 #include "graphics/CanvasViewport.h"
 #include "platform/DisplayProfile.h"
 #include "platform/DisplayProfileWatcher.h"
+#include <QInputMethodEvent>
+#include <QVariant>
 #include <QWidget>
 #include <QPointer>
 #include <QTimer>
@@ -20,6 +22,15 @@ namespace compositor {
 class NativeCanvas final:public QWidget {
 public:
     struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;double lineWidth{4};};
+    struct TextCaretOverlay {
+        std::shared_ptr<const Raster> raster;
+        double originX{},originY{},width{},height{};
+        struct Line { double x0{},y0{},x1{},y1{}; };
+        std::vector<Line> carets;
+        int caret{-1};
+        struct Box { double x{},y{},width{},height{}; };
+        std::vector<Box> selection;
+    };
 private:
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_;
@@ -39,6 +50,10 @@ private:
     std::optional<editing_transform::Corners> distortionOverlay_;
     std::optional<std::pair<Point,Point>> gradientLine_;
     std::optional<ShapeDraftOverlay> shapeDraft_;
+    std::optional<TextCaretOverlay> textOverlay_;
+    std::shared_ptr<const Raster> textRasterSource_;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> textBitmap_;
+    void drawTextOverlay();
     std::optional<editing::Rect> cropOverlay_;
     std::optional<double> snapGuideX_,snapGuideY_;
     std::optional<editing::LassoDraft> selectionDraft_;
@@ -100,6 +115,8 @@ public:
     std::function<bool(QPointF,Qt::KeyboardModifiers)> rightPointerDown;
     std::function<void(QPointF,Qt::KeyboardModifiers,bool)> rightPointerMove;
     std::function<bool()> navigationAllowed;
+    std::function<bool(QKeyEvent*)> textKey;
+    std::function<void(QInputMethodEvent*)> textInput;
     std::function<CompositeViewport(double,double,double,double,double)> viewportProvider;
     void setRaster(std::shared_ptr<const Raster>);
     void setDocumentSize(int width,int height);
@@ -111,6 +128,7 @@ public:
     // Document coordinates. Source endpoints draw at radius6 DIPs; caller hit radius10 DIPs.
     void setGradientLine(std::optional<std::pair<Point,Point>> value){gradientLine_=value;update();}
     void setShapeDraft(std::optional<ShapeDraftOverlay> value){shapeDraft_=std::move(value);update();}
+    void setTextOverlay(std::optional<TextCaretOverlay> value);
     const std::optional<ShapeDraftOverlay>& shapeDraft()const{return shapeDraft_;}
     void setCropOverlay(std::optional<editing::Rect> value){cropOverlay_=value;update();}
     const std::optional<editing::Rect>& cropOverlay()const{return cropOverlay_;}
@@ -150,6 +168,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
     void keyPressEvent(QKeyEvent*) override;
+    void inputMethodEvent(QInputMethodEvent*) override;
+    QVariant inputMethodQuery(Qt::InputMethodQuery) const override;
     void tabletEvent(QTabletEvent*) override;
     void leaveEvent(QEvent*) override;
     bool event(QEvent*) override;

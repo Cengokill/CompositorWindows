@@ -160,10 +160,10 @@ const std::vector<CommandSpec>& commandCatalog(){
         const char*filters[]{"Gaussian Blur…","Motion Blur…","Add Noise…","Lens Correction…","Content-Aware Fill…","Vignette…","Bloom…","Tonal Contrast…","Dither…","Scanlines…","Camera Raw…","Remove Background…"};
         const char*filterIds[]{"filter.gaussian","filter.motion","filter.noise","filter.lens","filter.content_aware","filter.vignette","filter.bloom","filter.tonal","filter.dither","filter.scanlines","filter.camera_raw","filter.subject"};
         for(int i=0;i<12;++i)add(filterIds[i],"Filters",filters[i],i==4?"Shift+Delete":"",C::Adjustment,i==4?G::ContentAwareFill:G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/Filters.swift:299");
-        const char*toolLabels[]{"Move (V)","Hand (H)","Marquee (M)","Lasso (L)","Polygon","Wand (W)","Brush (B)","Eraser (E)","Clone (S)","Heal (J)","Retouch (R)","Gradient (G)","Shape (U)","Crop (C)","Eyedropper (I)","Zoom (Z)"};
-        const char*toolIds[]{"move","hand","marquee","lasso","polygon","wand","brush","eraser","clone","heal","retouch","gradient","shape","crop","eyedropper","zoom"};
-        const char*toolKeys[]{"V","H","M","L","","W","B","E","S","J","R","G","U","C","I","Z"};
-        for(int i=0;i<16;++i){auto id=QString("tool.%1").arg(toolIds[i]).toUtf8();add(id.constData(),"Tools",toolLabels[i],toolKeys[i],C::Tool,G::Tool,P::None,"Compositor/Rendering/EditorCanvas.swift:1520");}
+        const char*toolLabels[]{"Move (V)","Hand (H)","Marquee (M)","Lasso (L)","Polygon","Wand (W)","Brush (B)","Eraser (E)","Clone (S)","Heal (J)","Retouch (R)","Gradient (G)","Shape (U)","Crop (C)","Eyedropper (I)","Zoom (Z)","Type (T)"};
+        const char*toolIds[]{"move","hand","marquee","lasso","polygon","wand","brush","eraser","clone","heal","retouch","gradient","shape","crop","eyedropper","zoom","type"};
+        const char*toolKeys[]{"V","H","M","L","","W","B","E","S","J","R","G","U","C","I","Z","T"};
+        for(int i=0;i<17;++i){auto id=QString("tool.%1").arg(toolIds[i]).toUtf8();add(id.constData(),"Tools",toolLabels[i],toolKeys[i],C::Tool,G::Tool,P::None,"Compositor/Rendering/EditorCanvas.swift:1520");}
         add("palette.foreground","Tools","Foreground","",C::Tool,G::Palette,P::None,"Compositor/Document/ColorPalette.swift:25");
         add("palette.background","Tools","Background","",C::Tool,G::Palette,P::None,"Compositor/Document/ColorPalette.swift:25");
         add("palette.swap","Tools","Swap (X)","X",C::Tool,G::Palette,P::None,"Compositor/Document/ColorPalette.swift:25");

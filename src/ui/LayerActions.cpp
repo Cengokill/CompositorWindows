@@ -1,5 +1,4 @@
 #include "MainWindow.h"
-#include "text/TextRaster.h"
 #include "LayerPanel.h"
 #include "LayerCopyCommit.h"
 #include <QMenuBar>
@@ -86,7 +85,7 @@ void MainWindow::layerCommand(int command){
 void MainWindow::setupLayerActions(){
     QMenu*menu=nullptr;for(auto*a:menuBar()->actions())if(a->text()=="&Layer")menu=a->menu();if(!menu)return;
     action(menu,"New Group",{},[this]{layerCommand(0);});action(menu,"Group Selected",QKeySequence("Ctrl+G"),[this]{layerCommand(1);});action(menu,"Ungroup",QKeySequence("Shift+Ctrl+G"),[this]{layerCommand(13);});action(menu,"Move Out of Group",{},[this]{layerCommand(2);});
-    action(menu,"Text Layer…",{},[this]{auto*p=current();if(!p||!p->document)return;bool ok=false;auto value=QInputDialog::getText(this,"Text Layer","Text",QLineEdit::Normal,"Text",&ok).trimmed();if(!ok||value.isEmpty())return;edit("Text Layer",[this,p,value](Document&d){TextContent text;text.value=value.toUtf8().toStdString();text.fontFamily="Segoe UI";text.fontSize=48;text.red=foreground_.redF();text.green=foreground_.greenF();text.blue=foreground_.blueF();auto drawn=text::rasterize(text);Layer layer;layer.id=newId();layer.name=value.toStdString();layer.text=text;layer.raster=drawn.raster;layer.transform={32,32,double(drawn.width),double(drawn.height)};d.layers.push_back(layer);p->active=layer.id;p->selected={layer.id};});});
+    action(menu,"Text Layer…",{},[this]{if(!current()||!current()->document)return;selectTool(Tool::Text);beginText({32,32},true);});
     action(menu,"Create / Release Clipping Mask",QKeySequence("Ctrl+Alt+G"),[this]{layerCommand(7);});action(menu,"Merge Layers",QKeySequence("Ctrl+E"),[this]{layerCommand(8);});action(menu,"Copy Layer to Project…",{},[this]{layerCommand(9);});
     ui::LayerPanelController::Host host;
     host.dragOwner=[this]()->QObject*{auto*p=current();return p?p->canvas:nullptr;};

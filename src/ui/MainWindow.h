@@ -19,6 +19,7 @@
 #include "EditPanelSession.h"
 #include "ProjectToolState.h"
 #include "CommandRegistry.h"
+#include "text/TextRaster.h"
 #include <QStackedWidget>
 #include <QPointer>
 #include <QMainWindow>
@@ -32,6 +33,7 @@
 #include <memory>
 #include <unordered_set>
 class QMimeData;
+class QInputMethodEvent;
 
 namespace compositor {
 namespace ui {class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
@@ -48,6 +50,7 @@ struct EditorProject {
     History history;
     CompositeCache composite;
     std::shared_ptr<const graphics::GrowingBrushSnapshot> brushPreview;
+    std::shared_ptr<const LayerRenderPreview> textPreview;
     std::shared_ptr<const LayerRenderPreview> retouchPreview;
     std::shared_ptr<const editing::GradientPreview> gradientPreview;
     std::optional<std::pair<std::string,Blend>> blendPreview;
@@ -117,6 +120,21 @@ class MainWindow final:public QMainWindow {
     Point gradientStart_,gradientEnd_;
     int gradientHandle_{-1};
     bool gradientMask_{};
+    TextContent textDefaults_{};
+    struct TextSession {
+        EditorProject* owner{};
+        std::string layerId;
+        double originX{},originY{};
+        TextContent style;
+        int caret{},anchor{};
+        struct Step { TextContent style; int caret{},anchor{}; };
+        std::vector<Step> undo,redo;
+        std::optional<TextContent> fontPreviewOriginal;
+        std::string preedit;
+        text::TextLayout layout;
+    };
+    std::optional<TextSession> textSession_;
+    bool fontChoiceKept_{};
     std::string shapeDraftId_;
     editing::ShapeStyle shapeDraftStyle_;
     std::optional<editing::Rect> shapeDraftRect_;
@@ -301,6 +319,21 @@ class MainWindow final:public QMainWindow {
     bool beginTransform(Point,Qt::KeyboardModifiers);
     void updateTransform(Point,Qt::KeyboardModifiers,bool finish);
     void setupDrawingActions();
+    void setupTypeControls();
+    void refreshTypeControls();
+    void beginText(Point,bool forceNew=false,bool extend=false);
+    bool finishText();
+    void cancelText();
+    bool handleTextKey(QKeyEvent*);
+    void handleTextInput(QInputMethodEvent*);
+    void publishTextEdit();
+    void previewTextFont(const std::string&);
+    void keepTextFontPreview();
+    void endTextFontPreview();
+    void applyTextFont(const std::string&);
+    void applyTextSize(double);
+    void applyTextColor(double,double,double);
+    bool undoTextTyping(bool redo);
     void beginGradient(Point);
     void updateGradient(Point,Qt::KeyboardModifiers,bool);
     void refreshGradient();

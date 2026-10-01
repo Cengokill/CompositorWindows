@@ -101,6 +101,7 @@ CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,doubl
         for(auto& layer:preview.layers)if(layer.id==project.blendPreview->first){layer.blend=project.blendPreview->second;break;}
         return render(preview);
     }
+    if(project.textPreview)return render(*project.document,project.textPreview);
     if(project.gradientPreview)return render(*project.document,project.gradientPreview->renderPreview());
     if(project.retouchPreview)return render(*project.document,project.retouchPreview);
     if(!project.brushPreview)return render(*project.document);
@@ -114,6 +115,7 @@ bool MainWindow::updateBrush(Point point,bool finish){
 }
 void MainWindow::keyPressEvent(QKeyEvent*e){
     auto*focus=QApplication::focusWidget();if(qobject_cast<QLineEdit*>(focus)||qobject_cast<QAbstractSpinBox*>(focus)||qobject_cast<QTextEdit*>(focus)||qobject_cast<QPlainTextEdit*>(focus)){QMainWindow::keyPressEvent(e);return;}
+    if(handleTextKey(e)){e->accept();return;}
     if(e->key()==Qt::Key_Escape&&editPanel_){cancelEditPanel();e->accept();return;}
     if(handleEditingKey(e))return;
     const bool brushTool=tool_==Tool::Brush||tool_==Tool::Eraser||tool_==Tool::SpotHealing||tool_==Tool::CloneStamp||tool_==Tool::Blur;
@@ -131,7 +133,7 @@ void MainWindow::keyPressEvent(QKeyEvent*e){
         case Qt::Key_G:selectTool(Tool::Gradient);refresh(false);return;case Qt::Key_U:selectTool(Tool::Shape);refresh(false);return;case Qt::Key_C:selectTool(Tool::Crop);refresh(false);return;
         case Qt::Key_X:swapPalette();return;case Qt::Key_D:resetPalette();return;case Qt::Key_I:selectTool(Tool::Eyedropper);return;case Qt::Key_Z:selectTool(Tool::Zoom);return;
         case Qt::Key_B:selectTool(Tool::Brush);return;case Qt::Key_E:selectTool(Tool::Eraser);return;
-        case Qt::Key_V:selectTool(Tool::Move);return;case Qt::Key_H:selectTool(Tool::Hand);return;
+        case Qt::Key_V:selectTool(Tool::Move);return;case Qt::Key_H:selectTool(Tool::Hand);return;case Qt::Key_T:selectTool(Tool::Text);return;
         case Qt::Key_Escape:pointerCancel();return;default:break;
     }}
     QMainWindow::keyPressEvent(e);

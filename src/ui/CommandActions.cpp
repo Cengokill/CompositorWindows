@@ -54,6 +54,7 @@ void MainWindow::initializeCommands(){
     commands_=new ui::CommandRegistry(this,[this]{return commandState();},[this](ui::CommandPreparation preparation,const QString&){
         if(preparation==ui::CommandPreparation::None)return;
         finishOpacityEdit();
+        if(textSession_)finishText();
         if(preparation==ui::CommandPreparation::CommitTransformAndGradient){
             applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
         }else if(preparation==ui::CommandPreparation::ProjectOperation){
