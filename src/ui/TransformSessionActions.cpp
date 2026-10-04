@@ -29,7 +29,7 @@ void MainWindow::changeTransformDraft(const std::function<void(Transform&)>& cha
         if(!transformSession_&&!startTransformSession(true))return;
         auto next=transformSession_->draft;change(next);
         if(!next.valid())return;
-        transformSession_->draft=next;publishTransformSession(false);refresh();
+        transformSession_->draft=next;publishTransformSession(false);refresh(true,false);
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
 }
 void MainWindow::editTransformGeometry(int field,double value) {

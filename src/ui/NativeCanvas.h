@@ -43,6 +43,8 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Device> d2device_;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_,image_;
+    Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> checkerBrush_;
+    float checkerScale_{};
     std::shared_ptr<const Raster> raster_;
     std::shared_ptr<const GrayRaster> selection_;
     std::shared_ptr<const editing::SelectionOutline> selectionInputOutline_,selectionOutline_;
@@ -90,6 +92,7 @@ private:
     void createDevice();
     void createTarget();
     void upload();
+    void ensureChecker();
     void releaseDevice();
     void draw(bool present=true);
     void drawSelection();

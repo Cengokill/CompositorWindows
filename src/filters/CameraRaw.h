@@ -1,6 +1,7 @@
 #pragma once
 #include "core/Document.h"
 #include <array>
+#include <functional>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -138,6 +139,8 @@ struct CameraRawView {
     bool sharpenMask{};
     bool shadowOverlay{};
     bool highlightOverlay{};
+    // 0 grades the scope from every pixel. A positive limit downsamples first.
+    int scopeLimit{};
 };
 
 struct CameraRawScope {
@@ -188,5 +191,5 @@ struct CameraRawRender {
     bool changed{};
 };
 // Grade, then selection blend, then preview-only paint. Scope is the grade before that paint.
-CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection);
+CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {});
 }
