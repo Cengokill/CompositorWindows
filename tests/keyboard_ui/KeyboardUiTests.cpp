@@ -55,8 +55,6 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
             auto* field=combo->lineEdit();require(field!=nullptr,"Combo has no field");
             QTest::mouseClick(field,Qt::LeftButton,Qt::NoModifier,QPoint(std::max(4,field->width()/2),std::max(4,field->height()/2)));
             QApplication::processEvents();QTest::qWait(50);
-            if(!(combo->view()&&combo->view()->isVisible()))combo->showPopup();
-            QApplication::processEvents();QTest::qWait(20);
         };
         clickField(styles);
         require(styles->view()&&styles->view()->isVisible(),"Clicking the style field did not open the popup");
@@ -73,6 +71,17 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         QApplication::processEvents();
         require(fonts->view()&&fonts->view()->isVisible(),"Font preview closed the popup");
         fonts->hidePopup();QApplication::processEvents();
+        if(fonts->findText("Arial")<0)fonts->addItem("Arial");
+        const int familyIndex=fonts->findText("Arial");
+        require(familyIndex>=0&&fonts->itemText(familyIndex)!=fonts->currentText(),"No alternate font family to activate");
+        const auto family=fonts->itemText(familyIndex).toStdString();
+        emit fonts->activated(familyIndex);
+        QApplication::processEvents();
+        fonts=control<QFontComboBox>(window,"textFont");
+        require(fonts->currentFont().family().toStdString()==family,("Font combo did not keep "+family+": '"+fonts->currentFont().family().toStdString()+"'").c_str());
+        key(window,Qt::Key_Return,Qt::ControlModifier);
+        const auto& committed=project.document->layers.back().text;
+        require(committed&&committed->fontFamily==family,("Activated font was not committed: "+(committed?committed->fontFamily:std::string{})).c_str());
     });
     std::cout<<"{\"suite\":\"keyboard_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";if(SUCCEEDED(apartment))CoUninitialize();return failed?1:0;
 }

@@ -107,20 +107,28 @@ std::shared_ptr<const Raster> compose(int width, int height, const std::vector<u
     for (size_t i = 0; i < size_t(width) * height; ++i) { uint8_t alpha = a.size() == r.size() ? a[i] : 255; rgba[i * 4] = uint8_t(r[i] * alpha / 255); rgba[i * 4 + 1] = uint8_t(g[i] * alpha / 255); rgba[i * 4 + 2] = uint8_t(b[i] * alpha / 255); rgba[i * 4 + 3] = alpha; }
     return Raster::fromRgba(width, height, rgba.data(), size_t(width) * 4);
 }
-bool readMerged(Reader& in, int width, int height, int depth, int channels, Layer& layer) {
+bool readMerged(Reader& in, int width, int height, int depth, int channels, Layer& layer, std::string& report) {
     if (in.at + 2 > in.size) return false;
     auto compression = in.u16();
     if (compression > 1) throw std::runtime_error("Unsupported PSD compression");
     const int planes = std::max(int(channels), 3);
     std::vector<uint32_t> rows;
     if (compression == 1) {
+        const uint64_t tableBytes = uint64_t(height) * uint64_t(planes) * (in.psb ? 4u : 2u);
+        if (in.at > in.size || tableBytes > in.size - in.at) throw std::runtime_error("PSD ended early");
         rows.resize(size_t(height) * size_t(planes));
         for (auto& row : rows) row = in.psb ? in.u32() : in.u16();
     }
     auto plane = [&](int index) { return decodeChannel(in, width, height, compression, depth, rows.empty() ? nullptr : &rows, index * height); };
     auto red = plane(0); auto green = plane(1); auto blue = plane(2);
     std::vector<uint8_t> alpha;
-    if (channels >= 4) try { alpha = plane(3); } catch (const std::exception&) { alpha.clear(); }
+    if (channels >= 4) {
+        try { alpha = plane(3); }
+        catch (const std::exception&) {
+            report += "Merged image transparency could not be read.\n";
+            return false;
+        }
+    }
     layer.id = newId(); layer.name = "Background"; layer.transform = {0, 0, double(width), double(height)};
     layer.raster = compose(width, height, red, green, blue, alpha);
     return true;
@@ -135,6 +143,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     auto version = in.u16(); if (version != 1 && version != 2) throw std::runtime_error("Unsupported PSD version"); in.psb = version == 2; in.skip(6);
     auto channels = in.u16(); auto height = in.u32(); auto width = in.u32(); auto depth = in.u16(); auto mode = in.u16();
     if (mode == 4) throw std::runtime_error("CMYK PSD files are not supported");
+    if (channels > 56) throw std::runtime_error("PSD channel count exceeds 56");
     if (channels < 3 || (depth != 8 && depth != 16) || mode != 3) throw std::runtime_error("Only 8-bit or 16-bit RGB PSD files are supported");
     if (!width || !height || width > 30000 || height > 30000 || uint64_t(width) * height > 100000000) throw std::runtime_error("PSD exceeds the canvas limit");
     in.skip(in.u32()); in.skip(in.u32());
@@ -162,7 +171,11 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                     else if (key == "luni" && length >= 4 && extraEnd >= in.at + 4) {
                         auto characters = in.u32();
                         auto encoded = std::min<uint64_t>(uint64_t(characters) * 2, extraEnd > in.at ? extraEnd - in.at : 0);
-                        if (characters > 0 && characters < 100000 && in.at + encoded <= in.size) { auto unicode = utf8FromUtf16Be(in.data + in.at, size_t(encoded)); if (!unicode.empty()) record.name = std::move(unicode); }
+                        if (characters > 0 && characters < 100000 && in.at + encoded <= in.size) {
+                            auto unicode = utf8FromUtf16Be(in.data + in.at, size_t(encoded));
+                            while (!unicode.empty() && unicode.back() == '\0') unicode.pop_back();
+                            if (!unicode.empty()) record.name = std::move(unicode);
+                        }
                     }
                     else if ((key == "TySh" || key == "txt2") && record.typeTool.empty()) { auto stored = std::min(length, uint64_t(extraEnd > in.at ? extraEnd - in.at : 0)); record.typeTool.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
                     auto next = start + size_t(length + (length & 1));
@@ -186,8 +199,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                             if (id == 0) red = std::move(plane); else if (id == 1) green = std::move(plane); else if (id == 2) blue = std::move(plane); else alpha = std::move(plane);
                         }
                     } catch (const std::exception&) { report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded.\n"; }
-                    auto end = start + size_t(length);
-                    if (end > in.size) end = in.size;
+                    const size_t end = start > in.size || length > in.size - start ? in.size : start + size_t(length);
                     in.at = end;
                 }
                 try {
@@ -211,7 +223,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     if (!hasImage) {
         result.document.layers.clear();
         Layer merged;
-        try { if (readMerged(in, int(width), int(height), int(depth), int(channels), merged) && merged.raster) { result.document.layers = {std::move(merged)}; report += "Imported the merged image.\n"; } }
+        try { if (readMerged(in, int(width), int(height), int(depth), int(channels), merged, report) && merged.raster) { result.document.layers = {std::move(merged)}; report += "Imported the merged image.\n"; } }
         catch (const std::exception& error) { report += std::string("Merged image was skipped: ") + error.what() + "\n"; }
     }
     if (result.document.layers.empty()) throw std::runtime_error(report.empty() ? "PSD contains no supported image" : report);

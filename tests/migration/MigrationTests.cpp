@@ -169,6 +169,63 @@ static void psd_contract() {
     n32(uint32_t(nameInfo.size() + 4)); n32(uint32_t(nameInfo.size())); named.insert(named.end(), nameInfo.begin(), nameInfo.end());
     auto namedImported = imaging::readPsd(named.data(), named.size());
     check(namedImported.document.layers.size() == 1 && namedImported.document.layers[0].name == "Caf\xc3\xa9", "PSD Unicode layer name was not decoded");
+    std::vector<uint8_t> terminated; auto t16 = [&](int v) { terminated.push_back(uint8_t(v >> 8)); terminated.push_back(uint8_t(v)); }; auto t32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) terminated.push_back(uint8_t(v >> s)); }; auto tascii = [&](const char* s) { while (*s) terminated.push_back(uint8_t(*s++)); };
+    tascii("8BPS"); t16(1); for (int i = 0; i < 6; ++i) terminated.push_back(0); t16(3); t32(2); t32(2); t16(8); t16(3); t32(0); t32(0);
+    std::vector<uint8_t> termInfo; auto ti16 = [&](int v) { termInfo.push_back(uint8_t(v >> 8)); termInfo.push_back(uint8_t(v)); }; auto ti32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) termInfo.push_back(uint8_t(v >> s)); }; auto tiascii = [&](const char* s) { while (*s) termInfo.push_back(uint8_t(*s++)); };
+    ti16(1); ti32(0); ti32(0); ti32(2); ti32(2); ti16(4); for (int id : {0, 1, 2, -1}) { ti16(id); ti32(6); } tiascii("8BIM"); tiascii("norm"); termInfo.push_back(255); termInfo.push_back(0); termInfo.push_back(0); termInfo.push_back(0);
+    std::vector<uint8_t> termExtra; auto te32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) termExtra.push_back(uint8_t(v >> s)); };
+    te32(0); te32(0); termExtra.push_back(1); termExtra.push_back(uint8_t('X')); termExtra.push_back(0); termExtra.push_back(0);
+    termExtra.insert(termExtra.end(), {'8','B','I','M','l','u','n','i'}); te32(14); te32(5); termExtra.insert(termExtra.end(), {0,0x43,0,0x61,0,0x66,0,0xE9,0,0x00});
+    ti32(uint32_t(termExtra.size())); termInfo.insert(termInfo.end(), termExtra.begin(), termExtra.end());
+    for (int channel = 0; channel < 4; ++channel) { termInfo.push_back(0); termInfo.push_back(0); uint8_t value = channel == 1 || channel == 2 ? 0 : 255; for (int i = 0; i < 4; ++i) termInfo.push_back(value); }
+    t32(uint32_t(termInfo.size() + 4)); t32(uint32_t(termInfo.size())); terminated.insert(terminated.end(), termInfo.begin(), termInfo.end());
+    auto terminatedImported = imaging::readPsd(terminated.data(), terminated.size());
+    const auto& terminatedName = terminatedImported.document.layers.at(0).name;
+    check(terminatedImported.document.layers.size() == 1 && terminatedName == "Caf\xc3\xa9" && terminatedName.find('\0') == std::string::npos, "PSD luni name kept the terminating NUL");
+    std::vector<uint8_t> blank; auto b16 = [&](int v) { blank.push_back(uint8_t(v >> 8)); blank.push_back(uint8_t(v)); }; auto b32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) blank.push_back(uint8_t(v >> s)); }; auto bascii = [&](const char* s) { while (*s) blank.push_back(uint8_t(*s++)); };
+    bascii("8BPS"); b16(1); for (int i = 0; i < 6; ++i) blank.push_back(0); b16(3); b32(2); b32(2); b16(8); b16(3); b32(0); b32(0);
+    std::vector<uint8_t> blankInfo; auto bi16 = [&](int v) { blankInfo.push_back(uint8_t(v >> 8)); blankInfo.push_back(uint8_t(v)); }; auto bi32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) blankInfo.push_back(uint8_t(v >> s)); }; auto biascii = [&](const char* s) { while (*s) blankInfo.push_back(uint8_t(*s++)); };
+    bi16(1); bi32(0); bi32(0); bi32(2); bi32(2); bi16(4); for (int id : {0, 1, 2, -1}) { bi16(id); bi32(6); } biascii("8BIM"); biascii("norm"); blankInfo.push_back(255); blankInfo.push_back(0); blankInfo.push_back(0); blankInfo.push_back(0);
+    std::vector<uint8_t> blankExtra; auto be32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) blankExtra.push_back(uint8_t(v >> s)); };
+    be32(0); be32(0); blankExtra.push_back(4); blankExtra.insert(blankExtra.end(), {'K','e','e','p'}); blankExtra.push_back(0); blankExtra.push_back(0); blankExtra.push_back(0);
+    blankExtra.insert(blankExtra.end(), {'8','B','I','M','l','u','n','i'}); be32(6); be32(1); blankExtra.push_back(0); blankExtra.push_back(0);
+    bi32(uint32_t(blankExtra.size())); blankInfo.insert(blankInfo.end(), blankExtra.begin(), blankExtra.end());
+    for (int channel = 0; channel < 4; ++channel) { blankInfo.push_back(0); blankInfo.push_back(0); uint8_t value = channel == 1 || channel == 2 ? 0 : 255; for (int i = 0; i < 4; ++i) blankInfo.push_back(value); }
+    b32(uint32_t(blankInfo.size() + 4)); b32(uint32_t(blankInfo.size())); blank.insert(blank.end(), blankInfo.begin(), blankInfo.end());
+    auto blankImported = imaging::readPsd(blank.data(), blank.size());
+    check(blankImported.document.layers.size() == 1 && blankImported.document.layers[0].name == "Keep", "PSD luni name of only NUL replaced the Pascal name");
+    std::vector<uint8_t> wideChannels; auto w16 = [&](int v) { wideChannels.push_back(uint8_t(v >> 8)); wideChannels.push_back(uint8_t(v)); }; auto w32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) wideChannels.push_back(uint8_t(v >> s)); }; auto wascii = [&](const char* s) { while (*s) wideChannels.push_back(uint8_t(*s++)); };
+    wascii("8BPS"); w16(1); for (int i = 0; i < 6; ++i) wideChannels.push_back(0); w16(57); w32(1); w32(1); w16(8); w16(3);
+    bool tooManyChannels = false; try { imaging::readPsd(wideChannels.data(), wideChannels.size()); } catch (const std::exception& error) { tooManyChannels = std::string(error.what()).find("exceeds 56") != std::string::npos; }
+    check(tooManyChannels, "PSD header channel count above 56 was accepted");
+    std::vector<uint8_t> shortRows; auto s16 = [&](int v) { shortRows.push_back(uint8_t(v >> 8)); shortRows.push_back(uint8_t(v)); }; auto s32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) shortRows.push_back(uint8_t(v >> s)); }; auto sascii = [&](const char* s) { while (*s) shortRows.push_back(uint8_t(*s++)); };
+    sascii("8BPS"); s16(1); for (int i = 0; i < 6; ++i) shortRows.push_back(0); s16(56); s32(100); s32(1); s16(8); s16(3); s32(0); s32(0); s32(0); s16(1);
+    bool shortRowTable = false; try { imaging::readPsd(shortRows.data(), shortRows.size()); } catch (const std::exception& error) { shortRowTable = std::string(error.what()).find("ended early") != std::string::npos && std::string(error.what()).find("bad allocation") == std::string::npos; }
+    check(shortRowTable, "Merged RLE row table larger than the file was not rejected");
+    std::vector<uint8_t> wrapped; auto p16 = [&](int v) { wrapped.push_back(uint8_t(v >> 8)); wrapped.push_back(uint8_t(v)); }; auto p32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) wrapped.push_back(uint8_t(v >> s)); }; auto p64 = [&](uint64_t v) { for (int s = 56; s >= 0; s -= 8) wrapped.push_back(uint8_t(v >> s)); }; auto pascii = [&](const char* s) { while (*s) wrapped.push_back(uint8_t(*s++)); };
+    auto patch64 = [&](size_t at, uint64_t v) { for (int s = 56; s >= 0; s -= 8) wrapped[at++] = uint8_t(v >> s); };
+    pascii("8BPS"); p16(2); for (int i = 0; i < 6; ++i) wrapped.push_back(0); p16(3); p32(1); p32(1); p16(8); p16(3); p32(0); p32(0);
+    const size_t sectionAt = wrapped.size(); p64(0); const size_t infoAt = wrapped.size(); p64(0); p16(1);
+    p32(0); p32(0); p32(1); p32(1); p16(3);
+    const size_t redLengthAt = wrapped.size() + 2; p16(0); p64(0); p16(1); p64(3); p16(2); p64(3);
+    pascii("8BIM"); pascii("norm"); wrapped.push_back(255); wrapped.push_back(0); wrapped.push_back(0); wrapped.push_back(0);
+    const size_t extraAt = wrapped.size(); p32(0); p32(0); p32(0); wrapped.push_back(0); wrapped.push_back(0); wrapped.push_back(0); wrapped.push_back(0);
+    const size_t decoyAt = wrapped.size(); wrapped.insert(wrapped.end(), {0, 0, 0, 0, 0, 0});
+    const uint32_t extraSize = uint32_t(wrapped.size() - (extraAt + 4)); for (int s = 24; s >= 0; s -= 8) wrapped[extraAt + size_t(3 - s / 8)] = uint8_t(extraSize >> s);
+    const size_t channelAt = wrapped.size(); wrapped.insert(wrapped.end(), {0, 0, 255});
+    patch64(redLengthAt, uint64_t(decoyAt) - uint64_t(channelAt));
+    const uint64_t infoSize = uint64_t(wrapped.size() - (infoAt + 8)); patch64(infoAt, infoSize);
+    const uint64_t sectionSize = uint64_t(wrapped.size() - (sectionAt + 8)); patch64(sectionAt, sectionSize);
+    bool wrappedRejected = false; std::string wrappedReason;
+    try { auto imported = imaging::readPsd(wrapped.data(), wrapped.size()); wrappedRejected = imported.document.layers.empty(); }
+    catch (const std::exception& error) { wrappedReason = error.what(); wrappedRejected = wrappedReason.find("channel could not be decoded") != std::string::npos || wrappedReason.find("no supported image") != std::string::npos; }
+    check(wrappedRejected, wrappedReason.empty() ? "Wrapping PSB channel length imported rewound pixels" : wrappedReason.c_str());
+    std::vector<uint8_t> opaque; auto o16 = [&](int v) { opaque.push_back(uint8_t(v >> 8)); opaque.push_back(uint8_t(v)); }; auto o32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) opaque.push_back(uint8_t(v >> s)); }; auto oascii = [&](const char* s) { while (*s) opaque.push_back(uint8_t(*s++)); };
+    oascii("8BPS"); o16(1); for (int i = 0; i < 6; ++i) opaque.push_back(0); o16(4); o32(1); o32(1); o16(8); o16(3); o32(0); o32(0); o32(0); o16(0); opaque.push_back(255); opaque.push_back(0); opaque.push_back(128);
+    bool alphaRejected = false; std::string alphaReason;
+    try { imaging::readPsd(opaque.data(), opaque.size()); }
+    catch (const std::exception& error) { alphaReason = error.what(); alphaRejected = alphaReason.find("transparency") != std::string::npos && alphaReason.find("Imported the merged image") == std::string::npos; }
+    check(alphaRejected, alphaReason.empty() ? "Truncated merged alpha imported an opaque image" : alphaReason.c_str());
 }
 static void loadPsdFile(const wchar_t* path) {
     const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

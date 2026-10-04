@@ -183,7 +183,14 @@ void MainWindow::setupTypeControls(){
     bar->addWidget(tracking);bar->addWidget(leading);bar->addAction(cancel);bar->addAction(done);
     connect(fonts,&QFontComboBox::currentFontChanged,this,[this,fonts](const QFont& font){if(refreshing_||fonts->property("typePopupQuiet").toBool()||(fonts->view()&&fonts->view()->isVisible()))return;applyTextFont(font.family().toStdString());});
     connect(fonts,&QComboBox::highlighted,this,[this,fonts](int index){if(index<0||fonts->property("typePopupQuiet").toBool()||!fonts->view()||!fonts->view()->isVisible()||index==fonts->currentIndex())return;previewTextFont(fonts->itemText(index).toStdString());});
-    connect(fonts,qOverload<int>(&QComboBox::activated),this,[this](int){fontChoiceKept_=true;keepTextFontPreview();if(!refreshing_)publishTextEdit();QTimer::singleShot(0,this,[this]{focusTextCanvas();});});
+    connect(fonts,qOverload<int>(&QComboBox::activated),this,[this,fonts](int index){
+        if(index<0)return;
+        fontChoiceKept_=true;
+        keepTextFontPreview();
+        if(!refreshing_)applyTextFont(fonts->itemText(index).toStdString());
+        if(!refreshing_)publishTextEdit();
+        QTimer::singleShot(0,this,[this]{focusTextCanvas();});
+    });
     connect(styles,&QComboBox::highlighted,this,[this,styles](int index){if(index<0||styles->property("typePopupQuiet").toBool()||!styles->view()||!styles->view()->isVisible()||index==styles->currentIndex())return;previewTextStyle(styles->itemText(index).toStdString());});
     connect(styles,qOverload<int>(&QComboBox::activated),this,[this,styles](int index){
         if(index<0)return;

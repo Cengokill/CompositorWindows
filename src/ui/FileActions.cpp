@@ -301,7 +301,14 @@ bool MainWindow::importPhotoshop(const QString& path,bool confirm){
         auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
         if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
         refresh();project.canvas->fit();
-        if(!confirm&&!imported.report.empty())statusBar()->showMessage(QString::fromStdString(imported.report).split('\n').front());
+        if(!confirm&&!imported.report.empty()){
+            const auto report=QString::fromStdString(imported.report).trimmed();
+            auto* message=new QMessageBox(QMessageBox::Information,"Import PSD",report,QMessageBox::Ok,this);
+            message->setObjectName("psdImportReport");
+            message->setAttribute(Qt::WA_DeleteOnClose);
+            message->setWindowModality(Qt::NonModal);
+            message->show();
+        }
         return true;
     }catch(const std::exception& error){
         QMessageBox::critical(this,"Import PSD",error.what());
