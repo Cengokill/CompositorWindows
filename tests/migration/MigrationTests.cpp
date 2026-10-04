@@ -128,6 +128,15 @@ static void psd_contract() {
     const char* missing = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (NoSuchFontXYZ) >> ] >> >>";
     auto substituted = textFile(missing, false, "Missing");
     check(substituted.document.layers.at(0).text && substituted.document.layers.at(0).text->fontFamily == "Segoe UI" && substituted.report.find("NoSuchFontXYZ") != std::string::npos, "missing PSD font was not substituted");
+    const char* segoePostScript = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (SegoeUI) >> ] >> >>";
+    auto segoe = textFile(segoePostScript, false, "Segoe");
+    check(segoe.document.layers.at(0).text && segoe.document.layers.at(0).text->fontFamily == "Segoe UI" && segoe.report.find("isn't installed") == std::string::npos, "SegoeUI PostScript name was not resolved");
+    wchar_t windowsDirectory[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"WINDIR", windowsDirectory, MAX_PATH) > 0 && std::filesystem::is_regular_file(std::filesystem::path(windowsDirectory) / L"Fonts" / L"monbaiti.ttf")) {
+        const char* mongolian = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (MongolianBaiti) >> ] >> >>";
+        auto baiti = textFile(mongolian, false, "Baiti");
+        check(baiti.document.layers.at(0).text && baiti.document.layers.at(0).text->fontFamily == "Mongolian Baiti" && baiti.report.find("isn't installed") == std::string::npos, "MongolianBaiti was treated as a missing font");
+    }
     auto upright = textFile("", true, "Upright");
     check(!upright.document.layers.at(0).text && upright.report.find("Vertical") != std::string::npos, "vertical PSD text stayed editable");
     std::vector<uint8_t> cmyk; auto c16 = [&](int v) { cmyk.push_back(uint8_t(v >> 8)); cmyk.push_back(uint8_t(v)); }; auto c32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) cmyk.push_back(uint8_t(v >> s)); }; auto cascii = [&](const char* s) { while (*s) cmyk.push_back(uint8_t(*s++)); };
