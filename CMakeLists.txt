@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31.6)
-project(CompositorWindows VERSION 0.1.4 LANGUAGES C CXX)
+project(CompositorWindows VERSION 0.1.5 LANGUAGES C CXX)
 option(COMPOSITOR_ASAN "Instrument native code with MSVC AddressSanitizer" OFF)
 if(COMPOSITOR_ASAN)
   add_compile_options(/fsanitize=address /Zi)
