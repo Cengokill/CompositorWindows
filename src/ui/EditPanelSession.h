@@ -44,6 +44,7 @@ public:
     virtual void cancel()=0;
     virtual bool samplePress(Point,double,Qt::KeyboardModifiers){return false;}
     virtual bool sampleMove(Point,double,Qt::KeyboardModifiers,bool){return false;}
+    virtual void sampleHover(Point){}
     // Complete adjustment state uses the ordinary preview revision and commit
     // path. Unsupported panel kinds and closed/committing editors return false.
     // Invalid settings throw before changing the draft.

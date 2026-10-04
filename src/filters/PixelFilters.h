@@ -1,4 +1,5 @@
 #pragma once
+#include "CameraRaw.h"
 #include "core/Document.h"
 #include <functional>
 #include <optional>
@@ -13,8 +14,6 @@ struct Settings {
     double bloom{},bloomThreshold{.6},tonal{};
     int ditherLevels{},ditherStyle{};
     double scanline{},scanlineGlow{};
-    double exposure{},contrast{},highlights{},shadows{},temperature{},tint{},vibrance{},saturation{};
-    double clarity{},sharpen{},noiseReduction{},rawVignette{},rawRotate{},rawScale{100};
     Settings normalized() const;
 };
 struct PixelRect {int x{},y{},width{},height{};bool operator==(const PixelRect&) const=default;};
@@ -31,11 +30,14 @@ struct Request {
     bool preview{};
     // Preserve the largest padded margin while a preview panel remains open.
     double retainedBlurMargin{};
+    CameraRawSettings cameraRaw;
+    CameraRawView cameraRawView;
     Limits limits;
 };
 struct Result {
     std::shared_ptr<const Raster> raster;Transform transform;
     PixelRect sourceBounds;double previewScale{1};bool changed{};
+    std::optional<CameraRawScope> cameraRawScope;
     std::string implementation;
 };
 double blurMargin(Kind,const Settings&);

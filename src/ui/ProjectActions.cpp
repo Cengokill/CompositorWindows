@@ -61,7 +61,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->pointerMove=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerUpdate(p,m);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerUp=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerEnd(p,m);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerCancel=[this]{pointerCancel();};project.canvas->pointerInterrupted=[this]{interruptPointer();};
-    project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){updateBrushPointer(point,flags);hoverSelection(point,flags);};
+    project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);};
     project.canvas->pointerLeave=[this]{clearBrushPointer();if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal){selectionGesture_.moveCursor({});refreshSelectionGesture();}};
     project.canvas->rightPointerDown=[this](QPointF point,Qt::KeyboardModifiers flags){return beginBrushTip(point,flags);};
     project.canvas->rightPointerMove=[this](QPointF point,Qt::KeyboardModifiers flags,bool finish){updateBrushTip(point,flags,finish);};

@@ -19,6 +19,7 @@ enum class ProjectBrushMode { Paint,Erase };
 // the bundle itself is neither document content nor undo state.
 struct ProjectFilterSettings {
     filters::Settings pixels;
+    filters::CameraRawSettings cameraRaw;
     imaging::MatteSettings background;
     QJsonObject curves,exposure,gradientMap,grain;
     ProjectFilterSettings();

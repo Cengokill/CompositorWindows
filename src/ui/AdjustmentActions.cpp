@@ -24,8 +24,8 @@ void MainWindow::setupAdjustmentActions(){
     }
     action(menu,"Edit Adjustment Layer…",{},[this]{if(active()&&!active()->adjustmentJson.empty())adjust({},true,true);});
     auto*filters=menuBar()->addMenu("&Filters");
-    int filterIndex=0;
-    for(const QString name:{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw"}){int index=filterIndex++;action(filters,name+"…",{},[this,index]{runFilter(index);});}
+    const struct {const char* name;int kind;} filterItems[]{{"Gaussian Blur",0},{"Motion Blur",1},{"Add Noise",2},{"Lens Correction",3},{"Camera Raw Filter",10},{"Content-Aware Fill",4},{"Vignette",5},{"Bloom",6},{"Tonal Contrast",7},{"Dither",8},{"Scanlines",9}};
+    for(const auto& item:filterItems)action(filters,QString(item.name)+"…",{},[this,kind=item.kind]{runFilter(kind);});
     action(filters,"Remove Background…",{},[this]{removeBackground();});
 }
 void MainWindow::adjust(const QString&kind,bool live,bool existing){
