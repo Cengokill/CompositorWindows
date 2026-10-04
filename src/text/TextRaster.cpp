@@ -126,18 +126,32 @@ Built build(const TextContent& text){
     }
     return built;
 }
+int lineOf(const std::vector<float>& tops,float top){
+    auto found=std::find_if(tops.begin(),tops.end(),[&](float value){return std::abs(value-top)<0.5f;});
+    return found==tops.end()?-1:int(found-tops.begin());
+}
 void collectCarets(const Built& built,const TextContent& text,TextLayout& laid){
     laid.carets.reserve(built.characters.size()+1);
     const float fallback=float(lineHeight(text));
+    // HitTestTextRange over the whole string returns one box per line. A partial
+    // selection would then paint that entire line. Per-position metrics are the glyph cluster.
     for(size_t index=0;index<=built.characters.size();++index){
         FLOAT x=0,y=0;DWRITE_HIT_TEST_METRICS metrics{};
         check(built.layout->HitTestTextPosition(UINT32(index),FALSE,&x,&y,&metrics));
         laid.carets.push_back({x+kPad,y+kPad,metrics.height>0?metrics.height:fallback,0});
+        if(index>=built.characters.size()||!(metrics.width>0)||!(metrics.height>0)||metrics.length==0)continue;
+        const int position=int(metrics.textPosition);
+        if(!laid.clusters.empty()&&laid.clusters.back().start==position)continue;
+        laid.clusters.push_back({metrics.left+kPad,metrics.top+kPad,metrics.width,metrics.height,position,int(metrics.length),0});
     }
     std::vector<float> tops;
     for(auto& caret:laid.carets){
-        auto found=std::find_if(tops.begin(),tops.end(),[&](float top){return std::abs(top-caret.top)<0.5f;});
-        if(found==tops.end()){caret.line=int(tops.size());tops.push_back(caret.top);}else caret.line=int(found-tops.begin());
+        int line=lineOf(tops,caret.top);
+        if(line<0){caret.line=int(tops.size());tops.push_back(caret.top);}else caret.line=line;
+    }
+    for(auto& cluster:laid.clusters){
+        int line=lineOf(tops,cluster.top);
+        cluster.line=line<0?0:line;
     }
 }
 RasterizedText draw(const Built& built,const TextContent& text){

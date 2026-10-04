@@ -109,9 +109,29 @@ void caret_positions(){
     REQUIRE(laid.raster&&laid.carets.size()==3&&laid.width>2&&laid.height>2);
     REQUIRE(laid.carets[1].x>laid.carets[0].x);
 }
+void selection_clusters(){
+    const HRESULT started=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+    REQUIRE(SUCCEEDED(started)||started==RPC_E_CHANGED_MODE);
+    struct Cleanup{HRESULT hr;~Cleanup(){if(SUCCEEDED(hr))CoUninitialize();}} cleanup{started};
+    auto italic=sample("Italic");italic.fontStyle="Italic";
+    auto laid=layoutText(italic);
+    REQUIRE(!laid.clusters.empty());
+    float width=0;
+    for(const auto& cluster:laid.clusters)width+=cluster.width;
+    REQUIRE(width>0);
+    auto bold=sample("Bold");bold.fontStyle="Bold";
+    auto boldLaid=layoutText(bold);
+    REQUIRE(!boldLaid.clusters.empty());
+    REQUIRE(boldLaid.clusters.front().width>0||boldLaid.clusters.size()>1);
+    auto word=layoutText(sample("Hello"));
+    REQUIRE(word.clusters.size()>=2);
+    float total=0,widest=0;
+    for(const auto& cluster:word.clusters){total+=cluster.width;widest=std::max(widest,cluster.width);}
+    REQUIRE(widest<total*0.8f);
+}
 
 int main(int argc,char** argv){
-    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"paragraph_layout",paragraph_layout}};
+    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"paragraph_layout",paragraph_layout},{"selection_clusters",selection_clusters}};
     try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify one text style test case");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}
     catch(const std::exception& error){std::cerr<<"FAIL "<<(argc>1?argv[1]:"arguments")<<": "<<error.what()<<"\n";return 1;}
 }

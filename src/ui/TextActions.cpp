@@ -6,7 +6,10 @@
 #include <QFontComboBox>
 #include <QFontDatabase>
 #include <QComboBox>
+#include <QAbstractItemView>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QButtonGroup>
@@ -19,6 +22,7 @@
 #include <QRegularExpression>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace compositor {
 namespace {
@@ -116,6 +120,35 @@ int characterIndex(const text::TextLayout& layout,float x,float y){
     return boundary>0?boundary-1:boundary;
 }
 bool wordUnit(const QString& text,int index){if(index<0||index>=text.size())return false;const auto character=text.at(index);if(character.isLowSurrogate())return false;return character.isLetterOrNumber()||character==QLatin1Char('_')||character==QLatin1Char('\'');}
+void openComboOnFieldClick(QComboBox* combo){
+    if(!combo)return;
+    auto* opener=new QObject(combo);
+    opener->setObjectName("comboFieldPopup");
+    auto press=[=](QObject* watched,QEvent* event)->bool{
+        if(event->type()!=QEvent::MouseButtonPress)return false;
+        auto* mouse=static_cast<QMouseEvent*>(event);
+        if(mouse->button()!=Qt::LeftButton||!combo->isEnabled())return false;
+        if(combo->view()&&combo->view()->isVisible())return false;
+        if(watched==combo->lineEdit()||watched==combo){
+            QTimer::singleShot(0,combo,[combo]{
+                if(!combo->isEnabled())return;
+                combo->setProperty("typePopupQuiet",true);
+                combo->showPopup();
+                combo->setProperty("typePopupQuiet",false);
+            });
+            return watched==combo->lineEdit();
+        }
+        return false;
+    };
+    struct Filter final:QObject{
+        std::function<bool(QObject*,QEvent*)> handle;
+        using QObject::QObject;
+        bool eventFilter(QObject* watched,QEvent* event) override {return handle&&handle(watched,event)?true:QObject::eventFilter(watched,event);}
+    };
+    auto* filter=new Filter(opener);filter->handle=press;
+    combo->installEventFilter(filter);
+    if(combo->lineEdit())combo->lineEdit()->installEventFilter(filter);
+}
 std::pair<int,int> wordRange(const QString& text,int index){
     if(text.isEmpty())return {0,0};
     index=std::clamp(index,0,int(text.size())-1);
@@ -133,6 +166,8 @@ void MainWindow::setupTypeControls(){
     fonts->setCurrentFont(QFont(QString::fromStdString(textDefaults_.fontFamily)));
     auto* styles=new QComboBox;styles->setObjectName("textStyle");styles->setAccessibleName("Text style");styles->setFixedWidth(120);
     styles->setEditable(true);styles->lineEdit()->setReadOnly(true);styles->lineEdit()->setPlaceholderText("Multiple");
+    openComboOnFieldClick(fonts);openComboOnFieldClick(styles);
+    textFontBox_=fonts;textStyleBox_=styles;
     auto* size=new ui::PropertyNumber;size->setObjectName("textSize");size->setAccessibleName("Text size");size->setRange(1,1000);size->setDecimals(0);size->setValue(textDefaults_.fontSize);size->setSuffix(" px");
     size->releaseFocus=[this]{focusTextCanvas();};
     auto* color=new QToolButton;color->setObjectName("textColor");color->setAccessibleName("Text color");color->setFixedSize(36,22);
@@ -146,11 +181,22 @@ void MainWindow::setupTypeControls(){
     bar->addWidget(fonts);bar->addWidget(styles);bar->addWidget(size);bar->addWidget(color);
     addAlign("textAlignLeft","Align left",TextAlignment::Left);addAlign("textAlignCenter","Align center",TextAlignment::Center);addAlign("textAlignRight","Align right",TextAlignment::Right);
     bar->addWidget(tracking);bar->addWidget(leading);bar->addAction(cancel);bar->addAction(done);
-    connect(fonts,&QFontComboBox::currentFontChanged,this,[this](const QFont& font){if(!refreshing_)applyTextFont(font.family().toStdString());});
-    connect(fonts,&QComboBox::highlighted,this,[this,fonts](int index){if(index>=0&&fonts->view()&&fonts->view()->isVisible())previewTextFont(fonts->itemText(index).toStdString());});
-    connect(fonts,qOverload<int>(&QComboBox::activated),this,[this](int){fontChoiceKept_=true;keepTextFontPreview();focusTextCanvas();});
-    connect(styles,&QComboBox::highlighted,this,[this,styles](int index){if(index>=0&&styles->view()&&styles->view()->isVisible())previewTextStyle(styles->itemText(index).toStdString());});
-    connect(styles,qOverload<int>(&QComboBox::activated),this,[this,styles](int index){if(index<0)return;fontChoiceKept_=true;keepTextFontPreview();if(!refreshing_)applyTextStyle(styles->itemText(index).toStdString());focusTextCanvas();});
+    connect(fonts,&QFontComboBox::currentFontChanged,this,[this,fonts](const QFont& font){if(refreshing_||fonts->property("typePopupQuiet").toBool()||(fonts->view()&&fonts->view()->isVisible()))return;applyTextFont(font.family().toStdString());});
+    connect(fonts,&QComboBox::highlighted,this,[this,fonts](int index){if(index<0||fonts->property("typePopupQuiet").toBool()||!fonts->view()||!fonts->view()->isVisible()||index==fonts->currentIndex())return;previewTextFont(fonts->itemText(index).toStdString());});
+    connect(fonts,qOverload<int>(&QComboBox::activated),this,[this](int){fontChoiceKept_=true;keepTextFontPreview();if(!refreshing_)publishTextEdit();QTimer::singleShot(0,this,[this]{focusTextCanvas();});});
+    connect(styles,&QComboBox::highlighted,this,[this,styles](int index){if(index<0||styles->property("typePopupQuiet").toBool()||!styles->view()||!styles->view()->isVisible()||index==styles->currentIndex())return;previewTextStyle(styles->itemText(index).toStdString());});
+    connect(styles,qOverload<int>(&QComboBox::activated),this,[this,styles](int index){
+        if(index<0)return;
+        fontChoiceKept_=true;
+        keepTextFontPreview();
+        if(!refreshing_)applyTextStyle(styles->itemText(index).toStdString());
+        if(!refreshing_)publishTextEdit();
+        QTimer::singleShot(0,this,[this]{focusTextCanvas();});
+    });
+    connect(styles,qOverload<int>(&QComboBox::currentIndexChanged),this,[this,styles](int index){
+        if(refreshing_||index<0||styles->property("typePopupQuiet").toBool()||(styles->view()&&styles->view()->isVisible()))return;
+        applyTextStyle(styles->itemText(index).toStdString());
+    });
     connect(size,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this](double value){if(!refreshing_)applyTextSize(value);});
     connect(align,&QButtonGroup::idClicked,this,[this](int id){if(!refreshing_)applyTextAlignment(TextAlignment(id));});
     connect(tracking,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this](double value){if(!refreshing_)applyTextTracking(value);});
@@ -192,7 +238,19 @@ void MainWindow::refreshTypeControls(){
     const bool mixed=length>0&&family.empty();
     if(fonts){const QSignalBlocker block(fonts);if(const int marker=fonts->findText("Multiple");marker>=0&&!mixed)fonts->removeItem(marker);if(mixed){if(fonts->findText("Multiple")<0)fonts->insertItem(0,"Multiple");fonts->setCurrentIndex(fonts->findText("Multiple"));}else if(!family.empty()&&!(editing&&textSession_->fontPreviewOriginal))fonts->setCurrentFont(QFont(QString::fromStdString(family)));fonts->setEnabled(tool_==Tool::Text||editing);}
     else if(fonts)fonts->setEnabled(true);
-    if(styles){const QSignalBlocker block(styles);if(mixed||variant.empty()){if(styles->currentText()!="Multiple"){styles->clear();styles->addItem("Multiple");styles->setCurrentIndex(0);}}else if(!(editing&&textSession_->fontPreviewOriginal)){styles->clear();const auto listed=family.empty()?style.fontFamily:family;for(const auto& name:QFontDatabase::styles(QString::fromStdString(listed)))styles->addItem(name);const int found=styles->findText(QString::fromStdString(variant));if(found>=0)styles->setCurrentIndex(found);}styles->setEnabled(tool_==Tool::Text||editing);}
+    if(styles){const QSignalBlocker block(styles);
+        if(mixed){if(styles->findText("Multiple")<0){styles->clear();styles->addItem("Multiple");}styles->setCurrentIndex(styles->findText("Multiple"));}
+        else if(!(editing&&textSession_->fontPreviewOriginal)){
+            QString listed=QString::fromStdString(family.empty()?style.fontFamily:family);
+            if(listed.isEmpty()&&fonts)listed=fonts->currentFont().family();
+            auto names=QFontDatabase::styles(listed);
+            if(names.isEmpty()&&fonts)names=QFontDatabase::styles(fonts->currentFont().family());
+            if(names.isEmpty())names=QStringList{"Regular","Bold","Italic","Bold Italic"};
+            if(styles->count()!=names.size()||(styles->count()&&styles->itemText(0)!=names.value(0))){styles->clear();for(const auto& name:names)styles->addItem(name);}
+            QString wanted=QString::fromStdString(variant.empty()?std::string("Regular"):variant);
+            int found=styles->findText(wanted);if(found<0)found=styles->findText(wanted,Qt::MatchContains);if(found>=0)styles->setCurrentIndex(found);
+        }
+        styles->setEnabled(tool_==Tool::Text||editing);}
     if(size){const QSignalBlocker block(size);size->setValue(style.fontSize);size->setEnabled(tool_==Tool::Text||editing);}
     if(color){double red=style.red,green=style.green,blue=style.blue;if(editing)text::colorAt(style,length>0?start:std::max(0,start-1),red,green,blue);color->setEnabled(editing);color->setStyleSheet(QString("background:%1;border:1px solid palette(mid);").arg(QColor::fromRgbF(red,green,blue).name()));}
     if(auto* group=findChild<QButtonGroup*>("textAlign")){const QSignalBlocker block(group);if(auto* button=group->button(int(style.alignment)))button->setChecked(true);for(auto* button:group->buttons())button->setEnabled(editing);}
@@ -223,21 +281,35 @@ void MainWindow::publishTextEdit(){
     overlay.caret=visualCaret;
     for(const auto& caret:layout.carets){const auto top=map(caret.x,caret.top),bottom=map(caret.x,caret.top+caret.height);overlay.carets.push_back({top.x,top.y,bottom.x,bottom.y});}
     const int start=std::min(session.caret,session.anchor),end=std::max(session.caret,session.anchor);
-    const int limit=std::max(0,int(layout.carets.size())-1);
-    if(end>start&&!layout.carets.empty()){
-        int index=std::clamp(start,0,limit);const int stop=std::clamp(end,0,limit);
-        while(index<stop){
-            const int line=layout.carets[size_t(index)].line;int last=index;
-            while(last<stop&&last+1<=limit&&layout.carets[size_t(last+1)].line==line)++last;
-            const auto& from=layout.carets[size_t(index)];const auto& to=layout.carets[size_t(last)];
-            float left=std::min(from.x,to.x),right=std::max(from.x,to.x);
-            if(last==index&&index<end){for(const auto& caret:layout.carets)if(caret.line==line)right=std::max(right,caret.x);if(right<=left+0.5f)right=left+std::max(from.height*.4f,1.f);}
-            if(right>left+0.5f){
-                const float top=from.top,bottom=top+std::max(from.height,1.f);
-                const auto a=map(left,top),b=map(right,top),c=map(right,bottom),d=map(left,bottom);
-                overlay.selection.push_back({a.x,a.y,b.x,b.y,c.x,c.y,d.x,d.y});
+    if(end>start){
+        for(const auto& cluster:layout.clusters){
+            if(cluster.start+cluster.length<=start||cluster.start>=end)continue;
+            const int clusterEnd=cluster.start+std::max(cluster.length,1);
+            const int overlapStart=std::max(start,cluster.start),overlapEnd=std::min(end,clusterEnd);
+            if(overlapEnd<=overlapStart)continue;
+            const float span=float(std::max(cluster.length,1));
+            const float left=cluster.x+cluster.width*float(overlapStart-cluster.start)/span;
+            const float right=std::max(left+1.f,cluster.x+cluster.width*float(overlapEnd-cluster.start)/span);
+            const float top=cluster.top,bottom=top+std::max(cluster.height,1.f);
+            const auto a=map(left,top),b=map(right,top),c=map(right,bottom),d=map(left,bottom);
+            overlay.selection.push_back({a.x,a.y,b.x,b.y,c.x,c.y,d.x,d.y});
+        }
+        if(overlay.selection.empty()&&!layout.carets.empty()){
+            const int limit=std::max(0,int(layout.carets.size())-1);
+            int index=std::clamp(start,0,limit);const int stop=std::clamp(end,0,limit);
+            while(index<stop){
+                const int line=layout.carets[size_t(index)].line;int last=index;
+                while(last<stop&&last+1<=limit&&layout.carets[size_t(last+1)].line==line)++last;
+                const auto& from=layout.carets[size_t(index)];const auto& to=layout.carets[size_t(last)];
+                float left=std::min(from.x,to.x),right=std::max(from.x,to.x);
+                if(last==index&&index<end){for(const auto& caret:layout.carets)if(caret.line==line)right=std::max(right,caret.x);if(right<=left+0.5f)right=left+std::max(from.height*.4f,1.f);}
+                if(right>left+0.5f){
+                    const float top=from.top,bottom=top+std::max(from.height,1.f);
+                    const auto a=map(left,top),b=map(right,top),c=map(right,bottom),d=map(left,bottom);
+                    overlay.selection.push_back({a.x,a.y,b.x,b.y,c.x,c.y,d.x,d.y});
+                }
+                if(last+1<=index)break;index=last+1;
             }
-            if(last+1<=index)break;index=last+1;
         }
     }
     overlay.showFrame=true;
@@ -252,6 +324,7 @@ void MainWindow::publishTextEdit(){
         session.owner->textPreview=std::move(preview);
     }else session.owner->textPreview.reset();
     if(session.owner->canvas)session.owner->canvas->setTextOverlay(std::move(overlay));
+    if(session.fontPreviewOriginal){if(session.owner->canvas)session.owner->canvas->update();return;}
     if(session.owner==current())refresh(true,false);
 }
 void MainWindow::beginText(Point point,bool forceNew,bool extend,int clickCount){

@@ -116,16 +116,23 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
 EditorProject& MainWindow::addProject(Document document,QString title,bool reuseEmpty){
     validateDocument(document);
     const auto restoreNumber=qScopeGuard([this,reuseEmpty,number=nextProjectNumber_]{if(!reuseEmpty)nextProjectNumber_=number;});
+    // A drop marks the workspace busy, which otherwise refuses the tab change
+    // onto the project that is about to receive the document. The refused
+    // change then deletes the still-active project.
+    const bool previousSelecting=selectingProjectForOpen_;
+    selectingProjectForOpen_=true;
+    const auto restoreSelecting=qScopeGuard([this,previousSelecting]{selectingProjectForOpen_=previousSelecting;});
     const bool replaceWelcome=!reuseEmpty&&projects_.size()==1&&!projects_.front()->document&&!projects_.front()->importing&&!projects_.front()->projectBusy&&(!importQueue_||!importQueue_->contains(projects_.front()->canvas));
     auto&project=addEmptyProject(reuseEmpty);project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;
     if(replaceWelcome){
         // ProjectWorkspace.swift:81-86: attach the successfully loaded fresh
         // session before discarding the sole empty welcome session. Tab-change
         // callbacks already selected the new owner in addEmptyProject(false).
-        auto* previous=projects_.front().get();detach(previous->canvas);
+        auto* previous=projects_.front().get();if(activeProject_==previous)activeProject_=nullptr;detach(previous->canvas);
         previous->page->setEnabled(false);previous->page->hide();
         {QSignalBlocker blocked(tabs_);tabs_->removeTab(0);}
         previous->page->deleteLater();projects_.erase(projects_.begin());
+        if(!activeProject_)activeProject_=&project;
     }
     refresh();project.canvas->fit();project.canvas->setFocus();return project;
 }

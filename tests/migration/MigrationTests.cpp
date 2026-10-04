@@ -14,8 +14,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <windows.h>
 #include <objbase.h>
 #include <cstring>
+#include <cwctype>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -88,7 +91,8 @@ static void psd_contract() {
     auto ascii = [&](const char* s) { while (*s) bytes.push_back(uint8_t(*s++)); };
     ascii("8BPS"); u16(1); for (int i = 0; i < 6; ++i) bytes.push_back(0); u16(3); u32(2); u32(2); u16(8); u16(3); u32(0); u32(0);
     std::vector<uint8_t> info; auto i16 = [&](int v) { info.push_back(uint8_t(v >> 8)); info.push_back(uint8_t(v)); }; auto i32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) info.push_back(uint8_t(v >> s)); }; auto infoAscii = [&](const char* s) { while (*s) info.push_back(uint8_t(*s++)); };
-    i16(1); i32(0); i32(0); i32(2); i32(2); i16(4); for (int id : {0, 1, 2, -1}) { i16(id); i32(6); } infoAscii("8BIM"); infoAscii("norm"); info.push_back(255); info.push_back(0); info.push_back(0); info.push_back(0); i32(12); i32(0); i32(0); info.push_back(3); infoAscii("Red");
+    i16(1); i32(0); i32(0); i32(2); i32(2); i16(4); for (int id : {0, 1, 2, -1}) { i16(id); i32(6); } infoAscii("8BIM"); infoAscii("norm"); info.push_back(255); info.push_back(0); info.push_back(0); info.push_back(0); i32(28); i32(0); i32(0); info.push_back(3); infoAscii("Red");
+    infoAscii("8BIM"); infoAscii("xxxx"); i32(4); i32(0x01020304);
     for (int channel = 0; channel < 4; ++channel) { info.push_back(0); info.push_back(0); uint8_t value = channel == 1 || channel == 2 ? 0 : 255; for (int i = 0; i < 4; ++i) info.push_back(value); }
     u32(uint32_t(info.size() + 4)); u32(uint32_t(info.size())); bytes.insert(bytes.end(), info.begin(), info.end());
     auto imported = imaging::readPsd(bytes.data(), bytes.size()); check(imported.document.layers.size() == 1 && imported.document.layers[0].name == "Red" && imported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255}, "PSD layer was not imported");
@@ -130,9 +134,77 @@ static void psd_contract() {
     cascii("8BPS"); c16(1); for (int i = 0; i < 6; ++i) cmyk.push_back(0); c16(4); c32(2); c32(2); c16(8); c16(4);
     bool namedCmyk = false; try { imaging::readPsd(cmyk.data(), cmyk.size()); } catch (const std::exception& error) { namedCmyk = std::string(error.what()).find("CMYK") != std::string::npos; }
     check(namedCmyk, "CMYK PSD was not named in the error");
+    std::vector<uint8_t> zip; auto z16 = [&](int v) { zip.push_back(uint8_t(v >> 8)); zip.push_back(uint8_t(v)); }; auto z32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) zip.push_back(uint8_t(v >> s)); }; auto zascii = [&](const char* s) { while (*s) zip.push_back(uint8_t(*s++)); };
+    zascii("8BPS"); z16(1); for (int i = 0; i < 6; ++i) zip.push_back(0); z16(3); z32(2); z32(2); z16(8); z16(3); z32(0); z32(0);
+    std::vector<uint8_t> zipInfo; auto zi16 = [&](int v) { zipInfo.push_back(uint8_t(v >> 8)); zipInfo.push_back(uint8_t(v)); }; auto zi32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) zipInfo.push_back(uint8_t(v >> s)); }; auto ziascii = [&](const char* s) { while (*s) zipInfo.push_back(uint8_t(*s++)); };
+    zi16(1); zi32(0); zi32(0); zi32(2); zi32(2); zi16(4); for (int id : {0, 1, 2, -1}) { zi16(id); zi32(6); } ziascii("8BIM"); ziascii("norm"); zipInfo.push_back(255); zipInfo.push_back(0); zipInfo.push_back(0); zipInfo.push_back(0); zi32(12); zi32(0); zi32(0); zipInfo.push_back(3); ziascii("Red");
+    for (int channel = 0; channel < 4; ++channel) { zipInfo.push_back(0); zipInfo.push_back(2); for (int i = 0; i < 4; ++i) zipInfo.push_back(0); }
+    z32(uint32_t(zipInfo.size() + 4)); z32(uint32_t(zipInfo.size())); zip.insert(zip.end(), zipInfo.begin(), zipInfo.end());
+    z16(0); for (int i = 0; i < 4; ++i) zip.push_back(0); for (int i = 0; i < 4; ++i) zip.push_back(255); for (int i = 0; i < 4; ++i) zip.push_back(0);
+    auto zipImported = imaging::readPsd(zip.data(), zip.size());
+    check(zipImported.document.layers.size() == 1 && zipImported.document.layers[0].raster && zipImported.document.layers[0].raster->pixel(0, 0) == Pixel{0, 255, 0, 255} && zipImported.report.find("merged") != std::string::npos, "ZIP-compressed layers did not fall back to the merged image");
+    std::vector<uint8_t> deep; auto d16 = [&](int v) { deep.push_back(uint8_t(v >> 8)); deep.push_back(uint8_t(v)); }; auto d32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) deep.push_back(uint8_t(v >> s)); }; auto dascii = [&](const char* s) { while (*s) deep.push_back(uint8_t(*s++)); };
+    dascii("8BPS"); d16(1); for (int i = 0; i < 6; ++i) deep.push_back(0); d16(3); d32(2); d32(2); d16(16); d16(3); d32(0); d32(0); d32(0);
+    d16(0);
+    for (int i = 0; i < 4; ++i) { deep.push_back(255); deep.push_back(0); }
+    for (int i = 0; i < 16; ++i) deep.push_back(0);
+    auto deepImported = imaging::readPsd(deep.data(), deep.size());
+    check(deepImported.document.layers.size() == 1 && deepImported.document.layers[0].raster && deepImported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255} && deepImported.report.find("16-bit") != std::string::npos, "16-bit PSD was not converted to 8-bit");
+    std::vector<uint8_t> rle; auto r16 = [&](int v) { rle.push_back(uint8_t(v >> 8)); rle.push_back(uint8_t(v)); }; auto r32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) rle.push_back(uint8_t(v >> s)); }; auto rascii = [&](const char* s) { while (*s) rle.push_back(uint8_t(*s++)); };
+    rascii("8BPS"); r16(1); for (int i = 0; i < 6; ++i) rle.push_back(0); r16(3); r32(1); r32(2); r16(8); r16(3); r32(0); r32(0); r32(0);
+    r16(1); r16(3); r16(3); r16(3);
+    auto literal = [&](uint8_t value) { rle.push_back(1); rle.push_back(value); rle.push_back(value); };
+    literal(255); literal(0); literal(128);
+    auto rleImported = imaging::readPsd(rle.data(), rle.size());
+    check(rleImported.document.layers.size() == 1 && rleImported.document.layers[0].raster && rleImported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 128, 255}, "merged RLE image was not decoded");
+    std::vector<uint8_t> named; auto n16 = [&](int v) { named.push_back(uint8_t(v >> 8)); named.push_back(uint8_t(v)); }; auto n32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) named.push_back(uint8_t(v >> s)); }; auto nascii = [&](const char* s) { while (*s) named.push_back(uint8_t(*s++)); };
+    nascii("8BPS"); n16(1); for (int i = 0; i < 6; ++i) named.push_back(0); n16(3); n32(2); n32(2); n16(8); n16(3); n32(0); n32(0);
+    std::vector<uint8_t> nameInfo; auto ni16 = [&](int v) { nameInfo.push_back(uint8_t(v >> 8)); nameInfo.push_back(uint8_t(v)); }; auto ni32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) nameInfo.push_back(uint8_t(v >> s)); }; auto niascii = [&](const char* s) { while (*s) nameInfo.push_back(uint8_t(*s++)); };
+    ni16(1); ni32(0); ni32(0); ni32(2); ni32(2); ni16(4); for (int id : {0, 1, 2, -1}) { ni16(id); ni32(6); } niascii("8BIM"); niascii("norm"); nameInfo.push_back(255); nameInfo.push_back(0); nameInfo.push_back(0); nameInfo.push_back(0);
+    std::vector<uint8_t> nameExtra; auto ne32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) nameExtra.push_back(uint8_t(v >> s)); };
+    ne32(0); ne32(0); nameExtra.push_back(1); nameExtra.push_back(0x8E); nameExtra.push_back(0); nameExtra.push_back(0);
+    nameExtra.insert(nameExtra.end(), {'8','B','I','M','l','u','n','i'}); ne32(12); ne32(4); nameExtra.insert(nameExtra.end(), {0,0x43,0,0x61,0,0x66,0,0xE9});
+    ni32(uint32_t(nameExtra.size())); nameInfo.insert(nameInfo.end(), nameExtra.begin(), nameExtra.end());
+    for (int channel = 0; channel < 4; ++channel) { nameInfo.push_back(0); nameInfo.push_back(0); uint8_t value = channel == 1 || channel == 2 ? 0 : 255; for (int i = 0; i < 4; ++i) nameInfo.push_back(value); }
+    n32(uint32_t(nameInfo.size() + 4)); n32(uint32_t(nameInfo.size())); named.insert(named.end(), nameInfo.begin(), nameInfo.end());
+    auto namedImported = imaging::readPsd(named.data(), named.size());
+    check(namedImported.document.layers.size() == 1 && namedImported.document.layers[0].name == "Caf\xc3\xa9", "PSD Unicode layer name was not decoded");
+}
+static void loadPsdFile(const wchar_t* path) {
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    struct ReleaseCom { HRESULT hr; ~ReleaseCom() { if (SUCCEEDED(hr)) CoUninitialize(); } } release{apartment};
+    std::wcout << path << L"\n" << std::flush;
+    try {
+        auto imported = imaging::readPsd(std::filesystem::path(path));
+        int rasters = 0, texts = 0;
+        for (const auto& layer : imported.document.layers) { if (layer.raster) ++rasters; if (layer.text) ++texts; }
+        std::cout << "  OK " << imported.document.width << "x" << imported.document.height
+                  << " layers=" << imported.document.layers.size() << " rasters=" << rasters << " texts=" << texts << "\n";
+        std::cout << imported.report << std::flush;
+    } catch (const std::exception& error) { std::cout << "  ERROR " << error.what() << "\n" << std::flush; }
+}
+static int guardPsd(const wchar_t* path) {
+    __try { loadPsdFile(path); return 0; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return int(GetExceptionCode()); }
+}
+static int psd_folder(const std::filesystem::path& dir) {
+    if (!std::filesystem::is_directory(dir)) { std::cerr << "PSD folder missing\n"; return 1; }
+    int crashes = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        auto ext = entry.path().extension().wstring();
+        for (auto& ch : ext) ch = wchar_t(towlower(ch));
+        if (ext != L".psd" && ext != L".psb") continue;
+        const int code = guardPsd(entry.path().c_str());
+        if (code) { ++crashes; std::cout << "  CRASH 0x" << std::hex << code << std::dec << "\n" << std::flush; }
+    }
+    return crashes ? 1 : 0;
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "psd-folder") {
+        const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
+        return psd_folder(dir);
+    }
     try { format_contract(); behavior_contract(); psd_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

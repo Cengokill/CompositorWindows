@@ -135,6 +135,8 @@ class MainWindow final:public QMainWindow {
     };
     std::optional<TextSession> textSession_;
     bool fontChoiceKept_{};
+    QPointer<QComboBox> textFontBox_;
+    QPointer<QComboBox> textStyleBox_;
     bool textSelecting_{};
     bool textArming_{};
     Point textArmPoint_{};
@@ -205,6 +207,7 @@ class MainWindow final:public QMainWindow {
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
     void queueImageImports(const QStringList&,EditorProject*,std::optional<Point> = {});
+    bool importPhotoshop(const QString& path, bool confirm=true);
     void refresh(bool render=true,bool rebuildLayers=true);
     void edit(const char* name,const std::function<void(Document&)>& operation);
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);

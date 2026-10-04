@@ -29,7 +29,7 @@ void NativeCanvas::upload(){
 }
 void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);ComPtr<ID2D1SolidColorBrush> light,dark;check(context_->CreateSolidColorBrush(D2D1::ColorF(.77f,.78f,.79f),&light),"Checker brush");check(context_->CreateSolidColorBrush(D2D1::ColorF(.91f,.92f,.93f),&dark),"Checker brush");for(int y=0;y<height();y+=12)for(int x=0;x<width();x+=12)context_->FillRectangle(D2D1::RectF(float(x),float(y),float(x+12),float(y+12)),((x/12+y/12)%2?light:dark).Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
 // Upload bounded tiles so a valid 30,000-pixel narrow document remains displayable.
-for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;auto tile=raster_->tiles[size_t(ty/256)*((raster_->width+255)/256)+tx/256];auto found=displayTiles_.find(tile.get());
+for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;const size_t index=size_t(ty/256)*((raster_->width+255)/256)+size_t(tx/256);if(index>=raster_->tiles.size()||!raster_->tiles[index])continue;auto tile=raster_->tiles[index];auto found=displayTiles_.find(tile.get());
 if(found==displayTiles_.end()){
     if(displayTiles_.size()>=1024)displayTiles_.erase(displayTiles_.begin());
     DisplayTile display;display.source=tile;
@@ -287,16 +287,8 @@ void NativeCanvas::drawTextOverlay(){
     if(!textOverlay_||!context_||!factory_||documentWidth_<=0)return;
     const auto& overlay=*textOverlay_;const auto mapping=viewMapping();
     auto viewOf=[&](double x,double y){auto point=mapping.toView({x,y});return D2D1::Point2F(float(point.x),float(point.y));};
-    ComPtr<ID2D1SolidColorBrush> fill,caret;check(context_->CreateSolidColorBrush(D2D1::ColorF(0.2f,0.55f,1.f,0.45f),&fill),"Text selection");check(context_->CreateSolidColorBrush(D2D1::ColorF(0.15f,0.45f,1.f),&caret),"Text caret");
+    ComPtr<ID2D1SolidColorBrush> fill,caret;    check(context_->CreateSolidColorBrush(D2D1::ColorF(0.2f,0.55f,1.f,0.45f),&fill),"Text selection");check(context_->CreateSolidColorBrush(D2D1::ColorF(0.15f,0.45f,1.f),&caret),"Text caret");
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    for(const auto& quad:overlay.selection){
-        ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Text selection");
-        ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink),"Text selection");
-        sink->BeginFigure(viewOf(quad.x0,quad.y0),D2D1_FIGURE_BEGIN_FILLED);
-        sink->AddLine(viewOf(quad.x1,quad.y1));sink->AddLine(viewOf(quad.x2,quad.y2));sink->AddLine(viewOf(quad.x3,quad.y3));
-        sink->EndFigure(D2D1_FIGURE_END_CLOSED);check(sink->Close(),"Text selection");
-        context_->FillGeometry(path.Get(),fill.Get());
-    }
     if(overlay.raster&&overlay.raster->width>0&&overlay.raster->height>0&&overlay.raster->width<=30000&&overlay.raster->height<=30000){
         if(textRasterSource_!=overlay.raster||!textBitmap_){
             const auto& image=*overlay.raster;std::vector<Pixel> pixels(size_t(image.width)*image.height);
@@ -306,6 +298,14 @@ void NativeCanvas::drawTextOverlay(){
         }
         const auto origin=viewOf(overlay.originX,overlay.originY),opposite=viewOf(overlay.originX+overlay.width,overlay.originY+overlay.height);
         context_->DrawBitmap(textBitmap_.Get(),D2D1::RectF(origin.x,origin.y,opposite.x,opposite.y),1,D2D1_INTERPOLATION_MODE_LINEAR);
+    }
+    for(const auto& quad:overlay.selection){
+        ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Text selection");
+        ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink),"Text selection");
+        sink->BeginFigure(viewOf(quad.x0,quad.y0),D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLine(viewOf(quad.x1,quad.y1));sink->AddLine(viewOf(quad.x2,quad.y2));sink->AddLine(viewOf(quad.x3,quad.y3));
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);check(sink->Close(),"Text selection");
+        context_->FillGeometry(path.Get(),fill.Get());
     }
     if(overlay.showFrame){for(int i=0;i<4;++i){const auto& a=overlay.frame[size_t(i)];const auto& b=overlay.frame[size_t((i+1)%4)];context_->DrawLine(viewOf(a.x,a.y),viewOf(b.x,b.y),caret.Get(),std::max(1.f,float(pointsPerPixel())));}for(const auto& handle:overlay.handles){const auto center=viewOf(handle.x,handle.y);context_->FillRectangle(D2D1::RectF(center.x-4,center.y-4,center.x+4,center.y+4),caret.Get());}}
     if(overlay.caret>=0&&overlay.caret<int(overlay.carets.size())){const auto& line=overlay.carets[size_t(overlay.caret)];context_->DrawLine(viewOf(line.x0,line.y0),viewOf(line.x1,line.y1),caret.Get(),std::max(1.f,float(pointsPerPixel())));}
