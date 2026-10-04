@@ -2,8 +2,14 @@
 #include "RememberedSettingsTests.cpp"
 #undef main
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QImage>
+#include <QLabel>
+#include <QSlider>
 #include <string>
+#include <cmath>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QTest>
 #include <QToolButton>
 namespace {
@@ -126,10 +132,58 @@ void dock_and_menu() {
     panel->reject();
     QApplication::processEvents();
 }
+QPointF brightCentroid(const QImage& image) {
+    double weight = 0, sumX = 0, sumY = 0;
+    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+        const QColor color = image.pixelColor(x, y);
+        if (color.alpha() < 170 || color.red() < 210 || color.green() < 210 || color.blue() < 210) continue;
+        weight += 1;
+        sumX += x + 0.5;
+        sumY += y + 0.5;
+    }
+    if (weight < 20) throw std::runtime_error("control mark is not visible");
+    return {sumX / weight, sumY / weight};
+}
+void glass_controls() {
+    Fixture f;
+    rawModal(f, [](QDialog& dialog) {
+        QApplication::sendPostedEvents();
+        auto* exposure = field<QDoubleSpinBox>(dialog, "Exposure");
+        require(exposure->text() == exposure->locale().toString(0.0, 'f', 2), "exposure value is shown");
+        require(exposure->width() >= exposure->fontMetrics().horizontalAdvance(exposure->text()) + 8, "exposure value fits in its field");
+        auto* slider = field<QSlider>(dialog, "Exposure slider");
+        QImage sliderImage(slider->size(), QImage::Format_ARGB32_Premultiplied);
+        sliderImage.fill(Qt::transparent);
+        slider->render(&sliderImage);
+        const QPointF knob = brightCentroid(sliderImage);
+        require(std::abs(knob.y() - sliderImage.height() / 2.0) <= 1.25, "slider knob is vertically centered");
+        require(std::abs(knob.x() - sliderImage.width() / 2.0) <= 2.0, "slider knob starts centered on the track");
+        bool luminanceFits = false;
+        for (auto* label : dialog.findChildren<QLabel*>()) {
+            if (label->text() != "Luminance" || !label->isVisible()) continue;
+            luminanceFits = label->width() >= label->fontMetrics().horizontalAdvance(label->text());
+            break;
+        }
+        require(luminanceFits, "color grading luminance text is not truncated");
+        auto* wheel = dialog.findChild<QWidget*>("cameraRawGradeShadows");
+        require(wheel && wheel->isVisible(), "shadows grade wheel is visible");
+        const QPointF edge(wheel->width() - 12, wheel->height() / 2.0);
+        const QPointF global = wheel->mapToGlobal(edge);
+        QMouseEvent press(QEvent::MouseButtonPress, edge, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(wheel, &press);
+        QImage wheelImage(wheel->size(), QImage::Format_ARGB32_Premultiplied);
+        wheelImage.fill(Qt::transparent);
+        wheel->render(&wheelImage);
+        const QPointF point = brightCentroid(wheelImage);
+        require(point.x() > wheel->width() * 0.62, "color grading point follows the pointer");
+        QMouseEvent release(QEvent::MouseButtonRelease, edge, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(wheel, &release);
+    }, false);
+}
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"glass_controls", glass_controls}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();

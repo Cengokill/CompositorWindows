@@ -211,6 +211,12 @@ public:
         status_.setWordWrap(true);status_.setStyleSheet("color: #989ba3; font-size: 11px;");layout_.addWidget(&status_);
         if(cameraRaw&&request_.selection){auto* note=new QLabel("Limited to the selection");note->setObjectName("cameraRawSelection");layout_.addWidget(note);}
         layout_.addWidget(&buttons_);apply_=buttons_.button(cameraRaw?QDialogButtonBox::Ok:QDialogButtonBox::Apply);apply_->setEnabled(false);apply_->setDefault(true);buttons_.button(QDialogButtonBox::Cancel)->setAutoDefault(false);
+        if(cameraRaw){
+            dialog_.setAttribute(Qt::WA_StyledBackground,true);
+            dialog_.setStyleSheet("QDialog#filterPanel { background: #16181c; }");
+            const QString glass="QPushButton { background: rgba(255,255,255,0.16); color: white; border: 1px solid rgba(255,255,255,0.46); border-top-color: rgba(255,255,255,0.78); border-radius: 14px; padding: 6px 16px; min-height: 22px; min-width: 72px; } QPushButton:hover { background: rgba(255,255,255,0.28); } QPushButton:default { background: rgba(255,255,255,0.30); }";
+            apply_->setStyleSheet(glass);buttons_.button(QDialogButtonBox::Cancel)->setStyleSheet(glass);
+        }
         layout_.setContentsMargins(18,16,18,16);layout_.setSpacing(12);fields_.setVerticalSpacing(12);
         debounce_.setSingleShot(true);debounce_.setInterval(120);
         auto number=[this](const QString& label,double& value,double low,double high,int decimals){
