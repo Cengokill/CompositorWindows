@@ -4,7 +4,7 @@ Read README.md and PROGRESS.md. Consult KNOWN-ISSUES.md and VALIDATION.md when t
 
 This is an independent Windows preview based on Robbie Tilton's Compositor. Keep the upstream pin in dependencies.lock.json accurate. Preserve original attribution and licenses. Staying aligned with upstream is the maintenance intent; do not claim that newer Mac features or full parity are already verified.
 
-Visual quality matters. Use the rendered Mac design as a reference and maintain cohesive custom interior controls. Native Windows title bars are the default; Mac-style window controls are an optional saved preference.
+Visual quality matters. Use the rendered Mac IOS 26 Liquid Glass design as a reference and maintain cohesive custom interior controls. Native Windows title bars are the default; Mac-style window controls are an optional saved preference.
 
 The code itself is the implementation reference. Read and link to it instead of writing a second description of its behavior. Documentation should explain user workflows, build steps, external contracts, and decisions that cannot be inferred from the code. People and coding agents use the same documentation.
 
