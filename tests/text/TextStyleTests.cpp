@@ -6,6 +6,7 @@
 #include <objbase.h>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 using namespace compositor;
 using namespace compositor::text;
@@ -140,9 +141,33 @@ void selection_clusters(){
     for(const auto& cluster:word.clusters){total+=cluster.width;widest=std::max(widest,cluster.width);}
     REQUIRE(widest<total*0.8f);
 }
+void com_apartment_balance(){
+    HRESULT after=E_FAIL;
+    std::exception_ptr failure;
+    std::thread thread([&]{
+        try{
+            const HRESULT started=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+            REQUIRE(SUCCEEDED(started));
+            {
+                struct Cleanup{HRESULT hr;~Cleanup(){if(SUCCEEDED(hr))CoUninitialize();}} cleanup{started};
+                const auto text=sample("Repeated text");
+                for(int index=0;index<3;++index){
+                    auto layout=layoutText(text);
+                    auto drawn=rasterize(text);
+                    REQUIRE(layout.raster&&drawn.raster);
+                }
+            }
+            APTTYPE type{};APTTYPEQUALIFIER qualifier{};
+            after=CoGetApartmentType(&type,&qualifier);
+        }catch(...){failure=std::current_exception();}
+    });
+    thread.join();
+    if(failure)std::rethrow_exception(failure);
+    REQUIRE(after==CO_E_NOTINITIALIZED);
+}
 
 int main(int argc,char** argv){
-    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"paragraph_layout",paragraph_layout},{"layout_reused",layout_reused},{"selection_clusters",selection_clusters}};
+    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"paragraph_layout",paragraph_layout},{"layout_reused",layout_reused},{"selection_clusters",selection_clusters},{"com_apartment_balance",com_apartment_balance}};
     try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify one text style test case");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}
     catch(const std::exception& error){std::cerr<<"FAIL "<<(argc>1?argv[1]:"arguments")<<": "<<error.what()<<"\n";return 1;}
 }

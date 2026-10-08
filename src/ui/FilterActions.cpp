@@ -169,7 +169,7 @@ class FilterPanel final:public ui::EditPanelSession {
     }
     void publishPreview(){if(host_.preview)host_.preview(preview_.isChecked()?completedPreview_:nullptr);}
     void start(){
-        if(closed_)return;if(worker_.isRunning()){if(runningVersion_!=version_){cancelled_->store(true);pending_=true;}return;}
+        if(closed_)return;if(worker_.isRunning()){if(committing_||runningVersion_!=version_){cancelled_->store(true);pending_=true;}return;}
         if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
         pending_=false;runningVersion_=version_;
         request_.retainedBlurMargin=std::max(request_.retainedBlurMargin,filters::blurMargin(request_.kind,request_.settings));
