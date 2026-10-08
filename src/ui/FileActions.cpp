@@ -322,6 +322,8 @@ void MainWindow::openPath(const QString&path){
         loadProjectDirectory(path);return;
     }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
+    const auto extension=QFileInfo(path).suffix().toLower();
+    if(extension=="psd"||extension=="psb"){importSelectedImages({path});return;}
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{});
 }

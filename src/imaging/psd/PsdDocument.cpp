@@ -63,13 +63,22 @@ std::vector<uint8_t> decodeChannel(Reader& in, int width, int height, uint16_t c
     if (compression != 1) throw std::runtime_error("Unsupported PSD compression");
     std::vector<uint32_t> rows(height); for (int y = 0; y < height; ++y) rows[y] = in.psb ? uint32_t(in.u32()) : in.u16();
     for (int y = 0; y < height; ++y) {
-        size_t written = 0; auto end = in.at + rows[y];
-        while (in.at < end && written < size_t(width)) {
+        if(rows[y]>in.size-in.at)throw std::runtime_error("PSD PackBits row ends early");
+        size_t written = 0; const auto end = in.at + rows[y];
+        while (in.at < end) {
             int control = int8_t(in.u8());
-            if (control >= 0) { int count = control + 1; for (int i = 0; i < count && written < size_t(width); ++i) out[size_t(y) * width + written++] = in.u8(); }
-            else if (control > -128) { auto value = in.u8(); int count = 1 - control; for (int i = 0; i < count && written < size_t(width); ++i) out[size_t(y) * width + written++] = value; }
+            if (control >= 0) {
+                const auto count = size_t(control + 1);
+                if(count>end-in.at||count>size_t(width)-written)throw std::runtime_error("PSD PackBits literal row overrun");
+                for (size_t i = 0; i < count; ++i) out[size_t(y) * width + written++] = in.u8();
+            }else if (control > -128) {
+                const auto count = size_t(1-control);
+                if(in.at==end||count>size_t(width)-written)throw std::runtime_error("PSD PackBits repeat row overrun");
+                const auto value = in.u8();
+                for (size_t i = 0; i < count; ++i) out[size_t(y) * width + written++] = value;
+            }
         }
-        if (in.at > end) throw std::runtime_error("PSD channel overrun"); in.at = end;
+        if(written!=size_t(width))throw std::runtime_error("PSD PackBits row is incomplete");
     }
     return out;
 }

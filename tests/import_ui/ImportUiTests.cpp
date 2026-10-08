@@ -80,6 +80,9 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         require(tabs&&tabs->count()==1&&tabs->tabText(tabs->currentIndex()).contains("welcome.psd"),"Selected PSD did not replace the empty welcome");
         auto* layers=window.findChild<QTreeWidget*>();
         require(layers&&layers->topLevelItemCount()==1&&layers->topLevelItem(0)->text(0).contains("Background"),"Imported PSD layer was not listed");
+        window.openPath(file);
+        QApplication::processEvents(QEventLoop::AllEvents);
+        require(tabs->count()==2&&tabs->tabText(tabs->currentIndex()).contains("welcome.psd"),"Opening a PSD added an empty project tab");
     });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }

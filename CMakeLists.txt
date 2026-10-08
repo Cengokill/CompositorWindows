@@ -904,7 +904,7 @@ foreach(case drag_box geometry_combine coverage_aa empty_move_inverse mapping_tr
 endforeach()
 add_executable(text_style_tests tests/text/TextStyleTests.cpp)
 target_link_libraries(text_style_tests PRIVATE compositor_editing)
-foreach(case partial_color whole_color inherit_insert reject_overflow utf16_pair font_range caret_positions caret_layout_without_raster paragraph_layout)
+foreach(case partial_color whole_color inherit_insert reject_overflow utf16_pair font_range caret_positions caret_layout_without_raster rasterize_balances_com_apartment paragraph_layout)
   add_test(NAME text_style.${case} COMMAND text_style_tests ${case})
 endforeach()
 add_executable(effects_tests tests/effects/effects_tests.cpp)

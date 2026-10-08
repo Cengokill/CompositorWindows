@@ -131,6 +131,12 @@ static void psd_contract() {
     cascii("8BPS"); c16(1); for (int i = 0; i < 6; ++i) cmyk.push_back(0); c16(4); c32(2); c32(2); c16(8); c16(4);
     bool namedCmyk = false; try { imaging::readPsd(cmyk.data(), cmyk.size()); } catch (const std::exception& error) { namedCmyk = std::string(error.what()).find("CMYK") != std::string::npos; }
     check(namedCmyk, "CMYK PSD was not named in the error");
+    std::vector<uint8_t> truncated; auto r16 = [&](int v) { truncated.push_back(uint8_t(v >> 8)); truncated.push_back(uint8_t(v)); }; auto r32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) truncated.push_back(uint8_t(v >> s)); }; auto rascii = [&](const char* s) { while (*s) truncated.push_back(uint8_t(*s++)); };
+    rascii("8BPS"); r16(1); for (int i = 0; i < 6; ++i) truncated.push_back(0); r16(3); r32(1); r32(4); r16(8); r16(3); r32(0); r32(0); r32(0);
+    r16(1); for (int channel = 0; channel < 3; ++channel) r16(2);
+    for (uint8_t value : {uint8_t(255), uint8_t(0), uint8_t(0)}) { truncated.push_back(0); truncated.push_back(value); }
+    bool rejectedTruncated = false; try { imaging::readPsd(truncated.data(), truncated.size()); } catch (const std::exception& error) { rejectedTruncated = std::string(error.what()).find("incomplete") != std::string::npos; }
+    check(rejectedTruncated, "truncated PSD PackBits row was accepted");
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);

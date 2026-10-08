@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <objbase.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,6 +17,14 @@ namespace {
 using Microsoft::WRL::ComPtr;
 constexpr float kPad=12.f;
 void check(HRESULT hr){if(FAILED(hr))throw std::runtime_error("Text rasterization failed");}
+class ComApartment {
+    HRESULT result_;
+public:
+    ComApartment():result_(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)){
+        if(FAILED(result_)&&result_!=RPC_E_CHANGED_MODE)check(result_);
+    }
+    ~ComApartment(){if(SUCCEEDED(result_))CoUninitialize();}
+};
 std::wstring wide(std::string_view utf8){if(utf8.empty())return {};int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,utf8.data(),int(utf8.size()),nullptr,0);if(count<=0)throw std::runtime_error("Text is not valid UTF-8");std::wstring out(count,L'\0');MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,utf8.data(),int(utf8.size()),out.data(),count);return out;}
 std::wstring lower(std::wstring text){for(auto& c:text)c=towlower(c);return text;}
 struct Face {std::wstring family{L"Segoe UI"};DWRITE_FONT_WEIGHT weight{DWRITE_FONT_WEIGHT_REGULAR};DWRITE_FONT_STYLE style{DWRITE_FONT_STYLE_NORMAL};DWRITE_FONT_STRETCH stretch{DWRITE_FONT_STRETCH_NORMAL};};
@@ -165,6 +174,7 @@ RasterizedText draw(const Built& built,const TextContent& text){
 }
 RasterizedText rasterize(const TextContent& text){
     if(text.value.empty())throw std::runtime_error("Invalid text layer");
+    ComApartment apartment;
     auto built=build(text);return draw(built,text);
 }
 TextLayout layoutText(const TextContent& text,bool includeRaster){
@@ -177,6 +187,7 @@ TextLayout layoutText(const TextContent& text,bool includeRaster){
         laid.carets.push_back({kPad,kPad,line,0});
         return laid;
     }
+    ComApartment apartment;
     auto built=build(text);
     if(includeRaster){
         auto drawn=draw(built,text);

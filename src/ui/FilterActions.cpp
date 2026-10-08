@@ -273,7 +273,11 @@ public:
             for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
-            preview_.setEnabled(false);debounce_.stop();publishPreview();start();
+            preview_.setEnabled(false);debounce_.stop();publishPreview();
+            // A queued preview is not an acceptable result for Apply. Retire it
+            // and advance the version so its completion starts the full render.
+            if(worker_.isRunning()){++version_;cancelled_->store(true);pending_=true;}
+            start();
         });
         connect(&buttons_,&QDialogButtonBox::rejected,&dialog_,&QDialog::reject);
         connect(&dialog_,&QDialog::finished,this,[this](int answer){finish(answer);});
