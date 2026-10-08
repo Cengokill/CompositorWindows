@@ -129,9 +129,13 @@ std::pair<int,int> wordRange(const QString& text,int index){
 void MainWindow::setupTypeControls(){
     auto* bar=addToolBar("Type Options");bar->setObjectName("typeOptions");
     auto* fonts=new QFontComboBox;fonts->setObjectName("textFont");fonts->setAccessibleName("Text font");fonts->setFixedWidth(180);
+    textFontPopup_=fonts->view()->window();
+    textFontPopup_=fonts->view()->window();
     fonts->setEditable(true);fonts->lineEdit()->setReadOnly(true);fonts->lineEdit()->setPlaceholderText("Multiple");
     fonts->setCurrentFont(QFont(QString::fromStdString(textDefaults_.fontFamily)));
     auto* styles=new QComboBox;styles->setObjectName("textStyle");styles->setAccessibleName("Text style");styles->setFixedWidth(120);
+    textStylePopup_=styles->view()->window();
+    textStylePopup_=styles->view()->window();
     styles->setEditable(true);styles->lineEdit()->setReadOnly(true);styles->lineEdit()->setPlaceholderText("Multiple");
     auto* size=new ui::PropertyNumber;size->setObjectName("textSize");size->setAccessibleName("Text size");size->setRange(1,1000);size->setDecimals(0);size->setValue(textDefaults_.fontSize);size->setSuffix(" px");
     size->releaseFocus=[this]{focusTextCanvas();};
@@ -192,7 +196,7 @@ void MainWindow::refreshTypeControls(){
     const bool mixed=length>0&&family.empty();
     if(fonts){const QSignalBlocker block(fonts);if(const int marker=fonts->findText("Multiple");marker>=0&&!mixed)fonts->removeItem(marker);if(mixed){if(fonts->findText("Multiple")<0)fonts->insertItem(0,"Multiple");fonts->setCurrentIndex(fonts->findText("Multiple"));}else if(!family.empty()&&!(editing&&textSession_->fontPreviewOriginal))fonts->setCurrentFont(QFont(QString::fromStdString(family)));fonts->setEnabled(tool_==Tool::Text||editing);}
     else if(fonts)fonts->setEnabled(true);
-    if(styles){const QSignalBlocker block(styles);if(mixed||variant.empty()){if(styles->currentText()!="Multiple"){styles->clear();styles->addItem("Multiple");styles->setCurrentIndex(0);}}else if(!(editing&&textSession_->fontPreviewOriginal)){styles->clear();const auto listed=family.empty()?style.fontFamily:family;for(const auto& name:QFontDatabase::styles(QString::fromStdString(listed)))styles->addItem(name);const int found=styles->findText(QString::fromStdString(variant));if(found>=0)styles->setCurrentIndex(found);}styles->setEnabled(tool_==Tool::Text||editing);}
+    if(styles){const QSignalBlocker block(styles);if(mixed||variant.empty()){textStylesFamily_.clear();if(styles->currentText()!="Multiple"){styles->clear();styles->addItem("Multiple");styles->setCurrentIndex(0);}}else if(!(editing&&textSession_->fontPreviewOriginal)){const auto listed=family.empty()?style.fontFamily:family;const auto listedFamily=QString::fromStdString(listed);if(textStylesFamily_!=listedFamily||styles->count()==0){styles->clear();for(const auto& name:QFontDatabase::styles(listedFamily))styles->addItem(name);textStylesFamily_=listedFamily;}const int found=styles->findText(QString::fromStdString(variant));if(found>=0)styles->setCurrentIndex(found);}styles->setEnabled(tool_==Tool::Text||editing);}
     if(size){const QSignalBlocker block(size);size->setValue(style.fontSize);size->setEnabled(tool_==Tool::Text||editing);}
     if(color){double red=style.red,green=style.green,blue=style.blue;if(editing)text::colorAt(style,length>0?start:std::max(0,start-1),red,green,blue);color->setEnabled(editing);color->setStyleSheet(QString("background:%1;border:1px solid palette(mid);").arg(QColor::fromRgbF(red,green,blue).name()));}
     if(auto* group=findChild<QButtonGroup*>("textAlign")){const QSignalBlocker block(group);if(auto* button=group->button(int(style.alignment)))button->setChecked(true);for(auto* button:group->buttons())button->setEnabled(editing);}
@@ -207,14 +211,19 @@ void MainWindow::publishTextEdit(){
     auto& session=*textSession_;
     TextContent shown=session.style;
     if(!session.preedit.empty()){auto withMark=shown;if(text::replaceText(withMark,session.caret,0,session.preedit))shown=std::move(withMark);}
-    try{session.layout=text::layoutText(shown);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
-    const auto& layout=session.layout;
     Layer* existing=nullptr;
-    Transform placed=textFrame(session.owner,session.layerId,session.originX,session.originY,layout.width,layout.height);
     if(!session.layerId.empty()&&session.owner->document){
         auto found=std::find_if(session.owner->document->layers.begin(),session.owner->document->layers.end(),[&](const Layer& layer){return layer.id==session.layerId;});
         if(found!=session.owner->document->layers.end())existing=&*found;
     }
+    const bool needsRaster=!existing||!existing->text||*existing->text!=shown;
+    const bool cachedLayout=session.layoutInput&&*session.layoutInput==shown&&(!needsRaster||session.layout.raster);
+    if(!cachedLayout){
+        try{session.layout=text::layoutText(shown,needsRaster);session.layoutInput=shown;}
+        catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    }
+    const auto& layout=session.layout;
+    Transform placed=textFrame(session.owner,session.layerId,session.originX,session.originY,layout.width,layout.height);
     auto map=[&](float x,float y){return placed.fromUnit({layout.width?double(x)/layout.width:0,layout.height?double(y)/layout.height:0});};
     NativeCanvas::TextCaretOverlay overlay;
     overlay.originX=placed.x;overlay.originY=placed.y;overlay.width=placed.width;overlay.height=placed.height;
@@ -245,14 +254,14 @@ void MainWindow::publishTextEdit(){
     for(int i=0;i<4;++i)overlay.frame[size_t(i)]=corners[i];
     const auto mid=[](Point a,Point b){return Point{(a.x+b.x)*.5,(a.y+b.y)*.5};};
     overlay.handles={corners[0],mid(corners[0],corners[1]),corners[1],mid(corners[1],corners[2]),corners[2],mid(corners[2],corners[3]),corners[3],mid(corners[3],corners[0])};
-    if(existing){
+    if(existing&&needsRaster){
         auto preview=std::make_shared<LayerRenderPreview>();preview->layer=*existing;preview->layer.transform=placed;preview->layer.text=session.style;
         preview->layer.raster=layout.raster?layout.raster:Raster::filled(1,1,{0,0,0,0});
         preview->identity=std::make_shared<int>(0);preview->damageComparedWith=[](const LayerRenderPreview*){return std::nullopt;};
         session.owner->textPreview=std::move(preview);
-    }else session.owner->textPreview.reset();
+    }else if(existing)session.owner->textPreview.reset();
     if(session.owner->canvas)session.owner->canvas->setTextOverlay(std::move(overlay));
-    if(session.owner==current())refresh(true,false);
+    if(session.owner==current())refresh(needsRaster,false);
 }
 void MainWindow::beginText(Point point,bool forceNew,bool extend,int clickCount){
     if(!canEditLayers()||!current()||!current()->document)return;
@@ -286,7 +295,7 @@ void MainWindow::beginText(Point point,bool forceNew,bool extend,int clickCount)
         }
     }
     if(session.layerId.empty()){session.style.value.clear();session.style.colorRuns.clear();session.style.fontRuns.clear();session.style.red=foreground_.redF();session.style.green=foreground_.greenF();session.style.blue=foreground_.blueF();session.style.alpha=foreground_.alphaF();}
-    try{session.layout=text::layoutText(session.style);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    try{session.layout=text::layoutText(session.style,false);session.layoutInput=session.style;}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
     const bool selecting=session.layerId.empty()?false:place(session);
     if(session.layerId.empty())session.caret=session.anchor=0;
     textSession_=std::move(session);tool_=Tool::Text;publish(selecting);
@@ -374,7 +383,7 @@ void MainWindow::beginParagraph(Point start,Point end){
     session.style.value.clear();session.style.colorRuns.clear();session.style.fontRuns.clear();
     session.style.red=foreground_.redF();session.style.green=foreground_.greenF();session.style.blue=foreground_.blueF();session.style.alpha=foreground_.alphaF();
     session.style.boxWidth=std::clamp(std::abs(end.x-start.x),16.,30000.);session.style.boxHeight=std::clamp(std::abs(end.y-start.y),16.,30000.);
-    try{session.layout=text::layoutText(session.style);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    try{session.layout=text::layoutText(session.style,false);session.layoutInput=session.style;}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
     session.caret=session.anchor=0;textSession_=std::move(session);tool_=Tool::Text;
     if(canvas())canvas()->setFocus();publishTextEdit();
 }
@@ -395,6 +404,11 @@ bool MainWindow::finishText(){
     auto clear=[&]{if(project){project->textPreview.reset();if(project->canvas)project->canvas->setTextOverlay({});}};
     if(!project||!project->document){clear();return true;}
     const bool blank=unitsOf(session.style.value).trimmed().isEmpty();
+    const auto rasterized=[&]{
+        if(session.preedit.empty()&&session.layoutInput&&*session.layoutInput==session.style&&session.layout.raster)
+            return text::RasterizedText{session.layout.raster,session.layout.width,session.layout.height};
+        return text::rasterize(session.style);
+    };
     auto commit=[&](const char* name,const std::function<void(Document&)>& change){
         project->history.begin(name,project->document,project->active);
         try{change(*project->document);validateDocument(*project->document);project->history.end(project->document,project->active);}
@@ -404,7 +418,7 @@ bool MainWindow::finishText(){
         if(session.layerId.empty()){
             if(blank){clear();if(project==current())refresh(false,false);return true;}
             if(!text::textRunsValid(session.style))throw std::runtime_error("Invalid text");
-            auto drawn=text::rasterize(session.style);
+            auto drawn=rasterized();
             commit("New Text Layer",[&](Document& document){Layer layer;layer.id=newId();layer.name=layerNameFor(session.style.value);layer.text=session.style;layer.raster=drawn.raster;layer.transform={session.originX,session.originY,double(drawn.width),double(drawn.height)};document.layers.push_back(std::move(layer));project->active=document.layers.back().id;project->selected={project->active};project->maskSelected=false;});
         }else{
             auto found=std::find_if(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==session.layerId;});
@@ -415,7 +429,7 @@ bool MainWindow::finishText(){
                 const bool sameOrigin=std::abs(found->transform.x-session.originX)<1e-4&&std::abs(found->transform.y-session.originY)<1e-4;
                 if(sameText&&sameOrigin){clear();if(project==current())refresh(false,false);return true;}
                 if(!text::textRunsValid(session.style))throw std::runtime_error("Invalid text");
-                auto drawn=text::rasterize(session.style);
+                auto drawn=rasterized();
                 const double scaleX=found->raster&&found->raster->width?found->transform.width/found->raster->width:1;
                 const double scaleY=found->raster&&found->raster->height?found->transform.height/found->raster->height:1;
                 const auto id=session.layerId;

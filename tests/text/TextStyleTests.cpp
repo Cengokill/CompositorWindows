@@ -6,6 +6,7 @@
 #include <objbase.h>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 using namespace compositor;
 using namespace compositor::text;
@@ -109,9 +110,31 @@ void caret_positions(){
     REQUIRE(laid.raster&&laid.carets.size()==3&&laid.width>2&&laid.height>2);
     REQUIRE(laid.carets[1].x>laid.carets[0].x);
 }
+void caret_layout_without_raster(){
+    const HRESULT started=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+    REQUIRE(SUCCEEDED(started)||started==RPC_E_CHANGED_MODE);
+    struct Cleanup{HRESULT hr;~Cleanup(){if(SUCCEEDED(hr))CoUninitialize();}} cleanup{started};
+    auto text=sample("Imported text with a caret");
+    auto metrics=layoutText(text,false);
+    REQUIRE(!metrics.raster&&metrics.carets.size()==utf16Length(text.value)+1);
+    REQUIRE(metrics.width>2&&metrics.height>2);
+}
+void rasterize_balances_com_apartment(){
+    bool rendered=false,balanced=false;
+    std::thread worker([&]{
+        try{
+            rendered=bool(rasterize(sample("Apartment")).raster);
+            const HRESULT after=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+            balanced=after==S_OK;
+            if(SUCCEEDED(after))CoUninitialize();
+        }catch(...){}
+    });
+    worker.join();
+    REQUIRE(rendered&&balanced);
+}
 
 int main(int argc,char** argv){
-    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"paragraph_layout",paragraph_layout}};
+    std::map<std::string,void(*)()> tests{{"partial_color",partial_color},{"whole_color",whole_color},{"inherit_insert",inherit_insert},{"reject_overflow",reject_overflow},{"utf16_pair",utf16_pair},{"font_range",font_range},{"caret_positions",caret_positions},{"caret_layout_without_raster",caret_layout_without_raster},{"rasterize_balances_com_apartment",rasterize_balances_com_apartment},{"paragraph_layout",paragraph_layout}};
     try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify one text style test case");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}
     catch(const std::exception& error){std::cerr<<"FAIL "<<(argc>1?argv[1]:"arguments")<<": "<<error.what()<<"\n";return 1;}
 }

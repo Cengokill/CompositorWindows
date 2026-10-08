@@ -121,6 +121,9 @@ class MainWindow final:public QMainWindow {
     int gradientHandle_{-1};
     bool gradientMask_{};
     TextContent textDefaults_{};
+    QWidget* textFontPopup_{};
+    QWidget* textStylePopup_{};
+    QString textStylesFamily_;
     struct TextSession {
         EditorProject* owner{};
         std::string layerId;
@@ -130,6 +133,7 @@ class MainWindow final:public QMainWindow {
         struct Step { TextContent style; int caret{},anchor{}; };
         std::vector<Step> undo,redo;
         std::optional<TextContent> fontPreviewOriginal;
+        std::optional<TextContent> layoutInput;
         std::string preedit;
         text::TextLayout layout;
     };
@@ -211,6 +215,7 @@ class MainWindow final:public QMainWindow {
     void newDialog();
     void checkForUpdates();
     void importImage();
+    void importWelcomeImage();
     void exportImage();
     void openProjectDialog();
     bool loadProjectDirectory(const QString&);
@@ -374,6 +379,8 @@ protected:
     void dragEnterEvent(QDragEnterEvent*)override;
     void dropEvent(QDropEvent*)override;
 public:
+    static QString userDownloadsDirectory();
+    void importSelectedImages(const QStringList&);
     explicit MainWindow(bool warp=false);
     ~MainWindow()override;
     EditorProject& addEmptyProject(bool reuseEmpty=true);

@@ -88,10 +88,11 @@ static void psd_contract() {
     auto ascii = [&](const char* s) { while (*s) bytes.push_back(uint8_t(*s++)); };
     ascii("8BPS"); u16(1); for (int i = 0; i < 6; ++i) bytes.push_back(0); u16(3); u32(2); u32(2); u16(8); u16(3); u32(0); u32(0);
     std::vector<uint8_t> info; auto i16 = [&](int v) { info.push_back(uint8_t(v >> 8)); info.push_back(uint8_t(v)); }; auto i32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) info.push_back(uint8_t(v >> s)); }; auto infoAscii = [&](const char* s) { while (*s) info.push_back(uint8_t(*s++)); };
-    i16(1); i32(0); i32(0); i32(2); i32(2); i16(4); for (int id : {0, 1, 2, -1}) { i16(id); i32(6); } infoAscii("8BIM"); infoAscii("norm"); info.push_back(255); info.push_back(0); info.push_back(0); info.push_back(0); i32(12); i32(0); i32(0); info.push_back(3); infoAscii("Red");
+    i16(1); i32(0); i32(0); i32(2); i32(2); i16(4); for (int id : {0, 1, 2, -1}) { i16(id); i32(6); } infoAscii("8BIM"); infoAscii("norm"); info.push_back(255); info.push_back(0); info.push_back(0); info.push_back(0); i32(48); i32(0); i32(0); info.push_back(3); infoAscii("Red");
+    infoAscii("8BIM"); infoAscii("luni"); i32(24); i32(10); for (uint16_t codePoint : {uint16_t('C'), uint16_t('a'), uint16_t('f'), uint16_t(0x00e9), uint16_t(' '), uint16_t(0x2013), uint16_t(' '), uint16_t(0x65e5), uint16_t(0x672c), uint16_t(0x8a9e)}) i16(codePoint);
     for (int channel = 0; channel < 4; ++channel) { info.push_back(0); info.push_back(0); uint8_t value = channel == 1 || channel == 2 ? 0 : 255; for (int i = 0; i < 4; ++i) info.push_back(value); }
     u32(uint32_t(info.size() + 4)); u32(uint32_t(info.size())); bytes.insert(bytes.end(), info.begin(), info.end());
-    auto imported = imaging::readPsd(bytes.data(), bytes.size()); check(imported.document.layers.size() == 1 && imported.document.layers[0].name == "Red" && imported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255}, "PSD layer was not imported");
+    auto imported = imaging::readPsd(bytes.data(), bytes.size()); check(imported.document.layers.size() == 1 && imported.document.layers[0].name == "Café – 日本語" && imported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255}, "PSD Unicode layer name was not imported");
     auto textFile = [&](const std::string& engine, bool vertical, const char* name) {
         std::vector<uint8_t> type; auto t16 = [&](int v) { type.push_back(uint8_t(v >> 8)); type.push_back(uint8_t(v)); }; auto t32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) type.push_back(uint8_t(v >> s)); };
         auto f64 = [&](double v) { uint64_t bits = 0; std::memcpy(&bits, &v, 8); for (int s = 56; s >= 0; s -= 8) type.push_back(uint8_t(bits >> s)); }; auto raw = [&](const char* s) { while (*s) type.push_back(uint8_t(*s++)); };
@@ -130,6 +131,12 @@ static void psd_contract() {
     cascii("8BPS"); c16(1); for (int i = 0; i < 6; ++i) cmyk.push_back(0); c16(4); c32(2); c32(2); c16(8); c16(4);
     bool namedCmyk = false; try { imaging::readPsd(cmyk.data(), cmyk.size()); } catch (const std::exception& error) { namedCmyk = std::string(error.what()).find("CMYK") != std::string::npos; }
     check(namedCmyk, "CMYK PSD was not named in the error");
+    std::vector<uint8_t> truncated; auto r16 = [&](int v) { truncated.push_back(uint8_t(v >> 8)); truncated.push_back(uint8_t(v)); }; auto r32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) truncated.push_back(uint8_t(v >> s)); }; auto rascii = [&](const char* s) { while (*s) truncated.push_back(uint8_t(*s++)); };
+    rascii("8BPS"); r16(1); for (int i = 0; i < 6; ++i) truncated.push_back(0); r16(3); r32(1); r32(4); r16(8); r16(3); r32(0); r32(0); r32(0);
+    r16(1); for (int channel = 0; channel < 3; ++channel) r16(2);
+    for (uint8_t value : {uint8_t(255), uint8_t(0), uint8_t(0)}) { truncated.push_back(0); truncated.push_back(value); }
+    bool rejectedTruncated = false; try { imaging::readPsd(truncated.data(), truncated.size()); } catch (const std::exception& error) { rejectedTruncated = std::string(error.what()).find("incomplete") != std::string::npos; }
+    check(rejectedTruncated, "truncated PSD PackBits row was accepted");
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);

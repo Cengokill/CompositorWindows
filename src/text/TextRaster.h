@@ -14,5 +14,7 @@ struct TextLayout {
 };
 RasterizedText rasterize(const TextContent& text);
 // Empty text has a caret and no raster. Other invalid text throws, as rasterize does.
-TextLayout layoutText(const TextContent& text);
+// Set includeRaster to false when only caret geometry is needed; this avoids
+// creating a full WIC/D2D bitmap for selection and caret movement.
+TextLayout layoutText(const TextContent& text,bool includeRaster=true);
 }

@@ -23,6 +23,29 @@ struct Reader {
     void skip(uint64_t n) { if (n > size - at) throw std::runtime_error("PSD ended early"); at += size_t(n); }
     std::string ascii(size_t n) { need(n); std::string out(reinterpret_cast<const char*>(data + at), n); at += n; return out; }
 };
+void appendUtf8(std::string& out,uint32_t codePoint){
+    if(codePoint<=0x7f)out.push_back(char(codePoint));
+    else if(codePoint<=0x7ff){out.push_back(char(0xc0|(codePoint>>6)));out.push_back(char(0x80|(codePoint&0x3f)));}
+    else if(codePoint<=0xffff){out.push_back(char(0xe0|(codePoint>>12)));out.push_back(char(0x80|((codePoint>>6)&0x3f)));out.push_back(char(0x80|(codePoint&0x3f)));}
+    else{out.push_back(char(0xf0|(codePoint>>18)));out.push_back(char(0x80|((codePoint>>12)&0x3f)));out.push_back(char(0x80|((codePoint>>6)&0x3f)));out.push_back(char(0x80|(codePoint&0x3f)));}
+}
+std::string unicodeLayerName(Reader& in,uint64_t length){
+    if(length<4)return {};
+    const auto count=in.u32();if(uint64_t(count)>((length-4)/2))throw std::runtime_error("PSD Unicode layer name overrun");
+    std::string result;
+    for(uint32_t index=0;index<count;++index){
+        const uint32_t first=in.u16();
+        if(first>=0xd800&&first<=0xdbff&&index+1<count){
+            const uint32_t second=in.u16();
+            if(second>=0xdc00&&second<=0xdfff){appendUtf8(result,0x10000+((first-0xd800)<<10)+(second-0xdc00));++index;continue;}
+            appendUtf8(result,0xfffd);
+            appendUtf8(result,second);
+            continue;
+        }
+        appendUtf8(result,(first>=0xdc00&&first<=0xdfff)?0xfffd:first);
+    }
+    return result;
+}
 Blend blendOf(const std::string& key, std::string& report) {
     if (key == "norm") return Blend::Normal; if (key == "mul ") return Blend::Multiply; if (key == "scrn") return Blend::Screen;
     if (key == "over") return Blend::Overlay; if (key == "dark") return Blend::Darken; if (key == "lite") return Blend::Lighten;
@@ -40,13 +63,22 @@ std::vector<uint8_t> decodeChannel(Reader& in, int width, int height, uint16_t c
     if (compression != 1) throw std::runtime_error("Unsupported PSD compression");
     std::vector<uint32_t> rows(height); for (int y = 0; y < height; ++y) rows[y] = in.psb ? uint32_t(in.u32()) : in.u16();
     for (int y = 0; y < height; ++y) {
-        size_t written = 0; auto end = in.at + rows[y];
-        while (in.at < end && written < size_t(width)) {
+        if(rows[y]>in.size-in.at)throw std::runtime_error("PSD PackBits row ends early");
+        size_t written = 0; const auto end = in.at + rows[y];
+        while (in.at < end) {
             int control = int8_t(in.u8());
-            if (control >= 0) { int count = control + 1; for (int i = 0; i < count && written < size_t(width); ++i) out[size_t(y) * width + written++] = in.u8(); }
-            else if (control > -128) { auto value = in.u8(); int count = 1 - control; for (int i = 0; i < count && written < size_t(width); ++i) out[size_t(y) * width + written++] = value; }
+            if (control >= 0) {
+                const auto count = size_t(control + 1);
+                if(count>end-in.at||count>size_t(width)-written)throw std::runtime_error("PSD PackBits literal row overrun");
+                for (size_t i = 0; i < count; ++i) out[size_t(y) * width + written++] = in.u8();
+            }else if (control > -128) {
+                const auto count = size_t(1-control);
+                if(in.at==end||count>size_t(width)-written)throw std::runtime_error("PSD PackBits repeat row overrun");
+                const auto value = in.u8();
+                for (size_t i = 0; i < count; ++i) out[size_t(y) * width + written++] = value;
+            }
         }
-        if (in.at > end) throw std::runtime_error("PSD channel overrun"); in.at = end;
+        if(written!=size_t(width))throw std::runtime_error("PSD PackBits row is incomplete");
     }
     return out;
 }
@@ -84,6 +116,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             while (in.at + 12 <= extraEnd) {
                 if (in.ascii(4) != "8BIM") break; auto key = in.ascii(4); auto length = in.psb && (key == "LMsk" || key == "Lr16" || key == "Lr32" || key == "Layr" || key == "Mt16" || key == "Mt32" || key == "Mtrn" || key == "Alph" || key == "FMsk" || key == "lnk2" || key == "FEid" || key == "FXid" || key == "PxSD") ? in.u64() : in.u32(); auto start = in.at;
                 if (key == "lsct" || key == "lsdk") { auto kind = length >= 4 ? in.u32() : 0; record.group = kind == 1 || kind == 2; record.closer = kind == 3; }
+                else if (key == "luni") record.name = unicodeLayerName(in,length);
                 else if ((key == "TySh" || key == "txt2") && record.typeTool.empty()) { auto stored = std::min(length, uint64_t(extraEnd - in.at)); record.typeTool.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
                 in.at = start + size_t(length + (length & 1)); if (in.at > extraEnd) throw std::runtime_error("PSD extra data overrun");
             }
