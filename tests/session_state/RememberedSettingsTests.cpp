@@ -17,10 +17,10 @@ namespace {
 void require(bool b,const char* message){if(!b)throw std::runtime_error(message);}
 template<class T>T* field(QObject& root,const char* name){if(auto* c=root.findChild<T*>(name))return c;for(auto* c:root.findChildren<T*>())if(c->accessibleName()==name)return c;throw std::runtime_error(std::string("missing control ")+name);}
 QAction* command(MainWindow& w,const char* id){for(auto* a:w.findChildren<QAction*>())if(a->property("commandId").toString()==id)return a;throw std::runtime_error(std::string("missing command ")+id);}
-Document document(){Document d;d.id=newId();d.width=40;d.height=20;Layer l;l.id=newId();l.transform={0,0,40,20};std::vector<Pixel> pixels(800,Pixel{128,128,128,255});l.raster=Raster::fromRgba(40,20,reinterpret_cast<const uint8_t*>(pixels.data()),160);d.layers.push_back(l);return d;}
+Document document(int width=40,int height=20){Document d;d.id=newId();d.width=width;d.height=height;Layer l;l.id=newId();l.transform={0,0,double(width),double(height)};std::vector<Pixel> pixels(size_t(width)*height,Pixel{128,128,128,255});l.raster=Raster::fromRgba(width,height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(width)*4);d.layers.push_back(l);return d;}
 struct Fixture {
  MainWindow window{true};EditorProject* a;EditorProject* b;
- Fixture(){a=&window.addProject(document(),"A");b=&window.addProject(document(),"B");select(a);}
+ Fixture(Document initial=document()){a=&window.addProject(initial,"A");b=&window.addProject(initial,"B");select(a);}
  void select(EditorProject* p){window.findChild<QTabWidget*>()->setCurrentWidget(p->page);require(window.findChild<QTabWidget*>()->currentWidget()==p->page,"tab switch accepted");}
  void trigger(const char* id){auto* action=command(window,id);require(action->isEnabled(),"command must be enabled");action->trigger();}
  void modal(const char* id,std::function<void(QDialog&)> configure,bool apply=false){

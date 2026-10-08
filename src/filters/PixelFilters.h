@@ -28,6 +28,8 @@ struct Request {
     Kind kind{Kind::GaussianBlur};std::shared_ptr<const Raster> source;Transform transform;Settings settings;
     std::uint32_t seed{};std::optional<SourceSelection> selection;
     bool preview{};
+    // Camera Raw interactive previews use this edge. Zero keeps the 2048 default.
+    int previewMaxEdge{};
     // Preserve the largest padded margin while a preview panel remains open.
     double retainedBlurMargin{};
     CameraRawSettings cameraRaw;

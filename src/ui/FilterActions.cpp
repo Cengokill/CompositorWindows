@@ -141,13 +141,14 @@ class FilterPanel final:public ui::EditPanelSession {
     std::shared_ptr<const Document> completedPreview_;
     std::optional<Document> committed_;
     uint64_t version_{},runningVersion_{};
-    bool pending_{},closed_{},committing_{};
+    bool pending_{},closed_{},committing_{},refine_{};
     static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     void retire(){if(closed_&&!worker_.isRunning())deleteLater();}
     void change(){
         if(closed_||committing_)return;
+        refine_=false;
         if(raw_){request_.cameraRaw=raw_->rendered();request_.cameraRawView=raw_->previewView();}
-        ++version_;apply_->setEnabled(false);debounce_.start();
+        ++version_;if(worker_.isRunning())cancelled_->store(true);apply_->setEnabled(false);debounce_.start();
     }
     Pixel samplePixel(Point point,bool graded)const{
         const Raster* raster=original_.raster.get();Transform transform=original_.transform;
@@ -168,18 +169,19 @@ class FilterPanel final:public ui::EditPanelSession {
     }
     void publishPreview(){if(host_.preview)host_.preview(preview_.isChecked()?completedPreview_:nullptr);}
     void start(){
-        if(closed_)return;if(worker_.isRunning()){pending_=true;return;}
+        if(closed_)return;if(worker_.isRunning()){if(committing_||runningVersion_!=version_){cancelled_->store(true);pending_=true;}return;}
         if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
         pending_=false;runningVersion_=version_;
         request_.retainedBlurMargin=std::max(request_.retainedBlurMargin,filters::blurMargin(request_.kind,request_.settings));
         cancelled_=std::make_shared<std::atomic_bool>(false);
         auto job=request_;job.preview=!committing_;job.limits.cancelled=[token=cancelled_]{return token->load();};
+        if(job.kind==filters::Kind::CameraRaw&&job.preview){job.previewMaxEdge=refine_?2048:1024;job.cameraRawView.scopeLimit=refine_?0:512;}
         status_.setText(committing_?"Applying filter…":"Updating preview…");
         worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_]{
             FilterOutput out;out.full=!job.preview;
             try{auto prepared=filteredLayer(original,job);auto document=before;
                 for(auto& value:document.layers)if(value.id==original.id){value=std::move(prepared.layer);break;}
-                validateDocument(document);out.thumbnail=fittedDocumentPreview(document,{640,420});out.document=std::move(document);out.scope=std::move(prepared.scope);
+                validateDocument(document);if(job.kind!=filters::Kind::CameraRaw)out.thumbnail=fittedDocumentPreview(document,{640,420});out.document=std::move(document);out.scope=std::move(prepared.scope);
             }catch(const std::exception& error){out.error=QString::fromUtf8(error.what());}
             return out;
         }));
@@ -261,7 +263,8 @@ public:
                 return;
             }
             if(result.full){committed_=std::move(result.document);dialog_.accept();return;}
-            completedPreview_=std::make_shared<const Document>(std::move(*result.document));if(raw_&&result.scope)raw_->setScope(*result.scope);publishPreview();thumbnail_.setPixmap(QPixmap::fromImage(result.thumbnail));status_.setText("Preview");apply_->setEnabled(true);
+            completedPreview_=std::make_shared<const Document>(std::move(*result.document));if(raw_&&result.scope)raw_->setScope(*result.scope);publishPreview();if(!result.thumbnail.isNull())thumbnail_.setPixmap(QPixmap::fromImage(result.thumbnail));status_.setText("Preview");apply_->setEnabled(true);
+            if(request_.kind==filters::Kind::CameraRaw&&!refine_){refine_=true;start();}
         });
         connect(apply_,&QPushButton::clicked,&dialog_,[this]{
             if(raw_){

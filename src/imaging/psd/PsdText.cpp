@@ -1,7 +1,7 @@
 #include "PsdText.h"
 #include "text/TextRaster.h"
 #include "text/TextStyle.h"
-#include <dwrite.h>
+#include <dwrite_3.h>
 #include <wrl/client.h>
 #include <algorithm>
 #include <cmath>
@@ -238,12 +238,39 @@ std::optional<Engine> engineFrom(const std::vector<uint8_t>& bytes) {
     return parsed && parsed->kind == Engine::Kind::Dict ? parsed : std::nullopt;
 }
 double unitColor(double value) { return value > 1 ? std::clamp(value, 0., 255.) / 255. : std::clamp(value, 0., 1.); }
-bool familyInstalled(const std::wstring& name) {
-    ComPtr<IDWriteFactory> factory; if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(factory.GetAddressOf())))) return false;
-    ComPtr<IDWriteFontCollection> fonts; if (FAILED(factory->GetSystemFontCollection(fonts.GetAddressOf(), FALSE)) || !fonts) return false;
-    UINT32 index = 0; BOOL exists = FALSE; if (FAILED(fonts->FindFamilyName(name.c_str(), &index, &exists))) return false; return exists;
-}
 std::wstring widen(const std::string& text) { if (text.empty()) return {}; int count = MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0); if (count <= 0) return {}; std::wstring out(count, L'\0'); MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), out.data(), count); return out; }
+std::string narrow(const std::wstring& text) { if (text.empty()) return {}; int count = WideCharToMultiByte(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0, nullptr, nullptr); if (count <= 0) return {}; std::string out(size_t(count), '\0'); WideCharToMultiByte(CP_UTF8, 0, text.data(), int(text.size()), out.data(), count, nullptr, nullptr); return out; }
+bool familyExists(IDWriteFontCollection* fonts, const std::wstring& name) {
+    UINT32 index = 0; BOOL exists = FALSE;
+    return fonts && SUCCEEDED(fonts->FindFamilyName(name.c_str(), &index, &exists)) && exists;
+}
+std::optional<std::string> acceptedFamilyName(IDWriteFontCollection* fonts, IDWriteLocalizedStrings* names) {
+    if (!fonts || !names) return std::nullopt;
+    auto consider = [&](UINT32 index) -> std::optional<std::string> {
+        UINT32 length = 0; if (FAILED(names->GetStringLength(index, &length)) || length == 0) return std::nullopt;
+        std::wstring value(size_t(length) + 1, L'\0'); if (FAILED(names->GetString(index, value.data(), length + 1))) return std::nullopt;
+        value.resize(length); if (!familyExists(fonts, value)) return std::nullopt; return narrow(value);
+    };
+    UINT32 preferred = 0; BOOL found = FALSE;
+    if (SUCCEEDED(names->FindLocaleName(L"en-us", &preferred, &found)) && found) if (auto name = consider(preferred)) return name;
+    for (UINT32 index = 0; index < names->GetCount(); ++index) if (auto name = consider(index)) return name;
+    return std::nullopt;
+}
+// Photoshop FontSet names are often PostScript names (MongolianBaiti), not the DirectWrite family (Mongolian Baiti).
+std::optional<std::string> installedFamily(const std::string& photoshopName) {
+    const auto wideName = widen(photoshopName); if (wideName.empty()) return std::nullopt;
+    ComPtr<IDWriteFactory> factory; if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(factory.GetAddressOf())))) return std::nullopt;
+    ComPtr<IDWriteFontCollection> fonts; if (FAILED(factory->GetSystemFontCollection(fonts.GetAddressOf(), FALSE)) || !fonts) return std::nullopt;
+    if (familyExists(fonts.Get(), wideName)) return photoshopName;
+    ComPtr<IDWriteFactory3> factory3; if (FAILED(factory.As(&factory3)) || !factory3) return std::nullopt;
+    ComPtr<IDWriteFontSet> set; if (FAILED(factory3->GetSystemFontSet(&set)) || !set) return std::nullopt;
+    const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_POSTSCRIPT_NAME, wideName.c_str(), L""};
+    ComPtr<IDWriteFontSet> matches; if (FAILED(set->GetMatchingFonts(&property, 1, &matches)) || !matches || matches->GetFontCount() == 0) return std::nullopt;
+    ComPtr<IDWriteFontFaceReference> faceRef; if (FAILED(matches->GetFontFaceReference(0, &faceRef)) || !faceRef) return std::nullopt;
+    ComPtr<IDWriteFontFace3> face; if (FAILED(faceRef->CreateFontFace(&face)) || !face) return std::nullopt;
+    ComPtr<IDWriteLocalizedStrings> families; if (FAILED(face->GetFamilyNames(&families))) return std::nullopt;
+    return acceptedFamilyName(fonts.Get(), families.Get());
+}
 const char* rasterNote = "Editable Photoshop text becomes pixels and can't be retyped.";
 }
 PhotoshopText readPhotoshopText(const uint8_t* data, size_t size) {
@@ -306,7 +333,8 @@ PhotoshopText readPhotoshopText(const uint8_t* data, size_t size) {
                 }
             }
         }
-        if (!familyInstalled(widen(style.fontFamily))) { notes += "The font \"" + style.fontFamily + "\" isn't installed, so the text was drawn with Segoe UI.\n"; style.fontFamily = "Segoe UI"; }
+        if (auto resolved = installedFamily(style.fontFamily)) style.fontFamily = std::move(*resolved);
+        else { notes += "The font \"" + style.fontFamily + "\" isn't installed, so the text was drawn with Segoe UI.\n"; style.fontFamily = "Segoe UI"; }
         if (!text::textRunsValid(style)) return result;
         result.editable = true; result.text = std::move(style); result.x = originX; result.y = originY; result.note = notes; return result;
     } catch (const std::exception&) { return result; }
