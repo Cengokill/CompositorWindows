@@ -211,6 +211,7 @@ class MainWindow final:public QMainWindow {
     void newDialog();
     void checkForUpdates();
     void importImage();
+    void importWelcomeImage();
     void exportImage();
     void openProjectDialog();
     bool loadProjectDirectory(const QString&);
@@ -374,6 +375,8 @@ protected:
     void dragEnterEvent(QDragEnterEvent*)override;
     void dropEvent(QDropEvent*)override;
 public:
+    static QString userDownloadsDirectory();
+    void importSelectedImages(const QStringList&);
     explicit MainWindow(bool warp=false);
     ~MainWindow()override;
     EditorProject& addEmptyProject(bool reuseEmpty=true);

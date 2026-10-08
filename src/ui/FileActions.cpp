@@ -43,6 +43,10 @@
 #include <QScopeGuard>
 #include <QTabBar>
 #include <QMenuBar>
+#include <knownfolders.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
 #include <atomic>
 #include <cmath>
 
@@ -56,6 +60,42 @@ template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& pat
         catch(const std::exception& error){QMessageBox message(QMessageBox::Critical,"Open Compositor Project",QString("Could not open %1.\n\n%2").arg(QDir::toNativeSeparators(path),QString::fromUtf8(error.what())),QMessageBox::Ok,owner);message.setObjectName("projectOpenError");message.exec();}
     }
     return opened;
+}
+QStringList welcomeNativeImportPaths(QWidget* owner,const QString& directory){
+    QStringList paths;
+    const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
+    Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+    if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))return paths;
+    DWORD options=0;
+    if(FAILED(dialog->GetOptions(&options)))return paths;
+    dialog->SetOptions(options|FOS_FORCEFILESYSTEM|FOS_ALLOWMULTISELECT|FOS_FILEMUSTEXIST|FOS_PATHMUSTEXIST);
+    const COMDLG_FILTERSPEC specs[]={
+        {L"Images",L"*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw"},
+        {L"All files",L"*.*"}
+    };
+    dialog->SetFileTypes(2,specs);
+    dialog->SetTitle(L"Import Images");
+    if(!directory.isEmpty()){
+        const auto wide=directory.toStdWString();
+        Microsoft::WRL::ComPtr<IShellItem> folder;
+        if(SUCCEEDED(SHCreateItemFromParsingName(wide.c_str(),nullptr,IID_PPV_ARGS(&folder))))dialog->SetFolder(folder.Get());
+    }
+    const auto hwnd=owner?reinterpret_cast<HWND>(owner->winId()):nullptr;
+    if(FAILED(dialog->Show(hwnd)))return paths;
+    Microsoft::WRL::ComPtr<IShellItemArray> items;
+    if(FAILED(dialog->GetResults(&items))||!items)return paths;
+    DWORD count=0;
+    if(FAILED(items->GetCount(&count)))return paths;
+    for(DWORD index=0;index<count;++index){
+        Microsoft::WRL::ComPtr<IShellItem> item;
+        if(FAILED(items->GetItemAt(index,&item))||!item)continue;
+        PWSTR name=nullptr;
+        if(FAILED(item->GetDisplayName(SIGDN_FILESYSPATH,&name))||!name)continue;
+        paths.append(QString::fromWCharArray(name));
+        CoTaskMemFree(name);
+    }
+    return paths;
 }
 }
 ui::ImportQueue* MainWindow::ensureImportQueue(){
@@ -283,7 +323,35 @@ void MainWindow::openPath(const QString&path){
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{});
 }
-void MainWindow::importImage(){auto* target=current();auto paths=QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif *.psd *.psb *.svg *.cr2 *.nef *.arw *.dng *.raw);;All files (*)");QStringList images;for(const auto& path:paths){auto ext=QFileInfo(path).suffix().toLower();if(ext=="psd"||ext=="psb"){try{auto imported=imaging::readPsd(nativePath(path));if(QMessageBox::question(this,"Import PSD",QString::fromStdString(imported.report)+"\nApply this import?")!=QMessageBox::Yes)continue;auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}refresh();project.canvas->fit();}catch(const std::exception& error){QMessageBox::critical(this,"Import PSD",error.what());}}else images.append(path);}if(!images.isEmpty())queueImageImports(images,target,{});}
+QString MainWindow::userDownloadsDirectory(){
+    PWSTR known=nullptr;
+    QString path;
+    if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads,KF_FLAG_DEFAULT,nullptr,&known))&&known){
+        path=QDir::cleanPath(QString::fromWCharArray(known));
+        CoTaskMemFree(known);
+    }
+    if(path.isEmpty()||!QDir(path).exists())path=QDir::cleanPath(QDir::homePath());
+    return path;
+}
+void MainWindow::importSelectedImages(const QStringList& paths){
+    auto* target=current();
+    QStringList images;
+    for(const auto& path:paths){
+        auto ext=QFileInfo(path).suffix().toLower();
+        if(ext=="psd"||ext=="psb"){
+            try{
+                auto imported=imaging::readPsd(nativePath(path));
+                if(QMessageBox::question(this,"Import PSD",QString::fromStdString(imported.report)+"\nApply this import?")!=QMessageBox::Yes)continue;
+                auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
+                if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
+                refresh();project.canvas->fit();
+            }catch(const std::exception& error){QMessageBox::critical(this,"Import PSD",error.what());}
+        }else images.append(path);
+    }
+    if(!images.isEmpty())queueImageImports(images,target,{});
+}
+void MainWindow::importWelcomeImage(){importSelectedImages(welcomeNativeImportPaths(this,userDownloadsDirectory()));}
+void MainWindow::importImage(){importSelectedImages(QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif *.psd *.psb *.svg *.cr2 *.nef *.arw *.dng *.raw);;All files (*)"));}
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=QFileDialog::getSaveFileName(this,"Save Compositor Project",path.isEmpty()?"Untitled.comp":path,"Compositor project directory (*.comp)");if(path.isEmpty())return false;if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;

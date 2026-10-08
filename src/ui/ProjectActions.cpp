@@ -103,8 +103,8 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     width->setObjectName("newCanvasWidth");height->setObjectName("newCanvasHeight");width->setAccessibleName("Width in pixels");height->setAccessibleName("Height in pixels");width->setValue(1920);height->setValue(1080);
     if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){width->setValue(image.width());height->setValue(image.height());}}
     form->addRow("Width (pixels)",width);form->addRow("Height (pixels)",height);form->addRow(new QLabel("Transparent canvas · sRGB"));
-    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);form->addRow(buttons);
-    connect(open,&QPushButton::clicked,this,[this]{openProjectDialog();});connect(import,&QPushButton::clicked,this,[this]{importImage();});
+    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);form->addRow(buttons);
+    connect(open,&QPushButton::clicked,this,[this]{openProjectDialog();});connect(import,&QPushButton::clicked,this,[this]{importWelcomeImage();});
     connect(create,&QPushButton::clicked,this,[this,raw,width,height]{
         if(raw!=current()||raw->document||raw->importing||raw->projectBusy)return;
         Document document;document.id=newId();document.width=width->value();document.height=height->value();Layer layer;layer.id=newId();layer.name="Layer 1";layer.transform={0,0,double(document.width),double(document.height)};document.layers.push_back(layer);
