@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "AppLogging.h"
 #include "PropertyControls.h"
 #include "persistence/ProjectStore.h"
 #include "imaging/wic_codec.h"
@@ -43,14 +44,17 @@
 #include <QScopeGuard>
 #include <QTabBar>
 #include <QMenuBar>
+#include <QThread>
+#include <commdlg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
-#include <shobjidl.h>
-#include <wrl/client.h>
 #include <atomic>
 #include <cmath>
+#include <memory>
+#include <string>
 
 namespace compositor {
+#pragma comment(lib, "comdlg32.lib")
 static std::filesystem::path nativePath(const QString&s){return std::filesystem::path(s.toStdWString());}
 namespace {
 template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& paths,Load&& load){
@@ -61,40 +65,38 @@ template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& pat
     }
     return opened;
 }
-QStringList welcomeNativeImportPaths(QWidget* owner,const QString& directory){
+QStringList nativeImportPaths(HWND owner,const QString& directory){
+    // This function runs outside Qt's GUI thread. Keeping the native modal
+    // loop away from Qt prevents qwindows/comdlg re-entry from corrupting
+    // Qt's object tree.
+    static const wchar_t filter[]=
+        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw\0"
+        L"All files\0*.*\0";
+    std::wstring buffer(32768,L'\0');
+    const auto initial=directory.toStdWString();
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize=sizeof(dialog);
+    dialog.hwndOwner=owner;
+    dialog.lpstrFilter=filter;
+    dialog.lpstrFile=buffer.data();
+    dialog.nMaxFile=DWORD(buffer.size());
+    dialog.lpstrInitialDir=initial.empty()?nullptr:initial.c_str();
+    dialog.lpstrTitle=L"Import Images";
+    dialog.Flags=OFN_EXPLORER|OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_ALLOWMULTISELECT|OFN_NOCHANGEDIR;
+    logging::trace(QString("native picker entered owner=0x%1 directory=%2")
+        .arg(quintptr(owner),0,16).arg(QDir::toNativeSeparators(directory)));
+    if(!GetOpenFileNameW(&dialog)){
+        logging::trace(QString("native picker cancelled error=%1").arg(CommDlgExtendedError()));
+        return {};
+    }
     QStringList paths;
-    const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-    struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
-    Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
-    if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))return paths;
-    DWORD options=0;
-    if(FAILED(dialog->GetOptions(&options)))return paths;
-    dialog->SetOptions(options|FOS_FORCEFILESYSTEM|FOS_ALLOWMULTISELECT|FOS_FILEMUSTEXIST|FOS_PATHMUSTEXIST);
-    const COMDLG_FILTERSPEC specs[]={
-        {L"Images",L"*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw"},
-        {L"All files",L"*.*"}
-    };
-    dialog->SetFileTypes(2,specs);
-    dialog->SetTitle(L"Import Images");
-    if(!directory.isEmpty()){
-        const auto wide=directory.toStdWString();
-        Microsoft::WRL::ComPtr<IShellItem> folder;
-        if(SUCCEEDED(SHCreateItemFromParsingName(wide.c_str(),nullptr,IID_PPV_ARGS(&folder))))dialog->SetFolder(folder.Get());
-    }
-    const auto hwnd=owner?reinterpret_cast<HWND>(owner->winId()):nullptr;
-    if(FAILED(dialog->Show(hwnd)))return paths;
-    Microsoft::WRL::ComPtr<IShellItemArray> items;
-    if(FAILED(dialog->GetResults(&items))||!items)return paths;
-    DWORD count=0;
-    if(FAILED(items->GetCount(&count)))return paths;
-    for(DWORD index=0;index<count;++index){
-        Microsoft::WRL::ComPtr<IShellItem> item;
-        if(FAILED(items->GetItemAt(index,&item))||!item)continue;
-        PWSTR name=nullptr;
-        if(FAILED(item->GetDisplayName(SIGDN_FILESYSPATH,&name))||!name)continue;
-        paths.append(QString::fromWCharArray(name));
-        CoTaskMemFree(name);
-    }
+    const wchar_t* cursor=buffer.c_str();
+    const QString first=QString::fromWCharArray(cursor);
+    cursor+=first.size()+1;
+    if(!*cursor)paths.append(first);
+    else while(*cursor){const QString name=QString::fromWCharArray(cursor);paths.append(QDir(first).filePath(name));cursor+=name.size()+1;}
+    logging::trace(QString("native picker returned %1 path(s): %2")
+        .arg(paths.size()).arg(paths.join(" | ")));
     return paths;
 }
 }
@@ -334,24 +336,74 @@ QString MainWindow::userDownloadsDirectory(){
     return path;
 }
 void MainWindow::importSelectedImages(const QStringList& paths){
+    logging::trace(QString("importSelectedImages begin count=%1 paths=%2")
+        .arg(paths.size()).arg(paths.join(" | ")));
     auto* target=current();
     QStringList images;
     for(const auto& path:paths){
         auto ext=QFileInfo(path).suffix().toLower();
         if(ext=="psd"||ext=="psb"){
             try{
+                logging::trace(QString("PSD read begin path=%1").arg(QDir::toNativeSeparators(path)));
                 auto imported=imaging::readPsd(nativePath(path));
-                if(QMessageBox::question(this,"Import PSD",QString::fromStdString(imported.report)+"\nApply this import?")!=QMessageBox::Yes)continue;
+                logging::trace(QString("PSD read complete path=%1 report=%2")
+                    .arg(QDir::toNativeSeparators(path),QString::fromStdString(imported.report)));
+                logging::trace(QString("PSD import accepted automatically path=%1")
+                    .arg(QDir::toNativeSeparators(path)));
                 auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
+                // addProject can replace the empty welcome project, invalidating
+                // the pointer captured before the PSD was opened.
+                target=&project;
                 if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
                 refresh();project.canvas->fit();
-            }catch(const std::exception& error){QMessageBox::critical(this,"Import PSD",error.what());}
+                logging::trace(QString("PSD project installed path=%1").arg(QDir::toNativeSeparators(path)));
+            }catch(const std::exception& error){
+                logging::trace(QString("PSD import exception path=%1 error=%2")
+                    .arg(QDir::toNativeSeparators(path),QString::fromUtf8(error.what())));
+                QMessageBox::critical(this,"Import PSD",error.what());
+            }
         }else images.append(path);
     }
     if(!images.isEmpty())queueImageImports(images,target,{});
 }
-void MainWindow::importWelcomeImage(){importSelectedImages(welcomeNativeImportPaths(this,userDownloadsDirectory()));}
-void MainWindow::importImage(){importSelectedImages(QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif *.psd *.psb *.svg *.cr2 *.nef *.arw *.dng *.raw);;All files (*)"));}
+namespace {
+void deferSelectedImageImport(MainWindow* window,QStringList paths){
+    if(paths.isEmpty())return;
+    QPointer<MainWindow> guard(window);
+    QTimer::singleShot(0,window,[guard,paths=std::move(paths)]{
+        if(guard)guard->importSelectedImages(paths);
+    });
+}
+void startNativeImport(MainWindow* window,const QString& directory){
+    if(window->property("nativeImportInProgress").toBool()){
+        logging::trace("native picker request ignored because another picker is active");
+        return;
+    }
+    window->setProperty("nativeImportInProgress",true);
+    const auto owner=reinterpret_cast<HWND>(window->winId());
+    auto paths=std::make_shared<QStringList>();
+    const auto initial=directory;
+    logging::trace(QString("native picker request queued directory=%1").arg(QDir::toNativeSeparators(directory)));
+    auto* thread=QThread::create([paths,owner,initial]{
+        const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+        struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
+        logging::trace(QString("native picker worker started apartment=0x%1").arg(quint32(apartment),0,16));
+        *paths=nativeImportPaths(owner,initial);
+        logging::trace(QString("native picker worker finished count=%1").arg(paths->size()));
+    });
+    QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
+    QPointer<MainWindow> guard(window);
+    QObject::connect(thread,&QThread::finished,window,[guard,paths]{
+        if(!guard)return;
+        guard->setProperty("nativeImportInProgress",false);
+        logging::trace(QString("native picker result delivered count=%1").arg(paths->size()));
+        deferSelectedImageImport(guard.data(),std::move(*paths));
+    },Qt::QueuedConnection);
+    thread->start();
+}
+}
+void MainWindow::importWelcomeImage(){startNativeImport(this,userDownloadsDirectory());}
+void MainWindow::importImage(){startNativeImport(this,userDownloadsDirectory());}
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=QFileDialog::getSaveFileName(this,"Save Compositor Project",path.isEmpty()?"Untitled.comp":path,"Compositor project directory (*.comp)");if(path.isEmpty())return false;if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;

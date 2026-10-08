@@ -15,7 +15,6 @@
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QKeyEvent>
-#include <QFontComboBox>
 #include <QComboBox>
 #include <QSignalBlocker>
 #include <chrono>
@@ -196,10 +195,15 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event){
             if(key->key()==Qt::Key_Escape||ui::reservesTextShortcut(*key)){event->accept();return true;}
         }
     }
-    auto popupOf=[&](QComboBox* combo){return combo&&combo->view()&&watched==combo->view()->window();};
-    if(popupOf(findChild<QFontComboBox*>("textFont"))||popupOf(findChild<QComboBox*>("textStyle"))){
-        if(event->type()==QEvent::Show)fontChoiceKept_=false;
-        if(event->type()==QEvent::Hide){if(!fontChoiceKept_)endTextFontPreview();fontChoiceKept_=false;focusTextCanvas();}
+    // Do not recursively walk the MainWindow hierarchy for unrelated events.
+    // During deferred page/widget destruction Qt temporarily keeps null child
+    // entries in that hierarchy; findChild() asserts when it recurses through
+    // one of those entries.
+    if(event->type()==QEvent::Show||event->type()==QEvent::Hide){
+        if(watched==textFontPopup_||watched==textStylePopup_){
+            if(event->type()==QEvent::Show)fontChoiceKept_=false;
+            if(event->type()==QEvent::Hide){if(!fontChoiceKept_)endTextFontPreview();fontChoiceKept_=false;focusTextCanvas();}
+        }
     }
     if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){
         auto* widget=qobject_cast<QWidget*>(watched);if(widget&&widget->window()==this){auto* key=static_cast<QKeyEvent*>(event);
@@ -242,7 +246,7 @@ void MainWindow::pasteSelection(){
     image=image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);auto raster=Raster::fromRgba(image.width(),image.height(),image.constBits(),size_t(image.bytesPerLine()));
     auto* project=current();if(!project||!project->document)return;
     const auto& document=*project->document;Point origin{std::floor((document.width-raster->width)/2.),std::floor((document.height-raster->height)/2.)};
-    if(mime->hasFormat("application/x-compositor-origin")){const auto data=QJsonDocument::fromJson(mime->data("application/x-compositor-origin")).object();origin={data["x"].toDouble(),data["y"].toDouble()};}
+    if(mime->hasFormat("application/x-compositor-origin")){const auto payload=QJsonDocument::fromJson(mime->data("application/x-compositor-origin")).object();origin={payload["x"].toDouble(),payload["y"].toDouble()};}
     addPixelLayer(std::move(raster),origin,"Paste");
 }
 }

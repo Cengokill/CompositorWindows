@@ -167,7 +167,7 @@ RasterizedText rasterize(const TextContent& text){
     if(text.value.empty())throw std::runtime_error("Invalid text layer");
     auto built=build(text);return draw(built,text);
 }
-TextLayout layoutText(const TextContent& text){
+TextLayout layoutText(const TextContent& text,bool includeRaster){
     TextLayout laid;
     if(text.value.empty()){
         if(!textRunsValid(text))throw std::runtime_error("Invalid text layer");
@@ -178,8 +178,12 @@ TextLayout layoutText(const TextContent& text){
         return laid;
     }
     auto built=build(text);
-    auto drawn=draw(built,text);
-    laid.raster=drawn.raster;laid.width=drawn.width;laid.height=drawn.height;
+    if(includeRaster){
+        auto drawn=draw(built,text);
+        laid.raster=drawn.raster;laid.width=drawn.width;laid.height=drawn.height;
+    }else{
+        laid.width=built.width;laid.height=built.height;
+    }
     collectCarets(built,text,laid);
     return laid;
 }

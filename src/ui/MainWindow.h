@@ -121,6 +121,9 @@ class MainWindow final:public QMainWindow {
     int gradientHandle_{-1};
     bool gradientMask_{};
     TextContent textDefaults_{};
+    QWidget* textFontPopup_{};
+    QWidget* textStylePopup_{};
+    QString textStylesFamily_;
     struct TextSession {
         EditorProject* owner{};
         std::string layerId;
@@ -130,6 +133,7 @@ class MainWindow final:public QMainWindow {
         struct Step { TextContent style; int caret{},anchor{}; };
         std::vector<Step> undo,redo;
         std::optional<TextContent> fontPreviewOriginal;
+        std::optional<TextContent> layoutInput;
         std::string preedit;
         text::TextLayout layout;
     };

@@ -6,6 +6,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QMessageBox>
 #include <QMimeData>
@@ -14,7 +15,6 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
-#include <QTimer>
 #include <QTreeWidget>
 #include <knownfolders.h>
 #include <shlobj.h>
@@ -72,11 +72,10 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         const auto file=temporary.filePath("welcome.psd");QFile psd(file);require(psd.open(QIODevice::WriteOnly)&&psd.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"Could not write PSD fixture");psd.close();
         MainWindow window(true);window.show();QApplication::processEvents();
         require(window.findChild<QPushButton*>("welcomeImportImage")!=nullptr,"Welcome import button missing");
-        QTimer confirm;confirm.setInterval(0);
-        QObject::connect(&confirm,&QTimer::timeout,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))if(auto* yes=box->button(QMessageBox::Yes)){yes->click();confirm.stop();}});
-        confirm.start();
         window.importSelectedImages({file});
-        confirm.stop();
+        // Process deferred welcome-page destruction and its Qt child events.
+        QApplication::processEvents(QEventLoop::AllEvents);
+        for(auto* box:window.findChildren<QMessageBox*>())require(!box->isVisible(),"PSD import unexpectedly displayed a confirmation dialog");
         auto* tabs=window.findChild<QTabWidget*>();
         require(tabs&&tabs->count()==1&&tabs->tabText(tabs->currentIndex()).contains("welcome.psd"),"Selected PSD did not replace the empty welcome");
         auto* layers=window.findChild<QTreeWidget*>();
