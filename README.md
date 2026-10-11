@@ -4,6 +4,10 @@ A native Windows 11 port of **Compositor**, the image editor created by **[Robbi
 
 Layers, masks, selections, painting, adjustments, filters, and offline background removal, with an interface closely informed by the original Mac app. Windows window controls are the default; an optional Mac-style title bar is available in **View → Appearance**.
 
+<!-- Screenshot: Layers panel with a live text layer selected. The image slot shows the Aa glyph, the row subtitle reads Text, and any mask thumbnail remains. The Type tool in the tool rail shows the same Aa glyph. -->
+
+<!-- Screenshot: The Filters menu after a filter has been applied. The Last Filter item shows the remembered filter name, and its shortcut is Ctrl+Alt+F. -->
+
 ![Compositor on Windows, editing the After the wind demonstration](docs/images/editor.png)
 
 ## Start here
@@ -12,7 +16,9 @@ Layers, masks, selections, painting, adjustments, filters, and offline backgroun
 
 Use the **x64 MSI**, or extract the **portable ZIP** and run `Compositor.exe`. Windows 11 x64 is supported. Runtime libraries and the foreground removal model are bundled; no account or first-run model download is needed. These preview builds are unsigned and updates are manual.
 
-Projects are `.comp` directories. Keep the whole directory when copying or backing up a project. Export flattened PNG or JPEG images for other applications.
+Projects are `.comp` directories. Keep the whole directory when copying or backing up a project. Export flattened PNG or JPEG images for other applications. **File > Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer.
+
+<!-- Screenshot: Windows Explorer opened by File > Import Image, with the initial folder set to the user's Downloads folder. -->
 
 This is a working preview with [known limitations](KNOWN-ISSUES.md). Large soft brushes can pause; difficult hair, fur, and transparent subjects can need mask cleanup. Full Mac parity and reciprocal project exchange have not been verified.
 

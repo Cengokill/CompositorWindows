@@ -19,7 +19,9 @@ the name. The vector tool rail and keyboard shortcuts remain available.
 
 Version 0.1.4 adds canvas text editing and paragraph boxes, CPU layer effects, horizontal PSD and PSB type import, and the destructive Camera Raw Filter. Paragraph fields that need them are stored as project version 12. Camera Raw replaces the active image layer, docks to the document window, and is not saved in the `.comp` project. There is no camera profile or kelvin preset. Guided Upright is a two-line heuristic, its guide lines are not drawn, and geometry is a CPU homography. Full Mac equivalence is not claimed. Version 0.1.4 also prepares the public repository, consolidates documentation, and updates Windows port credits and package naming.
 
-Version 0.1.5 keeps a partial text selection on the chosen glyphs and keeps the font and style chosen in the type menus. PSD and PSB import keeps Unicode layer names, converts 16-bit RGB channels to 8-bit, and imports the merged composite when layer records cannot be decoded. The import report lists those substitutions.
+Version 0.1.5 keeps a partial text selection on the chosen glyphs and keeps the font and style chosen in the type menus. PSD and PSB import keeps Unicode layer names, converts 16-bit RGB channels to 8-bit, and imports the merged composite when layer records cannot be decoded. The import report lists those substitutions. An installed Photoshop PostScript font name is mapped to its DirectWrite family. While a Camera Raw slider is moving, the preview is limited to 1024 pixels on the long edge and then refines to 2048; OK still commits the full-resolution layer.
+
+The same 0.1.5 preview opens welcome Import image, File > Import Image, the Export Image destination, and Save Project in Windows Explorer. An untitled import or save starts in Downloads. Save Project As starts in the current project folder when that folder exists. Import stays with the project that opened the picker. A second picker is refused, and the status bar reports that a file picker is already open. A JPEG name ending in .png is written as .jpg, and a PNG name ending in .jpg or .jpeg is written as .png, without appending the extension twice. Live text rows and the Type tool show an Aa glyph; the row subtitle is Text, and mask thumbnails stay in place. Filters > Last Filter (Ctrl+Alt+F) repeats the last Filters-menu apply with the same settings as one undo step. The menu item shows the remembered filter name. Image-menu adjustments and Content-Aware Fill are not remembered, and that choice is not stored in the `.comp` project. Filter Apply allows up to 4 GB of transient working memory, enough for a 100-megapixel apply, separate from the 1.2 GB import and merge caps. Color Overlay recolors a layer inside its existing alpha.
 
 ## What you can do
 
@@ -37,9 +39,9 @@ unknown-publisher warning. Do not disable Windows security to run it.
 ## Limits of this preview
 
 - Large soft brushes can fall short of 60 updates per second. On a Core Ultra 9
-  285K with RTX 5070, two native runs on 4000 Ã— 4000 images with 800 px soft
-  brushes measured dispatch p95 of 11.7â€“15.5 ms on hardware and 19.1â€“24.4 ms on
-  software rendering. Event-to-display-flush p95 was 38.6â€“50.4 ms; stroke start
+  285K with RTX 5070, two native runs on 4000 × 4000 images with 800 px soft
+  brushes measured dispatch p95 of 11.7–15.5 ms on hardware and 19.1–24.4 ms on
+  software rendering. Event-to-display-flush p95 was 38.6–50.4 ms; stroke start
   and release reached 427 and 522 ms. Both runs passed 6/10 unchanged 16.7 ms
   dispatch gates. Background CPU load was present; these are neither controlled
   idle measurements nor physical input-to-screen latency measurements. This is
