@@ -384,7 +384,7 @@ protected:
     void dropEvent(QDropEvent*)override;
 public:
     static QString userDownloadsDirectory();
-    void importSelectedImages(const QStringList&);
+    void importSelectedImages(const QStringList&,QObject* destination=nullptr);
     explicit MainWindow(bool warp=false);
     ~MainWindow()override;
     EditorProject& addEmptyProject(bool reuseEmpty=true);

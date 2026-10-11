@@ -17,6 +17,7 @@
 #include <QMimeData>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
@@ -104,7 +105,36 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         QAction* import=nullptr;
         for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()=="file.import")import=action;
         require(import!=nullptr,"File > Import Image command missing");
+        window.setProperty("testNativeImportPaths",QStringList{first});
+        import->trigger();
+        until([&]{return ui::ImportQueue::find(&window)!=nullptr;});
+        finish(window);
+        auto* tabs=window.findChild<QTabWidget*>();
+        require(tabs&&tabs->count()==1,"File > Import Image did not import through the production command");
+        auto* layers=window.findChild<QTreeWidget*>();
+        require(layers&&layers->topLevelItemCount()==1,"File > Import Image did not add the injected image");
         require(window.findChildren<QFileDialog*>().isEmpty(),"File > Import Image still uses a Qt file dialog");
+    });
+    test("file_import_pins_originating_project",[&]{
+        MainWindow window(true);
+        auto& origin=window.addProject(document(64,64),"Origin");
+        auto& other=window.addProject(document(80,80),"Other",false);
+        window.show();QApplication::processEvents();
+        auto* tabs=window.findChild<QTabWidget*>();
+        require(tabs&&tabs->count()==2,"Pinned import fixture did not keep two projects");
+        tabs->setCurrentIndex(0);
+        QApplication::processEvents();
+        QAction* import=nullptr;
+        for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()=="file.import")import=action;
+        require(import!=nullptr,"File > Import Image command missing");
+        window.setProperty("testNativeImportPaths",QStringList{first});
+        import->trigger();
+        tabs->setCurrentIndex(1);
+        until([&]{return ui::ImportQueue::find(&window)!=nullptr;});
+        finish(window);
+        require(origin.document&&origin.document->layers.size()==1,"File import did not land on the originating project");
+        require(other.document&&other.document->layers.empty(),"File import followed the tab selected while the picker was open");
+        require(window.findChildren<QFileDialog*>().isEmpty(),"Pinned File import used a Qt file dialog");
     });
     test("save_project_as_uses_native_path_without_qt_dialog",[&]{
         const auto dest=temporary.filePath("saved-native.comp");
@@ -125,6 +155,19 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         save->trigger();
         QApplication::processEvents();
         require(QFileInfo(project.path)==QFileInfo(dest),"Repeat Save reopened a picker after a path was chosen");
+    });
+    test("save_as_reports_busy_native_picker",[&]{
+        MainWindow window(true);auto& project=window.addProject(document(32,24),"Untitled");window.show();QApplication::processEvents();
+        QAction* saveAs=nullptr;
+        for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()=="file.save_as")saveAs=action;
+        require(saveAs,"File > Save Project As command missing");
+        const auto before=project.path;
+        window.setProperty("nativePickerInProgress",true);
+        saveAs->trigger();
+        QApplication::processEvents();
+        require(project.path==before&&!QFileInfo(temporary.filePath("busy-save.comp")).exists(),"Save As wrote a project while another picker was open");
+        require(window.statusBar()->currentMessage().contains("file picker"),"Busy picker produced no user-visible message");
+        require(window.findChildren<QFileDialog*>().isEmpty(),"Busy Save As opened a Qt file dialog");
     });
     test("qt_opened_psd_report_lists_depth_and_merged_image",[&]{
         std::vector<uint8_t> bytes;auto u16=[&](int v){bytes.push_back(uint8_t(v>>8));bytes.push_back(uint8_t(v));};auto u32=[&](uint32_t v){for(int s=24;s>=0;s-=8)bytes.push_back(uint8_t(v>>s));};
