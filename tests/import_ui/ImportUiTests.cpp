@@ -12,6 +12,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressDialog>
@@ -104,6 +105,26 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()=="file.import")import=action;
         require(import!=nullptr,"File > Import Image command missing");
         require(window.findChildren<QFileDialog*>().isEmpty(),"File > Import Image still uses a Qt file dialog");
+    });
+    test("save_project_as_uses_native_path_without_qt_dialog",[&]{
+        const auto dest=temporary.filePath("saved-native.comp");
+        MainWindow window(true);auto& project=window.addProject(document(32,24),"Untitled");window.show();QApplication::processEvents();
+        QAction* save=nullptr,*saveAs=nullptr;
+        for(auto* action:window.findChildren<QAction*>()){
+            const auto id=action->property("commandId").toString();
+            if(id=="file.save")save=action;
+            if(id=="file.save_as")saveAs=action;
+        }
+        require(save&&saveAs,"File > Save Project commands missing");
+        window.setProperty("testNativeSavePath",dest);
+        saveAs->trigger();
+        QApplication::processEvents();
+        require(QFileInfo(project.path)==QFileInfo(dest)&&QDir(dest).exists(),"Save As did not write the chosen .comp directory");
+        require(window.findChildren<QFileDialog*>().isEmpty(),"Save Project As used a Qt file dialog");
+        window.setProperty("testNativeSavePath",temporary.filePath("saved-again.comp"));
+        save->trigger();
+        QApplication::processEvents();
+        require(QFileInfo(project.path)==QFileInfo(dest),"Repeat Save reopened a picker after a path was chosen");
     });
     test("qt_opened_psd_report_lists_depth_and_merged_image",[&]{
         std::vector<uint8_t> bytes;auto u16=[&](int v){bytes.push_back(uint8_t(v>>8));bytes.push_back(uint8_t(v));};auto u32=[&](uint32_t v){for(int s=24;s>=0;s-=8)bytes.push_back(uint8_t(v>>s));};

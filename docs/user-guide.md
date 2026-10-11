@@ -6,7 +6,7 @@ This Windows 11 x64 preview opens and edits layered images locally. It is an ind
 
 In an installed build, use the Start menu shortcut. In a portable build, open `Compositor.exe`. Choose **File > New Canvas** to enter canvas dimensions, or **File > Import Image** to import a PNG, JPEG, TIFF or HEIC image. The welcome **Import image** button and **File > Import Image** both open the Windows file explorer, starting in Downloads. Import adds a layer to the current document. Each project has its own tab, layer selection and tool settings. The Layers panel selects the image or mask you are editing.
 
-Use **File > Open Project** for a saved `.comp` project. A `.comp` project is a directory containing its manifest and image assets. Copy or back up the complete directory. Save with **Ctrl+S**, or use **Save Project As** to make a separate project. An asterisk in the tab indicates unsaved changes. Closing a modified project offers Save, Discard or Cancel.
+Use **File > Open Project** for a saved `.comp` project. A `.comp` project is a directory containing its manifest and image assets. Copy or back up the complete directory. The first **Save Project** and **Save Project As** open the Windows file explorer; an untitled save starts in Downloads. Save with **Ctrl+S** after a path is chosen. An asterisk in the tab indicates unsaved changes. Closing a modified project offers Save, Discard or Cancel.
 
 ## Window appearance
 
