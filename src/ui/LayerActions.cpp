@@ -179,7 +179,7 @@ void MainWindow::editLayerEffect(int kind){
         else if(kind==4||kind==5){auto& glow=kind==4?layer->effects.outerGlow:layer->effects.innerGlow;glow.enabled=enabled->isChecked();glow.opacity=opacity->value();glow.size=size->value();glow.blend=Blend(blend->currentIndex());glow.color=color;}
         else{layer->effects.colorOverlay.enabled=enabled->isChecked();layer->effects.colorOverlay.opacity=opacity->value();layer->effects.colorOverlay.blend=Blend(blend->currentIndex());layer->effects.colorOverlay.color=color;}
         if(textSession_&&textSession_->owner==project&&textSession_->layerId==id)publishTextEdit();
-        else refresh(false,false);
+        else refresh(true,false);
     };
     form->addRow(enabled);
     if(kind!=0)form->addRow("Opacity",opacity);
