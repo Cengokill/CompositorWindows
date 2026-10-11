@@ -8,6 +8,7 @@
 #include "imaging/subject_matte.h"
 #include <QColor>
 #include <QJsonObject>
+#include <optional>
 
 namespace compositor {
 // Values preserve the existing tool action/property order.
@@ -43,6 +44,7 @@ struct ProjectToolState {
     editing::LassoKind lassoKind{editing::LassoKind::Freehand};
     int selectionExpandAmount{1},selectionContractAmount{1};
     ProjectFilterSettings filterSettings;
+    std::optional<filters::Kind> lastFilterKind;
     bool ellipse{},selectionAntialias{true};
     int wandTolerance{32},wandSampleRadius{};
     bool wandContiguous{true},wandAllLayers{};

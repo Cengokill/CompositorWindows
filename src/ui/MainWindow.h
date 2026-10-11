@@ -291,7 +291,11 @@ class MainWindow final:public QMainWindow {
     void cancelEditPanel();
     void adjust(const QString& kind,bool live,bool existing=false);
     void removeBackground();
-    void runFilter(int);
+    void runFilter(int,bool repeating=false);
+    void repeatLastFilter();
+    bool canRunFilterKind(EditorProject&,filters::Kind);
+    static QString filterKindDisplayName(filters::Kind);
+    QPointer<QAction> lastFilterAction_;
     void setupSelectionActions();
     void runWand(Point,Qt::KeyboardModifiers,std::optional<editing::SelectionMode> modeOverride={});
     int wandTolerance_{32},wandSampleRadius_{};

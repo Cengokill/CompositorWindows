@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LastFilterJob.h"
 #include "LayerPanel.h"
 #include "PreviewComboBox.h"
 #include "PropertyControls.h"
@@ -152,7 +153,11 @@ p->canvas->setTransformOverlay(tool_==Tool::Move&&(transformControls_||transform
     refreshShapeControls();refreshCropControls();refreshTypeControls();
 }
 bool MainWindow::closeProject(int i){
-    if(i<0||i>=int(projects_.size()))return true;if(!canSwitchProjects()||projects_[i]->importing||projects_[i]->projectBusy)return false;
+    if(i<0||i>=int(projects_.size()))return true;
+    if(auto* job=ui::LastFilterJob::find(this,projects_[i].get())){
+        delete job;projects_[i]->projectBusy=false;
+    }
+    if(!canSwitchProjects()||projects_[i]->importing||projects_[i]->projectBusy)return false;
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();finishVisibilitySwipe();
     finishOpacityEdit();if(textSession_&&textSession_->owner==projects_[i].get())finishText();applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
     auto&p=*projects_[i];

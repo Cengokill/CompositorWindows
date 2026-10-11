@@ -76,6 +76,7 @@ bool commandEnabled(CommandGate gate,const CommandState&s){
     case CommandGate::ApplyTransform:return s.transformEdit&&!s.projectBusy&&!s.importing;
     case CommandGate::ApplyGradient:return s.gradient&&!s.projectBusy&&!s.importing;
     case CommandGate::ApplyCrop:return s.crop&&canStartProjectOperation(s);
+    case CommandGate::RepeatLastFilter:return s.repeatLastFilter&&!s.warpStroke&&!s.hueSaturation&&!s.adjustmentEditing;
     }
     return false;
 }
@@ -157,6 +158,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         const char*slugs[]{"hue_saturation","levels","curves","exposure","gradient_map","grain","invert","black_white","color_balance","gaussian","motion","noise"};
         for(int i=0;i<12;++i){auto id=QString("adjust.%1").arg(slugs[i]).toUtf8();add(id.constData(),"Adjustments",adjustments[i],i==0?"Ctrl+U":i==1?"Ctrl+L":i==2?"Ctrl+M":"",C::Adjustment,G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/HueSaturation.swift:414");id=QString("adjust.new.%1").arg(slugs[i]).toUtf8();add(id.constData(),"New Adjustment Layer",adjustments[i],"",C::Adjustment,G::NewAdjustment,P::FinishAppearance,"Compositor/CompositorApp.swift:217");}
         add("adjust.edit","Adjustments","Edit Adjustment Layer…","",C::Adjustment,G::EditAdjustment,P::FinishAppearance,"Compositor/CompositorApp.swift:222");
+        add("filter.last","Filters","Last Filter","Ctrl+Alt+F",C::Adjustment,G::RepeatLastFilter,P::CommitTransformAndGradient,"Compositor/Document/Filters.swift:541");
         const char*filters[]{"Gaussian Blur…","Motion Blur…","Add Noise…","Lens Correction…","Content-Aware Fill…","Vignette…","Bloom…","Tonal Contrast…","Dither…","Scanlines…","Camera Raw Filter…","Remove Background…"};
         const char*filterIds[]{"filter.gaussian","filter.motion","filter.noise","filter.lens","filter.content_aware","filter.vignette","filter.bloom","filter.tonal","filter.dither","filter.scanlines","filter.camera_raw","filter.subject"};
         for(int i=0;i<12;++i)add(filterIds[i],"Filters",filters[i],i==4?"Shift+Delete":"",C::Adjustment,i==4?G::ContentAwareFill:G::Adjust,P::CommitTransformAndGradient,"Compositor/Document/Filters.swift:299");

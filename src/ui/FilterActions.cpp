@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LastFilterJob.h"
 #include "CameraRawPanel.h"
 #include "DocumentPreview.h"
 #include "EditPanelSession.h"
@@ -25,6 +26,8 @@
 #include <QImage>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QStatusBar>
+#include <QMessageBox>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -94,6 +97,25 @@ PreparedFilter filteredLayer(const Layer& original,const filters::Request& job){
     layer.raster=result.raster;layer.transform=result.transform;if(result.changed){layer.shapeJson.clear();layer.text.reset();}
     return {carryFilterMask(original,std::move(layer),job,result.changed),result.cameraRawScope};
 }
+std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer& original,const filters::Request& job){
+    return [rendered,original,job](const Layer& current){
+        auto layer=current;layer.raster=rendered.raster;layer.transform=rendered.transform;layer.shapeJson=rendered.shapeJson;
+        if(current.mask==original.mask&&current.transform==original.transform){layer.mask=rendered.mask;return layer;}
+        return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
+    };
+}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter"};}
+filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
+    filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
+    request.kind=kind;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
+    request.transform=layer.raster?layer.transform:Transform{0,0,double(before.width),double(before.height)};
+    request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,layer,kind);
+    if(kind==filters::Kind::Dither&&request.settings.ditherLevels<=0)request.settings.ditherLevels=4;
+    if(kind==filters::Kind::Vignette&&request.settings.vignette==0)request.settings.vignette=40;
+    if(kind==filters::Kind::Bloom&&request.settings.bloom==0)request.settings.bloom=30;
+    if(kind==filters::Kind::Scanlines&&request.settings.scanline==0)request.settings.scanline=35;
+    return request;
+}
 struct FilterOutput {std::optional<Document> document;QImage thumbnail;QString error;bool full{};std::optional<filters::CameraRawScope> scope;};
 class DockFollow final:public QObject {
     QPointer<QWidget> window_;
@@ -125,6 +147,7 @@ class FilterPanel final:public ui::EditPanelSession {
     filters::Request request_;
     std::function<void(const filters::Settings&)> remember_;
     std::function<void(const filters::CameraRawSettings&)> rememberRaw_;
+    std::function<void(filters::Kind)> rememberLast_;
     ui::CameraRawPanel* raw_{};
     QFutureWatcher<std::optional<std::pair<double,double>>> balance_;
     ui::CameraRawPanel::Tool dragKind_{ui::CameraRawPanel::Tool::None};
@@ -192,19 +215,16 @@ class FilterPanel final:public ui::EditPanelSession {
             auto found=std::find_if(committed_->layers.begin(),committed_->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
             if(found==committed_->layers.end())throw std::runtime_error("Completed filter target is missing");
             auto job=request_;job.preview=false;job.limits.cancelled={};
-            auto merge=[rendered=*found,original=original_,job](const Layer& current){
-                auto layer=current;layer.raster=rendered.raster;layer.transform=rendered.transform;layer.shapeJson=rendered.shapeJson;
-                if(current.mask==original.mask&&current.transform==original.transform){layer.mask=rendered.mask;return layer;}
-                return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
-            };
+            auto merge=filterMerge(*found,original_,job);
             host_.commit({std::move(*committed_),original_.id,false,std::move(merge)});
+            if(rememberLast_)rememberLast_(request_.kind);
         }}
         catch(const std::exception& error){if(host_.error)host_.error(QString::fromUtf8(error.what()));}
         if(host_.preview)host_.preview({});if(host_.closed)host_.closed();host_={};retire();
     }
 public:
-    FilterPanel(QWidget* parent,Document before,Layer original,filters::Request request,QString title,ui::EditPanelHost host,std::function<void(const filters::Settings&)> remember,std::function<void(const filters::CameraRawSettings&)> rememberRaw={})
-        :EditPanelSession(parent,Kind::Filter,false,std::move(host)),before_(std::move(before)),original_(std::move(original)),request_(std::move(request)),remember_(std::move(remember)),rememberRaw_(std::move(rememberRaw)),dialog_(parent),layout_(&dialog_){
+    FilterPanel(QWidget* parent,Document before,Layer original,filters::Request request,QString title,ui::EditPanelHost host,std::function<void(const filters::Settings&)> remember,std::function<void(const filters::CameraRawSettings&)> rememberRaw={},std::function<void(filters::Kind)> rememberLast={})
+        :EditPanelSession(parent,Kind::Filter,false,std::move(host)),before_(std::move(before)),original_(std::move(original)),request_(std::move(request)),remember_(std::move(remember)),rememberRaw_(std::move(rememberRaw)),rememberLast_(std::move(rememberLast)),dialog_(parent),layout_(&dialog_){
         const bool cameraRaw=request_.kind==filters::Kind::CameraRaw;
         if(cameraRaw)buttons_.setStandardButtons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);
         dialog_.mayReject=[this]{return !committing_;};dialog_.setObjectName("filterPanel");dialog_.setWindowTitle(title);dialog_.setWindowFlags(Qt::Tool|Qt::WindowTitleHint|Qt::WindowCloseButtonHint);dialog_.setWindowModality(Qt::NonModal);
@@ -318,16 +338,66 @@ public:
     }
 };
 }
-void MainWindow::runFilter(int kindIndex){
+QString MainWindow::filterKindDisplayName(filters::Kind kind){const auto names=filterKindNames();const int index=int(kind);return index>=0&&index<names.size()?names[index]:QString{};}
+bool MainWindow::canRunFilterKind(EditorProject& project,filters::Kind kind){
+    if(editPanel_||project.projectBusy||project.importing||!project.document)return false;
+    const auto state=commandState(&project);
+    if(state.warpStroke||state.levels||state.hueSaturation||state.filterEdit||state.adjustmentEditing)return false;
+    const bool vignette=kind==filters::Kind::Vignette;
+    const auto found=std::find_if(project.document->layers.begin(),project.document->layers.end(),[&](const Layer& layer){return layer.id==project.active;});
+    if(found==project.document->layers.end()||found->group||!found->adjustmentJson.empty()||(!found->raster&&!vignette))return false;
+    if(kind==filters::Kind::ContentAwareFill&&!state.selection)return false;
+    if(vignette)return state.singleSelected&&state.effectiveVisible&&!state.maskSelected&&!state.projectBusy&&!state.importing&&!state.brushStroke&&!state.pixelMove;
+    return ui::canAdjustColors(state);
+}
+void MainWindow::repeatLastFilter(){
+    auto* p=current();if(!p||!p->toolState.lastFilterKind)return;
+    runFilter(int(*p->toolState.lastFilterKind),true);
+}
+void MainWindow::runFilter(int kindIndex,bool repeating){
     auto* p=current();auto* layer=active();const bool vignette=kindIndex==int(filters::Kind::Vignette);
-    if(editPanel_||!p||!p->document||!layer||layer->group||!layer->adjustmentJson.empty()||(!layer->raster&&!vignette))return;
-    const QStringList names{"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter"};
+    if((!repeating&&editPanel_)||!p||!p->document||!layer||layer->group||!layer->adjustmentJson.empty()||(!layer->raster&&!vignette))return;
+    const auto names=filterKindNames();
     if(kindIndex<0||kindIndex>=names.size())throw std::runtime_error("Unsupported filter kind");
-    const auto kind=filters::Kind(kindIndex);if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
+    const auto kind=filters::Kind(kindIndex);
+    if(repeating&&!canRunFilterKind(*p,kind))return;
+    if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
     const auto before=*p->document;const auto original=*layer;
-    filters::Request request;request.settings=p->toolState.filterSettings.pixels;request.cameraRaw=p->toolState.filterSettings.cameraRaw.normalized();request.kind=kind;request.source=layer->raster?layer->raster:Raster::filled(p->document->width,p->document->height);request.transform=layer->raster?layer->transform:Transform{0,0,double(p->document->width),double(p->document->height)};request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,original,kind);
-    if(kind==filters::Kind::Dither&&request.settings.ditherLevels<=0)request.settings.ditherLevels=4;if(kind==filters::Kind::Vignette&&request.settings.vignette==0)request.settings.vignette=40;if(kind==filters::Kind::Bloom&&request.settings.bloom==0)request.settings.bloom=30;if(kind==filters::Kind::Scanlines&&request.settings.scanline==0)request.settings.scanline=35;
+    auto request=buildFilterRequest(*p,before,original,kind);
+    if(repeating){
+        if(ui::LastFilterJob::find(this,p))return;
+        const auto action=names[kindIndex].toStdString();
+        auto job=request;job.preview=false;
+        QPointer<NativeCanvas> token=p->canvas;
+        ui::LastFilterJob::Host host;
+        host.settled=[this,p,token]{if(!token)return;p->projectBusy=false;refresh(false,false);};
+        host.error=[this](const QString& error){QMessageBox::critical(this,"Compositor",error);};
+        host.commit=[this,p,token,original,job,action](Layer rendered){
+            if(!token||current()!=p||!p->document)return;
+            auto target=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& layer){return layer.id==original.id;});
+            if(target==p->document->layers.end())return;
+            if(target->raster!=original.raster||target->transform!=original.transform)return;
+            auto merge=filterMerge(rendered,original,job);
+            Document prepared=*p->document;
+            auto& changed=prepared.layers[size_t(target-p->document->layers.begin())];
+            changed=merge(*target);
+            validateDocument(prepared);
+            p->history.begin(action,p->document,p->active);
+            try{p->document=std::move(prepared);p->history.end(p->document,p->active);}
+            catch(...){if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}throw;}
+            if(current()==p)refresh();
+        };
+        p->projectBusy=true;refresh(false,false);
+        try{
+            new ui::LastFilterJob([job,original](std::function<bool()> cancelled){
+                auto active=job;active.limits.cancelled=std::move(cancelled);
+                return filteredLayer(original,active).layer;
+            },std::move(host),this,p);
+        }catch(...){p->projectBusy=false;refresh(false,false);throw;}
+        return;
+    }
     auto host=makeEditPanelHost(*p,before,names[kindIndex].toStdString());
-    editPanel_=new FilterPanel(this,before,original,request,names[kindIndex],std::move(host),[p](const filters::Settings& value){p->toolState.filterSettings.pixels=value;},[p](const filters::CameraRawSettings& value){p->toolState.filterSettings.cameraRaw=value;});refresh(false,false);
+    auto rememberLast=[p](filters::Kind applied){if(applied!=filters::Kind::ContentAwareFill)p->toolState.lastFilterKind=applied;};
+    editPanel_=new FilterPanel(this,before,original,request,names[kindIndex],std::move(host),[p](const filters::Settings& value){p->toolState.filterSettings.pixels=value;},[p](const filters::CameraRawSettings& value){p->toolState.filterSettings.cameraRaw=value;},std::move(rememberLast));refresh(false,false);
 }
 }

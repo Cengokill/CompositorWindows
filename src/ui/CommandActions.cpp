@@ -48,6 +48,15 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.transformable=project==current()&&(state.singleSelected&&!state.group?(state.asset&&state.effectiveVisible):selectedTransform().has_value());
     state.canMoveUp=layers::canMoveSibling(document,layer.id,1);state.canMoveDown=layers::canMoveSibling(document,layer.id,-1);
     state.canToggleClipping=layers::canToggleClipping(document,layer.id);
+    if(project&&project->toolState.lastFilterKind){
+        const auto kind=*project->toolState.lastFilterKind;
+        const bool sessions=!editPanel_&&!state.warpStroke&&!state.levels&&!state.hueSaturation&&!state.filterEdit&&!state.adjustmentEditing;
+        const bool layerOk=!state.group&&!state.adjustmentLayer&&(state.asset||kind==filters::Kind::Vignette);
+        const bool target=kind==filters::Kind::Vignette
+            ? state.singleSelected&&state.effectiveVisible&&!state.maskSelected&&!state.projectBusy&&!state.importing&&!state.brushStroke&&!state.pixelMove
+            : ui::canAdjustColors(state);
+        state.repeatLastFilter=sessions&&layerOk&&target&&(kind!=filters::Kind::ContentAwareFill||state.selection);
+    }
     return state;
 }
 void MainWindow::initializeCommands(){
