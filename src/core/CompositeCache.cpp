@@ -48,7 +48,7 @@ Point filterHalo(const LayerRenderPreview& preview,double units){
 std::shared_ptr<const Raster> directRaster(const Document& doc){
     if(doc.layers.size()!=1)return {};const auto& layer=doc.layers.front();
     if(layer.visible&&!layer.group&&layer.raster&&layer.raster->width==doc.width&&layer.raster->height==doc.height&&
-       layer.opacity==1&&layer.blend==Blend::Normal&&!layer.mask&&layer.parentId.empty()&&layer.maskSourceId.empty()&&layer.adjustmentJson.empty()&&
+       layer.opacity==1&&layer.blend==Blend::Normal&&!layer.mask&&layer.parentId.empty()&&layer.maskSourceId.empty()&&layer.adjustmentJson.empty()&&!layer.effects.active()&&
        layer.transform.x==0&&layer.transform.y==0&&layer.transform.width==doc.width&&layer.transform.height==doc.height&&layer.transform.rotation==0&&!layer.transform.flipX&&!layer.transform.flipY)return layer.raster;
     return {};
 }

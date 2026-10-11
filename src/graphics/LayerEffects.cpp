@@ -37,11 +37,12 @@ EffectSample shadeLayer(const Layer& layer,Point p,Pixel content,double coverage
         if(fx.stroke.position==0){out.under=blendPixel(out.under,stroke,Blend::Normal);out.hasUnder=out.under.a>0;}
         else out.content=blendPixel(out.content,stroke,Blend::Normal);
     }
-    if(fx.colorOverlay.enabled&&content.a){
-        // Recolor inside the layer's existing coverage. Overlay opacity is the fill
-        // amount; restoring content.a avoids a second over that inflates translucent pixels.
+    if(fx.colorOverlay.enabled&&out.content.a){
+        // Recolor the current fill, including an inside or center stroke already written
+        // into out.content. Overlay opacity is the fill amount; restoring that alpha avoids
+        // a second over that inflates translucent pixels.
         auto tint=colored(fx.colorOverlay.color,fx.colorOverlay.opacity);
-        out.content=restore(blendPixel(opaque(content),tint,fx.colorOverlay.blend),content.a);
+        out.content=restore(blendPixel(opaque(out.content),tint,fx.colorOverlay.blend),out.content.a);
     }
     if(fx.innerShadow.enabled&&content.a){auto delta=offsetOf(fx.innerShadow.angle,fx.innerShadow.distance);double inside=shaped(p).a/255.;double toward=blurredAlpha(shaped,{p.x-delta.x,p.y-delta.y},fx.innerShadow.size);double a=inside*(1-toward)*fx.innerShadow.opacity*coverage;out.content=blendPixel(out.content,colored(fx.innerShadow.color,a),fx.innerShadow.blend);}
     if(fx.innerGlow.enabled&&content.a){double a=(1-blurredAlpha(shaped,p,std::max(1.,fx.innerGlow.size)))*fx.innerGlow.opacity*(content.a/255.)*coverage;out.content=blendPixel(out.content,colored(fx.innerGlow.color,a),fx.innerGlow.blend);}
