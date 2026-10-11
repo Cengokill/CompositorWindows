@@ -15,7 +15,6 @@
 #include "ProjectLayerDrag.h"
 #include "ProjectLayerCopyJob.h"
 #include "LayerCopyCommit.h"
-#include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
@@ -46,9 +45,11 @@
 #include <QTabBar>
 #include <QMenuBar>
 #include <QThread>
+#include <QEventLoop>
 #include <commdlg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -99,6 +100,75 @@ QStringList nativeImportPaths(HWND owner,const QString& directory){
     logging::trace(QString("native picker returned %1 path(s): %2")
         .arg(paths.size()).arg(paths.join(" | ")));
     return paths;
+}
+QString nativeSavePath(HWND owner,const QString& directory,const QString& suggested,const wchar_t* filter,const wchar_t* title,const wchar_t* defExt){
+    std::wstring buffer(32768,L'\0');
+    const auto name=QFileInfo(suggested).fileName().toStdWString();
+    if(!name.empty()&&name.size()+1<buffer.size())std::copy(name.begin(),name.end(),buffer.begin());
+    const auto initial=directory.toStdWString();
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize=sizeof(dialog);
+    dialog.hwndOwner=owner;
+    dialog.lpstrFilter=filter;
+    dialog.lpstrFile=buffer.data();
+    dialog.nMaxFile=DWORD(buffer.size());
+    dialog.lpstrInitialDir=initial.empty()?nullptr:initial.c_str();
+    dialog.lpstrTitle=title;
+    dialog.lpstrDefExt=defExt;
+    dialog.Flags=OFN_EXPLORER|OFN_PATHMUSTEXIST|OFN_OVERWRITEPROMPT|OFN_NOCHANGEDIR|OFN_HIDEREADONLY;
+    logging::trace(QString("native save picker entered owner=0x%1 directory=%2 title=%3")
+        .arg(quintptr(owner),0,16).arg(QDir::toNativeSeparators(directory),QString::fromWCharArray(title)));
+    if(!GetSaveFileNameW(&dialog)){
+        logging::trace(QString("native save picker cancelled error=%1").arg(CommDlgExtendedError()));
+        return {};
+    }
+    QString path=QDir::cleanPath(QString::fromWCharArray(buffer.c_str()));
+    logging::trace(QString("native save picker returned %1").arg(QDir::toNativeSeparators(path)));
+    return path;
+}
+QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,const QString& suggested,const wchar_t* filter,const wchar_t* title,const wchar_t* defExt){
+    const auto override=window->property("testNativeSavePath").toString();
+    if(!override.isEmpty())return override;
+    if(window->property("nativeImportInProgress").toBool()){
+        logging::trace("native save picker ignored because another picker is active");
+        return {};
+    }
+    window->setProperty("nativeImportInProgress",true);
+    const auto owner=reinterpret_cast<HWND>(window->winId());
+    auto path=std::make_shared<QString>();
+    QEventLoop loop;
+    auto* thread=QThread::create([path,owner,directory,suggested,filter,title,defExt]{
+        const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+        struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
+        *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
+    });
+    QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
+    bool finished=false;
+    QObject::connect(thread,&QThread::finished,&loop,[&]{finished=true;loop.quit();});
+    thread->start();
+    if(!finished)loop.exec();
+    window->setProperty("nativeImportInProgress",false);
+    return *path;
+}
+QString chooseNativeExportDestination(MainWindow* window,bool jpeg,const QString& suggested){
+    static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
+    static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
+    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,jpeg?jpegFilter:pngFilter,L"Export Image",jpeg?L"jpg":L"png");
+    if(path.isEmpty())return {};
+    const auto suffix=QFileInfo(path).suffix().toLower();
+    if(jpeg){
+        if(suffix!="jpg"&&suffix!="jpeg")path+=".jpg";
+    }else if(suffix!="png")path+=".png";
+    return path;
+}
+QString chooseNativeProjectDestination(MainWindow* window,const QString& suggested){
+    static const wchar_t filter[]=L"Compositor project directory\0*.comp\0All files\0*.*\0";
+    QFileInfo info(suggested.isEmpty()?"Untitled.comp":suggested);
+    QString directory=info.isAbsolute()&&QDir(info.absolutePath()).exists()?info.absolutePath():MainWindow::userDownloadsDirectory();
+    auto path=chooseNativeSaveDestination(window,directory,info.fileName().isEmpty()?QString("Untitled.comp"):info.fileName(),filter,L"Save Compositor Project",L"comp");
+    if(path.isEmpty())return {};
+    if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";
+    return path;
 }
 }
 ui::ImportQueue* MainWindow::ensureImportQueue(){
@@ -397,7 +467,7 @@ void startNativeImport(MainWindow* window,const QString& directory){
     thread->start();
 }
 }
-void MainWindow::importWelcomeImage(){startNativeImport(this,userDownloadsDirectory());}
+void MainWindow::importWelcomeImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory());}
 bool MainWindow::importPhotoshop(const QString& path,bool confirm){
     try{
         auto imported=imaging::readPsd(nativePath(path));
@@ -419,8 +489,8 @@ bool MainWindow::importPhotoshop(const QString& path,bool confirm){
         return false;
     }
 }
-void MainWindow::importImage(){auto* target=current();auto paths=QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif *.psd *.psb *.svg *.cr2 *.nef *.arw *.dng *.raw);;All files (*)");QStringList images;for(const auto& path:paths){auto ext=QFileInfo(path).suffix().toLower();if(ext=="psd"||ext=="psb")importPhotoshop(path,true);else images.append(path);}if(!images.isEmpty())queueImageImports(images,target,{});}
-bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=QFileDialog::getSaveFileName(this,"Save Compositor Project",path.isEmpty()?"Untitled.comp":path,"Compositor project directory (*.comp)");if(path.isEmpty())return false;if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
+void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory());}
+bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;
     imaging::validateExportExtent(uint32_t(p->document->width),uint32_t(p->document->height));
@@ -475,7 +545,8 @@ void MainWindow::exportImage(){
     const auto response=dialog.exec();closed=true;debounce.stop();progress.stop();cancel->store(true);watcher.waitForFinished();
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     if(format.currentIndex()==1)settings.setValue("jpegExportQuality",quality.value()/100.);
-    const auto destination=QFileDialog::getSaveFileName(this,"Export Image",{},format.currentIndex()==0?"PNG (*.png)":"JPEG (*.jpg)");if(destination.isEmpty())return;
+    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(format.currentIndex()==0?".png":".jpg");
+    const auto destination=chooseNativeExportDestination(this,format.currentIndex()==1,suggested);if(destination.isEmpty())return;
     QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;
     connect(&saving,&QProgressDialog::canceled,&saving,[copyCancelled]{copyCancelled->store(true);});
