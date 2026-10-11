@@ -29,6 +29,7 @@
 #include <QFile>
 #include <QApplication>
 #include <QTimer>
+#include <QStatusBar>
 #include <QPushButton>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -142,11 +143,14 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     host.project=[this](const QString& path){loadProjectDirectory(path);};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
         QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);
-        auto* target=hasDestination?project(captured):&addEmptyProject();if(!target)return nullptr;
+        auto* target=hasDestination?project(captured):&addEmptyProject();
+        if(!target)target=current()?current():&addEmptyProject();
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==target){tabs_->setCurrentIndex(int(i));break;}
         return target->canvas;
     };
     host.image=[this,project](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime){
+        auto ext=QFileInfo(path).suffix().toLower();
+        if(ext=="psd"||ext=="psb"){importPhotoshop(path,false);if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,false);return;}
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);
@@ -162,6 +166,13 @@ void MainWindow::receiveDropPaths(const QStringList& paths,NativeCanvas* destina
 }
 void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point){
     if(paths.isEmpty())return;
+    QStringList images;
+    for(const auto& path:paths){
+        const auto ext=QFileInfo(path).suffix().toLower();
+        if(ext=="psd"||ext=="psb")importPhotoshop(path,false);
+        else images.append(path);
+    }
+    if(images.isEmpty())return;
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -170,7 +181,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refreshCropControls();
     if(transformSession_)applyTransformSession();
     if(!target)target=&addEmptyProject();
-    ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:paths)batch.files.push_back(nativePath(path));
+    ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
     ensureImportQueue()->enqueue(target->canvas,std::move(batch));
 }
 EditorProject* MainWindow::dropDestinationAt(QPoint location,std::optional<Point>& point){
@@ -323,7 +334,7 @@ void MainWindow::openPath(const QString&path){
     }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const auto extension=QFileInfo(path).suffix().toLower();
-    if(extension=="psd"||extension=="psb"){importSelectedImages({path});return;}
+    if(extension=="psd"||extension=="psb"){importPhotoshop(path,false);return;}
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{});
 }
@@ -345,25 +356,7 @@ void MainWindow::importSelectedImages(const QStringList& paths){
     for(const auto& path:paths){
         auto ext=QFileInfo(path).suffix().toLower();
         if(ext=="psd"||ext=="psb"){
-            try{
-                logging::trace(QString("PSD read begin path=%1").arg(QDir::toNativeSeparators(path)));
-                auto imported=imaging::readPsd(nativePath(path));
-                logging::trace(QString("PSD read complete path=%1 report=%2")
-                    .arg(QDir::toNativeSeparators(path),QString::fromStdString(imported.report)));
-                logging::trace(QString("PSD import accepted automatically path=%1")
-                    .arg(QDir::toNativeSeparators(path)));
-                auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
-                // addProject can replace the empty welcome project, invalidating
-                // the pointer captured before the PSD was opened.
-                target=&project;
-                if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
-                refresh();project.canvas->fit();
-                logging::trace(QString("PSD project installed path=%1").arg(QDir::toNativeSeparators(path)));
-            }catch(const std::exception& error){
-                logging::trace(QString("PSD import exception path=%1 error=%2")
-                    .arg(QDir::toNativeSeparators(path),QString::fromUtf8(error.what())));
-                QMessageBox::critical(this,"Import PSD",error.what());
-            }
+            if(importPhotoshop(path,true))target=current();
         }else images.append(path);
     }
     if(!images.isEmpty())queueImageImports(images,target,{});
@@ -405,7 +398,28 @@ void startNativeImport(MainWindow* window,const QString& directory){
 }
 }
 void MainWindow::importWelcomeImage(){startNativeImport(this,userDownloadsDirectory());}
-void MainWindow::importImage(){startNativeImport(this,userDownloadsDirectory());}
+bool MainWindow::importPhotoshop(const QString& path,bool confirm){
+    try{
+        auto imported=imaging::readPsd(nativePath(path));
+        if(confirm&&QMessageBox::question(this,"Import PSD",QString::fromStdString(imported.report)+"\nApply this import?")!=QMessageBox::Yes)return false;
+        auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
+        if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
+        refresh();project.canvas->fit();
+        if(!confirm&&!imported.report.empty()){
+            const auto report=QString::fromStdString(imported.report).trimmed();
+            auto* message=new QMessageBox(QMessageBox::Information,"Import PSD",report,QMessageBox::Ok,this);
+            message->setObjectName("psdImportReport");
+            message->setAttribute(Qt::WA_DeleteOnClose);
+            message->setWindowModality(Qt::NonModal);
+            message->show();
+        }
+        return true;
+    }catch(const std::exception& error){
+        QMessageBox::critical(this,"Import PSD",error.what());
+        return false;
+    }
+}
+void MainWindow::importImage(){auto* target=current();auto paths=QFileDialog::getOpenFileNames(this,"Import Images",{},"Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif *.psd *.psb *.svg *.cr2 *.nef *.arw *.dng *.raw);;All files (*)");QStringList images;for(const auto& path:paths){auto ext=QFileInfo(path).suffix().toLower();if(ext=="psd"||ext=="psb")importPhotoshop(path,true);else images.append(path);}if(!images.isEmpty())queueImageImports(images,target,{});}
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=QFileDialog::getSaveFileName(this,"Save Compositor Project",path.isEmpty()?"Untitled.comp":path,"Compositor project directory (*.comp)");if(path.isEmpty())return false;if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;

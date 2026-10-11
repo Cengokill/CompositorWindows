@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QSlider>
 #include <string>
+#include <algorithm>
 #include <cmath>
 #include <QMenu>
 #include <QMouseEvent>
@@ -69,6 +70,54 @@ void commit_ok() {
     const auto pixel = f.a->document->layers.front().raster->pixel(0, 0);
     require(pixel.r > 165 && pixel.r < 190 && pixel.r == pixel.g && pixel.a == 255, "OK bakes about one stop");
     rawModal(f, [](QDialog& dialog) { require(field<QDoubleSpinBox>(dialog, "Exposure")->value() == 1, "reopen restores the committed exposure"); }, false);
+}
+void commit_during_refinement() {
+    Fixture f(document(2048, 1536));
+    std::exception_ptr failure;
+    bool opened = false, finished = false, submitted = false, sawRefinement = false;
+    QPointer<QDialog> panel;
+    QMetaObject::Connection completion;
+    QEventLoop wait;
+    QTimer poll;
+    poll.setInterval(5);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    QObject::connect(&poll, &QTimer::timeout, &f.window, [&] {
+        try {
+            if (elapsed.elapsed() > 30000) throw std::runtime_error("Camera Raw refinement did not commit within 30 seconds");
+            QDialog* dialog = panel ? panel.data() : nullptr;
+            if (!dialog) for (auto* object : f.window.findChildren<QObject*>()) if (auto* session = dynamic_cast<ui::EditPanelSession*>(object))
+                if (session->canvas() == f.window.canvas() && session->panel() && session->panel()->isVisible()) dialog = session->panel();
+            if (!dialog) return;
+            if (!opened) {
+                opened = true;
+                panel = dialog;
+                completion = QObject::connect(dialog, &QDialog::finished, &wait, [&] { finished = true; wait.quit(); });
+                field<QDoubleSpinBox>(*dialog, "Exposure")->setValue(1);
+            }
+            auto* box = dialog->findChild<QDialogButtonBox*>();
+            auto* button = box ? box->button(QDialogButtonBox::Ok) : nullptr;
+            const auto labels = dialog->findChildren<QLabel*>();
+            const bool updating = std::any_of(labels.cbegin(), labels.cend(), [](const QLabel* label) { return label->text() == "Updating preview…"; });
+            if (!submitted && button && button->isEnabled() && updating) {
+                sawRefinement = true;
+                submitted = true;
+                button->click();
+            }
+        } catch (...) {
+            failure = std::current_exception();
+            poll.stop();
+            wait.quit();
+        }
+    });
+    poll.start();
+    f.trigger("filter.camera_raw");
+    if (!finished && !failure) wait.exec();
+    poll.stop();
+    QObject::disconnect(completion);
+    if (failure) std::rethrow_exception(failure);
+    require(opened && sawRefinement && submitted && finished, "OK was submitted while the refinement preview was running");
+    require(f.a->history.undoCount() == 1 && f.a->history.undoName() == "Camera Raw Filter", "OK during refinement commits one Camera Raw Filter undo");
 }
 void cancel_keeps() {
     Fixture f;
@@ -183,7 +232,7 @@ void glass_controls() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"glass_controls", glass_controls}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"glass_controls", glass_controls}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();

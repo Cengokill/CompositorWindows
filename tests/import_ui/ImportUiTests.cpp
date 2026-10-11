@@ -2,8 +2,10 @@
 #include "ui/WorkspaceDropQueue.h"
 #include "ui/MainWindow.h"
 #include "imaging/wic_codec.h"
+#include <QAbstractButton>
 #include <QApplication>
 #include <QDragEnterEvent>
+#include <QDir>
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -15,14 +17,17 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
+#include <QTimer>
 #include <QTreeWidget>
 #include <knownfolders.h>
 #include <shlobj.h>
 #include <QUrl>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <map>
+#include <vector>
 using namespace compositor;
 namespace {
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
@@ -72,10 +77,16 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         const auto file=temporary.filePath("welcome.psd");QFile psd(file);require(psd.open(QIODevice::WriteOnly)&&psd.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"Could not write PSD fixture");psd.close();
         MainWindow window(true);window.show();QApplication::processEvents();
         require(window.findChild<QPushButton*>("welcomeImportImage")!=nullptr,"Welcome import button missing");
+        QTimer::singleShot(0,&window,[&window]{
+            for(auto* widget:QApplication::topLevelWidgets()){
+                auto* box=qobject_cast<QMessageBox*>(widget);
+                if(!box||box->windowTitle()!="Import PSD")continue;
+                if(auto* yes=box->button(QMessageBox::Yes))yes->click();
+                else box->done(QMessageBox::Yes);
+            }
+        });
         window.importSelectedImages({file});
-        // Process deferred welcome-page destruction and its Qt child events.
         QApplication::processEvents(QEventLoop::AllEvents);
-        for(auto* box:window.findChildren<QMessageBox*>())require(!box->isVisible(),"PSD import unexpectedly displayed a confirmation dialog");
         auto* tabs=window.findChild<QTabWidget*>();
         require(tabs&&tabs->count()==1&&tabs->tabText(tabs->currentIndex()).contains("welcome.psd"),"Selected PSD did not replace the empty welcome");
         auto* layers=window.findChild<QTreeWidget*>();
@@ -83,6 +94,20 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         window.openPath(file);
         QApplication::processEvents(QEventLoop::AllEvents);
         require(tabs->count()==2&&tabs->tabText(tabs->currentIndex()).contains("welcome.psd"),"Opening a PSD added an empty project tab");
+    });
+    test("qt_opened_psd_report_lists_depth_and_merged_image",[&]{
+        std::vector<uint8_t> bytes;auto u16=[&](int v){bytes.push_back(uint8_t(v>>8));bytes.push_back(uint8_t(v));};auto u32=[&](uint32_t v){for(int s=24;s>=0;s-=8)bytes.push_back(uint8_t(v>>s));};
+        bytes.insert(bytes.end(),{'8','B','P','S'});u16(1);for(int i=0;i<6;++i)bytes.push_back(0);u16(3);u32(2);u32(2);u16(16);u16(3);u32(0);u32(0);u32(0);u16(0);
+        for(int i=0;i<4;++i){bytes.push_back(255);bytes.push_back(0);}for(int i=0;i<16;++i)bytes.push_back(0);
+        const auto file=temporary.filePath("merged-16.psd");QFile psd(file);require(psd.open(QIODevice::WriteOnly),"Could not write PSD fixture");require(psd.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"Could not write PSD bytes");psd.close();
+        MainWindow w(true);w.show();QApplication::processEvents();
+        w.openPath(file);
+        QApplication::processEvents();
+        auto* message=w.findChild<QMessageBox*>("psdImportReport");
+        require(message!=nullptr,"Opened PSD did not show the import report");
+        const auto text=message->text().toStdString();
+        require(text.find("16-bit")!=std::string::npos&&text.find("merged")!=std::string::npos,("PSD report omitted a substitution: "+text).c_str());
+        message->accept();
     });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }

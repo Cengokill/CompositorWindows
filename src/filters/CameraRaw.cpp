@@ -122,7 +122,7 @@ bool usesGuides(const CameraRawGeometrySettings& geometry) {
         return std::hypot(guide.endX - guide.startX, guide.endY - guide.startY) > 0.01;
     });
 }
-void warpGeometry(std::vector<std::uint8_t>& pixels, int w, int h, const CameraRawGeometrySettings& geometry) {
+void warpGeometry(std::vector<std::uint8_t>& pixels, int w, int h, const CameraRawGeometrySettings& geometry, const std::function<bool()>& cancelled) {
     if (w < 1 || h < 1 || !geometry.adjusts()) return;
     double vertical = geometry.vertical, horizontal = geometry.horizontal, rotate = geometry.rotate;
     if (geometry.upright == CameraRawUpright::Guided && !geometry.guides.empty()) {
@@ -187,7 +187,8 @@ void warpGeometry(std::vector<std::uint8_t>& pixels, int w, int h, const CameraR
     const auto inverse = Homography::fromCorners(corners).inverse();
     if (!inverse) return;
     const auto source = pixels;
-    for (int y = 0; y < h; ++y)
+    for (int y = 0; y < h; ++y) {
+        if ((y & 31) == 0 && cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
         for (int x = 0; x < w; ++x) {
             const auto unit = inverse->map({x + .5, y + .5});
             const double sx = unit.x * width - .5, sy = unit.y * height - .5;
@@ -201,6 +202,7 @@ void warpGeometry(std::vector<std::uint8_t>& pixels, int w, int h, const CameraR
             for (int c = 0; c < 3; ++c)
                 if (pixels[i + c] > alpha) pixels[i + c] = std::uint8_t(alpha);
         }
+    }
     if (!geometry.constrainCrop) return;
     int x0 = w, y0 = h, x1 = 0, y1 = 0;
     for (int y = 0; y < h; ++y)
@@ -253,23 +255,29 @@ void blendSelection(std::vector<std::uint8_t>& result, const std::vector<std::ui
 bool viewPaints(const CameraRawView& view) {
     return view.clipping || view.visualizePointColor >= 0 || view.sharpenMask || view.shadowOverlay || view.highlightOverlay;
 }
-std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, const CameraRawSettings& settings, const CameraRawView& view) {
+std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, const CameraRawSettings& settings, const CameraRawView& view, const std::function<bool()>& cancelled) {
+    auto stop = [&] { if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled"); };
     const bool clip = view.clipping != 0;
     const bool mask = view.sharpenMask;
     const double scale = view.scale > 0 ? view.scale : 1;
-    if (!clip && !mask && view.visualizePointColor < 0 && settings.geometry.adjusts()) warpGeometry(pixels, w, h, settings.geometry);
+    stop();
+    if (!clip && !mask && view.visualizePointColor < 0 && settings.geometry.adjusts()) warpGeometry(pixels, w, h, settings.geometry, cancelled);
+    stop();
     const auto stride = std::size_t(w) * 4;
     auto* bytes = pixels.data();
+    stop();
     if (!clip && !mask && settings.calibration.adjusts()) {
         const auto& calibration = settings.calibration;
         adjust_camera_raw_calibration(bytes, w, h, stride, calibration.shadowTint, calibration.redHue, calibration.redSaturation,
                                       calibration.greenHue, calibration.greenSaturation, calibration.blueHue, calibration.blueSaturation, int(calibration.process));
     }
+    stop();
     if (settings.adjustsLight() || settings.adjustsColor() || clip) {
         const auto gains = settings.gains();
         adjust_camera_raw(bytes, w, h, stride, gains.red, gains.green, gains.blue, settings.exposure, settings.contrast, settings.highlights,
                           settings.shadows, settings.whites, settings.blacks, settings.vibrance, settings.saturation, view.clipping);
     }
+    stop();
     const bool paintColor = !clip && !mask && (settings.curve.adjusts() || settings.mixer.adjusts() || settings.grading.adjusts() || view.visualizePointColor >= 0);
     if (paintColor) {
         const auto tone = settings.curve.toneTable();
@@ -283,6 +291,7 @@ std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, 
                                       mixer.data(), int(settings.mixer.points.size()), points.empty() ? nullptr : points.data(), grade.data(),
                                       settings.grading.blending / 100, settings.grading.balance / 100, view.visualizePointColor);
     }
+    stop();
     if (!clip && !mask && settings.adjustsEffects()) {
         if (settings.texture != 0 || settings.clarity != 0 || settings.dehaze != 0 || settings.glow != 0 || settings.vignetteAmount != 0)
             adjust_camera_raw_effects(bytes, w, h, stride, settings.texture, settings.clarity, settings.dehaze, settings.glow, int(settings.glowStyle),
@@ -291,6 +300,7 @@ std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, 
         if (settings.grainAmount > 0)
             adjust_grain(bytes, w, h, stride, settings.grainAmount, settings.grainKernelSize(), settings.grainRoughness, view.seed, 0, 0, 1 / scale);
     }
+    stop();
     if (!clip && (settings.detail.adjusts() || settings.optics.adjusts() || mask)) {
         if (mask) {
             adjust_camera_raw_sharpen_mask_overlay(bytes, w, h, stride, settings.detail.sharpenRadius, settings.detail.sharpenDetail, settings.detail.sharpenMasking, scale);
@@ -310,6 +320,22 @@ std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, 
         }
     }
     return pixels;
+}
+CameraRawScope scopeFrom(const std::uint8_t* rgba, int width, int height, int limit, const std::function<bool()>& cancelled) {
+    if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
+    if (limit < 1 || (width <= limit && height <= limit)) return CameraRawScope::make(rgba, width, height);
+    const double factor = double(limit) / std::max(width, height);
+    const int sw = std::max(1, int(std::lround(width * factor))), sh = std::max(1, int(std::lround(height * factor)));
+    std::vector<std::uint8_t> small(std::size_t(sw) * sh * 4);
+    for (int y = 0; y < sh; ++y) {
+        if ((y & 31) == 0 && cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
+        const int sy = std::min(height - 1, int((std::int64_t(y) * height) / sh));
+        for (int x = 0; x < sw; ++x) {
+            const int sx = std::min(width - 1, int((std::int64_t(x) * width) / sw));
+            std::copy_n(rgba + (std::size_t(sy) * width + sx) * 4, 4, small.data() + (std::size_t(y) * sw + x) * 4);
+        }
+    }
+    return CameraRawScope::make(small.data(), sw, sh);
 }
 }
 std::vector<Point> CameraRawCurveSettings::linear() { return {{0, 0}, {1, 1}}; }
@@ -676,10 +702,11 @@ CameraRawScope CameraRawScope::make(const std::uint8_t* rgba, int width, int hei
     }
     return scope;
 }
-CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& incoming, const CameraRawView& view, const GrayRaster* selection) {
+CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& incoming, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled) {
     const int w = source.width, h = source.height;
     const auto settings = incoming.normalized();
     auto original = source.rgba();
+    if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
     CameraRawView clean = view;
     clean.clipping = 0;
     clean.visualizePointColor = -1;
@@ -687,17 +714,17 @@ CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& i
     clean.shadowOverlay = false;
     clean.highlightOverlay = false;
     const bool early = settings.isIdentity() && !viewPaints(view);
-    std::vector<std::uint8_t> grade = early ? original : paint(original, w, h, settings, clean);
+    std::vector<std::uint8_t> grade = early ? original : paint(original, w, h, settings, clean, cancelled);
     blendSelection(grade, original, selection);
     CameraRawRender result;
-    result.scope = CameraRawScope::make(grade.data(), w, h);
+    result.scope = scopeFrom(grade.data(), w, h, view.scopeLimit, cancelled);
     result.changed = !early;
     std::vector<std::uint8_t> display = grade;
     if (view.clipping || view.sharpenMask || view.visualizePointColor >= 0) {
         auto shown = view;
         shown.shadowOverlay = false;
         shown.highlightOverlay = false;
-        display = paint(original, w, h, settings, shown);
+        display = paint(original, w, h, settings, shown, cancelled);
         blendSelection(display, original, selection);
         result.changed = true;
     }

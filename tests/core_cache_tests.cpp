@@ -28,6 +28,50 @@ void blank_culling(){Document d;d.width=d.height=30000;Layer l;l.id=newId();l.ra
 
 void lod_offscreen_invalidation(){auto d=document(768,64);d.width=2304;d.layers[0].transform.width=2304;CompositeCache cache;auto left=cache.renderViewport(d,0,0,512,64,2,1,3);auto right=cache.renderViewport(d,1536,0,512,64,2,1,3);std::vector<Pixel> blue(256*64,{0,0,255,255});d.layers[0].raster=d.layers[0].raster->replacing(512,0,256,64,blue.data(),256);auto leftAfter=cache.renderViewport(d,0,0,512,64,2,1,3);REQUIRE(leftAfter.raster->tiles[0]==left.raster->tiles[0]);auto rightAfter=cache.renderViewport(d,1536,0,512,64,2,1,3);REQUIRE(rightAfter.unitsPerPixel==2&&rightAfter.raster->tiles[0]!=right.raster->tiles[0]&&rightAfter.raster->pixel(0,0).b==191);}
 void blur_adjustment_tile_seam(){Document d;d.id=newId();d.width=512;d.height=32;Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,32,{255,0,0,255});image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};Layer blur;blur.id=newId();blur.adjustmentJson=effects::defaultAdjustmentJson("Gaussian Blur");blur.transform={0,0,512,32};d.layers={image,blur};auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);REQUIRE(tiled->pixel(255,16)==full->pixel(255,16)&&tiled->pixel(256,16)==full->pixel(256,16));REQUIRE(tiled->pixel(256,16).a>200);}
+Layer solid(const char* id,int width,int height,Pixel color,Transform transform){Layer layer;layer.id=id;layer.opacity=1;layer.raster=Raster::filled(width,height,color);layer.transform=transform;return layer;}
+void partial_metadata_damage(){
+    Document d;d.id=newId();d.width=768;d.height=256;
+    d.layers.push_back(solid("bg",768,256,{20,40,80,255},{0,0,768,256,0,false,false,Transform::Sampling::Nearest}));
+    Layer over=solid("over",200,80,{200,30,30,255},{20,40,200,80,0,false,false,Transform::Sampling::Nearest});
+    over.effects.specified=true;over.effects.dropShadow.enabled=true;over.effects.dropShadow.opacity=1;over.effects.dropShadow.distance=80;over.effects.dropShadow.size=8;over.effects.dropShadow.angle=0;
+    d.layers.push_back(over);
+    CompositeCache cache;auto before=cache.renderViewport(d,0,0,768,256,1,64,256);const auto far=before.raster->tiles[2];
+    d.layers[1].visible=false;auto hidden=cache.renderViewport(d,0,0,768,256,1,64,256);
+    REQUIRE(hidden.raster->tiles[2]==far);REQUIRE(hidden.raster->tiles[0]!=before.raster->tiles[0]);
+    equal(*hidden.raster,*SoftwareRenderer().renderScaled(d,hidden.documentX,hidden.documentY,hidden.raster->width,hidden.raster->height,1));
+    d.layers[1].visible=true;auto shown=cache.renderViewport(d,0,0,768,256,1,64,256);REQUIRE(shown.raster->tiles[2]==far);
+    d.layers[1].name="Renamed";auto renamed=cache.renderViewport(d,0,0,768,256,1,64,256);REQUIRE(renamed.raster->tiles==shown.raster->tiles);
+    d.layers[1].opacity=.4;auto faded=cache.renderViewport(d,0,0,768,256,1,64,256);
+    REQUIRE(faded.raster->tiles[2]==renamed.raster->tiles[2]);
+    equal(*faded.raster,*SoftwareRenderer().renderScaled(d,faded.documentX,faded.documentY,faded.raster->width,faded.raster->height,1));
+    d.layers[1].opacity=1;d.layers[1].transform.flipX=true;auto flipped=cache.renderViewport(d,0,0,768,256,1,64,256);
+    REQUIRE(flipped.raster->tiles[2]==faded.raster->tiles[2]);
+    equal(*flipped.raster,*SoftwareRenderer().renderScaled(d,flipped.documentX,flipped.documentY,flipped.raster->width,flipped.raster->height,1));
+}
+void group_visibility_damage(){
+    Document d;d.id=newId();d.width=768;d.height=256;
+    d.layers.push_back(solid("bg",768,256,{20,40,80,255},{0,0,768,256,0,false,false,Transform::Sampling::Nearest}));
+    Layer group;group.id="group";group.group=true;group.opacity=1;
+    Layer child=solid("child",180,90,{220,180,20,255},{30,20,180,90,0,false,false,Transform::Sampling::Nearest});child.parentId=group.id;
+    d.layers.push_back(group);d.layers.push_back(child);
+    CompositeCache cache;auto before=cache.renderViewport(d,0,0,768,256,1,64,256);const auto far=before.raster->tiles[2];
+    d.layers[1].visible=false;auto hidden=cache.renderViewport(d,0,0,768,256,1,64,256);
+    REQUIRE(hidden.raster->tiles[2]==far);REQUIRE(hidden.raster->tiles[0]!=before.raster->tiles[0]);
+    equal(*hidden.raster,*SoftwareRenderer().renderScaled(d,hidden.documentX,hidden.documentY,hidden.raster->width,hidden.raster->height,1));
+}
+void flip_full_frame_matches(){
+    Document d;d.id=newId();d.width=512;d.height=256;
+    auto raster=Raster::filled(512,256,{10,20,30,255});const Pixel red{255,0,0,255},blue{0,0,255,255};
+    raster=raster->replacing(0,4,1,1,&red,1);raster=raster->replacing(511,20,1,1,&blue,1);
+    Layer layer;layer.id="photo";layer.opacity=1;layer.raster=raster;layer.transform={0,0,512,256};
+    d.layers={layer};
+    CompositeCache cache;cache.renderViewport(d,0,0,512,256,1,64,256);
+    d.layers[0].transform.flipX=true;auto horizontal=cache.renderViewport(d,0,0,512,256,1,64,256);
+    equal(*horizontal.raster,*SoftwareRenderer().renderScaled(d,horizontal.documentX,horizontal.documentY,horizontal.raster->width,horizontal.raster->height,1));
+    REQUIRE(horizontal.raster->pixel(0,20).b==255);REQUIRE(horizontal.raster->pixel(511,4).r==255);
+    d.layers[0].transform.flipY=true;auto both=cache.renderViewport(d,0,0,512,256,1,64,256);
+    equal(*both.raster,*SoftwareRenderer().renderScaled(d,both.documentX,both.documentY,both.raster->width,both.raster->height,1));
+}
 void unsupported_blank_adjustment(){Document d;d.width=d.height=30000;Layer adjustment;adjustment.id=newId();adjustment.adjustmentJson="{\"kind\":\"unsupported\"}";d.layers={adjustment};for(bool viewport:{false,true}){CompositeCache cache;bool rejected=false;try{if(viewport)cache.renderViewport(d,0,0,30000,30000);else cache.render(d);}catch(const std::exception&){rejected=true;}REQUIRE(rejected);}d.layers[0].visible=false;CompositeCache cache;REQUIRE(unique(*cache.render(d))==1);}
 
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}

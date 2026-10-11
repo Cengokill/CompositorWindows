@@ -135,10 +135,13 @@ class MainWindow final:public QMainWindow {
         std::optional<TextContent> fontPreviewOriginal;
         std::optional<TextContent> layoutInput;
         std::string preedit;
+        std::string toolbarFace,toolbarVariant;
         text::TextLayout layout;
     };
     std::optional<TextSession> textSession_;
     bool fontChoiceKept_{};
+    QPointer<QComboBox> textFontBox_;
+    QPointer<QComboBox> textStyleBox_;
     bool textSelecting_{};
     bool textArming_{};
     Point textArmPoint_{};
@@ -209,8 +212,9 @@ class MainWindow final:public QMainWindow {
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
     void queueImageImports(const QStringList&,EditorProject*,std::optional<Point> = {});
+    bool importPhotoshop(const QString& path, bool confirm=true);
     void refresh(bool render=true,bool rebuildLayers=true);
-    void edit(const char* name,const std::function<void(Document&)>& operation);
+    void edit(const char* name,const std::function<void(Document&)>& operation,bool rebuildLayers=true);
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);
     void newDialog();
     void checkForUpdates();
