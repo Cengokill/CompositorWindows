@@ -158,11 +158,6 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
     QObject::connect(thread,&QThread::finished,&loop,&QEventLoop::quit,Qt::QueuedConnection);
     thread->start();
-    if(!thread->isRunning()&&!thread->isFinished()){
-        logging::trace("native save picker thread failed to start");
-        delete thread;
-        return {};
-    }
     if(!thread->isFinished())loop.exec(QEventLoop::ExcludeUserInputEvents);
     if(!guard)return {};
     return *path;
@@ -514,11 +509,6 @@ void startNativeImport(MainWindow* window,const QString& directory,QObject* dest
         deferSelectedImageImport(guard.data(),std::move(*paths),target,true);
     },Qt::QueuedConnection);
     thread->start();
-    if(!thread->isRunning()&&!thread->isFinished()){
-        if(guard)guard->setProperty("nativePickerInProgress",false);
-        logging::trace("native picker thread failed to start");
-        delete thread;
-    }
 }
 }
 void MainWindow::importWelcomeImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
