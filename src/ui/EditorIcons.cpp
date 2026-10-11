@@ -1,5 +1,6 @@
 #include "EditorIcons.h"
 #include <QApplication>
+#include <QFont>
 #include <QIconEngine>
 #include <QPainter>
 #include <QPainterPath>
@@ -100,17 +101,9 @@ public:
         case EditorIcon::Zoom:
             p->drawEllipse(QRectF(3,3,13,13)); line(14,14,21,21); break;
         case EditorIcon::Type: {
-            p->setBrush(color); p->setPen(Qt::NoPen);
-            QPainterPath capital; capital.setFillRule(Qt::OddEvenFill);
-            capital.moveTo(0.6,20.2); capital.lineTo(5.6,3.4); capital.lineTo(8.4,3.4);
-            capital.lineTo(13.4,20.2); capital.lineTo(10.9,20.2); capital.lineTo(9.95,16.5);
-            capital.lineTo(4.05,16.5); capital.lineTo(3.1,20.2); capital.closeSubpath();
-            capital.moveTo(4.85,14.3); capital.lineTo(9.15,14.3); capital.lineTo(7.0,6.5); capital.closeSubpath();
-            p->drawPath(capital);
-            QPainterPath small; small.setFillRule(Qt::OddEvenFill);
-            small.addRoundedRect(QRectF(13.5,8.6,8.4,11.6),4.1,4.1);
-            small.addEllipse(QRectF(14.9,10.4,4.4,7.8));
-            p->drawPath(small);
+            QFont font("Segoe UI"); font.setPixelSize(18); font.setWeight(QFont::DemiBold);
+            p->setFont(font); p->setPen(color);
+            p->drawText(QRectF(0,1,24,22),Qt::AlignCenter,"Aa");
             break;
         }
         case EditorIcon::Group:
