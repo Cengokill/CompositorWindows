@@ -14,13 +14,14 @@
 namespace compositor::filters {
 namespace {
 void cancel(const Limits& l){if(l.cancelled&&l.cancelled())throw std::runtime_error("Filter cancelled");}
+void gateSize(int w,int h){if(w<1||h<1||w>30000||h>30000||std::uint64_t(w)*h>100000000)throw std::runtime_error("Filter exceeds the 100-megapixel or 30000-pixel-side budget");}
 std::size_t count(int w,int h,const Limits& l,std::uint64_t bytesPerPixel=24){
-    if(w<1||h<1||w>30000||h>30000||std::uint64_t(w)*h>100000000)throw std::runtime_error("Filter exceeds the 100-megapixel or 30000-pixel-side budget");
-    const auto n=std::uint64_t(w)*h;
-    // Tiled intermediates also allocate full edge tiles, especially significant
-    // for very thin images. Three grids can coexist during grow/run/final trim.
+    gateSize(w,h);const auto n=std::uint64_t(w)*h;
+    // Linear RGBA/float intermediates are charged via bytesPerPixel. One tiled
+    // Raster accounts for edge-tile waste on thin images without treating the
+    // same pixels as three extra full grids.
     const auto tiles=std::uint64_t((w+Raster::tileSide-1)/Raster::tileSide)*((h+Raster::tileSide-1)/Raster::tileSide);
-    const auto estimated=n*bytesPerPixel+tiles*sizeof(Raster::Tile)*3;
+    const auto estimated=n*bytesPerPixel+tiles*sizeof(Raster::Tile);
     if(estimated>l.maxWorkingBytes)throw std::runtime_error("Filter exceeds transient allocation budget");return std::size_t(n);
 }
 void checkSelection(const GrayRaster& m){if(m.width<1||m.height<1||m.width>30000||m.height>30000||std::uint64_t(m.width)*m.height>100000000||m.pixels.size()!=std::size_t(m.width)*m.height)throw std::runtime_error("Invalid source selection storage");}
@@ -103,13 +104,13 @@ void scanlines(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,c
             if(glow>0&&y>0&&y+1<h){auto above=(std::size_t(y-1)*w+x)*4,below=(std::size_t(y+1)*w+x)*4;for(int c=0;c<3;++c)pixels[i+c]=byte(std::min(255.,pixels[i+c]+(source[above+c]+source[below+c])*.5*glow));}
         }});
 }
-std::shared_ptr<const Raster> resize(const Raster& source,int w,int h,const Limits& limits){
+// Nearest sample of `source` into `w`×`h` as if the logical `bounds` grid
+// (including transparent exterior padding) had been materialized first.
+std::shared_ptr<const Raster> resize(const Raster& source,PixelRect bounds,int w,int h,const Limits& limits){
     count(w,h,limits);std::vector<std::uint8_t> out(std::size_t(w)*h*4);
     // Filters.prepared uses BrushRaster.draw with interpolationQuality=.none.
-    // Read source tiles at destination pixel centers, preserving premultiplication
-    // and avoiding a second full source RGBA allocation for the preview copy.
-    for(int y=0;y<h;++y){cancel(limits);const int sy=int((std::int64_t(2*y+1)*source.height)/(2*h));
-        for(int x=0;x<w;++x){const int sx=int((std::int64_t(2*x+1)*source.width)/(2*w));
+    for(int y=0;y<h;++y){cancel(limits);const int sy=bounds.y+int((std::int64_t(2*y+1)*bounds.height)/(2*h));
+        for(int x=0;x<w;++x){const int sx=bounds.x+int((std::int64_t(2*x+1)*bounds.width)/(2*w));
             const auto p=source.pixel(sx,sy);const auto i=(std::size_t(y)*w+x)*4;
             out[i]=p.r;out[i+1]=p.g;out[i+2]=p.b;out[i+3]=p.a;}}
     return Raster::fromRgba(w,h,out.data(),std::size_t(w)*4);
@@ -142,16 +143,18 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
     graphics::clampPremultiplied(view(result,w,h));return Raster::fromRgba(w,h,result.data(),std::size_t(w)*4);
 }
 Result apply(const Request& request){
-    kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;count(original.width,original.height,request.limits);if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>1002)throw std::runtime_error("Invalid retained blur margin");
+    kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>1002)throw std::runtime_error("Invalid retained blur margin");
     Result result{request.source,request.transform,{0,0,original.width,original.height},1,false,{}};auto settings=request.settings.normalized();if(request.selection){if(!request.selection->coverage)throw std::runtime_error("Present selection must have coverage");checkSelection(*request.selection->coverage);if(std::abs(std::int64_t(request.selection->originX))>30000||std::abs(std::int64_t(request.selection->originY))>30000)throw std::runtime_error("Source selection origin exceeds supported extent");if(empty(*request.selection->coverage))return result;}
     if(request.kind==Kind::ContentAwareFill&&!request.selection)throw std::runtime_error("Content-Aware Fill needs a selection");if(request.kind==Kind::LensCorrection&&settings.distortion==0)return result;if(finishingIdentity(request.kind,settings))return result;
     PixelRect bounds{0,0,original.width,original.height};const bool spreads=request.kind==Kind::GaussianBlur||request.kind==Kind::MotionBlur;
     if(spreads){int margin=int(std::ceil(std::max(request.retainedBlurMargin,blurMargin(request.kind,settings))));bounds={-margin,-margin,original.width+2*margin,original.height+2*margin};}
     if(request.kind==Kind::ContentAwareFill){auto selection=coverageBounds(*request.selection);int loX=std::min(0,selection.x),loY=std::min(0,selection.y);bounds={loX,loY,std::max(original.width,selection.x+selection.width)-loX,std::max(original.height,selection.y+selection.height)-loY};}
-    count(bounds.width,bounds.height,request.limits,request.kind==Kind::ContentAwareFill?32:24);auto working=request.source;
-    if(bounds!=PixelRect{0,0,original.width,original.height}){std::vector<std::uint8_t> pixels(std::size_t(bounds.width)*bounds.height*4);for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=original.pixel(x,y);auto i=(std::size_t(y-bounds.y)*bounds.width+x-bounds.x)*4;pixels[i]=p.r;pixels[i+1]=p.g;pixels[i+2]=p.b;pixels[i+3]=p.a;}}working=Raster::fromRgba(bounds.width,bounds.height,pixels.data(),std::size_t(bounds.width)*4);}
-    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=request.kind==Kind::CameraRaw&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(working->width,working->height)):1.;
-    if(factor<1){int w=std::max(1,int(working->width*factor)),h=std::max(1,int(working->height*factor));factor=double(w)/working->width;working=resize(*working,w,h,request.limits);}
+    gateSize(bounds.width,bounds.height);
+    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=request.kind==Kind::CameraRaw&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
+    std::shared_ptr<const Raster> working;
+    if(factor<1){int w=std::max(1,int(bounds.width*factor)),h=std::max(1,int(bounds.height*factor));factor=double(w)/bounds.width;working=resize(original,bounds,w,h,request.limits);}
+    else{count(bounds.width,bounds.height,request.limits,request.kind==Kind::ContentAwareFill?32:24);working=request.source;
+        if(bounds!=PixelRect{0,0,original.width,original.height}){std::vector<std::uint8_t> pixels(std::size_t(bounds.width)*bounds.height*4);for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=original.pixel(x,y);auto i=(std::size_t(y-bounds.y)*bounds.width+x-bounds.x)*4;pixels[i]=p.r;pixels[i+1]=p.g;pixels[i+2]=p.b;pixels[i+3]=p.a;}}working=Raster::fromRgba(bounds.width,bounds.height,pixels.data(),std::size_t(bounds.width)*4);}}
     std::optional<GrayRaster> selected;if(request.selection){const auto& input=*request.selection;selected=GrayRaster{working->width,working->height,std::vector<std::uint8_t>(std::size_t(working->width)*working->height)};for(int y=0;y<working->height;++y)for(int x=0;x<working->width;++x){int sx=int(std::floor(bounds.x+(x+.5)*bounds.width/working->width))-input.originX,sy=int(std::floor(bounds.y+(y+.5)*bounds.height/working->height))-input.originY;selected->pixels[std::size_t(y)*working->width+x]=input.coverage->pixel(sx,sy);}}
     if(request.kind==Kind::CameraRaw){
         auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;

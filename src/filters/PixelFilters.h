@@ -21,7 +21,8 @@ struct PixelRect {int x{},y{},width{},height{};bool operator==(const PixelRect&)
 // a selection to extend outside the original grid for Content-Aware Fill.
 struct SourceSelection {std::shared_ptr<const GrayRaster> coverage;int originX{},originY{};};
 struct Limits {
-    std::uint64_t maxWorkingBytes{1200000000};
+    // Covers a 100-megapixel Apply (linear intermediates plus one tiled Raster).
+    std::uint64_t maxWorkingBytes{4000000000};
     std::function<bool()> cancelled;
 };
 struct Request {
