@@ -2,7 +2,6 @@
 #include "ui/WorkspaceDropQueue.h"
 #include "ui/MainWindow.h"
 #include "imaging/wic_codec.h"
-#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QDragEnterEvent>
@@ -21,7 +20,6 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
-#include <QTimer>
 #include <QTreeWidget>
 #include <knownfolders.h>
 #include <shlobj.h>
@@ -81,14 +79,6 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         const auto file=temporary.filePath("welcome.psd");QFile psd(file);require(psd.open(QIODevice::WriteOnly)&&psd.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"Could not write PSD fixture");psd.close();
         MainWindow window(true);window.show();QApplication::processEvents();
         require(window.findChild<QPushButton*>("welcomeImportImage")!=nullptr,"Welcome import button missing");
-        QTimer::singleShot(0,&window,[&window]{
-            for(auto* widget:QApplication::topLevelWidgets()){
-                auto* box=qobject_cast<QMessageBox*>(widget);
-                if(!box||box->windowTitle()!="Import PSD")continue;
-                if(auto* yes=box->button(QMessageBox::Yes))yes->click();
-                else box->done(QMessageBox::Yes);
-            }
-        });
         window.importSelectedImages({file});
         QApplication::processEvents(QEventLoop::AllEvents);
         auto* tabs=window.findChild<QTabWidget*>();
@@ -177,11 +167,11 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         MainWindow w(true);w.show();QApplication::processEvents();
         w.openPath(file);
         QApplication::processEvents();
-        auto* message=w.findChild<QMessageBox*>("psdImportReport");
-        require(message!=nullptr,"Opened PSD did not show the import report");
-        const auto text=message->text().toStdString();
-        require(text.find("16-bit")!=std::string::npos&&text.find("merged")!=std::string::npos,("PSD report omitted a substitution: "+text).c_str());
-        message->accept();
+        auto* tabs=w.findChild<QTabWidget*>();
+        require(tabs&&tabs->count()==1&&tabs->tabText(tabs->currentIndex()).contains("merged-16.psd"),"Opened 16-bit PSD did not replace the empty welcome");
+        auto* layers=w.findChild<QTreeWidget*>();
+        require(layers&&layers->topLevelItemCount()==1&&layers->topLevelItem(0)->text(0).contains("Background"),"Opened 16-bit PSD did not import the merged image");
+        require(w.findChildren<QMessageBox*>().isEmpty(),"Opened PSD showed a success dialog");
     });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }

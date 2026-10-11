@@ -212,7 +212,7 @@ class MainWindow final:public QMainWindow {
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
     void queueImageImports(const QStringList&,EditorProject*,std::optional<Point> = {});
-    bool importPhotoshop(const QString& path, bool confirm=true);
+    bool importPhotoshop(const QString& path);
     void refresh(bool render=true,bool rebuildLayers=true);
     void edit(const char* name,const std::function<void(Document&)>& operation,bool rebuildLayers=true);
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);
