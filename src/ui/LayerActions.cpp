@@ -51,7 +51,7 @@ void MainWindow::finishVisibilitySwipe(){
     if(owner){
         try{owner->history.end(owner->document,owner->active);}
         catch(...){if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}throw;}
-        if(owner==current())refresh();
+        if(owner==current()){refresh(true,false);if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome();}
     }
 }
 void MainWindow::layerCommand(int command){
@@ -87,7 +87,7 @@ void MainWindow::layerCommand(int command){
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()==target)tabs_->setCurrentIndex(i);refresh();if(first)target->canvas->fit();break;
         }
         case 10:QTimer::singleShot(0,this,[this]{if(auto*item=layers_->currentItem())layers_->editItem(item,0);});break;
-        case 11:if(active())edit("Layer Visibility",[this](Document&){active()->visible=!active()->visible;});break;
+        case 11:if(active()){edit("Layer Visibility",[this](Document&){active()->visible=!active()->visible;},false);if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome();}break;
         case 12:applyLayerEdit(layers::releaseClipping(d,selection,p->active));break;
         case 13:applyLayerEdit(layers::ungroup(d,selection));break;
     }
@@ -113,12 +113,12 @@ void MainWindow::setupLayerActions(){
         auto* project=current();auto& document=*project->document;
         auto found=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.id==id;});if(found==document.layers.end())return {};
         const bool visible=!found->visible;visibilityOwner_=project;project->history.begin(visible?"Show Layer":"Hide Layer",project->document,project->active);
-        found->visible=visible;refresh(false,false);return visible;
+        found->visible=visible;refresh(true,false);if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome();return visible;
     };
     host.setVisibilityInSwipe=[this](const std::string& id,bool visible){
         if(!visibilityOwner_||!visibilityOwner_->document)return;
         for(auto& layer:visibilityOwner_->document->layers)if(layer.id==id){layer.visible=visible;break;}
-        if(visibilityOwner_==current())refresh(false,false);
+        if(visibilityOwner_==current()){refresh(true,false);if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome();}
     };
     host.endVisibilitySwipe=[this]{finishVisibilitySwipe();};
     new ui::LayerPanelController(layers_,std::move(host));
@@ -137,7 +137,7 @@ void MainWindow::setupLayerActions(){
                 if(found==owner->document->layers.end())return;
                 const bool renamed=!name.empty()&&name!=found->name;if(!renamed&&visible==found->visible)return;
                 applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
-                edit(renamed?"Rename Layer":"Layer Visibility",[&](Document& document){for(auto& layer:document.layers)if(layer.id==id){layer.visible=visible;if(!name.empty())layer.name=name;}});
+                const bool visibilityOnly=!renamed;edit(renamed?"Rename Layer":"Layer Visibility",[&](Document& document){for(auto& layer:document.layers)if(layer.id==id){layer.visible=visible;if(!name.empty())layer.name=name;}},!visibilityOnly);if(visibilityOnly)if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome();
             }catch(const std::exception& error){statusBar()->showMessage(QString::fromUtf8(error.what()));}
         });
     });

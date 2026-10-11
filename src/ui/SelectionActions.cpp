@@ -15,8 +15,8 @@
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QKeyEvent>
-#include <QFontComboBox>
 #include <QComboBox>
+#include <QTimer>
 #include <QSignalBlocker>
 #include <chrono>
 #include <QInputDialog>
@@ -197,9 +197,21 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event){
         }
     }
     auto popupOf=[&](QComboBox* combo){return combo&&combo->view()&&watched==combo->view()->window();};
-    if(popupOf(findChild<QFontComboBox*>("textFont"))||popupOf(findChild<QComboBox*>("textStyle"))){
+    if(popupOf(textFontBox_)||popupOf(textStyleBox_)){
         if(event->type()==QEvent::Show)fontChoiceKept_=false;
-        if(event->type()==QEvent::Hide){if(!fontChoiceKept_)endTextFontPreview();fontChoiceKept_=false;focusTextCanvas();}
+        if(event->type()==QEvent::Hide){
+            const bool kept=fontChoiceKept_;
+            fontChoiceKept_=false;
+            if(!kept)endTextFontPreview();
+            QTimer::singleShot(0,this,[this]{
+                auto popupOpen=[](QComboBox* combo){return combo&&combo->view()&&combo->view()->isVisible();};
+                if(popupOpen(textFontBox_)||popupOpen(textStyleBox_))return;
+                auto* focus=QApplication::focusWidget();
+                if(textFontBox_&&(focus==textFontBox_||focus==textFontBox_->lineEdit()))return;
+                if(textStyleBox_&&(focus==textStyleBox_||focus==textStyleBox_->lineEdit()))return;
+                focusTextCanvas();
+            });
+        }
     }
     if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){
         auto* widget=qobject_cast<QWidget*>(watched);if(widget&&widget->window()==this){auto* key=static_cast<QKeyEvent*>(event);

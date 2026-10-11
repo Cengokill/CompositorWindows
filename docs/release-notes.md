@@ -1,4 +1,4 @@
-# Compositor Windows preview 0.1.4
+# Compositor Windows preview 0.1.5
 
 This independent Windows 11 x64 port is based on Compositor 1.0.4 at
 `a19db9011282399785dc18efcfded904627bdcc2`. Compositor was created by
@@ -17,7 +17,9 @@ menus and tabs, compact adjustment panels, colored Hue/Saturation sliders and
 a project picker. Layer rows place visibility, image and mask thumbnails before
 the name. The vector tool rail and keyboard shortcuts remain available.
 
-Version 0.1.4 prepares the public repository, consolidates documentation, and updates Windows port credits and package naming. Editing behavior is unchanged from 0.1.3.
+Version 0.1.4 adds canvas text editing and paragraph boxes, CPU layer effects, horizontal PSD and PSB type import, and the destructive Camera Raw Filter. Paragraph fields that need them are stored as project version 12. Camera Raw replaces the active image layer, docks to the document window, and is not saved in the `.comp` project. There is no camera profile or kelvin preset. Guided Upright is a two-line heuristic, its guide lines are not drawn, and geometry is a CPU homography. Full Mac equivalence is not claimed. Version 0.1.4 also prepares the public repository, consolidates documentation, and updates Windows port credits and package naming.
+
+Version 0.1.5 keeps a partial text selection on the chosen glyphs and keeps the font and style chosen in the type menus. PSD and PSB import keeps Unicode layer names, converts 16-bit RGB channels to 8-bit, and imports the merged composite when layer records cannot be decoded. The import report lists those substitutions.
 
 ## What you can do
 

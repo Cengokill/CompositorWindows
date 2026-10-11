@@ -7,7 +7,10 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QSpinBox>
+#include <QAbstractItemView>
+#include <QTest>
 #include <QToolButton>
+#include <algorithm>
 #include <cmath>
 #include <objbase.h>
 #include <functional>
@@ -40,5 +43,45 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
     test("keyboard_type_double_click_edit_and_drag_highlight",[&]{MainWindow window(true);auto& project=window.addProject(example());project.canvas->setFocus();key(window,Qt::Key_T);project.canvas->pointerDown({8,8},{});project.canvas->pointerUp({8,8},{});for(auto letter:{Qt::Key_H,Qt::Key_E,Qt::Key_L,Qt::Key_L,Qt::Key_O})key(window,letter);key(window,Qt::Key_Return,Qt::ControlModifier);const auto frame=project.document->layers.back().transform;const QPointF inside{frame.x+std::min(12.,frame.width*.2),frame.y+frame.height*.45};key(window,Qt::Key_V);require(!typeTool(window),"V did not leave the type tool");const auto layersBefore=project.document->layers.size();project.canvas->pointerDoubleClick({1,1},{});project.canvas->pointerUp({1,1},{});require(project.document->layers.size()==layersBefore&&!typeTool(window),"Double-click away from text created a text layer");project.canvas->pointerDoubleClick(inside,{});require(typeTool(window),"Double-click did not edit the text layer");key(window,Qt::Key_Z);key(window,Qt::Key_Return,Qt::ControlModifier);require(project.document->layers.back().text&&project.document->layers.back().text->value=="z","Double-click did not select the word");control<QAction>(window,"command.edit.undo")->trigger();require(project.document->layers.back().text&&project.document->layers.back().text->value=="hello","Undo did not restore the double-clicked word");key(window,Qt::Key_X);key(window,Qt::Key_T);const QPointF across{frame.x+frame.width*.55,inside.y()};project.canvas->pointerDown(inside,{});project.canvas->pointerMove(across,{});project.canvas->pointerUp(across,{});control<QAction>(window,"textApplyForeground")->trigger();key(window,Qt::Key_Return,Qt::ControlModifier);const auto& highlighted=project.document->layers.back().text;require(highlighted&&!highlighted->colorRuns.empty()&&highlighted->colorRuns.front().length>0&&highlighted->colorRuns.front().length<5,"Drag did not highlight part of the text");});
     test("keyboard_shift_u_and_text_focus_guard",[&]{MainWindow window(true);auto& project=window.addProject(example());key(window,Qt::Key_U,Qt::ShiftModifier);require(control<QComboBox>(window,"shapeKind")->currentIndex()==0,"First Shift U toggled before choosing shape");key(window,Qt::Key_U,Qt::ShiftModifier);require(control<QComboBox>(window,"shapeKind")->currentIndex()==1,"Second Shift U did not toggle ellipse");const auto before=project.document;auto* input=new QLineEdit(&window);window.show();input->show();input->setFocus();QApplication::processEvents();require(QApplication::focusWidget()==input,"Text focus witness unavailable");key(window,Qt::Key_Delete);key(window,Qt::Key_Right);key(window,Qt::Key_U,Qt::ShiftModifier);require(project.document==before&&control<QComboBox>(window,"shapeKind")->currentIndex()==1,"Editing keys escaped text focus guard");});
     test("keyboard_paragraph_style_word_and_duplicate",[&]{MainWindow window(true);auto& project=window.addProject(example());project.canvas->setFocus();key(window,Qt::Key_T);drag(project,{200,200},{360,280});for(auto letter:{Qt::Key_H,Qt::Key_E,Qt::Key_L,Qt::Key_L,Qt::Key_O,Qt::Key_Space,Qt::Key_H,Qt::Key_E,Qt::Key_L,Qt::Key_L,Qt::Key_O,Qt::Key_Space,Qt::Key_H,Qt::Key_E,Qt::Key_L,Qt::Key_L,Qt::Key_O})key(window,letter);key(window,Qt::Key_Return,Qt::ControlModifier);const auto& boxed=project.document->layers.back();require(boxed.text&&boxed.text->boxWidth&&*boxed.text->boxWidth>=16&&boxed.text->value=="hello hello hello","Drag did not commit a paragraph box");const auto color=*boxed.text;key(window,Qt::Key_T);const auto frame=boxed.transform;project.canvas->pointerDown({frame.x+frame.width*.3,frame.y+frame.height*.5},{});project.canvas->pointerUp({frame.x+frame.width*.3,frame.y+frame.height*.5},{});control<QToolButton>(window,"textColor")->click();QApplication::processEvents();auto* red=window.findChild<QSpinBox*>("paletteRGB0");require(red!=nullptr,"Text color picker did not open");red->setValue(color.red>0.5?0:255);if(auto* dialog=qobject_cast<QDialog*>(red->window()))dialog->reject();QApplication::processEvents();key(window,Qt::Key_Return,Qt::ControlModifier);require(project.document->layers.back().text&&std::abs(project.document->layers.back().text->red-color.red)<1e-6&&project.document->layers.back().text->colorRuns.empty(),"Cancelling the color picker kept the preview");key(window,Qt::Key_T);project.canvas->pointerDown({8,30},{});project.canvas->pointerUp({8,30},{});for(auto letter:{Qt::Key_A,Qt::Key_B,Qt::Key_Space,Qt::Key_C,Qt::Key_D})key(window,letter);key(window,Qt::Key_Left,Qt::ControlModifier);key(window,Qt::Key_Left,Qt::ControlModifier);key(window,Qt::Key_Z);key(window,Qt::Key_Return,Qt::ControlModifier);require(project.document->layers.back().text&&project.document->layers.back().text->value=="zab cd",("Ctrl+Left did not move by word: "+(project.document->layers.back().text?project.document->layers.back().text->value:std::string{})).c_str());key(window,Qt::Key_T);project.canvas->pointerDown({frame.x+frame.width*.3,frame.y+frame.height*.5},{});project.canvas->pointerUp({frame.x+frame.width*.3,frame.y+frame.height*.5},{});key(window,Qt::Key_Home);key(window,Qt::Key_Right,Qt::ShiftModifier);key(window,Qt::Key_Right,Qt::ShiftModifier);auto* fonts=control<QFontComboBox>(window,"textFont");if(fonts->findText("Arial")<0)fonts->addItem("Arial");fonts->setCurrentIndex(fonts->findText("Arial"));project.canvas->setFocus();key(window,Qt::Key_A,Qt::ControlModifier);auto* styles=control<QComboBox>(window,"textStyle");require(fonts->currentText()=="Multiple"&&styles->currentText()=="Multiple",("Mixed text did not show Multiple: font='"+fonts->currentText().toStdString()+"' style='"+styles->currentText().toStdString()+"'").c_str());key(window,Qt::Key_Escape);auto& textLayer=project.document->layers[1];textLayer.mask=Mask{gray(180),true,true};textLayer.effects.specified=true;textLayer.effects.stroke.enabled=true;textLayer.effects.stroke.size=4;const auto duplicated=textLayer.text->value;project.active=textLayer.id;project.selected={textLayer.id};const auto copies=project.document->layers.size();auto* duplicate=control<QAction>(window,"command.layer.duplicate");require(duplicate->shortcut()==QKeySequence("Ctrl+Shift+J"),"Duplicate Layer shortcut is not Ctrl+Shift+J");require(duplicate->isEnabled(),"Duplicate Layer is disabled");duplicate->trigger();require(project.document->layers.size()==copies+1,"Ctrl+Shift+J did not duplicate the layer");const auto& copy=project.document->layers[2];require(copy.text&&copy.text->value==duplicated&&copy.mask&&copy.effects.stroke.enabled&&copy.effects.stroke.size==4,"Duplicate dropped text, mask, or stroke");});
+    test("keyboard_type_font_and_style_combos",[&]{
+        MainWindow window(true);auto& project=window.addProject(example());window.show();window.resize(1100,700);QApplication::processEvents();
+        project.canvas->setFocus();key(window,Qt::Key_T);project.canvas->pointerDown({8,8},{});project.canvas->pointerUp({8,8},{});key(window,Qt::Key_H);QApplication::processEvents();
+        auto* fonts=control<QFontComboBox>(window,"textFont");auto* styles=control<QComboBox>(window,"textStyle");
+        require(fonts->findChild<QObject*>("comboFieldPopup")!=nullptr,"Font combo missing field-click opener");
+        require(styles->findChild<QObject*>("comboFieldPopup")!=nullptr,"Style combo missing field-click opener");
+        require(styles->isEnabled()&&styles->count()>0,("Style combo unavailable: enabled="+std::to_string(styles->isEnabled())+" count="+std::to_string(styles->count())).c_str());
+        auto clickField=[](QComboBox* combo){
+            combo->hidePopup();QApplication::processEvents();
+            auto* field=combo->lineEdit();require(field!=nullptr,"Combo has no field");
+            QTest::mouseClick(field,Qt::LeftButton,Qt::NoModifier,QPoint(std::max(4,field->width()/2),std::max(4,field->height()/2)));
+            QApplication::processEvents();QTest::qWait(50);
+        };
+        clickField(styles);
+        require(styles->view()&&styles->view()->isVisible(),"Clicking the style field did not open the popup");
+        int bold=styles->findText("Bold",Qt::MatchContains);require(bold>=0,"Bold style is missing");
+        const auto boldIndex=styles->model()->index(bold,styles->modelColumn(),styles->rootModelIndex());
+        QTest::mouseClick(styles->view()->viewport(),Qt::LeftButton,Qt::NoModifier,styles->view()->visualRect(boldIndex).center());
+        QApplication::processEvents();QTest::qWait(30);
+        styles=control<QComboBox>(window,"textStyle");
+        require(styles->currentText().contains("Bold",Qt::CaseInsensitive),("Style combo did not keep Bold: '"+styles->currentText().toStdString()+"'").c_str());
+        fonts=control<QFontComboBox>(window,"textFont");
+        clickField(fonts);
+        require(fonts->view()&&fonts->view()->isVisible(),"Clicking the font field did not open the popup");
+        if(fonts->count()>1){const auto idx=fonts->model()->index(1,fonts->modelColumn(),fonts->rootModelIndex());fonts->view()->setCurrentIndex(idx);}
+        QApplication::processEvents();
+        require(fonts->view()&&fonts->view()->isVisible(),"Font preview closed the popup");
+        fonts->hidePopup();QApplication::processEvents();
+        if(fonts->findText("Arial")<0)fonts->addItem("Arial");
+        const int familyIndex=fonts->findText("Arial");
+        require(familyIndex>=0&&fonts->itemText(familyIndex)!=fonts->currentText(),"No alternate font family to activate");
+        const auto family=fonts->itemText(familyIndex).toStdString();
+        emit fonts->activated(familyIndex);
+        QApplication::processEvents();
+        fonts=control<QFontComboBox>(window,"textFont");
+        require(fonts->currentFont().family().toStdString()==family,("Font combo did not keep "+family+": '"+fonts->currentFont().family().toStdString()+"'").c_str());
+        key(window,Qt::Key_Return,Qt::ControlModifier);
+        const auto& committed=project.document->layers.back().text;
+        require(committed&&committed->fontFamily==family,("Activated font was not committed: "+(committed?committed->fontFamily:std::string{})).c_str());
+    });
     std::cout<<"{\"suite\":\"keyboard_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";if(SUCCEEDED(apartment))CoUninitialize();return failed?1:0;
 }

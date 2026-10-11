@@ -36,6 +36,12 @@ struct Apartment {
 ComPtr<ID2D1Geometry> emptyGeometry() {
     ComPtr<ID2D1PathGeometry> path;check(factory()->CreatePathGeometry(&path));ComPtr<ID2D1GeometrySink> sink;check(path->Open(&sink));check(sink->Close());return path;
 }
+int geometryBounds(ID2D1Geometry* geometry,D2D1_RECT_F* bounds,HRESULT* hr,unsigned* code){
+    if(!geometry||!bounds||!hr||!code)return 0;
+    *hr=E_FAIL;*code=0;
+    __try{*hr=geometry->GetBounds(nullptr,bounds);return 1;}
+    __except(EXCEPTION_EXECUTE_HANDLER){*code=GetExceptionCode();return -1;}
+}
 uint8_t byte(double value){return uint8_t(std::clamp(std::lround(value),0L,255L));}
 }
 struct SelectionOutline::Impl { ComPtr<ID2D1Geometry> geometry; bool aa{true}; };
@@ -139,7 +145,12 @@ SelectionOutline SelectionOutline::polygon(std::span<const Point> points,bool aa
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);check(sink->Close());return SelectionOutline(std::make_shared<Impl>(Impl{g,aa}));
 }
 Rect SelectionOutline::bounds()const {
-    D2D1_RECT_F r{};check(impl_->geometry->GetBounds(nullptr,&r));
+    if(!impl_||!impl_->geometry)return {};
+    D2D1_RECT_F r{};HRESULT hr=E_FAIL;unsigned code=0;
+    const int status=geometryBounds(impl_->geometry.Get(),&r,&hr,&code);
+    if(status<0)throw std::runtime_error("Direct2D selection operation failed: "+std::to_string(code));
+    if(!status)return {};
+    check(hr);
     if(r.right<=r.left||r.bottom<=r.top)return {};return {r.left,r.top,double(r.right)-r.left,double(r.bottom)-r.top};
 }
 bool SelectionOutline::empty()const{return bounds().empty();}

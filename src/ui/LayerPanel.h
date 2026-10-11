@@ -65,6 +65,7 @@ public:
     ~LayerPanelController() override;
     void rebuild();
     void updateSelection();
+    void syncVisibilityChrome();
     QMimeData* dragMime(bool maskCopy=false) const;
     bool accepts(const QMimeData*,const QPoint&,Qt::KeyboardModifiers) const;
     bool performDrop(const QMimeData*,const QPoint&,Qt::KeyboardModifiers);

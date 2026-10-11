@@ -16,8 +16,10 @@
 #include <QUrl>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <map>
+#include <vector>
 using namespace compositor;
 namespace {
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
@@ -56,5 +58,19 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
     test("qt_bitmap_drop_lifetime_and_empty_tab_external_routing",[&]{MainWindow w(true);auto&p=w.addProject(document());w.show();QApplication::processEvents();QImage bitmap(8,6,QImage::Format_ARGB32);bitmap.fill(QColor(255,0,0,128));{QMimeData mime;mime.setImageData(bitmap);require(drop(w,mime,canvasPoint(w,{64,64})),"Bitmap drop rejected");}finish(w);require(p.document->layers.size()==1&&p.document->layers[0].raster->width==8&&p.document->layers[0].raster->pixel(0,0)==Pixel{128,0,0,128},"Copied bitmap lifetime/premultiplication failed");MainWindow external(true);external.openPath(first);external.openPath(second);finish(external);auto*tabs=external.findChild<QTabWidget*>();require(tabs&&tabs->count()==2,"Rapid external images reused an already reserved empty tab");});
     test("default_100mp_budget_side_and_corrupt_partial_failure",[&]{auto d=document();Layer full;full.id="full-budget";full.transform={0,0,10000,10000};full.raster=Raster::filled(10000,10000);d.layers={full};ui::ImportState before{d,full.id};auto result=ui::prepareImportBatch(before,{{path(first)}});require(result.imported==0&&result.errors.size()==1&&result.after==before,"100MP document limit underflowed or changed original");imaging::ImportOptions tiny;tiny.maxSide=63;result=ui::prepareImportBatch({},{{path(first)}},ui::decodeImportImage,tiny);require(result.imported==0&&result.errors.size()==1,"Side budget bypassed by batch decoder");auto corrupt=temporary.filePath("corrupt.jpg");QFile file(corrupt);require(file.open(QIODevice::WriteOnly)&&file.write("not an image")==12,"Could not write corrupt fixture");file.close();result=ui::prepareImportBatch({},{{path(corrupt),path(first)}});require(result.imported==1&&result.errors.size()==1&&result.after.document->width==64,"Corrupt first image prevented later success");});
     test("qt_prebusy_bitmap_rejected_without_mutation",[&]{MainWindow w(true);auto&p=w.addProject(document());w.show();QApplication::processEvents();p.projectBusy=true;const auto before=p.document;QImage bitmap(7,5,QImage::Format_ARGB32);bitmap.fill(Qt::green);{QMimeData mime;mime.setImageData(bitmap);require(!drop(w,mime,canvasPoint(w,{64,64})),"ContentView102 must reject a prebusy bitmap drop");}require(ui::ImportQueue::find(&w)==nullptr,"Rejected bitmap must not allocate an import queue");QTest::keyClick(&w,Qt::Key_N,Qt::ControlModifier);QTest::keyClick(&w,Qt::Key_Z,Qt::ControlModifier);QTest::qWait(40);require(p.document==before&&p.history.undoCount()==0,"Busy native commands mutated the project");p.projectBusy=false;require(p.document->layers.empty(),"Rejected bitmap appeared after the busy state cleared");});
+    test("qt_opened_psd_report_lists_depth_and_merged_image",[&]{
+        std::vector<uint8_t> bytes;auto u16=[&](int v){bytes.push_back(uint8_t(v>>8));bytes.push_back(uint8_t(v));};auto u32=[&](uint32_t v){for(int s=24;s>=0;s-=8)bytes.push_back(uint8_t(v>>s));};
+        bytes.insert(bytes.end(),{'8','B','P','S'});u16(1);for(int i=0;i<6;++i)bytes.push_back(0);u16(3);u32(2);u32(2);u16(16);u16(3);u32(0);u32(0);u32(0);u16(0);
+        for(int i=0;i<4;++i){bytes.push_back(255);bytes.push_back(0);}for(int i=0;i<16;++i)bytes.push_back(0);
+        const auto file=temporary.filePath("merged-16.psd");QFile psd(file);require(psd.open(QIODevice::WriteOnly),"Could not write PSD fixture");require(psd.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"Could not write PSD bytes");psd.close();
+        MainWindow w(true);w.show();QApplication::processEvents();
+        w.openPath(file);
+        QApplication::processEvents();
+        auto* message=w.findChild<QMessageBox*>("psdImportReport");
+        require(message!=nullptr,"Opened PSD did not show the import report");
+        const auto text=message->text().toStdString();
+        require(text.find("16-bit")!=std::string::npos&&text.find("merged")!=std::string::npos,("PSD report omitted a substitution: "+text).c_str());
+        message->accept();
+    });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }

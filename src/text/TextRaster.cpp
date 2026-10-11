@@ -16,6 +16,14 @@ namespace {
 using Microsoft::WRL::ComPtr;
 constexpr float kPad=12.f;
 void check(HRESULT hr){if(FAILED(hr))throw std::runtime_error("Text rasterization failed");}
+class ComApartment {
+    HRESULT result_;
+public:
+    ComApartment():result_(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)){if(FAILED(result_)&&result_!=RPC_E_CHANGED_MODE)check(result_);}
+    ~ComApartment(){if(SUCCEEDED(result_))CoUninitialize();}
+    ComApartment(const ComApartment&)=delete;
+    ComApartment& operator=(const ComApartment&)=delete;
+};
 std::wstring wide(std::string_view utf8){if(utf8.empty())return {};int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,utf8.data(),int(utf8.size()),nullptr,0);if(count<=0)throw std::runtime_error("Text is not valid UTF-8");std::wstring out(count,L'\0');MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,utf8.data(),int(utf8.size()),out.data(),count);return out;}
 std::wstring lower(std::wstring text){for(auto& c:text)c=towlower(c);return text;}
 struct Face {std::wstring family{L"Segoe UI"};DWRITE_FONT_WEIGHT weight{DWRITE_FONT_WEIGHT_REGULAR};DWRITE_FONT_STYLE style{DWRITE_FONT_STYLE_NORMAL};DWRITE_FONT_STRETCH stretch{DWRITE_FONT_STRETCH_NORMAL};};
@@ -43,11 +51,21 @@ bool faceNameMatches(IDWriteFont* font,const std::wstring& wanted){
     }
     return false;
 }
-Face resolveFace(IDWriteFactory* factory,const std::string& family,const std::string& styleName){
+IDWriteFactory* sharedFactory(){
+    static ComPtr<IDWriteFactory> factory;
+    if(!factory)check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(factory.GetAddressOf())));
+    return factory.Get();
+}
+IDWriteFontCollection* sharedCollection(){
+    static ComPtr<IDWriteFontCollection> fonts;
+    if(!fonts&&FAILED(sharedFactory()->GetSystemFontCollection(&fonts,FALSE)))fonts.Reset();
+    return fonts.Get();
+}
+Face resolveFace(IDWriteFontCollection* fonts,const std::string& family,const std::string& styleName){
     Face face;face.family=wide(family.empty()?"Segoe UI":family);
     const auto wanted=lower(wide(styleName.empty()?"Regular":styleName));
     applyStyleWords(face,wanted);
-    ComPtr<IDWriteFontCollection> fonts;if(!factory||FAILED(factory->GetSystemFontCollection(&fonts))||!fonts)return face;
+    if(!fonts)return face;
     UINT32 index=0;BOOL exists=FALSE;
     if(FAILED(fonts->FindFamilyName(face.family.c_str(),&index,&exists))||!exists){
         face.family=L"Segoe UI";fonts->FindFamilyName(face.family.c_str(),&index,&exists);if(!exists)return face;
@@ -87,8 +105,8 @@ Built build(const TextContent& text){
     if(!textRunsValid(text)||text.fontFamily.empty())throw std::runtime_error("Invalid text layer");
     Built built;built.characters=wide(text.value);
     if(built.characters.size()>100000)throw std::runtime_error("Text exceeds limit");
-    check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(built.write.GetAddressOf())));
-    const Face base=resolveFace(built.write.Get(),text.fontFamily,text.fontStyle);
+    built.write=sharedFactory();
+    const Face base=resolveFace(sharedCollection(),text.fontFamily,text.fontStyle);
     const float line=float(lineHeight(text));
     const bool box=hasTextBox(text);
     built.box=box;
@@ -103,7 +121,7 @@ Built build(const TextContent& text){
     for(const auto& run:text.fontRuns){
         if(!run.hasFont||run.location<0||run.length<=0||size_t(run.location)>=built.characters.size())continue;
         DWRITE_TEXT_RANGE range{UINT32(run.location),UINT32(std::min(size_t(run.length),built.characters.size()-size_t(run.location)))};
-        auto face=resolveFace(built.write.Get(),run.fontFamily,run.fontStyle);
+        auto face=resolveFace(sharedCollection(),run.fontFamily,run.fontStyle);
         applyFace(built.layout.Get(),face,range);
         if(run.fontSize>=1)built.layout->SetFontSize(float(run.fontSize),range);
     }
@@ -126,18 +144,32 @@ Built build(const TextContent& text){
     }
     return built;
 }
+int lineOf(const std::vector<float>& tops,float top){
+    auto found=std::find_if(tops.begin(),tops.end(),[&](float value){return std::abs(value-top)<0.5f;});
+    return found==tops.end()?-1:int(found-tops.begin());
+}
 void collectCarets(const Built& built,const TextContent& text,TextLayout& laid){
     laid.carets.reserve(built.characters.size()+1);
     const float fallback=float(lineHeight(text));
+    // HitTestTextRange over the whole string returns one box per line. A partial
+    // selection would then paint that entire line. Per-position metrics are the glyph cluster.
     for(size_t index=0;index<=built.characters.size();++index){
         FLOAT x=0,y=0;DWRITE_HIT_TEST_METRICS metrics{};
         check(built.layout->HitTestTextPosition(UINT32(index),FALSE,&x,&y,&metrics));
         laid.carets.push_back({x+kPad,y+kPad,metrics.height>0?metrics.height:fallback,0});
+        if(index>=built.characters.size()||!(metrics.width>0)||!(metrics.height>0)||metrics.length==0)continue;
+        const int position=int(metrics.textPosition);
+        if(!laid.clusters.empty()&&laid.clusters.back().start==position)continue;
+        laid.clusters.push_back({metrics.left+kPad,metrics.top+kPad,metrics.width,metrics.height,position,int(metrics.length),0});
     }
     std::vector<float> tops;
     for(auto& caret:laid.carets){
-        auto found=std::find_if(tops.begin(),tops.end(),[&](float top){return std::abs(top-caret.top)<0.5f;});
-        if(found==tops.end()){caret.line=int(tops.size());tops.push_back(caret.top);}else caret.line=int(found-tops.begin());
+        int line=lineOf(tops,caret.top);
+        if(line<0){caret.line=int(tops.size());tops.push_back(caret.top);}else caret.line=line;
+    }
+    for(auto& cluster:laid.clusters){
+        int line=lineOf(tops,cluster.top);
+        cluster.line=line<0?0:line;
     }
 }
 RasterizedText draw(const Built& built,const TextContent& text){
@@ -164,10 +196,15 @@ RasterizedText draw(const Built& built,const TextContent& text){
 }
 }
 RasterizedText rasterize(const TextContent& text){
+    ComApartment apartment;
     if(text.value.empty())throw std::runtime_error("Invalid text layer");
     auto built=build(text);return draw(built,text);
 }
+struct LayoutCache{TextContent key;TextLayout value;bool ready{};};
+LayoutCache& layoutCache(){static LayoutCache cache;return cache;}
 TextLayout layoutText(const TextContent& text){
+    auto& cached=layoutCache();if(cached.ready&&cached.key==text)return cached.value;
+    auto remember=[&](TextLayout layout){cached.key=text;cached.value=std::move(layout);cached.ready=true;return cached.value;};
     TextLayout laid;
     if(text.value.empty()){
         if(!textRunsValid(text))throw std::runtime_error("Invalid text layer");
@@ -175,12 +212,13 @@ TextLayout layoutText(const TextContent& text){
         if(hasTextBox(text)){laid.width=std::clamp(int(std::lround(*text.boxWidth)),16,30000);laid.height=std::clamp(int(std::lround(*text.boxHeight)),16,30000);}
         else{laid.width=std::clamp(int(std::ceil(kPad*2+float(text.fontSize)*0.1f)),16,30000);laid.height=std::clamp(int(std::ceil(line+kPad*2)),16,30000);}
         laid.carets.push_back({kPad,kPad,line,0});
-        return laid;
+        return remember(std::move(laid));
     }
+    ComApartment apartment;
     auto built=build(text);
     auto drawn=draw(built,text);
     laid.raster=drawn.raster;laid.width=drawn.width;laid.height=drawn.height;
     collectCarets(built,text,laid);
-    return laid;
+    return remember(std::move(laid));
 }
 }
