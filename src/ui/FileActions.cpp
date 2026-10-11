@@ -58,6 +58,10 @@
 namespace compositor {
 #pragma comment(lib, "comdlg32.lib")
 static std::filesystem::path nativePath(const QString&s){return std::filesystem::path(s.toStdWString());}
+static void reportPickerBusy(MainWindow* window){
+    logging::trace("native picker ignored because another picker is active");
+    window->statusBar()->showMessage("A file picker is already open",5000);
+}
 namespace {
 template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& paths,Load&& load){
     bool opened=false;
@@ -129,37 +133,49 @@ QString nativeSavePath(HWND owner,const QString& directory,const QString& sugges
 QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,const QString& suggested,const wchar_t* filter,const wchar_t* title,const wchar_t* defExt){
     const auto override=window->property("testNativeSavePath").toString();
     if(!override.isEmpty())return override;
-    if(window->property("nativeImportInProgress").toBool()){
-        logging::trace("native save picker ignored because another picker is active");
+    if(window->property("nativePickerInProgress").toBool()){
+        reportPickerBusy(window);
         return {};
     }
-    window->setProperty("nativeImportInProgress",true);
+    QPointer<MainWindow> guard(window);
+    window->setProperty("nativePickerInProgress",true);
+    const auto clearBusy=qScopeGuard([&]{if(guard)guard->setProperty("nativePickerInProgress",false);});
     const auto owner=reinterpret_cast<HWND>(window->winId());
     auto path=std::make_shared<QString>();
-    QEventLoop loop;
+    // Save-on-close needs a path before saveProject returns, so this waits.
+    // GetSaveFileNameW still runs off the Qt GUI thread; ExcludeUserInputEvents
+    // keeps the wait from dispatching close/deleteLater into this stack frame.
     auto* thread=QThread::create([path,owner,directory,suggested,filter,title,defExt]{
         const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
         struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
         *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
     });
+    if(!thread){
+        logging::trace("native save picker thread could not be created");
+        return {};
+    }
+    QEventLoop loop;
     QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
-    bool finished=false;
-    QObject::connect(thread,&QThread::finished,&loop,[&]{finished=true;loop.quit();});
+    QObject::connect(thread,&QThread::finished,&loop,&QEventLoop::quit,Qt::QueuedConnection);
     thread->start();
-    if(!finished)loop.exec();
-    window->setProperty("nativeImportInProgress",false);
+    if(!thread->isFinished())loop.exec(QEventLoop::ExcludeUserInputEvents);
+    if(!guard)return {};
     return *path;
+}
+QString withExportSuffix(QString path,bool jpeg){
+    QFileInfo info(path);
+    const auto suffix=info.suffix().toLower();
+    if(jpeg){if(suffix=="jpg"||suffix=="jpeg")return path;}
+    else if(suffix=="png")return path;
+    const auto stem=info.completeBaseName().isEmpty()?QStringLiteral("Untitled"):info.completeBaseName();
+    return QDir::cleanPath(QDir(info.path()).filePath(stem+(jpeg?".jpg":".png")));
 }
 QString chooseNativeExportDestination(MainWindow* window,bool jpeg,const QString& suggested){
     static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
     static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
     auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,jpeg?jpegFilter:pngFilter,L"Export Image",jpeg?L"jpg":L"png");
     if(path.isEmpty())return {};
-    const auto suffix=QFileInfo(path).suffix().toLower();
-    if(jpeg){
-        if(suffix!="jpg"&&suffix!="jpeg")path+=".jpg";
-    }else if(suffix!="png")path+=".png";
-    return path;
+    return withExportSuffix(path,jpeg);
 }
 QString chooseNativeProjectDestination(MainWindow* window,const QString& suggested){
     static const wchar_t filter[]=L"Compositor project directory\0*.comp\0All files\0*.*\0";
@@ -418,33 +434,55 @@ QString MainWindow::userDownloadsDirectory(){
     if(path.isEmpty()||!QDir(path).exists())path=QDir::cleanPath(QDir::homePath());
     return path;
 }
-void MainWindow::importSelectedImages(const QStringList& paths){
+void MainWindow::importSelectedImages(const QStringList& paths,QObject* destination){
     logging::trace(QString("importSelectedImages begin count=%1 paths=%2")
         .arg(paths.size()).arg(paths.join(" | ")));
-    auto* target=current();
+    EditorProject* target=current();
+    if(destination){
+        target=nullptr;
+        for(auto& project:projects_)if(project->canvas==destination){target=project.get();break;}
+        if(!target){
+            logging::trace("import destination was closed");
+            return;
+        }
+    }
     QStringList images;
     for(const auto& path:paths){
         auto ext=QFileInfo(path).suffix().toLower();
         if(ext=="psd"||ext=="psb"){
-            if(importPhotoshop(path,true))target=current();
+            if(importPhotoshop(path,true)&&!destination)target=current();
         }else images.append(path);
     }
     if(!images.isEmpty())queueImageImports(images,target,{});
 }
 namespace {
-void deferSelectedImageImport(MainWindow* window,QStringList paths){
+void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObject> destination,bool pinned){
     if(paths.isEmpty())return;
     QPointer<MainWindow> guard(window);
-    QTimer::singleShot(0,window,[guard,paths=std::move(paths)]{
-        if(guard)guard->importSelectedImages(paths);
+    QTimer::singleShot(0,window,[guard,paths=std::move(paths),destination,pinned]{
+        if(!guard)return;
+        if(pinned){
+            if(!destination){
+                logging::trace("import destination was closed");
+                return;
+            }
+            guard->importSelectedImages(paths,destination);
+            return;
+        }
+        guard->importSelectedImages(paths);
     });
 }
-void startNativeImport(MainWindow* window,const QString& directory){
-    if(window->property("nativeImportInProgress").toBool()){
-        logging::trace("native picker request ignored because another picker is active");
+void startNativeImport(MainWindow* window,const QString& directory,QObject* destination){
+    const auto injected=window->property("testNativeImportPaths");
+    if(injected.isValid()){
+        deferSelectedImageImport(window,injected.toStringList(),destination,true);
         return;
     }
-    window->setProperty("nativeImportInProgress",true);
+    if(window->property("nativePickerInProgress").toBool()){
+        reportPickerBusy(window);
+        return;
+    }
+    window->setProperty("nativePickerInProgress",true);
     const auto owner=reinterpret_cast<HWND>(window->winId());
     auto paths=std::make_shared<QStringList>();
     const auto initial=directory;
@@ -456,18 +494,24 @@ void startNativeImport(MainWindow* window,const QString& directory){
         *paths=nativeImportPaths(owner,initial);
         logging::trace(QString("native picker worker finished count=%1").arg(paths->size()));
     });
+    if(!thread){
+        window->setProperty("nativePickerInProgress",false);
+        logging::trace("native picker thread could not be created");
+        return;
+    }
     QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
     QPointer<MainWindow> guard(window);
-    QObject::connect(thread,&QThread::finished,window,[guard,paths]{
+    QPointer<QObject> target(destination);
+    QObject::connect(thread,&QThread::finished,window,[guard,paths,target]{
         if(!guard)return;
-        guard->setProperty("nativeImportInProgress",false);
+        guard->setProperty("nativePickerInProgress",false);
         logging::trace(QString("native picker result delivered count=%1").arg(paths->size()));
-        deferSelectedImageImport(guard.data(),std::move(*paths));
+        deferSelectedImageImport(guard.data(),std::move(*paths),target,true);
     },Qt::QueuedConnection);
     thread->start();
 }
 }
-void MainWindow::importWelcomeImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory());}
+void MainWindow::importWelcomeImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
 bool MainWindow::importPhotoshop(const QString& path,bool confirm){
     try{
         auto imported=imaging::readPsd(nativePath(path));
@@ -489,7 +533,7 @@ bool MainWindow::importPhotoshop(const QString& path,bool confirm){
         return false;
     }
 }
-void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory());}
+void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;
