@@ -23,6 +23,7 @@ struct CommandState {
     bool selection{},selectionEmpty{},renderHasPixels{},historyUndo{},historyRedo{},clipboardImage{};
     bool transformable{},hasParent{},canMoveUp{},canMoveDown{},canMerge{},canToggleClipping{},hasOtherProject{},shape{};
     bool moveTool{};
+    bool repeatLastFilter{};
 };
 bool canStartProjectOperation(const CommandState&);
 bool canSwitchProject(const CommandState&);
@@ -39,7 +40,7 @@ enum class CommandGate {
     SingleLayer,Duplicate,Parent,MoveUp,MoveDown,Merge,Clipping,OtherProject,Mask,AddMask,ImageAlpha,
     Selection,ModifySelection,Copy,Cut,CopyMerged,Paste,Paint,Clear,Invert,Adjust,NewAdjustment,
     EditAdjustment,ContentAwareFill,Transform,TransformDraft,TransformControls,ShapeStyle,Tool,Palette,
-    ApplyTransform,ApplyGradient,ApplyCrop
+    ApplyTransform,ApplyGradient,ApplyCrop,RepeatLastFilter
 };
 enum class CommandPreparation { None,FinishAppearance,CommitTransformAndGradient,ProjectOperation };
 enum class TextCommand { None,Undo,Redo,Cut,Copy,Paste,SelectAll };
