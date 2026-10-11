@@ -3,6 +3,7 @@
 #include "ui/MainWindow.h"
 #include "imaging/wic_codec.h"
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QDir>
@@ -10,6 +11,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileDialog>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressDialog>
@@ -94,6 +96,14 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         window.openPath(file);
         QApplication::processEvents(QEventLoop::AllEvents);
         require(tabs->count()==2&&tabs->tabText(tabs->currentIndex()).contains("welcome.psd"),"Opening a PSD added an empty project tab");
+    });
+    test("file_import_shares_welcome_downloads_picker",[&]{
+        MainWindow window(true);window.show();QApplication::processEvents();
+        require(MainWindow::userDownloadsDirectory()==window.userDownloadsDirectory(),"File import does not share the welcome Downloads folder");
+        QAction* import=nullptr;
+        for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()=="file.import")import=action;
+        require(import!=nullptr,"File > Import Image command missing");
+        require(window.findChildren<QFileDialog*>().isEmpty(),"File > Import Image still uses a Qt file dialog");
     });
     test("qt_opened_psd_report_lists_depth_and_merged_image",[&]{
         std::vector<uint8_t> bytes;auto u16=[&](int v){bytes.push_back(uint8_t(v>>8));bytes.push_back(uint8_t(v));};auto u32=[&](uint32_t v){for(int s=24;s>=0;s-=8)bytes.push_back(uint8_t(v>>s));};
