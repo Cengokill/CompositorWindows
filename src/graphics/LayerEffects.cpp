@@ -20,6 +20,8 @@ double blurredAlpha(const std::function<Pixel(Point)>& sample,Point p,double rad
     return weight>0?sum/weight:0;
 }
 Pixel colored(Pixel color,double alpha){double a=std::clamp(alpha,0.,1.);return {byte(color.r*a),byte(color.g*a),byte(color.b*a),byte(255*a)};}
+Pixel opaque(Pixel p){unsigned a=p.a;auto c=[&](unsigned v){return uint8_t(a?std::min(255u,(v*255+a/2)/a):0);};return{c(p.r),c(p.g),c(p.b),255};}
+Pixel restore(Pixel p,uint8_t alpha){auto c=[&](unsigned v){return uint8_t((v*alpha+127)/255);};return{c(p.r),c(p.g),c(p.b),alpha};}
 }
 EffectSample shadeLayer(const Layer& layer,Point p,Pixel content,double coverage,const std::function<Pixel(Point)>& shaped){
     EffectSample out;out.content=content;if(!layer.effects.active())return out;
@@ -35,7 +37,12 @@ EffectSample shadeLayer(const Layer& layer,Point p,Pixel content,double coverage
         if(fx.stroke.position==0){out.under=blendPixel(out.under,stroke,Blend::Normal);out.hasUnder=out.under.a>0;}
         else out.content=blendPixel(out.content,stroke,Blend::Normal);
     }
-    if(fx.colorOverlay.enabled&&content.a){auto tint=colored(fx.colorOverlay.color,content.a/255.*fx.colorOverlay.opacity);out.content=blendPixel(out.content,tint,fx.colorOverlay.blend);}
+    if(fx.colorOverlay.enabled&&content.a){
+        // Recolor inside the layer's existing coverage. Overlay opacity is the fill
+        // amount; restoring content.a avoids a second over that inflates translucent pixels.
+        auto tint=colored(fx.colorOverlay.color,fx.colorOverlay.opacity);
+        out.content=restore(blendPixel(opaque(content),tint,fx.colorOverlay.blend),content.a);
+    }
     if(fx.innerShadow.enabled&&content.a){auto delta=offsetOf(fx.innerShadow.angle,fx.innerShadow.distance);double inside=shaped(p).a/255.;double toward=blurredAlpha(shaped,{p.x-delta.x,p.y-delta.y},fx.innerShadow.size);double a=inside*(1-toward)*fx.innerShadow.opacity*coverage;out.content=blendPixel(out.content,colored(fx.innerShadow.color,a),fx.innerShadow.blend);}
     if(fx.innerGlow.enabled&&content.a){double a=(1-blurredAlpha(shaped,p,std::max(1.,fx.innerGlow.size)))*fx.innerGlow.opacity*(content.a/255.)*coverage;out.content=blendPixel(out.content,colored(fx.innerGlow.color,a),fx.innerGlow.blend);}
     return out;

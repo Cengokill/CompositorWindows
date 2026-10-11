@@ -53,5 +53,25 @@ int main(){
         require(StackRenderer(constant).render(d,0,0,1,1)->pixel(0,0)==Pixel{32,16,8,128},"adjustment blend thickened soft alpha");});
     test("G-R-012-region-tile-invariance",[]{Document d;d.width=513;d.height=17;auto base=layer("base",{10,20,30,64},513,17),child=layer("child",{70,20,30,128},513,17);base.transform={-7.25,1.25,520,17,2,false,true,Transform::Sampling::Smooth};child.maskSourceId="base";d.layers={base,child};
         auto full=StackRenderer().render(d,0,0,513,17),left=StackRenderer().render(d,0,0,256,17),right=StackRenderer().render(d,256,0,257,17);for(int y=0;y<17;++y)for(int x=0;x<513;++x)require(full->pixel(x,y)==(x<256?left->pixel(x,y):right->pixel(x-256,y)),"stack region seam");});
+    test("G-R-014-color-overlay-keeps-source-alpha",[]{
+        auto overlay=[](Layer l,Pixel color,double opacity=1){l.effects.specified=true;l.effects.colorOverlay.enabled=true;l.effects.colorOverlay.color=color;l.effects.colorOverlay.opacity=opacity;return l;};
+        Document d;d.width=d.height=1;
+        d.layers={overlay(layer("black",{0,0,0,128},1,1),{255,255,255,255})};
+        require(StackRenderer().render(d,0,0,1,1)->pixel(0,0)==Pixel{128,128,128,128},"half-transparent overlay inflated alpha");
+        auto white=layer("white",{255,255,255,255},1,1);
+        d.layers={white,d.layers[0]};
+        require(StackRenderer().render(d,0,0,1,1)->pixel(0,0)==Pixel{255,255,255,255},"white overlay over white backdrop stayed grey");
+        d.layers={overlay(layer("red",{255,0,0,255},1,1),{0,0,255,255},.5)};
+        require(StackRenderer().render(d,0,0,1,1)->pixel(0,0)==Pixel{127,0,128,255},"opaque overlay opacity mix");
+        d.layers={overlay(layer("clear",{0,0,0,0},1,1),{255,255,255,255})};
+        require(StackRenderer().render(d,0,0,1,1)->pixel(0,0)==Pixel{0,0,0,0},"transparent pixel stayed empty");
+        auto unspecified=layer("plain",{0,0,0,128},1,1);unspecified.effects.colorOverlay.enabled=true;unspecified.effects.colorOverlay.color={255,255,255,255};
+        d.layers={unspecified};
+        require(StackRenderer().render(d,0,0,1,1)->pixel(0,0)==Pixel{0,0,0,128},"unspecified overlay ignored");
+        auto shadow=overlay(layer("shadow",{0,0,0,128},1,1),{255,255,255,255});
+        shadow.effects.dropShadow.enabled=true;shadow.effects.dropShadow.opacity=1;shadow.effects.dropShadow.angle=0;
+        shadow.effects.dropShadow.distance=0;shadow.effects.dropShadow.size=0;shadow.effects.dropShadow.color={255,0,0,255};shadow.effects.dropShadow.blend=Blend::Normal;
+        d.layers={shadow};
+        require(StackRenderer().render(d,0,0,1,1)->pixel(0,0)==Pixel{192,128,128,192},"shadow under translucent overlay was tinted");});
     std::cout<<"{\"suite\":\"stack_renderer\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false}\n";return failed?1:0;
 }
