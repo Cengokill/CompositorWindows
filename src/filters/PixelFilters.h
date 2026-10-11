@@ -43,6 +43,9 @@ struct Result {
     std::optional<CameraRawScope> cameraRawScope;
     std::string implementation;
 };
+// Linear RGBA/float intermediates plus one tiled Raster. Distinct from the
+// 1.2 GB import/merge working caps. Default Limits permit a 100-megapixel Apply.
+std::uint64_t estimatedWorkingBytes(int width,int height,std::uint64_t bytesPerPixel=24);
 double blurMargin(Kind,const Settings&);
 // The direct PixelFilter.run boundary: supplied image is already padded/scaled;
 // optional coverage must match that grid. Output retains dimensions.

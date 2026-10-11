@@ -75,6 +75,13 @@ void testPreviewAndFailure(){
     q.kind=Kind::LensCorrection;q.settings.distortion=0;auto noop=apply(q);require(!noop.changed&&noop.raster==q.source,"neutral lens has no commit");q.kind=Kind::GaussianBlur;q.selection=SourceSelection{mask(3001,17,[](int,int){return std::uint8_t(0);})};noop=apply(q);require(!noop.changed&&noop.raster==q.source,"present empty selection has no commit");
     q.selection.reset();q.limits.maxWorkingBytes=1;fails([&]{apply(q);},"working budget must fail");q.limits={};q.limits.cancelled=[]{return true;};fails([&]{apply(q);},"pre-cancel must fail");int polls=0;q.source=Raster::filled(80,60,{255,255,255,255});q.transform={0,0,80,60};q.limits.cancelled=[&]{return ++polls>8;};fails([&]{apply(q);},"in-flight Gaussian cancellation must fail");require(polls>8&&q.source->pixel(0,0).a==255,"cancel preserves input");
     auto large=request(Kind::GaussianBlur,Raster::filled(7000,5000,{100,100,100,255}));large.preview=true;large.settings.radius=1;large.retainedBlurMargin=blurMargin(Kind::GaussianBlur,large.settings);large.limits.maxWorkingBytes=1200000000;auto largePreview=apply(large);require(largePreview.changed&&largePreview.raster->width<=2048&&largePreview.previewScale<1,"large gaussian preview downsamples before the working budget");
+    // 10000×10000 (100 MP) Apply: triple-tile 1.2 GB charge failed; one tiled Raster plus linear intermediates fits the 4 GB default.
+    const auto hundredMegapixel=estimatedWorkingBytes(10000,10000);
+    require(hundredMegapixel>1200000000&&hundredMegapixel<=Limits{}.maxWorkingBytes,"100-megapixel Apply fits the 4 GB filter cap and exceeds the 1.2 GB import/merge cap");
+    // Do not materialize 100 MP: reuse the shared count path via a 2×2 Apply under explicit budgets.
+    auto tiny=request(Kind::AddNoise,Raster::filled(2,2,{100,100,100,255}));
+    tiny.limits.maxWorkingBytes=estimatedWorkingBytes(2,2)-1;fails([&]{apply(tiny);},"apply fails when count exceeds the working budget");
+    tiny.limits.maxWorkingBytes=estimatedWorkingBytes(2,2);require(apply(tiny).raster->width==2,"apply passes when count fits the working budget");
     q.limits={};q.kind=Kind(999);fails([&]{apply(q);},"unknown filter must fail");q.kind=Kind::AddNoise;auto malformed=std::make_shared<GrayRaster>();malformed->width=1;malformed->height=1;q.selection=SourceSelection{malformed};fails([&]{apply(q);},"malformed coverage must fail");
 }
 int sourceParity(){

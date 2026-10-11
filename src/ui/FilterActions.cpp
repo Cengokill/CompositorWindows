@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LastFilterJob.h"
 #include "CameraRawPanel.h"
 #include "DocumentPreview.h"
 #include "EditPanelSession.h"
@@ -26,6 +27,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QStatusBar>
+#include <QMessageBox>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -363,33 +365,35 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     const auto before=*p->document;const auto original=*layer;
     auto request=buildFilterRequest(*p,before,original,kind);
     if(repeating){
+        if(ui::LastFilterJob::find(this,p))return;
         const auto action=names[kindIndex].toStdString();
-        auto job=request;job.preview=false;job.limits.cancelled={};
-        p->projectBusy=true;
-        refresh(false,false);
-        auto* worker=new QFutureWatcher<FilterOutput>(this);
-        connect(worker,&QFutureWatcher<FilterOutput>::finished,this,[this,p,action,worker]{
-            const auto result=worker->result();
-            p->projectBusy=false;
-            try{
-                if(!result.error.isEmpty())throw std::runtime_error(result.error.toStdString());
-                if(!p->document||!result.document)throw std::runtime_error("The repeated filter did not produce a document");
-                p->history.begin(action,p->document,p->active);
-                try{p->document=std::move(*result.document);p->history.end(p->document,p->active);}
-                catch(...){if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}throw;}
-            }catch(const std::exception& error){statusBar()->showMessage(error.what());}
-            worker->deleteLater();
-            refresh();
-        });
-        worker->setFuture(QtConcurrent::run([job,before,original]{
-            FilterOutput output;output.full=true;
-            try{
-                auto prepared=filteredLayer(original,job);auto document=before;
-                for(auto& value:document.layers)if(value.id==original.id){value=std::move(prepared.layer);break;}
-                validateDocument(document);output.document=std::move(document);
-            }catch(const std::exception& error){output.error=QString::fromUtf8(error.what());}
-            return output;
-        }));
+        auto job=request;job.preview=false;
+        QPointer<NativeCanvas> token=p->canvas;
+        ui::LastFilterJob::Host host;
+        host.settled=[this,p,token]{if(!token)return;p->projectBusy=false;refresh(false,false);};
+        host.error=[this](const QString& error){QMessageBox::critical(this,"Compositor",error);};
+        host.commit=[this,p,token,original,job,action](Layer rendered){
+            if(!token||current()!=p||!p->document)return;
+            auto target=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& layer){return layer.id==original.id;});
+            if(target==p->document->layers.end())return;
+            if(target->raster!=original.raster||target->transform!=original.transform)return;
+            auto merge=filterMerge(rendered,original,job);
+            Document prepared=*p->document;
+            auto& changed=prepared.layers[size_t(target-p->document->layers.begin())];
+            changed=merge(*target);
+            validateDocument(prepared);
+            p->history.begin(action,p->document,p->active);
+            try{p->document=std::move(prepared);p->history.end(p->document,p->active);}
+            catch(...){if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}throw;}
+            if(current()==p)refresh();
+        };
+        p->projectBusy=true;refresh(false,false);
+        try{
+            new ui::LastFilterJob([job,original](std::function<bool()> cancelled){
+                auto active=job;active.limits.cancelled=std::move(cancelled);
+                return filteredLayer(original,active).layer;
+            },std::move(host),this,p);
+        }catch(...){p->projectBusy=false;refresh(false,false);throw;}
         return;
     }
     auto host=makeEditPanelHost(*p,before,names[kindIndex].toStdString());

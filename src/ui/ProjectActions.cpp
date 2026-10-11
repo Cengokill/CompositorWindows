@@ -3,6 +3,7 @@
 #include "WorkspaceDropQueue.h"
 #include "ProjectLayerCopyJob.h"
 #include "LayerMergeJob.h"
+#include "LastFilterJob.h"
 #include "LayerPanel.h"
 #include "EditorIcons.h"
 #include <QApplication>
@@ -42,6 +43,7 @@ MainWindow::~MainWindow(){
     delete workspaceDrops_;workspaceDrops_=nullptr;
     delete ui::ProjectLayerCopyJob::find(this);
     delete ui::LayerMergeJob::find(this);
+    while(auto* job=ui::LastFilterJob::find(this))delete job;
     delete commands_;commands_=nullptr;
     delete importQueue_;importQueue_=nullptr;
 }

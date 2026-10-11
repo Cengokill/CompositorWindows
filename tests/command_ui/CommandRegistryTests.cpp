@@ -31,6 +31,10 @@ void source_predicates(){
     s.gradient=true;check(!canEditLayers(s)&&canUseHistory(s)&&!canSwitchProject(s),"gradient separates history and switching");s.historyUndo=false;check(commandEnabled(CommandGate::Undo,s),"pending gradient enables Undo with empty history");
     s.gradient=false;s.transformEdit=true;check(!canUseHistory(s)&&!canEditLayers(s)&&canStartProjectOperation(s)&&canSwitchProject(s),"transform can finalize at project boundary");
     s=ready();s.hueSaturation=true;check(!canEditLayers(s)&&!canSwitchProject(s),"Hue waits for completion");
+    s=ready();s.repeatLastFilter=true;check(commandEnabled(CommandGate::RepeatLastFilter,s)&&commandEnabled(CommandGate::Adjust,s),"ready Last Filter matches Adjust");
+    s.hueSaturation=true;check(!commandEnabled(CommandGate::RepeatLastFilter,s)&&!commandEnabled(CommandGate::Adjust,s),"Hue disables Last Filter with Adjust");
+    s=ready();s.repeatLastFilter=true;s.warpStroke=true;check(!commandEnabled(CommandGate::RepeatLastFilter,s)&&!commandEnabled(CommandGate::Adjust,s),"retouch disables Last Filter with Adjust");
+    s=ready();s.repeatLastFilter=true;s.adjustmentEditing=true;check(!commandEnabled(CommandGate::RepeatLastFilter,s)&&!commandEnabled(CommandGate::Adjust,s),"live adjustment disables Last Filter with Adjust");
 }
 void layer_eligibility(){
     auto s=ready();check(canPaint(s)&&canCopyPixels(s)&&canAdjustColors(s)&&canInvert(s),"ready visible image");

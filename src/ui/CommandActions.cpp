@@ -50,9 +50,12 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.canToggleClipping=layers::canToggleClipping(document,layer.id);
     if(project&&project->toolState.lastFilterKind){
         const auto kind=*project->toolState.lastFilterKind;
-        state.repeatLastFilter=kind==filters::Kind::Vignette
+        const bool sessions=!editPanel_&&!state.warpStroke&&!state.levels&&!state.hueSaturation&&!state.filterEdit&&!state.adjustmentEditing;
+        const bool layerOk=!state.group&&!state.adjustmentLayer&&(state.asset||kind==filters::Kind::Vignette);
+        const bool target=kind==filters::Kind::Vignette
             ? state.singleSelected&&state.effectiveVisible&&!state.maskSelected&&!state.projectBusy&&!state.importing&&!state.brushStroke&&!state.pixelMove
             : ui::canAdjustColors(state);
+        state.repeatLastFilter=sessions&&layerOk&&target&&(kind!=filters::Kind::ContentAwareFill||state.selection);
     }
     return state;
 }

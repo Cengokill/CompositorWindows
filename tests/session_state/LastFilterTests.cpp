@@ -2,6 +2,7 @@
 #include "RememberedSettingsTests.cpp"
 #undef main
 #include "ui/CommandRegistry.h"
+#include "ui/LastFilterJob.h"
 #include "filters/PixelFilters.h"
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -75,6 +76,27 @@ void shortcut_is_last_filter_only(){
     }
     require(owners.at("ctrl+alt+f")=="filter.last","Ctrl+Alt+F belongs to Last Filter alone");
 }
+void disabled_during_hue(){
+    Fixture f;
+    f.modal("filter.gaussian",[](QDialog& d){field<QDoubleSpinBox>(d,"Radius")->setValue(3);},true);
+    require(command(f.window,"filter.last")->isEnabled(),"Last Filter enabled after a filter");
+    f.trigger("adjust.hue_saturation");
+    QApplication::processEvents();
+    require(!command(f.window,"filter.last")->isEnabled(),"Last Filter disabled while Hue/Saturation is open");
+    for(auto* object:f.window.findChildren<QObject*>())if(auto* session=dynamic_cast<ui::EditPanelSession*>(object))session->cancel();
+}
+void cancel_skips_commit(){
+    Fixture f;
+    f.modal("filter.gaussian",[](QDialog& d){field<QDoubleSpinBox>(d,"Radius")->setValue(3);},true);
+    const auto before=f.a->history.undoCount();
+    f.trigger("filter.last");
+    require(f.a->projectBusy,"Last Filter marks the project busy");
+    auto* job=ui::LastFilterJob::find(&f.window,f.a);
+    require(job,"Last Filter started a cancellable job");
+    job->cancel();
+    waitFor([&]{return !f.a->projectBusy;},"Last Filter cancel did not settle");
+    require(f.a->history.undoCount()==before,"cancelled Last Filter does not commit");
+}
 void shortcut_triggers_command(){
     Fixture f;
     f.modal("filter.gaussian",[](QDialog& d){field<QDoubleSpinBox>(d,"Radius")->setValue(3);},true);
@@ -96,6 +118,8 @@ int main(int argc,char** argv){
         {"menu_label_shows_name",menu_label_shows_name},
         {"shortcut_is_last_filter_only",shortcut_is_last_filter_only},
         {"shortcut_triggers_command",shortcut_triggers_command},
+        {"disabled_during_hue",disabled_during_hue},
+        {"cancel_skips_commit",cancel_skips_commit},
     };
     try{
         require(argc==2&&cases.contains(argv[1]),"provide named case");

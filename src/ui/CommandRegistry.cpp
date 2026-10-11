@@ -76,7 +76,7 @@ bool commandEnabled(CommandGate gate,const CommandState&s){
     case CommandGate::ApplyTransform:return s.transformEdit&&!s.projectBusy&&!s.importing;
     case CommandGate::ApplyGradient:return s.gradient&&!s.projectBusy&&!s.importing;
     case CommandGate::ApplyCrop:return s.crop&&canStartProjectOperation(s);
-    case CommandGate::RepeatLastFilter:return s.repeatLastFilter;
+    case CommandGate::RepeatLastFilter:return s.repeatLastFilter&&!s.warpStroke&&!s.hueSaturation&&!s.adjustmentEditing;
     }
     return false;
 }

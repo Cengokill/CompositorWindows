@@ -12,17 +12,17 @@
 #include <numbers>
 #include <stdexcept>
 namespace compositor::filters {
+std::uint64_t estimatedWorkingBytes(int w,int h,std::uint64_t bytesPerPixel){
+    const auto n=std::uint64_t(w)*h;
+    const auto tiles=std::uint64_t((w+Raster::tileSide-1)/Raster::tileSide)*((h+Raster::tileSide-1)/Raster::tileSide);
+    return n*bytesPerPixel+tiles*sizeof(Raster::Tile);
+}
 namespace {
 void cancel(const Limits& l){if(l.cancelled&&l.cancelled())throw std::runtime_error("Filter cancelled");}
 void gateSize(int w,int h){if(w<1||h<1||w>30000||h>30000||std::uint64_t(w)*h>100000000)throw std::runtime_error("Filter exceeds the 100-megapixel or 30000-pixel-side budget");}
 std::size_t count(int w,int h,const Limits& l,std::uint64_t bytesPerPixel=24){
-    gateSize(w,h);const auto n=std::uint64_t(w)*h;
-    // Linear RGBA/float intermediates are charged via bytesPerPixel. One tiled
-    // Raster accounts for edge-tile waste on thin images without treating the
-    // same pixels as three extra full grids.
-    const auto tiles=std::uint64_t((w+Raster::tileSide-1)/Raster::tileSide)*((h+Raster::tileSide-1)/Raster::tileSide);
-    const auto estimated=n*bytesPerPixel+tiles*sizeof(Raster::Tile);
-    if(estimated>l.maxWorkingBytes)throw std::runtime_error("Filter exceeds transient allocation budget");return std::size_t(n);
+    gateSize(w,h);const auto estimated=estimatedWorkingBytes(w,h,bytesPerPixel);
+    if(estimated>l.maxWorkingBytes)throw std::runtime_error("Filter exceeds transient allocation budget");return std::size_t(std::uint64_t(w)*h);
 }
 void checkSelection(const GrayRaster& m){if(m.width<1||m.height<1||m.width>30000||m.height>30000||std::uint64_t(m.width)*m.height>100000000||m.pixels.size()!=std::size_t(m.width)*m.height)throw std::runtime_error("Invalid source selection storage");}
 bool empty(const GrayRaster& m){return std::none_of(m.pixels.begin(),m.pixels.end(),[](auto p){return p!=0;});}
