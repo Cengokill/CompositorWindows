@@ -71,6 +71,7 @@ Shortcuts apply to the editor when a text field or dialog is not using the keys.
 | Temporary pan | Hold Space and drag |
 | Foreground/background swap / defaults | X / D |
 | Last Filter | Ctrl+Alt+F |
+| Command Palette | Ctrl+Shift+P |
 | Cancel a pending gesture | Escape |
 
 Menu items show additional shortcuts and current availability. Preview updates are manual: install the next MSI, or extract the next portable download into a separate folder. Keep projects outside the application folder and back up each complete `.comp` directory. Automatic updates are disabled in this preview.

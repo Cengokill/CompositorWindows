@@ -52,10 +52,16 @@ struct CommandSpec {
     TextCommand textCommand{TextCommand::None};
     QString source;
 };
+struct CommandListItem {
+    QString id,menu,label,shortcut;
+    bool enabled{};
+    bool checked{};
+};
 bool commandEnabled(CommandGate,const CommandState&);
 const std::vector<CommandSpec>& commandCatalog();
 const CommandSpec* commandSpec(const QString& menu,const QString& label);
 const CommandSpec* commandSpecById(const QString& id);
+std::vector<CommandListItem> filterCommands(const std::vector<CommandListItem>&,const QString& query);
 bool isTextEditingWidget(QWidget*);
 bool reservesTextShortcut(const QKeyEvent&);
 
@@ -72,6 +78,7 @@ public:
     void refresh();
     void setErrorHandler(std::function<void(const QString&)> handler){error_=std::move(handler);}
     bool invoke(const QString& id);
+    std::vector<CommandListItem> listCommands()const;
     QJsonArray manifest()const;
 protected:
     bool eventFilter(QObject*,QEvent*)override;
