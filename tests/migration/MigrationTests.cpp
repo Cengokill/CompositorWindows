@@ -16,11 +16,13 @@
 #include <QTemporaryDir>
 #include <windows.h>
 #include <objbase.h>
+#include <algorithm>
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 using namespace compositor;
 static void check(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
@@ -265,12 +267,65 @@ static int psd_folder(const std::filesystem::path& dir) {
     }
     return crashes ? 1 : 0;
 }
+static std::vector<uint8_t> mergedRgb(const std::filesystem::path& path, int width, int height) {
+    QFile file(QString::fromStdWString(path.wstring()));
+    check(file.open(QIODevice::ReadOnly), "Could not reopen the Instagram PSD");
+    const auto bytes = file.readAll();
+    auto need = [&](qint64 at, qint64 count) { check(at >= 0 && count >= 0 && at + count <= bytes.size(), "Merged image ended early"); };
+    auto u16 = [&](qint64& at) { need(at, 2); int v = int(uint8_t(bytes[at]) << 8 | uint8_t(bytes[at + 1])); at += 2; return v; };
+    auto u32 = [&](qint64& at) { need(at, 4); uint32_t v = 0; for (int i = 0; i < 4; ++i) v = (v << 8) | uint8_t(bytes[at++]); return v; };
+    qint64 at = 26; at += qint64(u32(at)); at += qint64(u32(at)); at += qint64(u32(at));
+    check(u16(at) == 0, "Merged image is not uncompressed");
+    std::vector<uint8_t> rgb(size_t(width) * size_t(height) * 3);
+    for (int channel = 0; channel < 3; ++channel) for (int i = 0; i < width * height; ++i) {
+        need(at, 2); rgb[size_t(i) * 3 + channel] = uint8_t(bytes[at]); at += 2;
+    }
+    return rgb;
+}
+static void instagram_layers() {
+    const auto path = std::filesystem::path(COMPOSITOR_SOURCE_ROOT) / L"psd-test" / L"Mise \u00e0 jour Instagram.psd";
+    if (!std::filesystem::is_regular_file(path)) throw std::runtime_error("Missing PSD fixture psd-test/Mise a jour Instagram.psd");
+    auto imported = imaging::readPsd(path);
+    const auto& document = imported.document;
+    check(document.width == 1080 && document.height == 1350, "Instagram PSD canvas");
+    if (document.layers.size() != 19) throw std::runtime_error("Instagram PSD layer count " + std::to_string(document.layers.size()) + "\n" + imported.report);
+    check(imported.report.find("Imported the merged image") == std::string::npos, "Instagram PSD used the merged image");
+    check(document.layers[0].name == "Arri\xc3\xa8re-plan" && document.layers[0].visible && document.layers[0].transform.x == 0 && document.layers[0].transform.y == 0, "background layer");
+    const auto& photo = document.layers[1];
+    check(photo.name == "Calque 1" && photo.visible && photo.raster && photo.transform.x == -3 && photo.transform.y == -445, "Calque 1 position");
+    int hidden = 0; const Layer* masked = nullptr; const Layer* rectangle = nullptr; const Layer* title = nullptr; const Layer* page = nullptr;
+    for (const auto& layer : document.layers) {
+        if (!layer.visible) ++hidden;
+        if (layer.name == "Calque 5 copie") masked = &layer;
+        if (layer.name == "Rectangle 1") rectangle = &layer;
+        if (layer.name == "a Fresh New Look") title = &layer;
+        if (layer.name == "num\xc3\xa9ro courant") page = &layer;
+    }
+    check(hidden == 9, "hidden layer count");
+    check(masked && !masked->visible && masked->mask && masked->mask->enabled && masked->mask->raster && masked->mask->raster->width == masked->raster->width, "hidden layer mask");
+    check(rectangle && rectangle->visible && rectangle->raster && rectangle->transform.x > 20 && rectangle->transform.y > 250, "rounded rectangle");
+    check(title && title->visible && title->text && title->text->value.find("Fresh") != std::string::npos && title->raster && title->transform.x == 81 && title->transform.y == 100 && title->transform.width == 930 && title->transform.height == 86, "text layer keeps Photoshop pixels");
+    check(page && page->visible && page->text && page->name == "num\xc3\xa9ro courant", "unicode text layer");
+    auto reference = mergedRgb(path, document.width, document.height);
+    auto rendered = SoftwareRenderer{}.render(document, 0, 0, document.width, document.height);
+    check(rendered && rendered->width == document.width && rendered->height == document.height, "composite render");
+    uint64_t error = 0; int maxError = 0;
+    for (int y = 0; y < document.height; ++y) for (int x = 0; x < document.width; ++x) {
+        auto pixel = rendered->pixel(x, y); size_t i = (size_t(y) * document.width + x) * 3;
+        for (int channel = 0; channel < 3; ++channel) {
+            int delta = std::abs(int((&pixel.r)[channel]) - int(reference[i + channel]));
+            error += uint64_t(delta); maxError = std::max(maxError, delta);
+        }
+    }
+    const double mean = double(error) / (double(document.width) * document.height * 3);
+    if (mean > 1.5 || maxError > 44) throw std::runtime_error("composite drift mean " + std::to_string(mean) + " max " + std::to_string(maxError));
+}
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "psd-folder") {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { format_contract(); behavior_contract(); psd_contract(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { format_contract(); behavior_contract(); psd_contract(); instagram_layers(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }
