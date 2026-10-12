@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "CommandPalette.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QMessageBox>
@@ -58,6 +59,13 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
         state.repeatLastFilter=sessions&&layerOk&&target&&(kind!=filters::Kind::ContentAwareFill||state.selection);
     }
     return state;
+}
+void MainWindow::openCommandPalette(){
+    if(!commands_)return;
+    if(commandPalette_){commandPalette_->popup();return;}
+    commands_->refresh();
+    commandPalette_=new ui::CommandPalette(this,*commands_,QApplication::focusWidget());
+    commandPalette_->popup();
 }
 void MainWindow::initializeCommands(){
     commands_=new ui::CommandRegistry(this,[this]{return commandState();},[this](ui::CommandPreparation preparation,const QString&){

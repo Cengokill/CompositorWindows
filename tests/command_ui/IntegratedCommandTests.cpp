@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QFont>
 #include <QJsonDocument>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
@@ -34,5 +35,19 @@ void import_busy(){MainWindow w(true);auto&p=w.addProject(example());const auto 
 void blank_hidden_transform(){for(auto pair:{std::pair{false,true},std::pair{true,false},std::pair{true,true}}){MainWindow w(true);auto&p=w.addProject(example(pair.first,pair.second));(void)p;check(command(w,"transform.free")->isEnabled()==(pair.first&&pair.second),"blank/hidden transform enablement mismatch");}}
 void text_focus(){MainWindow w(true);auto&p=w.addProject(example());command(w,"layer.new")->trigger();const auto before=p.document;QLineEdit field(&w);field.setGeometry(300,100,220,30);w.show();field.show();field.setFocus();QApplication::processEvents();QTest::keyClicks(&field,"bml");check(field.text()=="bml"&&p.document==before,"document shortcut stole typed letters");QTest::keyClick(&field,Qt::Key_A,Qt::ControlModifier);check(field.selectedText()=="bml"&&!p.document->selection,"Select All escaped text field");QTest::keyClick(&field,Qt::Key_Z,Qt::ControlModifier);check(field.text().isEmpty()&&p.document==before&&p.history.undoCount()==1,"Undo escaped text field into document history");QTest::keyClicks(&field,"again");registry(w).invoke("selection.all");registry(w).invoke("clipboard.cut");check(field.text().isEmpty()&&p.document==before,"menu Cut escaped text field");}
 void transform_draft(){MainWindow w(true);auto&p=w.addProject(example());const auto before=p.document;command(w,"transform.free")->trigger();check(command(w,"transform.apply")->isEnabled()&&!command(w,"edit.undo")->isEnabled()&&!command(w,"layer.new")->isEnabled(),"persistent transform gates");check(command(w,"transform.distort")->isEnabled(),"existing affine cannot become Distort");command(w,"transform.distort")->trigger();check(command(w,"transform.apply")->isEnabled()&&p.history.undoCount()==0,"draft distortion prematurely committed");command(w,"transform.cancel")->trigger();check(p.document==before&&p.history.undoCount()==0,"Cancel transform did not restore exact document");}
+void command_palette(){
+    MainWindow w(true);auto&p=w.addProject(example());w.show();QApplication::processEvents();
+    auto* paletteCommand=command(w,"help.command_palette");
+    check(paletteCommand->shortcut()==QKeySequence("Ctrl+Shift+P"),"palette shortcut");
+    QLineEdit field(&w);field.setGeometry(300,100,220,30);field.show();field.setFocus();QApplication::processEvents();
+    paletteCommand->trigger();QApplication::processEvents();
+    auto* palette=w.findChild<QWidget*>("commandPalette");
+    auto* search=palette?palette->findChild<QLineEdit*>("commandPaletteSearch"):nullptr;
+    check(search,"palette search missing");
+    QTest::keyClicks(search,"New Layer");QTest::keyClick(search,Qt::Key_Return);QApplication::processEvents();
+    check(p.document->layers.size()==2&&p.history.undoCount()==1,"palette invoked existing command");
+    field.setFocus();QApplication::processEvents();
+    QTest::keyClicks(&field,"bml");check(field.text()=="bml","tool letters remain reserved after palette");
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

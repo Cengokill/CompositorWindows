@@ -18,6 +18,7 @@
 #include "PaletteDialog.h"
 #include "EditPanelSession.h"
 #include "ProjectToolState.h"
+#include "CommandPalette.h"
 #include "CommandRegistry.h"
 #include "text/TextRaster.h"
 #include <QStackedWidget>
@@ -87,6 +88,7 @@ class MainWindow final:public QMainWindow {
     QPointer<PaletteDialog> colorPicker_;
     ui::PaletteSwatches* paletteSwatches_{};
     QPointer<QWidget> maskPalettePopup_;
+    QPointer<ui::CommandPalette> commandPalette_;
     EditorProject* paletteTarget_{};
     bool paletteWasMaskSelected_{};
     QPointer<ui::EditPanelSession> editPanel_;
@@ -211,6 +213,7 @@ class MainWindow final:public QMainWindow {
     bool canSwitchProjects();
     ui::CommandState commandState(EditorProject* owner=nullptr);
     void initializeCommands();
+    void openCommandPalette();
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();

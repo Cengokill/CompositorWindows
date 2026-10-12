@@ -15,6 +15,7 @@
 #include <QTextEdit>
 #include <QWidget>
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 
 namespace compositor::ui {
@@ -119,6 +120,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("view.snap","View","Snap","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
         add("layer.text","Layer","Text Layer…","",C::Layer,G::Layers,P::FinishAppearance,"Compositor/Document/Text.swift");
         add("help.shortcuts","Help","Keyboard Shortcuts…","",C::Application,G::Always,P::None,"Windows shortcut window");
+        add("help.command_palette","Help","Command Palette…","Ctrl+Shift+P",C::Application,G::Always,P::None,"Windows command search");
         add("view.fit","View","Fit Canvas","Ctrl+0",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:87");
         add("view.actual","View","Actual Pixels","Ctrl+1",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:88");
         add("view.pixel_grid","View","Pixel Grid","",C::View,G::Always,P::None,"Compositor/CompositorApp.swift:93");
@@ -179,6 +181,10 @@ const std::vector<CommandSpec>& commandCatalog(){
 }
 namespace {
 QString normalized(QString value){return value.remove('&').trimmed();}
+QString displayShortcut(const QAction& action){
+    const auto keys=action.shortcuts();
+    return keys.isEmpty()?QString{}:keys.front().toString(QKeySequence::PortableText);
+}
 bool clipboardHasText(){const auto*mime=QApplication::clipboard()->mimeData();return mime&&mime->hasText();}
 QWidget* textEditor(QWidget* widget){
     for(auto* item=widget;item;item=item->parentWidget()){
@@ -202,6 +208,21 @@ bool dispatchText(QWidget* widget,TextCommand command){
 }
 const CommandSpec* commandSpec(const QString& menu,const QString& label){const auto m=normalized(menu),l=normalized(label);const auto&items=commandCatalog();auto it=std::find_if(items.begin(),items.end(),[&](const CommandSpec&s){return s.menu==m&&s.label==l;});return it==items.end()?nullptr:&*it;}
 const CommandSpec* commandSpecById(const QString& id){const auto&items=commandCatalog();auto it=std::find_if(items.begin(),items.end(),[&](const CommandSpec&s){return s.id==id;});return it==items.end()?nullptr:&*it;}
+std::vector<CommandListItem> filterCommands(const std::vector<CommandListItem>& items,const QString& query){
+    const auto needle=query.trimmed();
+    std::vector<CommandListItem> prefix,rest;
+    for(const auto& item:items){
+        if(item.id=="help.command_palette")continue;
+        if(!needle.isEmpty()){
+            const bool matches=item.label.contains(needle,Qt::CaseInsensitive)||item.menu.contains(needle,Qt::CaseInsensitive)||item.id.contains(needle,Qt::CaseInsensitive);
+            if(!matches)continue;
+            if(item.label.startsWith(needle,Qt::CaseInsensitive)){prefix.push_back(item);continue;}
+        }
+        rest.push_back(item);
+    }
+    prefix.insert(prefix.end(),rest.begin(),rest.end());
+    return prefix;
+}
 bool isTextEditingWidget(QWidget*widget){return textEditor(widget)!=nullptr;}
 bool reservesTextShortcut(const QKeyEvent&e){
     const auto key=e.key();const auto mods=e.modifiers();
@@ -239,6 +260,15 @@ bool CommandRegistry::invokeEntry(size_t index){
     }catch(const std::exception&error){if(error_){error_(QString::fromUtf8(error.what()));return false;}throw;}
 }
 bool CommandRegistry::invoke(const QString&id){for(size_t i=0;i<entries_.size();++i)if(entries_[i].spec.id==id&&entries_[i].action)return invokeEntry(i);return false;}
+std::vector<CommandListItem> CommandRegistry::listCommands()const{
+    std::vector<CommandListItem> result;
+    std::set<QString> seen;
+    for(const auto&e:entries_){
+        if(!e.action||!seen.insert(e.spec.id).second)continue;
+        result.push_back({e.spec.id,e.spec.menu,normalized(e.spec.label),displayShortcut(*e.action),e.action->isEnabled(),e.action->isChecked()});
+    }
+    return result;
+}
 QJsonArray CommandRegistry::manifest()const{QJsonArray result;for(const auto&e:entries_)if(e.action){QJsonArray shortcuts;for(const auto&key:e.action->shortcuts())shortcuts.append(key.toString(QKeySequence::PortableText));result.append(QJsonObject{{"id",e.spec.id},{"object_name",e.action->objectName()},{"menu",e.spec.menu},{"label",e.action->text()},{"shortcuts",shortcuts},{"class",int(e.spec.category)},{"gate",int(e.spec.gate)},{"preparation",int(e.spec.preparation)},{"text_command",int(e.spec.textCommand)},{"source",e.spec.source},{"enabled",e.action->isEnabled()}});}return result;}
 bool CommandRegistry::eventFilter(QObject*object,QEvent*event){
     if(owner_&&event->type()==QEvent::ShortcutOverride){auto*widget=qobject_cast<QWidget*>(object);auto*focus=QApplication::focusWidget();if(widget&&focus&&(focus==owner_||owner_->isAncestorOf(focus))&&isTextEditingWidget(focus)&&reservesTextShortcut(*static_cast<QKeyEvent*>(event))){event->accept();return true;}}
