@@ -74,4 +74,8 @@ Shortcuts apply to the editor when a text field or dialog is not using the keys.
 | Command Palette | Ctrl+Shift+P |
 | Cancel a pending gesture | Escape |
 
+Help → Command Palette… opens the same search. It lists currently bound commands and tools. Arrow keys move the highlight, and Enter runs the selected command.
+
+![Command palette in the Windows editor, filtered to flip, with Flip V selected from the keyboard](images/command-palette.png)
+
 Menu items show additional shortcuts and current availability. Preview updates are manual: install the next MSI, or extract the next portable download into a separate folder. Keep projects outside the application folder and back up each complete `.comp` directory. Automatic updates are disabled in this preview.
