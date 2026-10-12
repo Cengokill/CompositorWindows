@@ -4,8 +4,10 @@
 #include "text/TextRaster.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -258,7 +260,12 @@ std::optional<bool> descriptorBool(const std::vector<uint8_t>& blob, const char*
 }
 uint8_t byteChannel(double value) {
     if (!std::isfinite(value)) return 0;
-    return uint8_t(std::clamp(std::lround(value), 0L, 255L));
+    return uint8_t(std::lround(std::clamp(value, 0., 255.)));
+}
+bool inIntRange(double value) {
+    return std::isfinite(value)
+        && value >= static_cast<double>(std::numeric_limits<int>::min())
+        && value <= static_cast<double>(std::numeric_limits<int>::max());
 }
 struct ShapePaint { std::shared_ptr<const Raster> raster; Transform transform; };
 std::optional<ShapePaint> rasterizeRoundedRect(const std::vector<uint8_t>& fill, const std::vector<uint8_t>& geometry, const std::vector<uint8_t>& stroke) {
@@ -267,25 +274,32 @@ std::optional<ShapePaint> rasterizeRoundedRect(const std::vector<uint8_t>& fill,
     auto bottom = descriptorNumber(geometry, "Btom"); auto right = descriptorNumber(geometry, "Rght");
     auto radiusValue = descriptorNumber(geometry, "topLeft");
     auto red = descriptorNumber(fill, "Rd  "); auto green = descriptorNumber(fill, "Grn "); auto blue = descriptorNumber(fill, "Bl  ");
-    if (!top || !left || !bottom || !right || !red || !green || !blue || *right <= *left || *bottom <= *top) return {};
+    if (!top || !left || !bottom || !right || !red || !green || !blue) return {};
+    if (!std::isfinite(*top) || !std::isfinite(*left) || !std::isfinite(*bottom) || !std::isfinite(*right) || !std::isfinite(*red) || !std::isfinite(*green) || !std::isfinite(*blue)) return {};
+    if (*right <= *left || *bottom <= *top) return {};
+    if (radiusValue && !std::isfinite(*radiusValue)) return {};
     const bool gradient = std::memcmp(fill.data(), "GdFl", 4) == 0;
     double fillOpacity = 1;
-    if (gradient) { if (auto opacity = descriptorNumber(fill, "Opct")) fillOpacity = std::clamp(*opacity / 100., 0., 1.); }
+    if (gradient) { if (auto opacity = descriptorNumber(fill, "Opct"); opacity && std::isfinite(*opacity)) fillOpacity = std::clamp(*opacity / 100., 0., 1.); }
     const bool fillEnabled = descriptorBool(stroke, "fillEnabled").value_or(true);
     const bool strokeEnabled = descriptorBool(stroke, "strokeEnabled").value_or(false);
     double strokeWidth = descriptorNumber(stroke, "strokeStyleLineWidth").value_or(0);
     double strokeOpacity = 1;
-    if (auto opacity = descriptorNumber(stroke, "strokeStyleOpacity")) strokeOpacity = std::clamp(*opacity / 100., 0., 1.);
+    if (auto opacity = descriptorNumber(stroke, "strokeStyleOpacity"); opacity && std::isfinite(*opacity)) strokeOpacity = std::clamp(*opacity / 100., 0., 1.);
     if (!strokeEnabled || !std::isfinite(strokeWidth) || strokeWidth <= 0) strokeWidth = 0;
     const double strokeRed = descriptorNumber(stroke, "Rd  ").value_or(0);
     const double strokeGreen = descriptorNumber(stroke, "Grn ").value_or(0);
     const double strokeBlue = descriptorNumber(stroke, "Bl  ").value_or(0);
     const double pad = strokeWidth * 0.5;
-    const int x0 = int(std::floor(*left - pad)), y0 = int(std::floor(*top - pad));
-    const int x1 = int(std::ceil(*right + pad)), y1 = int(std::ceil(*bottom + pad));
-    const int width = x1 - x0, height = y1 - y0;
-    if (width < 1 || height < 1 || width > 30000 || height > 30000 || uint64_t(width) * uint64_t(height) > 100000000) return {};
+    const double rawLeft = *left - pad, rawTop = *top - pad, rawRight = *right + pad, rawBottom = *bottom + pad;
+    if (!inIntRange(std::floor(rawLeft)) || !inIntRange(std::floor(rawTop)) || !inIntRange(std::ceil(rawRight)) || !inIntRange(std::ceil(rawBottom))) return {};
+    const int x0 = static_cast<int>(std::floor(rawLeft)), y0 = static_cast<int>(std::floor(rawTop));
+    const int x1 = static_cast<int>(std::ceil(rawRight)), y1 = static_cast<int>(std::ceil(rawBottom));
+    const auto width64 = std::int64_t(x1) - std::int64_t(x0), height64 = std::int64_t(y1) - std::int64_t(y0);
+    if (width64 < 1 || height64 < 1 || width64 > 30000 || height64 > 30000 || uint64_t(width64) * uint64_t(height64) > 100000000) return {};
+    const int width = static_cast<int>(width64), height = static_cast<int>(height64);
     const double pathWidth = *right - *left, pathHeight = *bottom - *top;
+    if (!std::isfinite(pathWidth) || !std::isfinite(pathHeight)) return {};
     double radius = std::clamp(radiusValue.value_or(0), 0., std::min(pathWidth, pathHeight) * 0.5);
     std::vector<uint8_t> rgba(size_t(width) * size_t(height) * 4);
     for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
