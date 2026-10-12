@@ -1,6 +1,6 @@
 # Current checkpoint
 
-Windows preview **0.1.4** is based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/IAmTheBlurr/CompositorWindows. The complete existing Windows commit history is retained.
+Windows preview **0.1.6** is based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/IAmTheBlurr/CompositorWindows. The complete existing Windows commit history is retained.
 
 The current interface has a vector tool rail, custom dark controls, Inter typography, compact adjustment panels, a themed project picker, Mac-informed layer rows, and a searchable command palette (Ctrl+Shift+P). Native Windows title bars are the default; View → Appearance → Mac-style title bar enables the saved optional appearance. This preference only changes window chrome.
 
