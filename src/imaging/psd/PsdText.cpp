@@ -272,6 +272,39 @@ std::optional<std::string> installedFamily(const std::string& photoshopName) {
     return acceptedFamilyName(fonts.Get(), families.Get());
 }
 const char* rasterNote = "Editable Photoshop text becomes pixels and can't be retyped.";
+std::string styleFromFontName(const std::string& name) {
+    std::string lower = name;
+    for (char& letter : lower) if (letter >= 'A' && letter <= 'Z') letter = char(letter - 'A' + 'a');
+    const bool italic = lower.find("italic") != std::string::npos || lower.find("oblique") != std::string::npos;
+    if (lower.find("semibold") != std::string::npos || lower.find("semi-bold") != std::string::npos || lower.find("demibold") != std::string::npos || lower.find("demi-bold") != std::string::npos)
+        return italic ? "Semibold Italic" : "Semibold";
+    if (lower.find("bold") != std::string::npos || lower.find("black") != std::string::npos || lower.find("heavy") != std::string::npos)
+        return italic ? "Bold Italic" : "Bold";
+    if (lower.find("light") != std::string::npos) return italic ? "Light Italic" : "Light";
+    if (italic) return "Italic";
+    return "Regular";
+}
+struct ImportedFace { std::string family{"Segoe UI"}, style{"Regular"}, photoshop; double size{12}; bool missing{}; };
+ImportedFace faceFromRun(const Engine* run, const Engine* fonts, double scale, double fallbackSize) {
+    ImportedFace face; face.size = fallbackSize;
+    const Engine* dataNode = walk(run, {"StyleSheet", "StyleSheetData"}); if (!dataNode) dataNode = run;
+    if (auto points = numberOf(walk(dataNode, {"FontSize"})); points && std::isfinite(*points) && *points > 0) face.size = std::clamp(*points * scale, 1., 1000.);
+    int index = 0; if (auto font = numberOf(walk(dataNode, {"Font"}))) index = int(std::lround(*font));
+    if (fonts && fonts->kind == Engine::Kind::Array && index >= 0 && index < int(fonts->values.size()))
+        if (auto name = stringOf(walk(&fonts->values[size_t(index)], {"Name"})); name && !name->empty()) face.photoshop = *name;
+    if (face.photoshop.empty()) face.photoshop = "Segoe UI";
+    if (auto resolved = installedFamily(face.photoshop)) face.family = std::move(*resolved);
+    else { face.family = "Segoe UI"; face.missing = face.photoshop != "Segoe UI"; }
+    face.style = styleFromFontName(face.photoshop);
+    if (boolOf(walk(dataNode, {"FauxBold"})).value_or(false) && face.style.find("Bold") == std::string::npos && face.style.find("Semibold") == std::string::npos)
+        face.style = face.style == "Italic" || face.style == "Light Italic" ? "Bold Italic" : "Bold";
+    if (boolOf(walk(dataNode, {"FauxItalic"})).value_or(false) && face.style.find("Italic") == std::string::npos)
+        face.style = face.style == "Regular" ? "Italic" : face.style + " Italic";
+    return face;
+}
+bool sameFace(const ImportedFace& left, const ImportedFace& right) {
+    return left.family == right.family && left.style == right.style && std::abs(left.size - right.size) < 1e-4;
+}
 }
 PhotoshopText readPhotoshopText(const uint8_t* data, size_t size) {
     PhotoshopText result; result.note = rasterNote;
@@ -298,10 +331,51 @@ PhotoshopText readPhotoshopText(const uint8_t* data, size_t size) {
             const Engine* runs = walk(&*engine, {"EngineDict", "StyleRun", "RunArray"});
             const Engine* first = runs && runs->kind == Engine::Kind::Array && !runs->values.empty() ? &runs->values.front() : &*engine;
             const Engine* dataNode = walk(first, {"StyleSheet", "StyleSheetData"}); if (!dataNode) dataNode = first;
-            if (auto points = numberOf(walk(dataNode, {"FontSize"})); points && std::isfinite(*points) && *points > 0) style.fontSize = std::clamp(*points * scaleX, 1., 1000.);
             const Engine* fonts = walk(&*engine, {"ResourceDict", "FontSet"});
-            int index = 0; if (auto font = numberOf(walk(dataNode, {"Font"}))) index = int(std::lround(*font));
-            if (fonts && fonts->kind == Engine::Kind::Array && index >= 0 && index < int(fonts->values.size())) if (auto name = stringOf(walk(&fonts->values[size_t(index)], {"Name"})); name && !name->empty()) style.fontFamily = *name;
+            const Engine* lengths = walk(&*engine, {"EngineDict", "StyleRun", "RunLengthArray"});
+            std::vector<ImportedFace> faces;
+            std::vector<int> runLengths;
+            if (runs && runs->kind == Engine::Kind::Array && lengths && lengths->kind == Engine::Kind::Array && runs->values.size() == lengths->values.size()) {
+                for (size_t index = 0; index < runs->values.size(); ++index) {
+                    auto count = numberOf(&lengths->values[index]);
+                    if (!count || !std::isfinite(*count) || *count < 1) { faces.clear(); runLengths.clear(); break; }
+                    runLengths.push_back(int(std::lround(*count)));
+                    faces.push_back(faceFromRun(&runs->values[index], fonts, scaleX, style.fontSize));
+                }
+                int covered = 0; for (int length : runLengths) covered += length;
+                int extra = covered - text::utf16Length(style.value);
+                // Photoshop counts a trailing return that the text string does not store.
+                while (extra > 0 && extra <= 4 && !runLengths.empty()) {
+                    if (runLengths.back() > extra) { runLengths.back() -= extra; extra = 0; }
+                    else { extra -= runLengths.back(); runLengths.pop_back(); faces.pop_back(); }
+                }
+                if (extra != 0 || faces.empty()) { faces.clear(); runLengths.clear(); }
+            }
+            if (faces.empty()) faces.push_back(faceFromRun(first, fonts, scaleX, style.fontSize));
+            style.fontFamily = faces.front().family; style.fontStyle = faces.front().style; style.fontSize = faces.front().size;
+            std::vector<std::string> missing;
+            auto noteMissing = [&](const ImportedFace& face) {
+                if (!face.missing || std::find(missing.begin(), missing.end(), face.photoshop) != missing.end()) return;
+                missing.push_back(face.photoshop);
+                notes += "The font \"" + face.photoshop + "\" isn't installed, so the text was drawn with Segoe UI.\n";
+            };
+            noteMissing(faces.front());
+            if (!runLengths.empty()) {
+                int location = 0;
+                for (size_t index = 0; index < faces.size(); ++index) {
+                    const int length = runLengths[index];
+                    if (index > 0 && !sameFace(faces[index], faces.front())) {
+                        noteMissing(faces[index]);
+                        if (!style.fontRuns.empty() && style.fontRuns.back().location + style.fontRuns.back().length == location && style.fontRuns.back().fontFamily == faces[index].family && style.fontRuns.back().fontStyle == faces[index].style && std::abs(style.fontRuns.back().fontSize - faces[index].size) < 1e-4)
+                            style.fontRuns.back().length += length;
+                        else {
+                            TextRun run; run.location = location; run.length = length; run.hasFont = true; run.fontFamily = faces[index].family; run.fontStyle = faces[index].style; run.fontSize = faces[index].size;
+                            style.fontRuns.push_back(std::move(run));
+                        }
+                    }
+                    location += length;
+                }
+            }
             if (auto values = walk(dataNode, {"FillColor", "Values"}); values && values->kind == Engine::Kind::Array) {
                 std::vector<double> channels; for (const auto& item : values->values) if (auto channel = numberOf(&item)) channels.push_back(*channel);
                 if (channels.size() >= 4) { style.red = unitColor(channels[1]); style.green = unitColor(channels[2]); style.blue = unitColor(channels[3]); }
@@ -333,8 +407,6 @@ PhotoshopText readPhotoshopText(const uint8_t* data, size_t size) {
                 }
             }
         }
-        if (auto resolved = installedFamily(style.fontFamily)) style.fontFamily = std::move(*resolved);
-        else { notes += "The font \"" + style.fontFamily + "\" isn't installed, so the text was drawn with Segoe UI.\n"; style.fontFamily = "Segoe UI"; }
         if (!text::textRunsValid(style)) return result;
         result.editable = true; result.text = std::move(style); result.x = originX; result.y = originY; result.note = notes; return result;
     } catch (const std::exception&) { return result; }

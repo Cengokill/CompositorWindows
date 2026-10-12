@@ -128,6 +128,9 @@ class MainWindow final:public QMainWindow {
         EditorProject* owner{};
         std::string layerId;
         double originX{},originY{};
+        // Origin when the session opened. Done without an edit compares against this,
+        // so an automatic ink alignment does not replace the imported pixels.
+        double homeOriginX{},homeOriginY{};
         TextContent style;
         int caret{},anchor{};
         struct Step { TextContent style; int caret{},anchor{}; };

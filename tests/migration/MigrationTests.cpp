@@ -130,6 +130,9 @@ static void psd_contract() {
     const char* missing = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (NoSuchFontXYZ) >> ] >> >>";
     auto substituted = textFile(missing, false, "Missing");
     check(substituted.document.layers.at(0).text && substituted.document.layers.at(0).text->fontFamily == "Segoe UI" && substituted.report.find("NoSuchFontXYZ") != std::string::npos, "missing PSD font was not substituted");
+    const char* boldMissing = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (NoSuchFont-Bold) >> ] >> >>";
+    auto boldFace = textFile(boldMissing, false, "BoldMissing");
+    check(boldFace.document.layers.at(0).text && boldFace.document.layers.at(0).text->fontFamily == "Segoe UI" && boldFace.document.layers.at(0).text->fontStyle == "Bold", "missing bold PostScript name lost its weight");
     const char* segoePostScript = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (SegoeUI) >> ] >> >>";
     auto segoe = textFile(segoePostScript, false, "Segoe");
     check(segoe.document.layers.at(0).text && segoe.document.layers.at(0).text->fontFamily == "Segoe UI" && segoe.report.find("isn't installed") == std::string::npos, "SegoeUI PostScript name was not resolved");
@@ -138,6 +141,12 @@ static void psd_contract() {
         const char* mongolian = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> ] >> >> /ResourceDict << /FontSet [ << /Name (MongolianBaiti) >> ] >> >>";
         auto baiti = textFile(mongolian, false, "Baiti");
         check(baiti.document.layers.at(0).text && baiti.document.layers.at(0).text->fontFamily == "Mongolian Baiti" && baiti.report.find("isn't installed") == std::string::npos, "MongolianBaiti was treated as a missing font");
+    }
+    if (GetEnvironmentVariableW(L"WINDIR", windowsDirectory, MAX_PATH) > 0 && std::filesystem::is_regular_file(std::filesystem::path(windowsDirectory) / L"Fonts" / L"calibri.ttf")) {
+        const char* mixed = "<< /EngineDict << /Editor << /Text (Hi) >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 0 >> >> >> << /StyleSheet << /StyleSheetData << /FontSize 18 /Font 1 >> >> >> ] /RunLengthArray [ 1 1 ] >> >> /ResourceDict << /FontSet [ << /Name (NoSuchFontXYZ) >> << /Name (Calibri) >> ] >> >>";
+        auto runs = textFile(mixed, false, "Runs");
+        const auto* typed = runs.document.layers.at(0).text ? &*runs.document.layers.at(0).text : nullptr;
+        check(typed && typed->fontFamily == "Segoe UI" && typed->fontRuns.size() == 1 && typed->fontRuns[0].location == 1 && typed->fontRuns[0].length == 1 && typed->fontRuns[0].fontFamily == "Calibri" && typed->fontRuns[0].hasFont, "a later installed PSD font was replaced with the missing face");
     }
     auto upright = textFile("", true, "Upright");
     check(!upright.document.layers.at(0).text && upright.report.find("Vertical") != std::string::npos, "vertical PSD text stayed editable");
@@ -293,18 +302,29 @@ static void instagram_layers() {
     check(document.layers[0].name == "Arri\xc3\xa8re-plan" && document.layers[0].visible && document.layers[0].transform.x == 0 && document.layers[0].transform.y == 0, "background layer");
     const auto& photo = document.layers[1];
     check(photo.name == "Calque 1" && photo.visible && photo.raster && photo.transform.x == -3 && photo.transform.y == -445, "Calque 1 position");
-    int hidden = 0; const Layer* masked = nullptr; const Layer* rectangle = nullptr; const Layer* title = nullptr; const Layer* page = nullptr;
+    int hidden = 0; const Layer* masked = nullptr; const Layer* rectangle = nullptr; const Layer* title = nullptr; const Layer* page = nullptr; const Layer* details = nullptr;
     for (const auto& layer : document.layers) {
         if (!layer.visible) ++hidden;
         if (layer.name == "Calque 5 copie") masked = &layer;
         if (layer.name == "Rectangle 1") rectangle = &layer;
         if (layer.name == "a Fresh New Look") title = &layer;
         if (layer.name == "num\xc3\xa9ro courant") page = &layer;
+        if (layer.name.rfind("Find details", 0) == 0) details = &layer;
     }
     check(hidden == 9, "hidden layer count");
     check(masked && !masked->visible && masked->mask && masked->mask->enabled && masked->mask->raster && masked->mask->raster->width == masked->raster->width, "hidden layer mask");
     check(rectangle && rectangle->visible && rectangle->raster && rectangle->transform.x > 20 && rectangle->transform.y > 250, "rounded rectangle");
     check(title && title->visible && title->text && title->text->value.find("Fresh") != std::string::npos && title->raster && title->transform.x == 81 && title->transform.y == 100 && title->transform.width == 930 && title->transform.height == 86, "text layer keeps Photoshop pixels");
+    bool bodyFont = false;
+    std::string seen;
+    if (details && details->text) {
+        seen = details->text->fontFamily + "/" + details->text->fontStyle + " runs=" + std::to_string(details->text->fontRuns.size());
+        for (const auto& run : details->text->fontRuns) {
+            seen += " [" + std::to_string(run.location) + "+" + std::to_string(run.length) + " " + run.fontFamily + " " + run.fontStyle + "]";
+            if (run.hasFont && run.fontFamily == "Javanese Text") bodyFont = true;
+        }
+    }
+    if (!(details && details->text && details->text->fontStyle == "Bold" && bodyFont)) throw std::runtime_error("Find details font " + seen);
     check(page && page->visible && page->text && page->name == "num\xc3\xa9ro courant", "unicode text layer");
     auto reference = mergedRgb(path, document.width, document.height);
     auto rendered = SoftwareRenderer{}.render(document, 0, 0, document.width, document.height);
