@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <optional>
 
 namespace compositor {
 namespace {
@@ -79,6 +80,26 @@ Transform textFrame(EditorProject* owner,const std::string& layerId,double origi
     const double scaleY=found->raster&&found->raster->height?found->transform.height/found->raster->height:1;
     placed.width=std::max(1.,layoutWidth*scaleX);placed.height=std::max(1.,layoutHeight*scaleY);
     return placed;
+}
+void alignTextOrigin(double& originX,double& originY,const TextContent& style,const text::TextLayout& layout,const Layer& layer){
+    if(!layer.raster||!layout.raster||layer.raster->width<=0||layer.raster->height<=0||layout.raster->width<=0||layout.raster->height<=0)return;
+    const double scaleX=layer.transform.width/layer.raster->width,scaleY=layer.transform.height/layer.raster->height;
+    if(!(scaleX>0)||!(scaleY>0))return;
+    auto anchor=[&](const Raster& raster)->std::optional<std::pair<int,int>>{
+        const int band=std::clamp(int(std::ceil(std::max(style.fontSize,1.))),1,raster.height);
+        int top=-1;
+        for(int y=0;y<raster.height&&top<0;++y)for(int x=0;x<raster.width;++x)if(raster.pixel(x,y).a>16){top=y;break;}
+        if(top<0)return std::nullopt;
+        int left=raster.width;
+        const int bottom=std::min(raster.height,top+band);
+        for(int y=top;y<bottom;++y)for(int x=0;x<raster.width;++x)if(raster.pixel(x,y).a>16)left=std::min(left,x);
+        if(left>=raster.width)return std::nullopt;
+        return std::pair<int,int>{left,top};
+    };
+    const auto layerInk=anchor(*layer.raster),layoutInk=anchor(*layout.raster);
+    if(!layerInk||!layoutInk)return;
+    originX=layer.transform.x+(layerInk->first-layoutInk->first)*scaleX;
+    originY=layer.transform.y+(layerInk->second-layoutInk->second)*scaleY;
 }
 bool wordUnit(const QString& text,int index);
 int wordForward(const QString& text,int index){
@@ -421,6 +442,11 @@ void MainWindow::beginText(Point point,bool forceNew,bool extend,int clickCount)
     }
     if(session.layerId.empty()){session.style.value.clear();session.style.colorRuns.clear();session.style.fontRuns.clear();session.style.red=foreground_.redF();session.style.green=foreground_.greenF();session.style.blue=foreground_.blueF();session.style.alpha=foreground_.alphaF();}
     try{session.layout=text::layoutText(session.style);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    if(!session.layerId.empty()){
+        auto found=std::find_if(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==session.layerId;});
+        if(found!=project->document->layers.end())alignTextOrigin(session.originX,session.originY,session.style,session.layout,*found);
+    }
+    session.homeOriginX=session.originX;session.homeOriginY=session.originY;
     const bool selecting=session.layerId.empty()?false:place(session);
     if(session.layerId.empty())session.caret=session.anchor=0;
     textSession_=std::move(session);tool_=Tool::Text;publish(selecting);
@@ -509,6 +535,7 @@ void MainWindow::beginParagraph(Point start,Point end){
     session.style.red=foreground_.redF();session.style.green=foreground_.greenF();session.style.blue=foreground_.blueF();session.style.alpha=foreground_.alphaF();
     session.style.boxWidth=std::clamp(std::abs(end.x-start.x),16.,30000.);session.style.boxHeight=std::clamp(std::abs(end.y-start.y),16.,30000.);
     try{session.layout=text::layoutText(session.style);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    session.homeOriginX=session.originX;session.homeOriginY=session.originY;
     session.caret=session.anchor=0;textSession_=std::move(session);tool_=Tool::Text;
     if(canvas())canvas()->setFocus();publishTextEdit();
 }
@@ -546,7 +573,7 @@ bool MainWindow::finishText(){
             if(blank){const auto id=session.layerId;commit("Edit Text",[&](Document& document){auto layer=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& item){return item.id==id;});if(layer!=document.layers.end())document.layers.erase(layer);if(project->active==id){project->active=document.layers.empty()?"":document.layers.back().id;project->selected={project->active};}});}
             else{
                 const bool sameText=found->text&&*found->text==session.style;
-                const bool sameOrigin=std::abs(found->transform.x-session.originX)<1e-4&&std::abs(found->transform.y-session.originY)<1e-4;
+                const bool sameOrigin=std::abs(session.homeOriginX-session.originX)<1e-4&&std::abs(session.homeOriginY-session.originY)<1e-4;
                 if(sameText&&sameOrigin){clear();if(project==current())refresh(false,false);return true;}
                 if(!text::textRunsValid(session.style))throw std::runtime_error("Invalid text");
                 auto drawn=text::rasterize(session.style);
