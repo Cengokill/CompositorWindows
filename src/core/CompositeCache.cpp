@@ -69,7 +69,20 @@ std::optional<Bounds> layerPaintBounds(const Layer& layer,double units){
     auto grid=graphics::samplingGrid(*source,level);
     auto box=bounds(layer.transform,double(grid.x)/source->width,double(grid.y)/source->height,double(grid.width*grid.step)/source->width,double(grid.height*grid.step)/source->height);
     const double pad=effectPad(layer.effects)+1;
-    box.left-=pad;box.top-=pad;box.right+=pad;box.bottom+=pad;return box;
+    box.left-=pad;box.top-=pad;box.right+=pad;box.bottom+=pad;
+    if(level>0&&source->width>0&&source->height>0){
+            const double step=double(uint64_t(1)<<level),radius=10.*(step-1.)+step;
+            const double angle=std::remainder(layer.transform.rotation,360.)*std::numbers::pi/180.,c=std::abs(std::cos(angle)),s=std::abs(std::sin(angle));
+            const double hx=radius*layer.transform.width/source->width,hy=radius*layer.transform.height/source->height;
+            const double haloX=c*hx+s*hy,haloY=s*hx+c*hy;
+            box.left-=haloX;box.right+=haloX;box.top-=haloY;box.bottom+=haloY;
+    }
+    return box;
+}
+bool pureTranslation(const Layer& before,const Layer& after){
+    if(before.mask||after.mask||before.raster!=after.raster)return false;
+    if(before.transform.x==after.transform.x&&before.transform.y==after.transform.y)return false;
+    Layer probe=before;probe.transform.x=after.transform.x;probe.transform.y=after.transform.y;return probe==after;
 }
 void addPainted(const Document& doc,size_t index,double units,std::vector<Bounds>& damage,bool withDescendants){
     if(auto box=layerPaintBounds(doc.layers[index],units))damage.push_back(*box);
@@ -92,7 +105,11 @@ LayerDamage compareLayers(const Document* previous,const Document& doc,double un
     for(size_t i=0;i<doc.layers.size();++i){const auto& before=previous->layers[i];const auto& after=doc.layers[i];if(before==after)continue;
         auto metadata=before;metadata.raster=after.raster;
         const bool rasterGeometry=bool(before.raster)!=bool(after.raster)||(before.raster&&(before.raster->width!=after.raster->width||before.raster->height!=after.raster->height||before.raster->samplingOriginX!=after.raster->samplingOriginX||before.raster->samplingOriginY!=after.raster->samplingOriginY));
-        if(rasterGeometry||dependent||lodActive(before,units)||lodActive(after,units)){result.all=true;return result;}
+        // Downsample kernels reach outside the layer only by a bounded halo.
+        // A pure translation can therefore damage the old and new painted bounds.
+        // Masks, adjustments, and any other change still rebuild the viewport.
+        const bool lod=lodActive(before,units)||lodActive(after,units);
+        if(rasterGeometry||dependent||(lod&&!pureTranslation(before,after))){result.all=true;return result;}
         if(metadata!=after){if(!boundsOnlyMetadata(metadata,after)){result.all=true;return result;}
             if(visualMetadata(before,after)){const bool children=before.visible!=after.visible||before.opacity!=after.opacity;addPainted(*previous,i,units,result.regions,children);addPainted(doc,i,units,result.regions,children);}
             continue;}
@@ -165,6 +182,7 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
     previous_=doc;output_=result;return output_;
 }
 CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview){
+    lastViewportComposedTiles_=0;
     Document doc=input;
     if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");*found=preview->layer;}
     validateDocument(doc);
@@ -221,15 +239,15 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             else if(direct){const size_t index=size_t(ty)*((direct->width+255)/256)+tx;tile=index<direct->tiles.size()&&direct->tiles[index]?direct->tiles[index]:zeroTile();}
             else if(mirror)tile=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,tx*256,ty*256,doc.width,doc.height);
             else if(!touches(painted,dx-margin*units,dy-margin*units,(w+margin*2.)*units,(h+margin*2.)*units))tile=zeroTile();
-            else if(margin>0)tile=cropTile(*renderer.renderScaled(doc,dx-margin*units,dy-margin*units,w+margin*2,h+margin*2,units),margin,margin,w,h);
-            else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();}
+            else if(margin>0){tile=cropTile(*renderer.renderScaled(doc,dx-margin*units,dy-margin*units,w+margin*2,h+margin*2,units),margin,margin,w,h);++lastViewportComposedTiles_;}
+            else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();++lastViewportComposedTiles_;}
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
         }else{
             if(auto dirty=partial.find(key);dirty!=partial.end()){
                 const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;const auto& box=dirty->second;
                 const int sx=std::clamp(int(std::floor((box.left-dx)/units))-1,0,w),sy=std::clamp(int(std::floor((box.top-dy)/units))-1,0,h),ex=std::clamp(int(std::ceil((box.right-dx)/units))+1,0,w),ey=std::clamp(int(std::ceil((box.bottom-dy)/units))+1,0,h);
-                if(ex>sx&&ey>sy){auto updated=std::make_shared<Raster::Tile>(*found->second.pixels);auto region=renderer.renderScaledPatch(doc,dx,dy,sx,sy,ex-sx,ey-sy,units);for(int row=0;row<ey-sy;++row)std::copy_n(region->tiles.front()->pixels.data()+size_t(row)*256,ex-sx,updated->pixels.data()+size_t(sy+row)*256+sx);found->second.pixels=std::move(updated);}
+                if(ex>sx&&ey>sy){auto updated=std::make_shared<Raster::Tile>(*found->second.pixels);auto region=renderer.renderScaledPatch(doc,dx,dy,sx,sy,ex-sx,ey-sy,units);for(int row=0;row<ey-sy;++row)std::copy_n(region->tiles.front()->pixels.data()+size_t(row)*256,ex-sx,updated->pixels.data()+size_t(sy+row)*256+sx);found->second.pixels=std::move(updated);++lastViewportComposedTiles_;}
             }
             found->second.use=viewportTick_;
         }patch->tiles.push_back(found->second.pixels);

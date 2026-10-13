@@ -160,11 +160,60 @@ void MainWindow::publishTransformSession(bool finish) {
     project->maskSelected=state.originalMaskSelected&&!state.duplicated;
 }
 
+void MainWindow::invalidateViewportComposite(){if(viewportComposite_)viewportComposite_->invalidate();}
+void MainWindow::beginPreviewGesture(NativeCanvas* target){
+    ++previewGesture_;previewSealed_=false;previewLayerId_.clear();
+    if(movePreviewJob_)movePreviewJob_->invalidate();
+    invalidateViewportComposite();
+    if(auto* shown=target?target:canvas())shown->clearMovePreview();
+}
+void MainWindow::scheduleViewportComposite(EditorProject& project){
+    if(!viewportComposite_||!project.document||!project.canvas)return;
+    const auto bounds=project.canvas->viewportBounds();if(!bounds.valid)return;
+    ui::ViewportCompositeJob::Request request;
+    request.owner=&project;request.document=*project.document;request.x=bounds.x;request.y=bounds.y;request.width=bounds.width;request.height=bounds.height;request.units=bounds.units;
+    request.zoom=project.canvas->zoom;request.panX=project.canvas->pan.x();request.panY=project.canvas->pan.y();request.canvasWidth=project.canvas->width();request.canvasHeight=project.canvas->height();request.gesture=previewGesture_;
+    viewportComposite_->submit(std::move(request));
+}
+void MainWindow::applyViewportComposite(ui::ViewportCompositeJob::Result result){
+    if(result.stale||result.gesture!=previewGesture_)return;
+    const bool live=std::any_of(projects_.begin(),projects_.end(),[&](const std::unique_ptr<EditorProject>& item){return item.get()==result.owner;});
+    if(!live||!result.owner->canvas)return;
+    auto* canvas=result.owner->canvas;
+    const bool sameView=canvas->zoom==result.zoom&&canvas->pan.x()==result.panX&&canvas->pan.y()==result.panY&&canvas->width()==result.canvasWidth&&canvas->height()==result.canvasHeight;
+    if(!result.error.isEmpty()||!sameView||!result.owner->document||*result.owner->document!=result.document||!result.view.raster){
+        canvas->setCompositeHeld(false);
+        if(!sameView||!result.owner->document||*result.owner->document!=result.document)canvas->clearMovePreview();
+        if(!result.error.isEmpty())statusBar()->showMessage(result.error);
+        canvas->update();
+        return;
+    }
+    const bool dragging=transformDrag_&&transformOwner_==result.owner;
+    result.owner->composite=std::move(result.cache);
+    if(!dragging)previewSealed_=true;
+    canvas->presentComposite(result.view.raster,result.view.documentX,result.view.documentY,result.view.unitsPerPixel,!dragging);
+    if(!dragging){canvas->setCompositeHeld(false);canvas->setNavigatorDeferred(false);}
+}
+void MainWindow::applyMovePreview(ui::MovePreviewJob::Result result){
+    if(result.stale||result.gesture!=previewGesture_||previewSealed_||!result.base||result.layerId!=previewLayerId_){if(!result.error.isEmpty()&&result.gesture==previewGesture_&&!previewSealed_)statusBar()->showMessage(result.error);return;}
+    EditorProject* project=nullptr;
+    if(transformOwner_&&std::any_of(projects_.begin(),projects_.end(),[&](const std::unique_ptr<EditorProject>& item){return item.get()==transformOwner_;}))project=transformOwner_;
+    else project=current();
+    if(!project||!project->canvas||!project->document||std::none_of(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==result.layerId;}))return;
+    NativeCanvas::MovePreview preview;
+    preview.layerId=std::move(result.layerId);preview.gesture=result.gesture;preview.base=std::move(result.base);preview.baseX=result.viewX;preview.baseY=result.viewY;preview.baseUnits=result.units;
+    preview.layer=std::move(result.sprite);preview.placed=previewDraft_;preview.opacity=result.opacity;preview.plate=std::move(result.plate);preview.front=std::move(result.front);
+    preview.plateX=result.plateX;preview.plateY=result.plateY;preview.anchorX=result.anchorX;preview.anchorY=result.anchorY;
+    project->canvas->setMovePreview(std::move(preview));
+}
 void MainWindow::applyTransformSession() {
     if(!transformSession_||!transformOwner_)return;
+    previewDraft_=transformSession_->draft;
+    if(!transformSession_->ids.empty())previewLayerId_=transformSession_->ids.front();
     auto* owner=transformOwner_;
-    owner->canvas->setSnapGuides();
-    if(owner->canvas){owner->canvas->clearMovePreview();owner->canvas->setNavigatorDeferred(false);}
+    const bool retain=owner->canvas&&owner->canvas->hasMovePreview();
+    if(owner->canvas)owner->canvas->setSnapGuides();
+    if(owner->canvas&&!retain)owner->canvas->clearMovePreview();
     try {
         if(transformSession_->corners&&!transformSession_->pixels) {
             const auto* name=transformSession_->maskOnly?"Distort Layer Mask":transformSession_->group?"Distort Layers":"Distort";
@@ -173,14 +222,17 @@ void MainWindow::applyTransformSession() {
         publishTransformSession(true);
         owner->history.end(owner->document,owner->active);
         transformSession_.reset();transformOwner_=nullptr;transformDrag_.reset();transformBefore_.reset();transformIds_.clear();
-        refresh();
+        if(owner->canvas&&owner->canvas->viewportBounds().valid){if(!retain)owner->canvas->setCompositeHeld(true);scheduleViewportComposite(*owner);refresh(false);}
+        else{if(owner->canvas){owner->canvas->setCompositeHeld(false);owner->canvas->clearMovePreview();}refresh();}
     } catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
 }
 
 void MainWindow::cancelTransformSession() {
     if(!transformSession_)return;
+    beginPreviewGesture(transformOwner_?transformOwner_->canvas:nullptr);
+    invalidateViewportComposite();
     auto* owner=transformOwner_;auto activeId=std::move(transformSession_->originalActive);auto selected=std::move(transformSession_->originalSelected);const bool mask=transformSession_->originalMaskSelected;
-    if(owner){owner->canvas->setSnapGuides();owner->canvas->clearMovePreview();owner->canvas->setNavigatorDeferred(false);}
+    if(owner&&owner->canvas){owner->canvas->setSnapGuides();owner->canvas->clearMovePreview();owner->canvas->setNavigatorDeferred(false);owner->canvas->setCompositeHeld(false);}
     transformSession_.reset();transformOwner_=nullptr;transformDrag_.reset();transformBefore_.reset();transformIds_.clear();
     if(owner) {
         if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}

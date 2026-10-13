@@ -13,6 +13,25 @@
 #include <unordered_set>
 
 namespace compositor {
+namespace {
+struct MovePreviewPlan { bool sprite{}; bool covered{}; bool masked{}; std::vector<const Layer*> above; };
+MovePreviewPlan planMovePreview(const Document& document,const Layer& moving){
+    MovePreviewPlan plan;
+    const bool plain=!moving.group&&moving.raster&&moving.blend==Blend::Normal&&!moving.effects.active()&&moving.adjustmentJson.empty()&&moving.maskSourceId.empty()&&moving.shapeJson.empty()&&moving.parentId.empty()&&(!moving.mask||moving.mask->linked)&&std::none_of(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.maskSourceId==moving.id;});
+    if(!plain)return plan;
+    std::vector<const Layer*> top;for(const auto& layer:document.layers)if(layer.parentId.empty())top.push_back(&layer);
+    auto at=std::find_if(top.begin(),top.end(),[&](const Layer* layer){return layer->id==moving.id;});if(at==top.end())return plan;
+    for(auto it=std::next(at);it!=top.end();++it){const auto& layer=**it;if(!layer.visible)continue;
+        if(layer.group||layer.blend!=Blend::Normal||layer.effects.active()||!layer.adjustmentJson.empty()||!layer.maskSourceId.empty()||!layer.shapeJson.empty())return {};
+        if(!layer.raster)continue;plan.above.push_back(*it);}
+    auto visible=editing_transform::visiblePlacements(document);
+    plan.sprite=!moving.mask&&plan.above.empty()&&!visible.empty()&&visible.back().id==moving.id;
+    plan.covered=!plan.above.empty();plan.masked=moving.mask.has_value();
+    if(!plan.sprite&&!plan.covered&&!plan.masked)return {};
+    return plan;
+}
+Document hideLayers(Document document,const std::unordered_set<std::string>& ids){for(auto& layer:document.layers)if(ids.contains(layer.id))layer.visible=false;return document;}
+}
 std::optional<Transform> MainWindow::selectedTransform(){
     if(transformSession_&&transformOwner_==current())return transformSession_->draft;
     auto*l=active();auto*p=current();if(!l||!p||!p->document)return {};
@@ -38,7 +57,7 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
             if(!state->pixels->begin())return true;
             state->draft=state->originalBox=state->pixels->originalFloatingTransform();
             finishOpacityEdit();p->history.begin(modifiers.testFlag(Qt::AltModifier)?"Duplicate Pixels":"Move Pixels",p->document,p->active);
-            transformOwner_=p;transformSession_=std::move(state);transformDrag_=editing_transform::Drag{transformSession_->draft,point,{}};
+            transformOwner_=p;transformSession_=std::move(state);beginPreviewGesture(p->canvas);transformDrag_=editing_transform::Drag{transformSession_->draft,point,{}};
         }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
         return true;
     }
@@ -60,7 +79,7 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
         state.duplicateOnDrag=intent->duplicateOnFirstDrag&&!state.persistent&&!state.pixels&&!state.maskOnly&&state.ids.size()==1&&!active()->group;
         if(state.duplicateOnDrag){p->history.cancel();p->history.begin("Duplicate Layer",state.original,state.originalActive);}
         transformDrag_=editing_transform::Drag{state.draft,point,intent->mode,state.corners};
-        refresh(false,false);
+        beginPreviewGesture(p->canvas);if(canvas())canvas()->setCompositeHeld(true);refresh(false,false);
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
     return true;
 }
@@ -85,33 +104,49 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
             auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_||modifiers.testFlag(Qt::ControlModifier)},targets,canvas()->pointsPerPixel());
             if(preview.accepted){state.draft=preview.transform;state.corners=preview.distortion;if(!finish)canvas()->setSnapGuides(preview.snap.x,preview.snap.y);}
         }
-        if(finish){if(canvas()){canvas()->clearMovePreview();canvas()->setNavigatorDeferred(false);}if(!state.persistent){applyTransformSession();return;}}
         const bool plainMove=!state.pixels&&!state.corners&&!state.maskOnly&&!state.group&&state.ids.size()==1&&transformDrag_->mode.kind==editing_transform::ModeKind::Move;
         const Layer* moving=nullptr;if(plainMove)for(const auto& layer:state.original.layers)if(layer.id==state.ids.front())moving=&layer;
-        const bool sprite=moving&&moving->raster&&!moving->group&&moving->blend==Blend::Normal&&!moving->effects.active()&&moving->adjustmentJson.empty()&&moving->maskSourceId.empty()&&!moving->mask&&moving->shapeJson.empty()&&std::none_of(state.original.layers.begin(),state.original.layers.end(),[&](const Layer& layer){return layer.maskSourceId==moving->id;})&&[&]{auto visible=editing_transform::visiblePlacements(state.original);return !visible.empty()&&visible.back().id==moving->id;}();
-        if(!finish&&sprite&&canvas()){
+        const auto preview=moving?planMovePreview(state.original,*moving):MovePreviewPlan{};
+        const bool fast=moving&&(preview.sprite||preview.covered||preview.masked);
+        if(fast){previewDraft_=state.draft;previewLayerId_=moving->id;}
+        if(finish&&!state.persistent){applyTransformSession();return;}
+        if(!finish&&fast&&canvas()&&canvas()->viewportBounds().valid&&movePreviewJob_){
             try{
-                if(!canvas()->hasMovePreview()){
-                    Document base=state.original;for(auto& layer:base.layers)if(layer.id==moving->id)layer.visible=false;
-                    const double scale=canvas()->pointsPerPixel();const QPointF origin=canvas()->documentPoint({0,0});const bool crisp=canvas()->zoom>=2;
-                    const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();
-                    const double requestWidth=crisp?std::ceil(origin.x()+canvas()->width()/scale)-requestX:canvas()->width()/scale,requestHeight=crisp?std::ceil(origin.y()+canvas()->height()/scale)-requestY:canvas()->height()/scale;
-                    const double units=crisp?1.:1./canvas()->zoom;const int pixelsWide=std::max(1,int(std::ceil(requestWidth/units))),pixelsHigh=std::max(1,int(std::ceil(requestHeight/units)));
-                    auto image=SoftwareRenderer().renderScaled(base,requestX,requestY,pixelsWide,pixelsHigh,units);
-                    canvas()->setMovePreview(std::move(image),requestX,requestY,units,moving->raster,state.draft,moving->opacity);
-                }else canvas()->setMovePreviewPlacement(state.draft);
+                if(canvas()->previewMatches(moving->id,previewGesture_))canvas()->setMovePreviewPlacement(state.draft);
+                else if(!movePreviewJob_->covers(previewGesture_)){
+                    const auto bounds=canvas()->viewportBounds();
+                    ui::MovePreviewJob::Request request;
+                    request.gesture=previewGesture_;request.layerId=moving->id;request.opacity=preview.masked?1:moving->opacity;request.anchorX=moving->transform.x;request.anchorY=moving->transform.y;
+                    request.viewX=bounds.x;request.viewY=bounds.y;request.viewWidth=bounds.width;request.viewHeight=bounds.height;request.units=bounds.units;
+                    request.pixelsWide=std::max(1,int(std::ceil(bounds.width/bounds.units)));request.pixelsHigh=std::max(1,int(std::ceil(bounds.height/bounds.units)));
+                    if(!preview.masked)request.sprite=moving->raster;
+                    std::unordered_set<std::string> above;for(const auto* layer:preview.above)above.insert(layer->id);
+                    auto backIds=above;backIds.insert(moving->id);request.back=hideLayers(state.original,backIds);
+                    if(!above.empty()){request.wantFront=true;std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(!above.contains(layer.id))hidden.insert(layer.id);request.front=hideLayers(state.original,hidden);}
+                    if(preview.masked){const auto plate=ui::movingLayerPlateBounds(*moving,bounds.units);if(!plate.valid)throw std::runtime_error("The moving layer does not fit a preview plate");
+                        request.wantPlate=true;request.plateX=plate.x;request.plateY=plate.y;request.plateWidth=plate.width;request.plateHeight=plate.height;request.platePixelsWide=plate.pixelsWide;request.platePixelsHigh=plate.pixelsHigh;
+                        std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(layer.id!=moving->id)hidden.insert(layer.id);request.plate=hideLayers(state.original,hidden);}
+                    movePreviewJob_->submit(std::move(request));
+                }
                 refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
                 const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;return;
             }catch(const std::exception&){canvas()->clearMovePreview();}
         }
+        if(finish&&canvas()&&canvas()->hasMovePreview()){
+            publishTransformSession(false);transformDrag_.reset();
+            if(canvas()->viewportBounds().valid){scheduleViewportComposite(*p);refresh(false);}
+            else{canvas()->clearMovePreview();refresh();}
+            return;
+        }
         publishTransformSession(false);
         if(finish)transformDrag_.reset();
-        refresh();
+        if(canvas()&&canvas()->viewportBounds().valid){canvas()->setNavigatorDeferred(true);canvas()->setCompositeHeld(true);scheduleViewportComposite(*p);refresh(false);}
+        else{if(canvas())canvas()->setCompositeHeld(false);refresh();}
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
 }
 void MainWindow::setupTransformActions(){
     auto*bar=addToolBar("Transform Options");bar->setObjectName("transformOptions");
-    auto*autoSelect=new QCheckBox("Auto-select layer");autoSelect->setObjectName("transformAutoSelect");bar->addWidget(autoSelect);connect(autoSelect,&QCheckBox::toggled,this,[this](bool value){autoSelectLayers_=value;});
+    auto*autoSelect=new QCheckBox("Auto-select layer");autoSelect->setObjectName("transformAutoSelect");autoSelect->setChecked(true);bar->addWidget(autoSelect);connect(autoSelect,&QCheckBox::toggled,this,[this](bool value){autoSelectLayers_=value;});
     auto*controls=new QCheckBox("Show controls");controls->setObjectName("transformShowControls");controls->setChecked(true);bar->addWidget(controls);connect(controls,&QCheckBox::toggled,this,[this](bool value){transformControls_=value;refresh(false,false);});
     auto*ratio=new QCheckBox("Lock aspect ratio");ratio->setObjectName("transformLockRatio");bar->addWidget(ratio);connect(ratio,&QCheckBox::toggled,this,[this](bool v){lockRatio_=v;});
     auto*snap=new QCheckBox("Snap to edges and centers");snap->setObjectName("transformSnapping");snap->setChecked(true);bar->addWidget(snap);connect(snap,&QCheckBox::toggled,this,[this](bool v){snapping_=v;});

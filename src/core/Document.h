@@ -229,11 +229,14 @@ class CompositeCache {
     double viewportUnits_{},viewportPhaseX_{},viewportPhaseY_{};
     uint64_t viewportTick_{};
     std::shared_ptr<const LayerRenderPreview> viewportPreview_;
+    size_t lastViewportComposedTiles_{};
 public:
     std::shared_ptr<const Raster> render(const Document&);
     CompositeViewport renderViewport(const Document&,double x,double y,double width,double height,double unitsPerPixel=1,size_t maxVisibleTiles=64,size_t maxRetainedTiles=256,std::shared_ptr<const LayerRenderPreview> preview={});
     size_t viewportRetainedTiles()const{return viewportTiles_.size();}
     size_t viewportMetadataEntries()const{return viewportTiles_.size();}
+    // Tiles whose pixels were produced by the renderer during the last viewport call.
+    size_t lastViewportComposedTiles()const{return lastViewportComposedTiles_;}
     void reset(){previous_.reset();output_.reset();viewportPrevious_.reset();viewportTiles_.clear();viewportUnits_=viewportPhaseX_=viewportPhaseY_=0;viewportTick_=0;viewportPreview_.reset();}
 };
 struct Snapshot { std::optional<Document> document; std::string activeLayer; uint64_t revision{}; };

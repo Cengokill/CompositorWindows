@@ -20,6 +20,7 @@
 #include "ProjectToolState.h"
 #include "CommandPalette.h"
 #include "CommandRegistry.h"
+#include "ViewportCompositeJob.h"
 #include "text/TextRaster.h"
 #include <QStackedWidget>
 #include <QPointer>
@@ -194,8 +195,14 @@ class MainWindow final:public QMainWindow {
     std::optional<Transform> moving_;
     std::optional<editing_transform::Drag> transformDrag_;
     std::unique_ptr<editing_transform::TransformSessionState> transformSession_;
+    ui::ViewportCompositeJob* viewportComposite_{};
+    ui::MovePreviewJob* movePreviewJob_{};
+    uint64_t previewGesture_{1};
+    bool previewSealed_{};
+    Transform previewDraft_{};
+    std::string previewLayerId_;
     EditorProject* transformOwner_{};
-    bool autoSelectLayers_{},transformControls_{true};
+    bool autoSelectLayers_{true},transformControls_{true};
     std::optional<Document> transformBefore_;
     std::vector<std::string> transformIds_;
     bool lockRatio_{true},snapping_{true};
@@ -343,6 +350,11 @@ class MainWindow final:public QMainWindow {
     void applyTransformSession();
     void cancelTransformSession();
     void publishTransformSession(bool finish);
+    void invalidateViewportComposite();
+    void beginPreviewGesture(NativeCanvas* canvas=nullptr);
+    void scheduleViewportComposite(EditorProject&);
+    void applyViewportComposite(ui::ViewportCompositeJob::Result result);
+    void applyMovePreview(ui::MovePreviewJob::Result result);
     void updateTransformActions();
     std::optional<Transform> selectedTransform();
     bool beginTransform(Point,Qt::KeyboardModifiers);

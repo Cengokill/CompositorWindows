@@ -1,6 +1,7 @@
 #include "core/Document.h"
 #include "effects/Adjustments.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -95,4 +96,41 @@ void navigator_overview_isolated(){
 }
 void unsupported_blank_adjustment(){Document d;d.width=d.height=30000;Layer adjustment;adjustment.id=newId();adjustment.adjustmentJson="{\"kind\":\"unsupported\"}";d.layers={adjustment};for(bool viewport:{false,true}){CompositeCache cache;bool rejected=false;try{if(viewport)cache.renderViewport(d,0,0,30000,30000);else cache.render(d);}catch(const std::exception&){rejected=true;}REQUIRE(rejected);}d.layers[0].visible=false;CompositeCache cache;REQUIRE(unique(*cache.render(d))==1);}
 
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+void move_translation_damage(){
+    Document document;document.id=newId();document.width=1920;document.height=1080;
+    document.layers.push_back(solid("background",4,4,{20,40,80,255},{0,0,1920,1080,0,false,false,Transform::Sampling::Smooth}));
+    Layer photo=solid("photo",960,700,{180,40,20,255},{0,0,960,700,0,false,false,Transform::Sampling::Smooth});
+    const Pixel mark{0,220,255,255};photo.raster=photo.raster->replacing(24,36,1,1,&mark,1);document.layers.push_back(photo);
+    const double units=4;CompositeCache cache;const auto started=std::chrono::steady_clock::now();
+    auto before=cache.renderViewport(document,0,0,1920,1080,units,64,256);
+    const auto firstMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    const auto firstTiles=cache.lastViewportComposedTiles();const auto far=before.raster->tiles.at(1);
+    document.layers[1].transform.x=10;document.layers[1].transform.y=12;
+    const auto moveStarted=std::chrono::steady_clock::now();
+    auto moved=cache.renderViewport(document,0,0,1920,1080,units,64,256);
+    const auto moveMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-moveStarted).count();
+    const auto moveTiles=cache.lastViewportComposedTiles();
+    std::cout<<"move_translation_damage zoom_units="<<units<<" first_ms="<<firstMs<<" first_tiles="<<firstTiles<<" translation_ms="<<moveMs<<" translation_tiles="<<moveTiles<<"\n";
+    REQUIRE(firstTiles>moveTiles&&moveTiles>0);REQUIRE(moved.raster->tiles.at(1)==far);
+    CompositeCache fresh;equal(*moved.raster,*fresh.renderViewport(document,0,0,1920,1080,units,64,256).raster);
+    Document shadowed=document;shadowed.layers[1].effects.specified=true;shadowed.layers[1].effects.dropShadow.enabled=true;shadowed.layers[1].effects.dropShadow.opacity=1;shadowed.layers[1].effects.dropShadow.distance=12;shadowed.layers[1].effects.dropShadow.size=4;shadowed.layers[1].effects.dropShadow.angle=0;shadowed.layers[1].transform={0,0,800,500};
+    CompositeCache shadowCache;auto shadowBefore=shadowCache.renderViewport(shadowed,0,0,1920,1080,units,64,256);const auto shadowFar=shadowBefore.raster->tiles.at(1);
+    shadowed.layers[1].transform.x=8;shadowed.layers[1].transform.y=6;auto shadowMoved=shadowCache.renderViewport(shadowed,0,0,1920,1080,units,64,256);
+    REQUIRE(shadowMoved.raster->tiles.at(1)==shadowFar&&shadowCache.lastViewportComposedTiles()<shadowBefore.raster->tiles.size());
+    equal(*shadowMoved.raster,*CompositeCache{}.renderViewport(shadowed,0,0,1920,1080,units,64,256).raster);
+    Document dependent=document;Layer clipped=document.layers[1];clipped.id="clipped";clipped.maskSourceId=document.layers[1].id;clipped.opacity=.6;dependent.layers.push_back(clipped);
+    CompositeCache dependentCache;auto dependentBefore=dependentCache.renderViewport(dependent,0,0,1920,1080,units,64,256);const auto dependentFar=dependentBefore.raster->tiles.at(1);
+    dependent.layers[1].transform.x=40;auto dependentMoved=dependentCache.renderViewport(dependent,0,0,1920,1080,units,64,256);
+    REQUIRE(dependentMoved.raster->tiles.at(1)!=dependentFar);REQUIRE(dependentCache.lastViewportComposedTiles()>moveTiles);
+    equal(*dependentMoved.raster,*CompositeCache{}.renderViewport(dependent,0,0,1920,1080,units,64,256).raster);
+    Document native=document;CompositeCache fullScale;const auto nativeStarted=std::chrono::steady_clock::now();
+    fullScale.renderViewport(native,0,0,1920,1080,1,64,256);
+    const auto nativeMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeStarted).count();
+    const auto nativeTiles=fullScale.lastViewportComposedTiles();
+    native.layers[1].transform.x=48;const auto nativeMoveStarted=std::chrono::steady_clock::now();
+    auto nativeMoved=fullScale.renderViewport(native,0,0,1920,1080,1,64,256);
+    const auto nativeMoveMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeMoveStarted).count();
+    std::cout<<"move_translation_damage zoom_units=1 first_ms="<<nativeMs<<" first_tiles="<<nativeTiles<<" translation_ms="<<nativeMoveMs<<" translation_tiles="<<fullScale.lastViewportComposedTiles()<<"\n";
+    equal(*nativeMoved.raster,*CompositeCache{}.renderViewport(native,0,0,1920,1080,1,64,256).raster);
+}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}

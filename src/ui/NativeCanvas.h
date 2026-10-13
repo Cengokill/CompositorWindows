@@ -22,6 +22,20 @@ namespace compositor {
 class NativeCanvas final:public QWidget {
 public:
     struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;double lineWidth{4};};
+    // `plate` is the moving layer's full painted appearance, shifted with the draft.
+    // `front` is the frozen content that must stay above the moving layer.
+    struct MovePreview {
+        std::string layerId;
+        uint64_t gesture{};
+        std::shared_ptr<const Raster> base;
+        double baseX{},baseY{},baseUnits{1};
+        std::shared_ptr<const Raster> layer;
+        Transform placed{};
+        double opacity{1};
+        std::shared_ptr<const Raster> plate,front;
+        double plateX{},plateY{},anchorX{},anchorY{};
+    };
+    struct PreviewPlate { double x{},y{}; int width{},height{}; };
     struct TextCaretOverlay {
         std::shared_ptr<const Raster> raster;
         double originX{},originY{},width{},height{};
@@ -46,7 +60,6 @@ private:
     Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> checkerBrush_;
     float checkerScale_{};
     std::shared_ptr<const Raster> raster_;
-    struct MovePreview { std::shared_ptr<const Raster> base; double baseX{},baseY{},baseUnits{1}; std::shared_ptr<const Raster> layer; Transform placed{}; double opacity{1}; };
     std::optional<MovePreview> movePreview_;
     void drawRasterTiles(const Raster& image,double docX,double docY,double units,float left,float top,double scale);
     void drawMoveSprite(double scale);
@@ -86,7 +99,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
     QTimer* navigatorTimer_{};
     QTimer* viewportTimer_{};
-    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{};
+    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{};
     std::shared_ptr<const Raster> navigatorRaster_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
     double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
@@ -156,10 +169,21 @@ public:
     void setRaster(std::shared_ptr<const Raster>);
     // A plain layer move draws a frozen background plus the layer. The full
     // viewport composite waits until the drag ends.
-    void setMovePreview(std::shared_ptr<const Raster> base,double baseX,double baseY,double baseUnits,std::shared_ptr<const Raster> layer,Transform placed,double opacity);
+    void setMovePreview(MovePreview preview);
     void setMovePreviewPlacement(Transform placed);
     void clearMovePreview();
     bool hasMovePreview() const { return movePreview_.has_value(); }
+    bool previewMatches(const std::string& layerId,uint64_t gesture) const;
+    std::string previewLayerId() const { return movePreview_?movePreview_->layerId:std::string{}; }
+    uint64_t previewGesture() const { return movePreview_?movePreview_->gesture:0; }
+    std::optional<PreviewPlate> previewPlate() const;
+    // While held, paint keeps the current frame instead of composing on the UI thread.
+    void setCompositeHeld(bool held);
+    bool compositeHeld() const { return compositeHeld_; }
+    struct ViewportBounds { double x{},y{},width{},height{},units{1}; bool valid{}; };
+    ViewportBounds viewportBounds() const;
+    // Install a finished composite and, when requested, drop the move sprite in the same frame.
+    void presentComposite(std::shared_ptr<const Raster> raster,double x,double y,double units,bool clearPreview);
     void setDocumentSize(int width,int height);
     void setSelection(std::shared_ptr<const GrayRaster>,std::shared_ptr<const editing::SelectionOutline> outline={});
     void setSelectionDraft(std::optional<editing::LassoDraft> value){selectionDraft_=std::move(value);update();}
