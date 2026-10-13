@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include <algorithm>
 #include "ImportActions.h"
 #include "WorkspaceDropQueue.h"
 #include "ProjectLayerCopyJob.h"
@@ -24,7 +25,7 @@ namespace compositor {
 namespace {
 void detach(NativeCanvas*canvas){
     canvas->pointerDown={};canvas->pointerDoubleClick={};canvas->pointerMove={};canvas->pointerUp={};canvas->pointerCancel={};canvas->pointerInterrupted={};
-    canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};
+    canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};canvas->navigatorProvider={};
 }
 }
 MainWindow::~MainWindow(){
@@ -71,6 +72,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->textKey=[this](QKeyEvent* event){return handleTextKey(event);};
     project.canvas->textInput=[this](QInputMethodEvent* event){handleTextInput(event);};
     auto*owner=&project;project.canvas->viewportProvider=[this,owner](double x,double y,double w,double h,double units){return brushViewport(*owner,x,y,w,h,units);};
+    project.canvas->navigatorProvider=[this,owner](int edge){return navigatorComposite(*owner,edge);};
 }
 bool MainWindow::canSwitchProjects(){
     const auto state=commandState(activeProject_);return !state.modalDialog&&ui::canSwitchProject(state);
@@ -139,4 +141,25 @@ EditorProject& MainWindow::addProject(Document document,QString title,bool reuse
     refresh();project.canvas->fit();project.canvas->setFocus();return project;
 }
 void MainWindow::newDialog(){if(canSwitchProjects())addEmptyProject(false);}
+CompositeViewport MainWindow::navigatorComposite(EditorProject& project,int maxEdge){
+    if(!project.document||maxEdge<1)return {};
+    const int edge=std::clamp(maxEdge,1,256);
+    const double units=std::clamp(std::max(1.,std::max(project.document->width,project.document->height)/double(edge)),1./32.,30000.);
+    // A separate cache keeps the interactive viewport tiles. The same units key
+    // would discard them on every overview pass.
+    auto render=[&](const Document& document,std::shared_ptr<const LayerRenderPreview> layerPreview={}){
+        return project.navigatorCache.renderViewport(document,0,0,document.width,document.height,units,4,16,std::move(layerPreview));
+    };
+    if(auto preview=editPanelPreview(project))return render(*preview);
+    if(project.blendPreview&&project.active==project.blendPreview->first){
+        auto preview=*project.document;
+        for(auto& layer:preview.layers)if(layer.id==project.blendPreview->first){layer.blend=project.blendPreview->second;break;}
+        return render(preview);
+    }
+    if(project.textPreview)return render(*project.document,project.textPreview);
+    if(project.gradientPreview)return render(*project.document,project.gradientPreview->renderPreview());
+    if(project.retouchPreview)return render(*project.document,project.retouchPreview);
+    if(project.brushPreview)return render(*project.document,project.brushPreview->renderPreview());
+    return render(*project.document);
+}
 }

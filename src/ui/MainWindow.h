@@ -50,6 +50,7 @@ struct EditorProject {
     std::unordered_set<std::string> collapsedGroups;
     History history;
     CompositeCache composite;
+    CompositeCache navigatorCache;
     std::shared_ptr<const graphics::GrowingBrushSnapshot> brushPreview;
     std::shared_ptr<const LayerRenderPreview> textPreview;
     std::shared_ptr<const LayerRenderPreview> retouchPreview;
@@ -288,6 +289,7 @@ class MainWindow final:public QMainWindow {
     bool updateBrush(Point,bool finish);
     void publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapshot>,bool finish=false);
     CompositeViewport brushViewport(EditorProject&,double,double,double,double,double);
+    CompositeViewport navigatorComposite(EditorProject&,int maxEdge);
     void setupAdjustmentActions();
     ui::EditPanelHost makeEditPanelHost(EditorProject&,const Document&,std::string action);
     std::shared_ptr<const Document> editPanelPreview(EditorProject&)const;

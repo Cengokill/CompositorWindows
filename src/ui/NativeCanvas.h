@@ -80,6 +80,17 @@ private:
     QMetaObject::Connection profileScreenConnection_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> presentationScene_;
     Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
+    QTimer* navigatorTimer_{};
+    bool navigatorDeferred_{},navigatorDirty_{},navigating_{};
+    std::shared_ptr<const Raster> navigatorRaster_;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
+    double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
+    void refreshNavigator();
+    void drawNavigator();
+    void ensureNavigatorBitmap();
+    bool navigatorContains(QPointF) const;
+    void navigateFrom(QPointF);
+    void centerDocument(Point);
     bool profileKnown_{},presentationAttempted_{};
     QString presentationDiagnostic_;
     uint64_t presentationBytes_{},profileDiscoveryCount_{};
@@ -125,6 +136,14 @@ public:
     std::function<bool(QKeyEvent*)> textKey;
     std::function<void(QInputMethodEvent*)> textInput;
     std::function<CompositeViewport(double,double,double,double,double)> viewportProvider;
+    // Reduced full-document composite. maxEdge is the longest side in pixels.
+    // The canvas calls it after editing pauses, not on every repaint or brush step.
+    std::function<CompositeViewport(int maxEdge)> navigatorProvider;
+    struct NavigatorPlacement { bool visible{}; QRectF map; QRectF viewport; };
+    NavigatorPlacement navigatorPlacement() const;
+    void scheduleNavigator();
+    void setNavigatorDeferred(bool deferred);
+    bool navigatorDeferred() const { return navigatorDeferred_; }
     void setRaster(std::shared_ptr<const Raster>);
     void setDocumentSize(int width,int height);
     void setSelection(std::shared_ptr<const GrayRaster>,std::shared_ptr<const editing::SelectionOutline> outline={});

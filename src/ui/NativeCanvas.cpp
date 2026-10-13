@@ -17,9 +17,9 @@
 namespace compositor {
 using Microsoft::WRL::ComPtr;
 static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
-NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){ui::installCanvasAccessibility();setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);selectionTimer_=new QTimer(this);selectionTimer_->setObjectName("selectionAntsTimer");selectionTimer_->setTimerType(Qt::PreciseTimer);selectionTimer_->setInterval(120);connect(selectionTimer_,&QTimer::timeout,this,[this]{selectionPhase_=(selectionPhase_+1)%8;update();});synchronizeViewport();}
-NativeCanvas::~NativeCanvas(){selectionTimer_->stop();profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
-void NativeCanvas::releaseDevice(){checkerBrush_.Reset();checkerScale_=0;selectionGeometry_.Reset();selectionMatrix_.reset();brushPreviewBitmap_.Reset();brushPreviewSource_.reset();textBitmap_.Reset();textRasterSource_.reset();resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
+NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){ui::installCanvasAccessibility();setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);selectionTimer_=new QTimer(this);selectionTimer_->setObjectName("selectionAntsTimer");selectionTimer_->setTimerType(Qt::PreciseTimer);selectionTimer_->setInterval(120);connect(selectionTimer_,&QTimer::timeout,this,[this]{selectionPhase_=(selectionPhase_+1)%8;update();});navigatorTimer_=new QTimer(this);navigatorTimer_->setObjectName("navigatorTimer");navigatorTimer_->setSingleShot(true);navigatorTimer_->setInterval(300);connect(navigatorTimer_,&QTimer::timeout,this,[this]{refreshNavigator();});synchronizeViewport();}
+NativeCanvas::~NativeCanvas(){selectionTimer_->stop();navigatorTimer_->stop();profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
+void NativeCanvas::releaseDevice(){checkerBrush_.Reset();checkerScale_=0;selectionGeometry_.Reset();selectionMatrix_.reset();brushPreviewBitmap_.Reset();brushPreviewSource_.reset();textBitmap_.Reset();textRasterSource_.reset();navigatorBitmap_.Reset();resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
 void NativeCanvas::ensureChecker(){
     const float scale=float(devicePixelRatioF());if(checkerBrush_&&checkerScale_==scale)return;
     checkerBrush_.Reset();checkerScale_=scale;
@@ -187,6 +187,7 @@ if((snapGuideX_||snapGuideY_)&&documentWidth_>0&&documentHeight_>0){
     if(snapGuideY_)context_->DrawLine(point({0,*snapGuideY_}),point({double(documentWidth_),*snapGuideY_}),accent.Get(),1);
 }
 if(textOverlay_)drawTextOverlay();
+drawNavigator();
 auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas draw");hr=finishPresentation();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas presentation");if(!present)return;hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
 std::optional<int> NativeCanvas::cropResizeHandle(editing::Rect crop,Point point,const editing_transform::ViewMapping& mapping){
     const auto geometry=editing_transform::OverlayGeometry::fromTransform({crop.x,crop.y,crop.width,crop.height},mapping);
@@ -232,7 +233,7 @@ void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(
 graphics::CanvasViewport NativeCanvas::viewportState()const{return {{double(width()),double(height())},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
 void NativeCanvas::installViewport(const graphics::CanvasViewport& state){zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;update();}
 void NativeCanvas::synchronizeViewport(){auto state=viewportState();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({double(width()),double(height())},devicePixelRatioF(),document);installViewport(state);}
-void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();}updateSelectionAnimation();if(changed)synchronizeViewport();else update();}
+void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
 editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto state=viewportState();return {state.pointsPerPixel(),state.origin({double(documentWidth_),double(documentHeight_)})};}
 QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto point=viewportState().documentPoint({p.x(),p.y()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}
@@ -259,11 +260,88 @@ QImage NativeCanvas::captureRendered(){
     QImage image(static_cast<const uchar*>(mapped.pData),int(desc.Width),int(desc.Height),mapped.RowPitch,QImage::Format_ARGB32);
     auto copy=image.copy();immediate_->Unmap(staging.Get(),0);check(swap_->Present(1,0),"Present captured canvas");return copy;
 }
+NativeCanvas::NavigatorPlacement NativeCanvas::navigatorPlacement()const{
+    NavigatorPlacement result;
+    if(documentWidth_<=0||documentHeight_<=0||width()<120||height()<120)return result;
+    const double docW=documentWidth_,docH=documentHeight_,margin=16,maxLong=160;
+    double mapW=docW>=docH?maxLong:std::max(36.,maxLong*docW/docH),mapH=docW>=docH?std::max(36.,maxLong*docH/docW):maxLong;
+    const double availW=width()-margin*2,availH=height()-margin*2;
+    if(availW<48||availH<48)return result;
+    if(mapW>availW||mapH>availH){const double fit=std::min(availW/mapW,availH/mapH);mapW*=fit;mapH*=fit;}
+    result.map=QRectF(width()-margin-mapW,height()-margin-mapH,mapW,mapH);
+    const double scale=pointsPerPixel();if(scale<=0||mapW<=0||mapH<=0)return result;
+    const QPointF origin=documentPoint({0,0});
+    const double left=origin.x(),top=origin.y(),right=left+width()/scale,bottom=top+height()/scale,eps=.51;
+    result.visible=left>eps||top>eps||right<docW-eps||bottom<docH-eps;
+    const double visL=std::clamp(left,0.,docW),visT=std::clamp(top,0.,docH),visR=std::clamp(right,0.,docW),visB=std::clamp(bottom,0.,docH);
+    if(visR>visL&&visB>visT)result.viewport=QRectF(result.map.left()+visL/docW*mapW,result.map.top()+visT/docH*mapH,(visR-visL)/docW*mapW,(visB-visT)/docH*mapH);
+    return result;
+}
+void NativeCanvas::scheduleNavigator(){
+    if(!navigatorTimer_)return;
+    if(!navigatorProvider||documentWidth_<=0||documentHeight_<=0){navigatorDirty_=false;navigatorTimer_->stop();if(navigatorRaster_){navigatorRaster_.reset();navigatorBitmap_.Reset();update();}return;}
+    navigatorDirty_=true;if(navigatorDeferred_){navigatorTimer_->stop();return;}navigatorTimer_->start();
+}
+void NativeCanvas::setNavigatorDeferred(bool deferred){navigatorDeferred_=deferred;if(deferred){if(navigatorTimer_)navigatorTimer_->stop();return;}if(navigatorDirty_)scheduleNavigator();}
+void NativeCanvas::refreshNavigator(){
+    if(navigatorDeferred_||!navigatorProvider||documentWidth_<=0||documentHeight_<=0)return;
+    navigatorDirty_=false;
+    const auto placement=navigatorPlacement();
+    const double longest=std::max(placement.map.width(),placement.map.height());
+    const int edge=std::clamp(int(std::ceil(std::max(32.,longest)*std::max(1.,devicePixelRatioF()))),1,256);
+    try{auto patch=navigatorProvider(edge);navigatorRaster_=std::move(patch.raster);navigatorOriginX_=patch.documentX;navigatorOriginY_=patch.documentY;navigatorUnits_=patch.unitsPerPixel>0?patch.unitsPerPixel:1;navigatorBitmap_.Reset();}
+    catch(const std::exception& error){error_=error.what();}
+    update();
+}
+void NativeCanvas::ensureNavigatorBitmap(){
+    if(!context_||!navigatorRaster_||navigatorBitmap_)return;
+    const auto& image=*navigatorRaster_;
+    if(image.width<1||image.height<1||image.width>512||image.height>512)return;
+    std::vector<Pixel> pixels(size_t(image.width)*size_t(image.height));
+    for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x)pixels[size_t(y)*size_t(image.width)+size_t(x)]=image.pixel(x,y);
+    auto properties=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+    check(context_->CreateBitmap(D2D1::SizeU(UINT32(image.width),UINT32(image.height)),pixels.data(),UINT32(image.width*4),&properties,&navigatorBitmap_),"Navigator bitmap");
+}
+void NativeCanvas::drawNavigator(){
+    const auto placement=navigatorPlacement();if(!placement.visible||!context_)return;
+    const auto map=D2D1::RectF(float(placement.map.left()),float(placement.map.top()),float(placement.map.right()),float(placement.map.bottom()));
+    ComPtr<ID2D1SolidColorBrush> shade,border,viewport;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(.09f,.1f,.12f,.92f),&shade),"Navigator shade");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,.45f),&border),"Navigator border");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1,.95f),&viewport),"Navigator viewport");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    context_->FillRectangle(map,shade.Get());
+    ensureNavigatorBitmap();
+    if(navigatorBitmap_&&navigatorRaster_&&navigatorUnits_>0){
+        const auto& image=*navigatorRaster_;
+        const float srcL=float(std::clamp((0-navigatorOriginX_)/navigatorUnits_,0.,double(image.width)));
+        const float srcT=float(std::clamp((0-navigatorOriginY_)/navigatorUnits_,0.,double(image.height)));
+        const float srcR=float(std::clamp(documentWidth_/navigatorUnits_,0.,double(image.width)));
+        const float srcB=float(std::clamp(documentHeight_/navigatorUnits_,0.,double(image.height)));
+        if(srcR>srcL&&srcB>srcT)context_->DrawBitmap(navigatorBitmap_.Get(),map,1,D2D1_INTERPOLATION_MODE_LINEAR,D2D1::RectF(srcL,srcT,srcR,srcB));
+    }
+    context_->DrawRectangle(map,border.Get(),1);
+    if(placement.viewport.width()>0&&placement.viewport.height()>0){const auto box=D2D1::RectF(float(placement.viewport.left()),float(placement.viewport.top()),float(placement.viewport.right()),float(placement.viewport.bottom()));context_->DrawRectangle(box,viewport.Get(),1.5f);}
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
+bool NativeCanvas::navigatorContains(QPointF position)const{const auto placement=navigatorPlacement();return placement.visible&&position.x()>=placement.map.left()&&position.y()>=placement.map.top()&&position.x()<=placement.map.right()&&position.y()<=placement.map.bottom();}
+void NativeCanvas::centerDocument(Point target){
+    if(documentWidth_<=0||documentHeight_<=0)return;
+    auto state=viewportState();const double scale=state.pointsPerPixel();
+    target.x=std::clamp(target.x,0.,double(documentWidth_));target.y=std::clamp(target.y,0.,double(documentHeight_));
+    state.pan={(documentWidth_*.5-target.x)*scale,(documentHeight_*.5-target.y)*scale};state.followsFit=false;installViewport(state);
+}
+void NativeCanvas::navigateFrom(QPointF position){
+    const auto placement=navigatorPlacement();if(placement.map.width()<=0||placement.map.height()<=0||documentWidth_<=0)return;
+    const double x=std::clamp(position.x(),placement.map.left(),placement.map.right()),y=std::clamp(position.y(),placement.map.top(),placement.map.bottom());
+    centerDocument({(x-placement.map.left())/placement.map.width()*documentWidth_,(y-placement.map.top())/placement.map.height()*documentHeight_});
+}
 void NativeCanvas::paintEvent(QPaintEvent*){try{draw();error_.clear();}catch(const std::exception&e){error_=e.what();releaseDevice();}}
-void NativeCanvas::resizeEvent(QResizeEvent*){synchronizeViewport();if(swap_){context_->SetTarget(nullptr);target_.Reset();auto hr=swap_->ResizeBuffers(0,std::max(1,int(width()*devicePixelRatioF())),std::max(1,int(height()*devicePixelRatioF())),DXGI_FORMAT_UNKNOWN,0);try{check(hr,"Canvas resize");createTarget();}catch(const std::exception&e){error_=e.what();releaseDevice();}}update();}
+void NativeCanvas::resizeEvent(QResizeEvent*){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();if(swap_){context_->SetTarget(nullptr);target_.Reset();auto hr=swap_->ResizeBuffers(0,std::max(1,int(width()*devicePixelRatioF())),std::max(1,int(height()*devicePixelRatioF())),DXGI_FORMAT_UNKNOWN,0);try{check(hr,"Canvas resize");createTarget();}catch(const std::exception&e){error_=e.what();releaseDevice();}}update();}
 void NativeCanvas::mousePressEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
     setFocus();last_=e->position();if(pointerHover)pointerHover(e->position(),e->modifiers());
+    if(navigatorContains(e->position())&&(e->button()==Qt::LeftButton||e->button()==Qt::RightButton)){if(e->button()==Qt::LeftButton){navigating_=true;grabMouse();navigateFrom(e->position());}e->accept();return;}
     if(e->button()==Qt::RightButton&&rightPointerDown&&rightPointerDown(e->position(),e->modifiers())){rightDragging_=true;grabMouse();e->accept();return;}
     if(e->button()==Qt::MiddleButton){panning_=true;grabMouse();e->accept();return;}
     if(e->button()==Qt::LeftButton&&!rightDragging_&&!panning_){dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
@@ -271,22 +349,26 @@ void NativeCanvas::mousePressEvent(QMouseEvent*e){
 void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
     if(pointerHover)pointerHover(e->position(),e->modifiers());
+    if(navigating_){navigateFrom(e->position());last_=e->position();return;}
     if(rightDragging_){if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),false);last_=e->position();return;}
-    if(!dragging_&&cropOverlay_){
+    if(!dragging_&&navigatorContains(e->position()))setCursor(Qt::OpenHandCursor);
+    else if(!dragging_&&cropOverlay_){
         const auto hit=cropResizeHandle(*cropOverlay_,{e->position().x(),e->position().y()},viewMapping());
         if(hit){constexpr Qt::CursorShape cursors[]{Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor,Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor};setCursor(cursors[*hit]);}
         else unsetCursor();
     }
-    if(!dragging_&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({e->position().x(),e->position().y()});auto cursor=mode?geometry.cursor(*mode,{e->modifiers().testFlag(Qt::ShiftModifier),e->modifiers().testFlag(Qt::AltModifier),e->modifiers().testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
+    if(!dragging_&&!navigatorContains(e->position())&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({e->position().x(),e->position().y()});auto cursor=mode?geometry.cursor(*mode,{e->modifiers().testFlag(Qt::ShiftModifier),e->modifiers().testFlag(Qt::AltModifier),e->modifiers().testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
     if(panning_&&(!navigationAllowed||navigationAllowed()))panBy(e->position()-last_);else if(dragging_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());last_=e->position();
 }
 void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
     if(tabletActive_||e->button()!=Qt::LeftButton||rightDragging_){e->accept();return;}
+    if(navigatorContains(e->position())){navigating_=true;grabMouse();navigateFrom(e->position());e->accept();return;}
     setFocus();last_=e->position();if(pointerHover)pointerHover(e->position(),e->modifiers());
     dragging_=true;grabMouse();if(pointerDoubleClick)pointerDoubleClick(documentPoint(e->position()),e->modifiers());else if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());
 }
 void NativeCanvas::mouseReleaseEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
+    if(navigating_&&e->button()==Qt::LeftButton){navigating_=false;releaseMouse();return;}
     if(panning_&&e->button()==Qt::MiddleButton){panning_=false;releaseMouse();return;}
     if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);return;}
     if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
@@ -328,7 +410,7 @@ void NativeCanvas::drawTextOverlay(){
     if(overlay.caret>=0&&overlay.caret<int(overlay.carets.size())){const auto& line=overlay.carets[size_t(overlay.caret)];context_->DrawLine(viewOf(line.x0,line.y0),viewOf(line.x1,line.y1),caret.Get(),std::max(1.f,float(pointsPerPixel())));}
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
-void NativeCanvas::keyPressEvent(QKeyEvent*e){if(textKey&&textKey(e)){e->accept();return;}if(e->key()==Qt::Key_Escape&&(dragging_||rightDragging_)){dragging_=rightDragging_=tabletActive_=false;releaseMouse();if(pointerCancel)pointerCancel();e->accept();}else QWidget::keyPressEvent(e);}
+void NativeCanvas::keyPressEvent(QKeyEvent*e){if(textKey&&textKey(e)){e->accept();return;}if(e->key()==Qt::Key_Escape&&navigating_){navigating_=false;if(QWidget::mouseGrabber()==this)releaseMouse();e->accept();return;}if(e->key()==Qt::Key_Escape&&(dragging_||rightDragging_)){dragging_=rightDragging_=tabletActive_=false;releaseMouse();if(pointerCancel)pointerCancel();e->accept();}else QWidget::keyPressEvent(e);}
 void NativeCanvas::inputMethodEvent(QInputMethodEvent*e){if(textInput){textInput(e);e->accept();return;}QWidget::inputMethodEvent(e);}
 QVariant NativeCanvas::inputMethodQuery(Qt::InputMethodQuery query) const{
     if(query==Qt::ImEnabled)return textOverlay_.has_value();
@@ -341,8 +423,9 @@ QVariant NativeCanvas::inputMethodQuery(Qt::InputMethodQuery query) const{
 }
 void NativeCanvas::tabletEvent(QTabletEvent*e){
     e->accept();if(pointerHover)pointerHover(e->position(),e->modifiers());
-    if(e->type()==QEvent::TabletPress){setFocus();if(dragging_||rightDragging_)return;tabletActive_=dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
-    else if(e->type()==QEvent::TabletMove){if(tabletActive_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());}
+    if(e->type()==QEvent::TabletPress){setFocus();if(dragging_||rightDragging_||navigating_)return;if(navigatorContains(e->position())){navigating_=true;grabMouse();navigateFrom(e->position());return;}tabletActive_=dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
+    else if(e->type()==QEvent::TabletMove){if(navigating_)navigateFrom(e->position());else if(tabletActive_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());}
+    else if(e->type()==QEvent::TabletRelease&&navigating_){navigating_=false;releaseMouse();}
     else if(e->type()==QEvent::TabletRelease&&tabletActive_){tabletActive_=dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
     // The pinned source has no pressure mapping. Accept prevents Qt's duplicate synthesized mouse stroke.
 }
@@ -350,6 +433,7 @@ void NativeCanvas::leaveEvent(QEvent*e){if(pointerLeave)pointerLeave();if(!dragg
 bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();updateSelectionAnimation();}
     if(e->type()==QEvent::Hide&&selectionTimer_)selectionTimer_->stop();
     const bool focusLost=e->type()==QEvent::WindowDeactivate||e->type()==QEvent::FocusOut;
+    if(navigating_&&(focusLost||e->type()==QEvent::UngrabMouse)){navigating_=false;if(QWidget::mouseGrabber()==this&&!dragging_&&!rightDragging_)releaseMouse();}
     if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){setSnapGuides();dragging_=rightDragging_=tabletActive_=false;if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
     if(e->type()==QEvent::DevicePixelRatioChange){releaseDevice();synchronizeViewport();}
     if(e->type()==QEvent::NativeGesture){auto*gesture=static_cast<QNativeGestureEvent*>(e);if(gesture->gestureType()==Qt::ZoomNativeGesture){if(documentWidth_>0&&(!navigationAllowed||navigationAllowed()))zoomAt(zoom*(1+gesture->value()),gesture->position());gesture->accept();return true;}}
