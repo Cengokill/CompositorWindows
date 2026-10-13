@@ -81,7 +81,8 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> presentationScene_;
     Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
     QTimer* navigatorTimer_{};
-    bool navigatorDeferred_{},navigatorDirty_{},navigating_{};
+    QTimer* viewportTimer_{};
+    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{};
     std::shared_ptr<const Raster> navigatorRaster_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
     double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
@@ -91,6 +92,8 @@ private:
     bool navigatorContains(QPointF) const;
     void navigateFrom(QPointF);
     void centerDocument(Point);
+    void noteViewportInteraction();
+    void settleViewport();
     bool profileKnown_{},presentationAttempted_{};
     QString presentationDiagnostic_;
     uint64_t presentationBytes_{},profileDiscoveryCount_{};

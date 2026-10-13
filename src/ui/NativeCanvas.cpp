@@ -18,7 +18,7 @@ namespace compositor {
 using Microsoft::WRL::ComPtr;
 static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
 NativeCanvas::NativeCanvas(bool warp,QWidget*parent):QWidget(parent),warp_(warp){ui::installCanvasAccessibility();setAttribute(Qt::WA_NativeWindow);setAttribute(Qt::WA_PaintOnScreen);setAttribute(Qt::WA_NoSystemBackground);setFocusPolicy(Qt::StrongFocus);setMouseTracking(true);setAccessibleName("Image canvas");setMinimumSize(160,120);selectionTimer_=new QTimer(this);selectionTimer_->setObjectName("selectionAntsTimer");selectionTimer_->setTimerType(Qt::PreciseTimer);selectionTimer_->setInterval(120);connect(selectionTimer_,&QTimer::timeout,this,[this]{selectionPhase_=(selectionPhase_+1)%8;update();});navigatorTimer_=new QTimer(this);navigatorTimer_->setObjectName("navigatorTimer");navigatorTimer_->setSingleShot(true);navigatorTimer_->setInterval(300);connect(navigatorTimer_,&QTimer::timeout,this,[this]{refreshNavigator();});synchronizeViewport();}
-NativeCanvas::~NativeCanvas(){selectionTimer_->stop();navigatorTimer_->stop();profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
+NativeCanvas::~NativeCanvas(){selectionTimer_->stop();navigatorTimer_->stop();if(viewportTimer_)viewportTimer_->stop();profileWatcher_.reset();if(profileWindow_)profileWindow_->removeEventFilter(this);QObject::disconnect(profileScreenConnection_);releaseDevice();}
 void NativeCanvas::releaseDevice(){checkerBrush_.Reset();checkerScale_=0;selectionGeometry_.Reset();selectionMatrix_.reset();brushPreviewBitmap_.Reset();brushPreviewSource_.reset();textBitmap_.Reset();textRasterSource_.reset();navigatorBitmap_.Reset();resetPresentationResources();displayTiles_.clear();image_.Reset();target_.Reset();if(context_)context_->SetTarget(nullptr);context_.Reset();d2device_.Reset();factory_.Reset();swap_.Reset();immediate_.Reset();device_.Reset();}
 void NativeCanvas::ensureChecker(){
     const float scale=float(devicePixelRatioF());if(checkerBrush_&&checkerScale_==scale)return;
@@ -44,7 +44,7 @@ void NativeCanvas::upload(){
     for(const auto&tile:raster_->tiles)live[tile.get()]=true;
     std::erase_if(displayTiles_,[&](const auto&entry){return !live.contains(entry.first);});
 }
-void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
+void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0&&!viewportDeferred_){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
 // Upload bounded tiles so a valid 30,000-pixel narrow document remains displayable.
 for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;const size_t index=size_t(ty/256)*((raster_->width+255)/256)+size_t(tx/256);if(index>=raster_->tiles.size()||!raster_->tiles[index])continue;auto tile=raster_->tiles[index];auto found=displayTiles_.find(tile.get());
 if(found==displayTiles_.end()){
@@ -237,8 +237,8 @@ void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
 editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto state=viewportState();return {state.pointsPerPixel(),state.origin({double(documentWidth_),double(documentHeight_)})};}
 QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto point=viewportState().documentPoint({p.x(),p.y()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}
-void NativeCanvas::zoomAt(double value,QPointF anchor){if(documentWidth_<=0||documentHeight_<=0)return;auto state=viewportState();state.setZoom(value,{anchor.x(),anchor.y()},{double(documentWidth_),double(documentHeight_)});installViewport(state);}
-void NativeCanvas::panBy(QPointF delta){auto state=viewportState();state.translate({delta.x(),delta.y()});installViewport(state);}
+void NativeCanvas::zoomAt(double value,QPointF anchor){if(documentWidth_<=0||documentHeight_<=0)return;noteViewportInteraction();auto state=viewportState();state.setZoom(value,{anchor.x(),anchor.y()},{double(documentWidth_),double(documentHeight_)});installViewport(state);}
+void NativeCanvas::panBy(QPointF delta){noteViewportInteraction();auto state=viewportState();state.translate({delta.x(),delta.y()});installViewport(state);}
 QString NativeCanvas::adapterName()const{
     if(!device_)return {};
     ComPtr<IDXGIDevice> device;ComPtr<IDXGIAdapter> adapter;DXGI_ADAPTER_DESC description{};
@@ -283,7 +283,19 @@ void NativeCanvas::scheduleNavigator(){
     navigatorDirty_=true;if(navigatorDeferred_){navigatorTimer_->stop();return;}navigatorTimer_->start();
 }
 void NativeCanvas::setNavigatorDeferred(bool deferred){navigatorDeferred_=deferred;if(deferred){if(navigatorTimer_)navigatorTimer_->stop();return;}if(navigatorDirty_)scheduleNavigator();}
+void NativeCanvas::noteViewportInteraction(){
+    if(!raster_)return;
+    const bool live=viewportGesture_||panning_||navigating_||dragging_;
+    if(!live)return;
+    viewportDeferred_=true;
+    if(navigatorTimer_&&navigatorTimer_->isActive())navigatorTimer_->start();
+    if(panning_||navigating_||dragging_){if(viewportTimer_)viewportTimer_->stop();return;}
+    if(!viewportTimer_){viewportTimer_=new QTimer(this);viewportTimer_->setObjectName("viewportInteractionTimer");viewportTimer_->setSingleShot(true);viewportTimer_->setInterval(20);connect(viewportTimer_,&QTimer::timeout,this,[this]{viewportDeferred_=false;update();});}
+    viewportTimer_->start();
+}
+void NativeCanvas::settleViewport(){if(!viewportDeferred_)return;viewportDeferred_=false;if(viewportTimer_)viewportTimer_->stop();update();}
 void NativeCanvas::refreshNavigator(){
+    if(viewportDeferred_){if(navigatorTimer_)navigatorTimer_->start();return;}
     if(navigatorDeferred_||!navigatorProvider||documentWidth_<=0||documentHeight_<=0)return;
     navigatorDirty_=false;
     const auto placement=navigatorPlacement();
@@ -327,6 +339,7 @@ void NativeCanvas::drawNavigator(){
 bool NativeCanvas::navigatorContains(QPointF position)const{const auto placement=navigatorPlacement();return placement.visible&&position.x()>=placement.map.left()&&position.y()>=placement.map.top()&&position.x()<=placement.map.right()&&position.y()<=placement.map.bottom();}
 void NativeCanvas::centerDocument(Point target){
     if(documentWidth_<=0||documentHeight_<=0)return;
+    noteViewportInteraction();
     auto state=viewportState();const double scale=state.pointsPerPixel();
     target.x=std::clamp(target.x,0.,double(documentWidth_));target.y=std::clamp(target.y,0.,double(documentHeight_));
     state.pan={(documentWidth_*.5-target.x)*scale,(documentHeight_*.5-target.y)*scale};state.followsFit=false;installViewport(state);
@@ -368,17 +381,20 @@ void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
 }
 void NativeCanvas::mouseReleaseEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
-    if(navigating_&&e->button()==Qt::LeftButton){navigating_=false;releaseMouse();return;}
-    if(panning_&&e->button()==Qt::MiddleButton){panning_=false;releaseMouse();return;}
-    if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);return;}
-    if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
+    if(navigating_&&e->button()==Qt::LeftButton){navigating_=false;releaseMouse();settleViewport();return;}
+    if(panning_&&e->button()==Qt::MiddleButton){panning_=false;releaseMouse();settleViewport();return;}
+    if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);settleViewport();return;}
+    if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());settleViewport();}
 }
 void NativeCanvas::wheelEvent(QWheelEvent*e){
     e->accept();if(documentWidth_<=0||documentHeight_<=0||(navigationAllowed&&!navigationAllowed()))return;
     // Qt reports discrete wheel angle in eighths of degrees (120 per detent).
     // One normalized detent is one source non-precise scrolling unit.
+    // Forward (positive) zooms out and backward zooms in, with Alt only.
     const bool precise=!e->pixelDelta().isNull();const QPointF delta=precise?QPointF(e->pixelDelta()):QPointF(e->angleDelta())/120;
-    if(e->modifiers()&(Qt::ControlModifier|Qt::AltModifier))zoomAt(zoom*std::exp(-delta.y()*.015),e->position());else panBy(delta*(precise?1:12));
+    viewportGesture_=true;
+    if(e->modifiers().testFlag(Qt::AltModifier))zoomAt(zoom*std::exp(-delta.y()*.015),e->position());else panBy(delta*(precise?1:12));
+    viewportGesture_=false;
     if(pointerHover)pointerHover(e->position(),e->modifiers());
 }
 void NativeCanvas::setTextOverlay(std::optional<TextCaretOverlay> value){textOverlay_=std::move(value);setAttribute(Qt::WA_InputMethodEnabled,textOverlay_.has_value());if(!textOverlay_){textBitmap_.Reset();textRasterSource_.reset();}update();}
