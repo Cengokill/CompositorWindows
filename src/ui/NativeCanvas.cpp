@@ -1,5 +1,6 @@
 #include "NativeCanvas.h"
 #include "CanvasAccessibility.h"
+#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -391,9 +392,13 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     // Qt reports discrete wheel angle in eighths of degrees (120 per detent).
     // One normalized detent is one source non-precise scrolling unit.
     // Forward (positive) zooms out and backward zooms in, with Alt only.
+    // Windows leaves Alt out of WM_MOUSEWHEEL, and some devices report that
+    // notch on the horizontal axis. The live key state still has Alt.
+    const auto modifiers=e->modifiers()|QGuiApplication::keyboardModifiers();
     const bool precise=!e->pixelDelta().isNull();const QPointF delta=precise?QPointF(e->pixelDelta()):QPointF(e->angleDelta())/120;
     viewportGesture_=true;
-    if(e->modifiers().testFlag(Qt::AltModifier))zoomAt(zoom*std::exp(-delta.y()*.015),e->position());else panBy(delta*(precise?1:12));
+    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(-steps*.015),e->position());}
+    else panBy(delta*(precise?1:12));
     viewportGesture_=false;
     if(pointerHover)pointerHover(e->position(),e->modifiers());
 }
