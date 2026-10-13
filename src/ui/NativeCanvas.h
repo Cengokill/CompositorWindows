@@ -88,6 +88,8 @@ private:
     double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
     void refreshNavigator();
     void drawNavigator();
+    void drawDocumentStandIn(D2D1_RECT_F bounds);
+    bool sharpPatchCoversView() const;
     void ensureNavigatorBitmap();
     bool navigatorContains(QPointF) const;
     void navigateFrom(QPointF);

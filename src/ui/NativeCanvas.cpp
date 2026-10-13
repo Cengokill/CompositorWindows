@@ -45,7 +45,7 @@ void NativeCanvas::upload(){
     for(const auto&tile:raster_->tiles)live[tile.get()]=true;
     std::erase_if(displayTiles_,[&](const auto&entry){return !live.contains(entry.first);});
 }
-void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0&&!viewportDeferred_){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
+void NativeCanvas::draw(bool present){const double scale=pointsPerPixel();if(viewportProvider&&documentWidth_>0&&documentHeight_>0&&!viewportDeferred_){auto origin=documentPoint({0,0});const bool crisp=zoom>=2;const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();const double requestWidth=crisp?std::ceil(origin.x()+width()/scale)-requestX:width()/scale,requestHeight=crisp?std::ceil(origin.y()+height()/scale)-requestY:height()/scale;auto patch=viewportProvider(requestX,requestY,requestWidth,requestHeight,crisp?1:1/zoom);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(D2D1::ColorF(.115f,.122f,.137f));if(raster_){float left=float((width()-documentWidth_*scale)/2+pan.x()),top=float((height()-documentHeight_*scale)/2+pan.y());auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());drawDocumentStandIn(bounds);if(image_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{
 // Upload bounded tiles so a valid 30,000-pixel narrow document remains displayable.
 for(int ty=0;ty<raster_->height;ty+=256)for(int tx=0;tx<raster_->width;tx+=256){int tw=std::min(256,raster_->width-tx),th=std::min(256,raster_->height-ty);auto rect=D2D1::RectF(left+float((rasterX_+tx*rasterUnits_)*scale),top+float((rasterY_+ty*rasterUnits_)*scale),left+float((rasterX_+(tx+tw)*rasterUnits_)*scale),top+float((rasterY_+(ty+th)*rasterUnits_)*scale));if(rect.right<0||rect.bottom<0||rect.left>width()||rect.top>height())continue;const size_t index=size_t(ty/256)*((raster_->width+255)/256)+size_t(tx/256);if(index>=raster_->tiles.size()||!raster_->tiles[index])continue;auto tile=raster_->tiles[index];auto found=displayTiles_.find(tile.get());
 if(found==displayTiles_.end()){
@@ -290,9 +290,11 @@ void NativeCanvas::noteViewportInteraction(){
     if(!live)return;
     viewportDeferred_=true;
     if(navigatorTimer_&&navigatorTimer_->isActive())navigatorTimer_->start();
-    if(panning_||navigating_||dragging_){if(viewportTimer_)viewportTimer_->stop();return;}
-    if(!viewportTimer_){viewportTimer_=new QTimer(this);viewportTimer_->setObjectName("viewportInteractionTimer");viewportTimer_->setSingleShot(true);viewportTimer_->setInterval(20);connect(viewportTimer_,&QTimer::timeout,this,[this]{viewportDeferred_=false;update();});}
-    viewportTimer_->start();
+    if(!viewportTimer_){viewportTimer_=new QTimer(this);viewportTimer_->setObjectName("viewportInteractionTimer");viewportTimer_->setSingleShot(true);connect(viewportTimer_,&QTimer::timeout,this,[this]{viewportDeferred_=false;update();});}
+    // Wheel notches coalesce. A held pan or minimap drag refreshes on a fixed
+    // cadence so newly revealed document area does not wait for the release.
+    if(viewportGesture_){viewportTimer_->setInterval(20);viewportTimer_->start();return;}
+    if(panning_||navigating_||dragging_){viewportTimer_->setInterval(40);if(!viewportTimer_->isActive())viewportTimer_->start();}
 }
 void NativeCanvas::settleViewport(){if(!viewportDeferred_)return;viewportDeferred_=false;if(viewportTimer_)viewportTimer_->stop();update();}
 void NativeCanvas::refreshNavigator(){
@@ -305,6 +307,26 @@ void NativeCanvas::refreshNavigator(){
     try{auto patch=navigatorProvider(edge);navigatorRaster_=std::move(patch.raster);navigatorOriginX_=patch.documentX;navigatorOriginY_=patch.documentY;navigatorUnits_=patch.unitsPerPixel>0?patch.unitsPerPixel:1;navigatorBitmap_.Reset();}
     catch(const std::exception& error){error_=error.what();}
     update();
+}
+bool NativeCanvas::sharpPatchCoversView()const{
+    if(!raster_||rasterUnits_<=0||documentWidth_<=0||documentHeight_<=0)return false;
+    const double scale=pointsPerPixel();if(scale<=0)return false;
+    const QPointF origin=documentPoint({0,0});
+    const double left=std::clamp(origin.x(),0.,double(documentWidth_)),top=std::clamp(origin.y(),0.,double(documentHeight_));
+    const double right=std::clamp(origin.x()+width()/scale,0.,double(documentWidth_)),bottom=std::clamp(origin.y()+height()/scale,0.,double(documentHeight_));
+    if(right<=left||bottom<=top)return true;
+    return rasterX_<=left+.51&&rasterY_<=top+.51&&rasterX_+raster_->width*rasterUnits_>=right-.51&&rasterY_+raster_->height*rasterUnits_>=bottom-.51;
+}
+void NativeCanvas::drawDocumentStandIn(D2D1_RECT_F bounds){
+    if(!context_||sharpPatchCoversView())return;
+    ensureNavigatorBitmap();
+    if(!navigatorBitmap_||!navigatorRaster_||navigatorUnits_<=0||documentWidth_<=0)return;
+    const auto& image=*navigatorRaster_;
+    const float srcL=float(std::clamp((0-navigatorOriginX_)/navigatorUnits_,0.,double(image.width)));
+    const float srcT=float(std::clamp((0-navigatorOriginY_)/navigatorUnits_,0.,double(image.height)));
+    const float srcR=float(std::clamp(documentWidth_/navigatorUnits_,0.,double(image.width)));
+    const float srcB=float(std::clamp(documentHeight_/navigatorUnits_,0.,double(image.height)));
+    if(srcR>srcL&&srcB>srcT)context_->DrawBitmap(navigatorBitmap_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR,D2D1::RectF(srcL,srcT,srcR,srcB));
 }
 void NativeCanvas::ensureNavigatorBitmap(){
     if(!context_||!navigatorRaster_||navigatorBitmap_)return;
@@ -394,13 +416,13 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     // Forward (positive) zooms in and backward zooms out, with Alt only.
     // Windows leaves Alt out of WM_MOUSEWHEEL, and some devices report that
     // notch on the horizontal axis. The live key state still has Alt.
-    // One detent multiplies zoom by 3/2. Precise pixel scrolling stays gradual.
+    // One detent multiplies zoom by 5/4. Precise pixel scrolling stays gradual.
     const auto modifiers=e->modifiers()|QGuiApplication::keyboardModifiers();
     const bool precise=!e->pixelDelta().isNull();const QPointF angleSteps=QPointF(e->angleDelta())/120;
     const bool notch=!precise||std::abs(angleSteps.x())>=1||std::abs(angleSteps.y())>=1;
     const QPointF delta=notch?angleSteps:QPointF(e->pixelDelta());
     viewportGesture_=true;
-    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(steps*(notch?std::log(1.5):.015)),e->position());}
+    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(steps*(notch?std::log(1.25):.015)),e->position());}
     else panBy((precise?QPointF(e->pixelDelta()):angleSteps)*(precise?1:12));
     viewportGesture_=false;
     if(pointerHover)pointerHover(e->position(),e->modifiers());
