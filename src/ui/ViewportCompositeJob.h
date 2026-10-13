@@ -20,7 +20,6 @@ public:
         double x{},y{},width{},height{},units{1};
         double zoom{1},panX{},panY{};
         int canvasWidth{},canvasHeight{};
-        uint64_t gesture{};
     };
     struct Result {
         EditorProject* owner{};
@@ -32,7 +31,6 @@ public:
         QString error;
         bool stale{};
         uint64_t epoch{};
-        uint64_t gesture{};
     };
     using Receiver=std::function<void(Result)>;
     ViewportCompositeJob(Receiver receiver,QObject* parent);
@@ -42,45 +40,6 @@ public:
     void shutdown();
     void setProceedGate(std::shared_ptr<std::atomic_bool> gate);
     uint64_t epoch() const;
-private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-    void start(Request request);
-};
-// Background stills for one layer drag. Direct2D upload stays on the UI thread.
-struct MovePlateBounds { double x{},y{},width{},height{}; int pixelsWide{},pixelsHigh{}; bool valid{}; };
-MovePlateBounds movingLayerPlateBounds(const Layer& layer,double units);
-class MovePreviewJob final:public QObject {
-public:
-    struct Request {
-        uint64_t gesture{};
-        std::string layerId;
-        Document back,front,plate;
-        bool wantFront{},wantPlate{};
-        std::shared_ptr<const Raster> sprite;
-        double opacity{1},anchorX{},anchorY{};
-        double viewX{},viewY{},viewWidth{},viewHeight{},units{1};
-        int pixelsWide{},pixelsHigh{};
-        double plateX{},plateY{},plateWidth{},plateHeight{};
-        int platePixelsWide{},platePixelsHigh{};
-    };
-    struct Result {
-        uint64_t gesture{},epoch{};
-        std::string layerId;
-        std::shared_ptr<const Raster> base,front,plate,sprite;
-        double opacity{1},anchorX{},anchorY{};
-        double viewX{},viewY{},units{1};
-        double plateX{},plateY{};
-        QString error;
-        bool stale{};
-    };
-    using Receiver=std::function<void(Result)>;
-    MovePreviewJob(Receiver receiver,QObject* parent);
-    ~MovePreviewJob() override;
-    void submit(Request request);
-    void invalidate();
-    void shutdown();
-    bool covers(uint64_t gesture) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

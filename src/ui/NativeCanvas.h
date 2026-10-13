@@ -22,19 +22,6 @@ namespace compositor {
 class NativeCanvas final:public QWidget {
 public:
     struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;double lineWidth{4};};
-    // `plate` is the moving layer's full painted appearance, shifted with the draft.
-    // `front` is the frozen content that must stay above the moving layer.
-    struct MovePreview {
-        std::string layerId;
-        uint64_t gesture{};
-        std::shared_ptr<const Raster> base;
-        double baseX{},baseY{},baseUnits{1};
-        std::shared_ptr<const Raster> layer;
-        Transform placed{};
-        double opacity{1};
-        std::shared_ptr<const Raster> plate,front;
-        double plateX{},plateY{},anchorX{},anchorY{};
-    };
     struct TextCaretOverlay {
         std::shared_ptr<const Raster> raster;
         double originX{},originY{},width{},height{};
@@ -59,6 +46,9 @@ private:
     Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> checkerBrush_;
     float checkerScale_{};
     std::shared_ptr<const Raster> raster_;
+    // `plate` is a viewport render of a masked layer, shifted with the draft.
+    // `front` is the frozen content that must stay above the moving layer.
+    struct MovePreview { std::shared_ptr<const Raster> base; double baseX{},baseY{},baseUnits{1}; std::shared_ptr<const Raster> layer; Transform placed{}; double opacity{1}; std::shared_ptr<const Raster> plate,front; double anchorX{},anchorY{}; };
     std::optional<MovePreview> movePreview_;
     void drawRasterTiles(const Raster& image,double docX,double docY,double units,float left,float top,double scale);
     void drawMoveSprite(double scale);
@@ -168,13 +158,10 @@ public:
     void setRaster(std::shared_ptr<const Raster>);
     // A plain layer move draws a frozen background plus the layer. The full
     // viewport composite waits until the drag ends.
-    void setMovePreview(MovePreview preview);
+    void setMovePreview(std::shared_ptr<const Raster> base,double baseX,double baseY,double baseUnits,std::shared_ptr<const Raster> layer,Transform placed,double opacity,std::shared_ptr<const Raster> plate={},double anchorX=0,double anchorY=0,std::shared_ptr<const Raster> front={});
     void setMovePreviewPlacement(Transform placed);
     void clearMovePreview();
     bool hasMovePreview() const { return movePreview_.has_value(); }
-    bool previewMatches(const std::string& layerId,uint64_t gesture) const;
-    std::string previewLayerId() const { return movePreview_?movePreview_->layerId:std::string{}; }
-    uint64_t previewGesture() const { return movePreview_?movePreview_->gesture:0; }
     // While held, paint keeps the current frame instead of composing on the UI thread.
     void setCompositeHeld(bool held);
     bool compositeHeld() const { return compositeHeld_; }

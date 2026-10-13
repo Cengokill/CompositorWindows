@@ -57,7 +57,7 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
             if(!state->pixels->begin())return true;
             state->draft=state->originalBox=state->pixels->originalFloatingTransform();
             finishOpacityEdit();p->history.begin(modifiers.testFlag(Qt::AltModifier)?"Duplicate Pixels":"Move Pixels",p->document,p->active);
-            transformOwner_=p;transformSession_=std::move(state);beginPreviewGesture(p->canvas);transformDrag_=editing_transform::Drag{transformSession_->draft,point,{}};
+            transformOwner_=p;transformSession_=std::move(state);transformDrag_=editing_transform::Drag{transformSession_->draft,point,{}};
         }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
         return true;
     }
@@ -79,7 +79,7 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
         state.duplicateOnDrag=intent->duplicateOnFirstDrag&&!state.persistent&&!state.pixels&&!state.maskOnly&&state.ids.size()==1&&!active()->group;
         if(state.duplicateOnDrag){p->history.cancel();p->history.begin("Duplicate Layer",state.original,state.originalActive);}
         transformDrag_=editing_transform::Drag{state.draft,point,intent->mode,state.corners};
-        beginPreviewGesture(p->canvas);if(canvas())canvas()->setCompositeHeld(true);refresh(false,false);
+        invalidateViewportComposite();if(canvas())canvas()->setCompositeHeld(true);refresh(false,false);
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
     return true;
 }
@@ -104,30 +104,25 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
             auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_||modifiers.testFlag(Qt::ControlModifier)},targets,canvas()->pointsPerPixel());
             if(preview.accepted){state.draft=preview.transform;state.corners=preview.distortion;if(!finish)canvas()->setSnapGuides(preview.snap.x,preview.snap.y);}
         }
+        if(finish&&!state.persistent){applyTransformSession();return;}
         const bool plainMove=!state.pixels&&!state.corners&&!state.maskOnly&&!state.group&&state.ids.size()==1&&transformDrag_->mode.kind==editing_transform::ModeKind::Move;
         const Layer* moving=nullptr;if(plainMove)for(const auto& layer:state.original.layers)if(layer.id==state.ids.front())moving=&layer;
         const auto preview=moving?planMovePreview(state.original,*moving):MovePreviewPlan{};
-        const bool fast=moving&&(preview.sprite||preview.covered||preview.masked);
-        if(fast){previewDraft_=state.draft;previewLayerId_=moving->id;}
-        if(finish&&!state.persistent){applyTransformSession();return;}
-        if(!finish&&fast&&canvas()&&canvas()->viewportBounds().valid&&movePreviewJob_){
+        if(!finish&&(preview.sprite||preview.covered||preview.masked)&&canvas()){
             try{
-                if(canvas()->previewMatches(moving->id,previewGesture_))canvas()->setMovePreviewPlacement(state.draft);
-                else if(!movePreviewJob_->covers(previewGesture_)){
-                    const auto bounds=canvas()->viewportBounds();
-                    ui::MovePreviewJob::Request request;
-                    request.gesture=previewGesture_;request.layerId=moving->id;request.opacity=preview.masked?1:moving->opacity;request.anchorX=moving->transform.x;request.anchorY=moving->transform.y;
-                    request.viewX=bounds.x;request.viewY=bounds.y;request.viewWidth=bounds.width;request.viewHeight=bounds.height;request.units=bounds.units;
-                    request.pixelsWide=std::max(1,int(std::ceil(bounds.width/bounds.units)));request.pixelsHigh=std::max(1,int(std::ceil(bounds.height/bounds.units)));
-                    if(!preview.masked)request.sprite=moving->raster;
+                if(!canvas()->hasMovePreview()){
+                    const double scale=canvas()->pointsPerPixel();const QPointF origin=canvas()->documentPoint({0,0});const bool crisp=canvas()->zoom>=2;
+                    const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();
+                    const double requestWidth=crisp?std::ceil(origin.x()+canvas()->width()/scale)-requestX:canvas()->width()/scale,requestHeight=crisp?std::ceil(origin.y()+canvas()->height()/scale)-requestY:canvas()->height()/scale;
+                    const double units=crisp?1.:1./canvas()->zoom;const int pixelsWide=std::max(1,int(std::ceil(requestWidth/units))),pixelsHigh=std::max(1,int(std::ceil(requestHeight/units)));
+                    auto render=[&](const Document& document){return SoftwareRenderer().renderScaled(document,requestX,requestY,pixelsWide,pixelsHigh,units);};
                     std::unordered_set<std::string> above;for(const auto* layer:preview.above)above.insert(layer->id);
-                    auto backIds=above;backIds.insert(moving->id);request.back=hideLayers(state.original,backIds);
-                    if(!above.empty()){request.wantFront=true;std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(!above.contains(layer.id))hidden.insert(layer.id);request.front=hideLayers(state.original,hidden);}
-                    if(preview.masked){const auto plate=ui::movingLayerPlateBounds(*moving,bounds.units);if(!plate.valid)throw std::runtime_error("The moving layer does not fit a preview plate");
-                        request.wantPlate=true;request.plateX=plate.x;request.plateY=plate.y;request.plateWidth=plate.width;request.plateHeight=plate.height;request.platePixelsWide=plate.pixelsWide;request.platePixelsHigh=plate.pixelsHigh;
-                        std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(layer.id!=moving->id)hidden.insert(layer.id);request.plate=hideLayers(state.original,hidden);}
-                    movePreviewJob_->submit(std::move(request));
-                }
+                    auto backIds=above;backIds.insert(moving->id);
+                    auto base=render(hideLayers(state.original,backIds));
+                    std::shared_ptr<const Raster> front,plate;if(!above.empty()){std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(!above.contains(layer.id))hidden.insert(layer.id);front=render(hideLayers(state.original,hidden));}
+                    if(preview.masked){std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(layer.id!=moving->id)hidden.insert(layer.id);plate=render(hideLayers(state.original,hidden));}
+                    canvas()->setMovePreview(std::move(base),requestX,requestY,units,preview.masked?nullptr:moving->raster,state.draft,preview.masked?1:moving->opacity,std::move(plate),moving->transform.x,moving->transform.y,std::move(front));
+                }else canvas()->setMovePreviewPlacement(state.draft);
                 refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
                 const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;return;
             }catch(const std::exception&){canvas()->clearMovePreview();}
