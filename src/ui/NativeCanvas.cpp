@@ -391,14 +391,17 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     e->accept();if(documentWidth_<=0||documentHeight_<=0||(navigationAllowed&&!navigationAllowed()))return;
     // Qt reports discrete wheel angle in eighths of degrees (120 per detent).
     // One normalized detent is one source non-precise scrolling unit.
-    // Forward (positive) zooms out and backward zooms in, with Alt only.
+    // Forward (positive) zooms in and backward zooms out, with Alt only.
     // Windows leaves Alt out of WM_MOUSEWHEEL, and some devices report that
     // notch on the horizontal axis. The live key state still has Alt.
+    // One detent multiplies zoom by 3/2. Precise pixel scrolling stays gradual.
     const auto modifiers=e->modifiers()|QGuiApplication::keyboardModifiers();
-    const bool precise=!e->pixelDelta().isNull();const QPointF delta=precise?QPointF(e->pixelDelta()):QPointF(e->angleDelta())/120;
+    const bool precise=!e->pixelDelta().isNull();const QPointF angleSteps=QPointF(e->angleDelta())/120;
+    const bool notch=!precise||std::abs(angleSteps.x())>=1||std::abs(angleSteps.y())>=1;
+    const QPointF delta=notch?angleSteps:QPointF(e->pixelDelta());
     viewportGesture_=true;
-    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(-steps*.015),e->position());}
-    else panBy(delta*(precise?1:12));
+    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(steps*(notch?std::log(1.5):.015)),e->position());}
+    else panBy((precise?QPointF(e->pixelDelta()):angleSteps)*(precise?1:12));
     viewportGesture_=false;
     if(pointerHover)pointerHover(e->position(),e->modifiers());
 }
