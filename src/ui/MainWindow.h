@@ -20,6 +20,7 @@
 #include "ProjectToolState.h"
 #include "CommandPalette.h"
 #include "CommandRegistry.h"
+#include "ViewportCompositeJob.h"
 #include "text/TextRaster.h"
 #include <QStackedWidget>
 #include <QPointer>
@@ -194,6 +195,7 @@ class MainWindow final:public QMainWindow {
     std::optional<Transform> moving_;
     std::optional<editing_transform::Drag> transformDrag_;
     std::unique_ptr<editing_transform::TransformSessionState> transformSession_;
+    ui::ViewportCompositeJob* viewportComposite_{};
     EditorProject* transformOwner_{};
     bool autoSelectLayers_{},transformControls_{true};
     std::optional<Document> transformBefore_;
@@ -343,6 +345,9 @@ class MainWindow final:public QMainWindow {
     void applyTransformSession();
     void cancelTransformSession();
     void publishTransformSession(bool finish);
+    void invalidateViewportComposite();
+    void scheduleViewportComposite(EditorProject&);
+    void applyViewportComposite(ui::ViewportCompositeJob::Result result);
     void updateTransformActions();
     std::optional<Transform> selectedTransform();
     bool beginTransform(Point,Qt::KeyboardModifiers);

@@ -29,6 +29,7 @@ void detach(NativeCanvas*canvas){
 }
 }
 MainWindow::~MainWindow(){
+    if(viewportComposite_)viewportComposite_->shutdown();
     detachOpacityPercent();
     qApp->removeEventFilter(this);stopSelectionAutoscroll();
     cancelEditPanel();

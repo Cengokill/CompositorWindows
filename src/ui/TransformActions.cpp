@@ -60,7 +60,7 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
         state.duplicateOnDrag=intent->duplicateOnFirstDrag&&!state.persistent&&!state.pixels&&!state.maskOnly&&state.ids.size()==1&&!active()->group;
         if(state.duplicateOnDrag){p->history.cancel();p->history.begin("Duplicate Layer",state.original,state.originalActive);}
         transformDrag_=editing_transform::Drag{state.draft,point,intent->mode,state.corners};
-        refresh(false,false);
+        invalidateViewportComposite();if(canvas())canvas()->setCompositeHeld(true);refresh(false,false);
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
     return true;
 }
@@ -85,7 +85,7 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
             auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_||modifiers.testFlag(Qt::ControlModifier)},targets,canvas()->pointsPerPixel());
             if(preview.accepted){state.draft=preview.transform;state.corners=preview.distortion;if(!finish)canvas()->setSnapGuides(preview.snap.x,preview.snap.y);}
         }
-        if(finish){if(canvas()){canvas()->clearMovePreview();canvas()->setNavigatorDeferred(false);}if(!state.persistent){applyTransformSession();return;}}
+        if(finish&&!state.persistent){applyTransformSession();return;}
         const bool plainMove=!state.pixels&&!state.corners&&!state.maskOnly&&!state.group&&state.ids.size()==1&&transformDrag_->mode.kind==editing_transform::ModeKind::Move;
         const Layer* moving=nullptr;if(plainMove)for(const auto& layer:state.original.layers)if(layer.id==state.ids.front())moving=&layer;
         const bool sprite=moving&&moving->raster&&!moving->group&&moving->blend==Blend::Normal&&!moving->effects.active()&&moving->adjustmentJson.empty()&&moving->maskSourceId.empty()&&!moving->mask&&moving->shapeJson.empty()&&std::none_of(state.original.layers.begin(),state.original.layers.end(),[&](const Layer& layer){return layer.maskSourceId==moving->id;})&&[&]{auto visible=editing_transform::visiblePlacements(state.original);return !visible.empty()&&visible.back().id==moving->id;}();
@@ -104,9 +104,16 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
                 const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;return;
             }catch(const std::exception&){canvas()->clearMovePreview();}
         }
+        if(finish&&canvas()&&canvas()->hasMovePreview()){
+            publishTransformSession(false);transformDrag_.reset();
+            if(canvas()->viewportBounds().valid){scheduleViewportComposite(*p);refresh(false);}
+            else{canvas()->clearMovePreview();refresh();}
+            return;
+        }
         publishTransformSession(false);
         if(finish)transformDrag_.reset();
-        refresh();
+        if(canvas()&&canvas()->viewportBounds().valid){canvas()->setNavigatorDeferred(true);canvas()->setCompositeHeld(true);scheduleViewportComposite(*p);refresh(false);}
+        else{if(canvas())canvas()->setCompositeHeld(false);refresh();}
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
 }
 void MainWindow::setupTransformActions(){

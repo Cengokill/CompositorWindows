@@ -1,9 +1,13 @@
 #include "ui/MainWindow.h"
+#include "ui/ViewportCompositeJob.h"
 #include <QApplication>
 #include <QAction>
 #include <QCheckBox>
+#include <QElapsedTimer>
+#include <atomic>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 using namespace compositor;
@@ -20,6 +24,10 @@ Document example(){Document document;document.id=newId();document.width=64;docum
 Layer& originalLayer(EditorProject& project){return project.document->layers.front();}
 void setup(MainWindow& window,EditorProject& project){project.canvas->zoom=10;control<QCheckBox>(window,"transformSnapping")->setChecked(false);}
 void selectionTool(MainWindow& window){for(auto* item:window.findChildren<QAction*>())if(item->text()=="Marquee (M)"){item->trigger();return;}throw std::runtime_error("Marquee action missing");}
+QAction* historyAction(MainWindow& window,QKeySequence shortcut,const char* label){for(auto* item:window.findChildren<QAction*>())if(item->shortcut()==shortcut||item->shortcuts().contains(shortcut))return item;throw std::runtime_error(label);}
+void showCanvas(MainWindow& window){window.show();QCoreApplication::processEvents();require(window.canvas()&&window.canvas()->width()>0&&window.canvas()->height()>0,"Canvas has no size");}
+void pump(int budgetMs){QElapsedTimer timer;timer.start();while(timer.elapsed()<budgetMs)QCoreApplication::processEvents(QEventLoop::AllEvents,20);}
+ui::ViewportCompositeJob* compositeJob(MainWindow& window){for(auto* child:window.findChildren<QObject*>())if(auto* job=dynamic_cast<ui::ViewportCompositeJob*>(child))return job;throw std::runtime_error("Viewport composite job missing");}
 }
 int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0;
     auto test=[&](const char* name,const std::function<void()>& run){try{run();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception& error){++failed;std::cout<<"FAIL "<<name<<": "<<error.what()<<'\n';}};
@@ -52,6 +60,37 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         MainWindow window(true);auto document=example();document.layers.front().mask=Mask{selection()};auto& project=window.addProject(document);setup(window,project);project.maskSelected=true;
         drag(project,{32,24},{37,24});require(originalLayer(project).transform.x==5&&originalLayer(project).mask->linked,"Linked selected mask did not move with image");
         originalLayer(project).mask->linked=false;const auto imageTransform=originalLayer(project).transform;drag(project,{37,24},{40,24});require(originalLayer(project).transform==imageTransform&&originalLayer(project).mask->placement->x==8,"Unlinked selected mask moved the image");
+    });
+    test("ui_move_keeps_preview_until_composite",[]{
+        MainWindow window(true);auto& project=window.addProject(example());setup(window,project);showCanvas(window);
+        auto gate=std::make_shared<std::atomic_bool>(false);compositeJob(window)->setProceedGate(gate);
+        drag(project,{32,24},{40,30});
+        require(project.history.undoCount()==1&&project.history.undoName()=="Transform Layer","Plain move did not commit one history step");
+        require(originalLayer(project).transform.x==8&&originalLayer(project).transform.y==6,"Plain move did not commit the release position");
+        require(project.canvas->hasMovePreview(),"Move preview was cleared before the composite was ready");
+        gate->store(true);pump(3000);
+        require(!project.canvas->hasMovePreview()&&!project.canvas->compositeHeld(),"Composite did not replace the move preview");
+        require(project.composite.lastViewportComposedTiles()>0,"Finished composite was not installed");
+        require(originalLayer(project).transform.x==8&&project.history.undoCount()==1,"Composite changed the committed move");
+        historyAction(window,QKeySequence::Undo,"Undo action missing")->trigger();require(originalLayer(project).transform.x==0&&originalLayer(project).transform.y==0&&project.history.undoCount()==0,"Undo did not restore the single move");
+        historyAction(window,QKeySequence("Ctrl+Y"),"Redo action missing")->trigger();require(originalLayer(project).transform.x==8&&project.history.undoCount()==1,"Redo did not restore the single move");
+    });
+    test("ui_move_undo_discards_stale_composite",[]{
+        MainWindow window(true);auto& project=window.addProject(example());setup(window,project);showCanvas(window);
+        auto gate=std::make_shared<std::atomic_bool>(false);compositeJob(window)->setProceedGate(gate);
+        const auto before=*project.document;drag(project,{32,24},{42,28});
+        require(project.canvas->hasMovePreview()&&project.history.undoCount()==1,"Move was not committed behind its preview");
+        historyAction(window,QKeySequence::Undo,"Undo action missing")->trigger();require(*project.document==before&&!project.canvas->hasMovePreview(),"Undo did not restore the document and clear the preview");
+        gate->store(true);pump(3000);require(*project.document==before&&project.history.undoCount()==0,"Stale composite overwrote undo");
+    });
+    test("ui_masked_move_coalesces_one_history_step",[]{
+        MainWindow window(true);auto document=example();document.layers.front().mask=Mask{selection()};auto& project=window.addProject(document);setup(window,project);showCanvas(window);
+        auto gate=std::make_shared<std::atomic_bool>(false);compositeJob(window)->setProceedGate(gate);
+        const auto before=*project.document;drag(project,{32,24},{40,28});
+        require(!project.canvas->hasMovePreview()&&project.canvas->compositeHeld(),"Masked move composited synchronously or used the sprite path");
+        require(project.history.undoCount()==1&&originalLayer(project).transform.x==8,"Masked move did not commit one step");
+        historyAction(window,QKeySequence::Undo,"Undo action missing")->trigger();require(*project.document==before,"Masked move undo failed");
+        gate->store(true);pump(3000);require(*project.document==before&&project.history.undoCount()==0,"Stale masked composite overwrote undo");
     });
     std::cout<<"{\"suite\":\"transform_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";return failed?1:0;
 }
