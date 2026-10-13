@@ -197,7 +197,7 @@ class MainWindow final:public QMainWindow {
     std::unique_ptr<editing_transform::TransformSessionState> transformSession_;
     ui::ViewportCompositeJob* viewportComposite_{};
     EditorProject* transformOwner_{};
-    bool autoSelectLayers_{},transformControls_{true};
+    bool autoSelectLayers_{true},transformControls_{true};
     std::optional<Document> transformBefore_;
     std::vector<std::string> transformIds_;
     bool lockRatio_{true},snapping_{true};

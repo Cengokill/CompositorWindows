@@ -49,7 +49,7 @@ struct ProjectToolState {
     int wandTolerance{32},wandSampleRadius{};
     bool wandContiguous{true},wandAllLayers{};
     bool maskPaintWhite{},showSampleRing{true},showPixelGrid{true};
-    bool lockRatio{true},autoSelectLayers{},transformControls{true},snapping{true};
+    bool lockRatio{true},autoSelectLayers{true},transformControls{true},snapping{true};
     // Continuity for a future Shift-click, not an in-flight pointer gesture.
     std::optional<Point> lastBrushPoint;
     std::string lastBrushLayer;
