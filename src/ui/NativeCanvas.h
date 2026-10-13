@@ -46,6 +46,10 @@ private:
     Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> checkerBrush_;
     float checkerScale_{};
     std::shared_ptr<const Raster> raster_;
+    struct MovePreview { std::shared_ptr<const Raster> base; double baseX{},baseY{},baseUnits{1}; std::shared_ptr<const Raster> layer; Transform placed{}; double opacity{1}; };
+    std::optional<MovePreview> movePreview_;
+    void drawRasterTiles(const Raster& image,double docX,double docY,double units,float left,float top,double scale);
+    void drawMoveSprite(double scale);
     std::shared_ptr<const GrayRaster> selection_;
     std::shared_ptr<const editing::SelectionOutline> selectionInputOutline_,selectionOutline_;
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> selectionGeometry_;
@@ -150,6 +154,12 @@ public:
     void setNavigatorDeferred(bool deferred);
     bool navigatorDeferred() const { return navigatorDeferred_; }
     void setRaster(std::shared_ptr<const Raster>);
+    // A plain layer move draws a frozen background plus the layer. The full
+    // viewport composite waits until the drag ends.
+    void setMovePreview(std::shared_ptr<const Raster> base,double baseX,double baseY,double baseUnits,std::shared_ptr<const Raster> layer,Transform placed,double opacity);
+    void setMovePreviewPlacement(Transform placed);
+    void clearMovePreview();
+    bool hasMovePreview() const { return movePreview_.has_value(); }
     void setDocumentSize(int width,int height);
     void setSelection(std::shared_ptr<const GrayRaster>,std::shared_ptr<const editing::SelectionOutline> outline={});
     void setSelectionDraft(std::optional<editing::LassoDraft> value){selectionDraft_=std::move(value);update();}
