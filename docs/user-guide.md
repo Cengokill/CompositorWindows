@@ -14,7 +14,7 @@ Windows title bars and system controls are the default. Turn on **View > Appeara
 
 ## Navigate and arrange layers
 
-Use **Ctrl+0** to fit the canvas and **Ctrl+1** for actual pixels. Hold **Space** and drag to pan. The mouse wheel pans; Ctrl or Alt with the wheel zooms around the pointer. Pixel Grid is available in the View menu and appears at high zoom.
+Use **Ctrl+0** to fit the canvas and **Ctrl+1** for actual pixels. Hold **Space** and drag to pan. The mouse wheel pans, including with Ctrl. Alt and roll the wheel forward to zoom in, or backward to zoom out, around the pointer. One notch multiplies or divides the zoom by 1.25. Pixel Grid is available in the View menu and appears at high zoom. When zoom or pan leaves part of the image off-screen, a navigator appears at the bottom-right of the canvas. It shows the whole document and a rectangle for the visible area. Click or drag inside it to move the view. The picture updates shortly after editing pauses, including after a brush stroke finishes, rather than on every step of the stroke.
 
 Select a layer in the Layers panel. Use its visibility control to hide or show it, and the blend and opacity controls to change its appearance. The Layer menu contains duplication, grouping, ordering, clipping and merge operations. A mask thumbnail selects mask editing; select the image thumbnail to return to the image. A live text layer uses an Aa glyph in place of the image thumbnail, with the subtitle Text. A mask thumbnail on that row is unchanged, and the Type tool uses the same Aa glyph. Mask operations are in the Mask menu. Painting white reveals coverage and painting black hides it.
 

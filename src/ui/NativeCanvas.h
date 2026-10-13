@@ -46,6 +46,10 @@ private:
     Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> checkerBrush_;
     float checkerScale_{};
     std::shared_ptr<const Raster> raster_;
+    struct MovePreview { std::shared_ptr<const Raster> base; double baseX{},baseY{},baseUnits{1}; std::shared_ptr<const Raster> layer; Transform placed{}; double opacity{1}; };
+    std::optional<MovePreview> movePreview_;
+    void drawRasterTiles(const Raster& image,double docX,double docY,double units,float left,float top,double scale);
+    void drawMoveSprite(double scale);
     std::shared_ptr<const GrayRaster> selection_;
     std::shared_ptr<const editing::SelectionOutline> selectionInputOutline_,selectionOutline_;
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> selectionGeometry_;
@@ -80,6 +84,22 @@ private:
     QMetaObject::Connection profileScreenConnection_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> presentationScene_;
     Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
+    QTimer* navigatorTimer_{};
+    QTimer* viewportTimer_{};
+    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{};
+    std::shared_ptr<const Raster> navigatorRaster_;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
+    double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
+    void refreshNavigator();
+    void drawNavigator();
+    void drawDocumentStandIn(D2D1_RECT_F bounds);
+    bool sharpPatchCoversView() const;
+    void ensureNavigatorBitmap();
+    bool navigatorContains(QPointF) const;
+    void navigateFrom(QPointF);
+    void centerDocument(Point);
+    void noteViewportInteraction();
+    void settleViewport();
     bool profileKnown_{},presentationAttempted_{};
     QString presentationDiagnostic_;
     uint64_t presentationBytes_{},profileDiscoveryCount_{};
@@ -125,7 +145,21 @@ public:
     std::function<bool(QKeyEvent*)> textKey;
     std::function<void(QInputMethodEvent*)> textInput;
     std::function<CompositeViewport(double,double,double,double,double)> viewportProvider;
+    // Reduced full-document composite. maxEdge is the longest side in pixels.
+    // The canvas calls it after editing pauses, not on every repaint or brush step.
+    std::function<CompositeViewport(int maxEdge)> navigatorProvider;
+    struct NavigatorPlacement { bool visible{}; QRectF map; QRectF viewport; };
+    NavigatorPlacement navigatorPlacement() const;
+    void scheduleNavigator();
+    void setNavigatorDeferred(bool deferred);
+    bool navigatorDeferred() const { return navigatorDeferred_; }
     void setRaster(std::shared_ptr<const Raster>);
+    // A plain layer move draws a frozen background plus the layer. The full
+    // viewport composite waits until the drag ends.
+    void setMovePreview(std::shared_ptr<const Raster> base,double baseX,double baseY,double baseUnits,std::shared_ptr<const Raster> layer,Transform placed,double opacity);
+    void setMovePreviewPlacement(Transform placed);
+    void clearMovePreview();
+    bool hasMovePreview() const { return movePreview_.has_value(); }
     void setDocumentSize(int width,int height);
     void setSelection(std::shared_ptr<const GrayRaster>,std::shared_ptr<const editing::SelectionOutline> outline={});
     void setSelectionDraft(std::optional<editing::LassoDraft> value){selectionDraft_=std::move(value);update();}

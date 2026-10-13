@@ -85,7 +85,25 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
             auto preview=editing_transform::previewDrag(*transformDrag_,point,lockRatio_,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),!snapping_||modifiers.testFlag(Qt::ControlModifier)},targets,canvas()->pointsPerPixel());
             if(preview.accepted){state.draft=preview.transform;state.corners=preview.distortion;if(!finish)canvas()->setSnapGuides(preview.snap.x,preview.snap.y);}
         }
-        if(finish&&!state.persistent){applyTransformSession();return;}
+        if(finish){if(canvas()){canvas()->clearMovePreview();canvas()->setNavigatorDeferred(false);}if(!state.persistent){applyTransformSession();return;}}
+        const bool plainMove=!state.pixels&&!state.corners&&!state.maskOnly&&!state.group&&state.ids.size()==1&&transformDrag_->mode.kind==editing_transform::ModeKind::Move;
+        const Layer* moving=nullptr;if(plainMove)for(const auto& layer:state.original.layers)if(layer.id==state.ids.front())moving=&layer;
+        const bool sprite=moving&&moving->raster&&!moving->group&&moving->blend==Blend::Normal&&!moving->effects.active()&&moving->adjustmentJson.empty()&&moving->maskSourceId.empty()&&!moving->mask&&moving->shapeJson.empty()&&std::none_of(state.original.layers.begin(),state.original.layers.end(),[&](const Layer& layer){return layer.maskSourceId==moving->id;})&&[&]{auto visible=editing_transform::visiblePlacements(state.original);return !visible.empty()&&visible.back().id==moving->id;}();
+        if(!finish&&sprite&&canvas()){
+            try{
+                if(!canvas()->hasMovePreview()){
+                    Document base=state.original;for(auto& layer:base.layers)if(layer.id==moving->id)layer.visible=false;
+                    const double scale=canvas()->pointsPerPixel();const QPointF origin=canvas()->documentPoint({0,0});const bool crisp=canvas()->zoom>=2;
+                    const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();
+                    const double requestWidth=crisp?std::ceil(origin.x()+canvas()->width()/scale)-requestX:canvas()->width()/scale,requestHeight=crisp?std::ceil(origin.y()+canvas()->height()/scale)-requestY:canvas()->height()/scale;
+                    const double units=crisp?1.:1./canvas()->zoom;const int pixelsWide=std::max(1,int(std::ceil(requestWidth/units))),pixelsHigh=std::max(1,int(std::ceil(requestHeight/units)));
+                    auto image=SoftwareRenderer().renderScaled(base,requestX,requestY,pixelsWide,pixelsHigh,units);
+                    canvas()->setMovePreview(std::move(image),requestX,requestY,units,moving->raster,state.draft,moving->opacity);
+                }else canvas()->setMovePreviewPlacement(state.draft);
+                refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
+                const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;return;
+            }catch(const std::exception&){canvas()->clearMovePreview();}
+        }
         publishTransformSession(false);
         if(finish)transformDrag_.reset();
         refresh();

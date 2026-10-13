@@ -77,6 +77,7 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers){
         if(!strokeMask_&&l->mask){uint64_t maskBudget=100000000;for(const auto&layer:p->document->layers)if(layer.id!=l->id&&layer.mask&&layer.mask->raster)maskBudget-=uint64_t(layer.mask->raster->width)*layer.mask->raster->height;remaining=std::min(remaining,maskBudget);}
         p->brushLayerId=l->id;
         stroke_=std::make_unique<graphics::GrowingBrushSession>(*l,settings,p->document->width,p->document->height,brushGpu_,p->document->selection?p->document->selection->coverage:nullptr,strokeMask_,remaining);
+        if(p->canvas)p->canvas->setNavigatorDeferred(true);
         if(modifiers.testFlag(Qt::ShiftModifier)&&lastBrushPoint_&&lastBrushLayer_==l->id&&lastBrushMask_==strokeMask_){stroke_->begin(*lastBrushPoint_);stroke_->append(point);}else stroke_->begin(point);publishBrush(stroke_->preview());lastBrushPoint_=point;lastBrushLayer_=l->id;lastBrushMask_=strokeMask_;if(p->canvas)p->canvas->update();
     }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;

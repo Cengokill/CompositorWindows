@@ -164,6 +164,7 @@ void MainWindow::applyTransformSession() {
     if(!transformSession_||!transformOwner_)return;
     auto* owner=transformOwner_;
     owner->canvas->setSnapGuides();
+    if(owner->canvas){owner->canvas->clearMovePreview();owner->canvas->setNavigatorDeferred(false);}
     try {
         if(transformSession_->corners&&!transformSession_->pixels) {
             const auto* name=transformSession_->maskOnly?"Distort Layer Mask":transformSession_->group?"Distort Layers":"Distort";
@@ -179,7 +180,7 @@ void MainWindow::applyTransformSession() {
 void MainWindow::cancelTransformSession() {
     if(!transformSession_)return;
     auto* owner=transformOwner_;auto activeId=std::move(transformSession_->originalActive);auto selected=std::move(transformSession_->originalSelected);const bool mask=transformSession_->originalMaskSelected;
-    if(owner)owner->canvas->setSnapGuides();
+    if(owner){owner->canvas->setSnapGuides();owner->canvas->clearMovePreview();owner->canvas->setNavigatorDeferred(false);}
     transformSession_.reset();transformOwner_=nullptr;transformDrag_.reset();transformBefore_.reset();transformIds_.clear();
     if(owner) {
         if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}
