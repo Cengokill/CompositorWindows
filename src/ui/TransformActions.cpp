@@ -13,6 +13,25 @@
 #include <unordered_set>
 
 namespace compositor {
+namespace {
+struct MovePreviewPlan { bool sprite{}; bool covered{}; bool masked{}; std::vector<const Layer*> above; };
+MovePreviewPlan planMovePreview(const Document& document,const Layer& moving){
+    MovePreviewPlan plan;
+    const bool plain=!moving.group&&moving.raster&&moving.blend==Blend::Normal&&!moving.effects.active()&&moving.adjustmentJson.empty()&&moving.maskSourceId.empty()&&moving.shapeJson.empty()&&moving.parentId.empty()&&(!moving.mask||moving.mask->linked)&&std::none_of(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.maskSourceId==moving.id;});
+    if(!plain)return plan;
+    std::vector<const Layer*> top;for(const auto& layer:document.layers)if(layer.parentId.empty())top.push_back(&layer);
+    auto at=std::find_if(top.begin(),top.end(),[&](const Layer* layer){return layer->id==moving.id;});if(at==top.end())return plan;
+    for(auto it=std::next(at);it!=top.end();++it){const auto& layer=**it;if(!layer.visible)continue;
+        if(layer.group||layer.blend!=Blend::Normal||layer.effects.active()||!layer.adjustmentJson.empty()||!layer.maskSourceId.empty()||!layer.shapeJson.empty())return {};
+        if(!layer.raster)continue;plan.above.push_back(*it);}
+    auto visible=editing_transform::visiblePlacements(document);
+    plan.sprite=!moving.mask&&plan.above.empty()&&!visible.empty()&&visible.back().id==moving.id;
+    plan.covered=!plan.above.empty();plan.masked=moving.mask.has_value();
+    if(!plan.sprite&&!plan.covered&&!plan.masked)return {};
+    return plan;
+}
+Document hideLayers(Document document,const std::unordered_set<std::string>& ids){for(auto& layer:document.layers)if(ids.contains(layer.id))layer.visible=false;return document;}
+}
 std::optional<Transform> MainWindow::selectedTransform(){
     if(transformSession_&&transformOwner_==current())return transformSession_->draft;
     auto*l=active();auto*p=current();if(!l||!p||!p->document)return {};
@@ -88,17 +107,21 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
         if(finish&&!state.persistent){applyTransformSession();return;}
         const bool plainMove=!state.pixels&&!state.corners&&!state.maskOnly&&!state.group&&state.ids.size()==1&&transformDrag_->mode.kind==editing_transform::ModeKind::Move;
         const Layer* moving=nullptr;if(plainMove)for(const auto& layer:state.original.layers)if(layer.id==state.ids.front())moving=&layer;
-        const bool sprite=moving&&moving->raster&&!moving->group&&moving->blend==Blend::Normal&&!moving->effects.active()&&moving->adjustmentJson.empty()&&moving->maskSourceId.empty()&&!moving->mask&&moving->shapeJson.empty()&&std::none_of(state.original.layers.begin(),state.original.layers.end(),[&](const Layer& layer){return layer.maskSourceId==moving->id;})&&[&]{auto visible=editing_transform::visiblePlacements(state.original);return !visible.empty()&&visible.back().id==moving->id;}();
-        if(!finish&&sprite&&canvas()){
+        const auto preview=moving?planMovePreview(state.original,*moving):MovePreviewPlan{};
+        if(!finish&&(preview.sprite||preview.covered||preview.masked)&&canvas()){
             try{
                 if(!canvas()->hasMovePreview()){
-                    Document base=state.original;for(auto& layer:base.layers)if(layer.id==moving->id)layer.visible=false;
                     const double scale=canvas()->pointsPerPixel();const QPointF origin=canvas()->documentPoint({0,0});const bool crisp=canvas()->zoom>=2;
                     const double requestX=crisp?std::floor(origin.x()):origin.x(),requestY=crisp?std::floor(origin.y()):origin.y();
                     const double requestWidth=crisp?std::ceil(origin.x()+canvas()->width()/scale)-requestX:canvas()->width()/scale,requestHeight=crisp?std::ceil(origin.y()+canvas()->height()/scale)-requestY:canvas()->height()/scale;
                     const double units=crisp?1.:1./canvas()->zoom;const int pixelsWide=std::max(1,int(std::ceil(requestWidth/units))),pixelsHigh=std::max(1,int(std::ceil(requestHeight/units)));
-                    auto image=SoftwareRenderer().renderScaled(base,requestX,requestY,pixelsWide,pixelsHigh,units);
-                    canvas()->setMovePreview(std::move(image),requestX,requestY,units,moving->raster,state.draft,moving->opacity);
+                    auto render=[&](const Document& document){return SoftwareRenderer().renderScaled(document,requestX,requestY,pixelsWide,pixelsHigh,units);};
+                    std::unordered_set<std::string> above;for(const auto* layer:preview.above)above.insert(layer->id);
+                    auto backIds=above;backIds.insert(moving->id);
+                    auto base=render(hideLayers(state.original,backIds));
+                    std::shared_ptr<const Raster> front,plate;if(!above.empty()){std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(!above.contains(layer.id))hidden.insert(layer.id);front=render(hideLayers(state.original,hidden));}
+                    if(preview.masked){std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(layer.id!=moving->id)hidden.insert(layer.id);plate=render(hideLayers(state.original,hidden));}
+                    canvas()->setMovePreview(std::move(base),requestX,requestY,units,preview.masked?nullptr:moving->raster,state.draft,preview.masked?1:moving->opacity,std::move(plate),moving->transform.x,moving->transform.y,std::move(front));
                 }else canvas()->setMovePreviewPlacement(state.draft);
                 refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
                 const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;return;

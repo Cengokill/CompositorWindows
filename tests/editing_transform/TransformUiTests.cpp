@@ -87,10 +87,31 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         MainWindow window(true);auto document=example();document.layers.front().mask=Mask{selection()};auto& project=window.addProject(document);setup(window,project);showCanvas(window);
         auto gate=std::make_shared<std::atomic_bool>(false);compositeJob(window)->setProceedGate(gate);
         const auto before=*project.document;drag(project,{32,24},{40,28});
-        require(!project.canvas->hasMovePreview()&&project.canvas->compositeHeld(),"Masked move composited synchronously or used the sprite path");
+        require(project.canvas->hasMovePreview(),"Masked move left the pixels behind the frame");
         require(project.history.undoCount()==1&&originalLayer(project).transform.x==8,"Masked move did not commit one step");
         historyAction(window,QKeySequence::Undo,"Undo action missing")->trigger();require(*project.document==before,"Masked move undo failed");
         gate->store(true);pump(3000);require(*project.document==before&&project.history.undoCount()==0,"Stale masked composite overwrote undo");
+    });
+    test("ui_covered_move_keeps_preview",[]{
+        MainWindow window(true);auto document=example();Layer cover;cover.id=newId();cover.name="Cover";cover.transform={0,0,8,8};cover.transform.sampling=Transform::Sampling::Nearest;cover.raster=Raster::filled(8,8,{0,255,0,255});document.layers.push_back(std::move(cover));
+        auto& project=window.addProject(document);setup(window,project);showCanvas(window);control<QCheckBox>(window,"transformAutoSelect")->setChecked(false);
+        project.active=project.document->layers.front().id;project.selected={project.active};
+        auto gate=std::make_shared<std::atomic_bool>(false);compositeJob(window)->setProceedGate(gate);
+        drag(project,{32,24},{40,30});
+        require(project.canvas->hasMovePreview(),"Covered layer move did not keep the pixels with the frame");
+        require(project.history.undoCount()==1&&originalLayer(project).transform.x==8,"Covered layer move did not commit one step");
+        gate->store(true);pump(3000);require(!project.canvas->hasMovePreview(),"Covered layer preview survived the composite");
+    });
+    test("translated_mask_preview_matches_composite",[]{
+        Document document=example();auto mask=std::make_shared<GrayRaster>();mask->width=64;mask->height=48;mask->pixels.assign(64*48,0);for(int y=10;y<20;++y)for(int x=10;x<20;++x)mask->pixels[size_t(y)*64+x]=255;
+        document.layers.front().mask=Mask{mask};Layer floor;floor.id=newId();floor.name="Floor";floor.transform={0,0,64,48};floor.transform.sampling=Transform::Sampling::Nearest;floor.raster=Raster::filled(64,48,{0,0,80,255});document.layers.insert(document.layers.begin(),std::move(floor));
+        const std::string id=document.layers.back().id;const int dx=5,dy=3;
+        Document moved=document;for(auto& layer:moved.layers)if(layer.id==id){layer.transform.x+=dx;layer.transform.y+=dy;}
+        auto full=SoftwareRenderer().renderScaled(moved,0,0,64,48,1);
+        auto hide=[&](Document source,const std::string& only){if(only.empty()){for(auto& layer:source.layers)if(layer.id==id)layer.visible=false;}else for(auto& layer:source.layers)if(layer.id!=only)layer.visible=false;return source;};
+        auto back=SoftwareRenderer().renderScaled(hide(document,""),0,0,64,48,1);
+        auto plate=SoftwareRenderer().renderScaled(hide(document,id),0,0,64,48,1);
+        for(int y=0;y<48;++y)for(int x=0;x<64;++x){Pixel under=back->pixel(x,y);const int sx=x-dx,sy=y-dy;if(sx>=0&&sy>=0&&sx<64&&sy<48)under=blendPixel(under,plate->pixel(sx,sy),Blend::Normal);require(under==full->pixel(x,y),"Shifted masked layer did not match the canonical composite");}
     });
     std::cout<<"{\"suite\":\"transform_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";return failed?1:0;
 }
