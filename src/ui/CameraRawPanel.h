@@ -31,6 +31,8 @@ public:
     void beginGuide(double x, double y);
     void dragGuide(double x, double y);
     void endGuide();
+    // Accepted guides plus the in-progress stroke once it passes the accept threshold.
+    std::vector<filters::CameraRawGeometryGuide> guideOverlay() const;
     void releaseTool();
     std::function<void()> edited;
     std::function<void()> autoRequested;

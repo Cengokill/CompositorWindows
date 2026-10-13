@@ -1,7 +1,9 @@
 #define main rememberedSettingsBaseMain
 #include "RememberedSettingsTests.cpp"
 #undef main
+#include "filters/CameraRaw.h"
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QImage>
 #include <QLabel>
@@ -9,8 +11,10 @@
 #include <string>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QTest>
 #include <QToolButton>
 namespace {
@@ -229,10 +233,174 @@ void glass_controls() {
         QApplication::sendEvent(wheel, &release);
     }, false);
 }
+Document checkerboard() {
+    auto picture = document(96, 64);
+    std::vector<Pixel> pixels(std::size_t(picture.width) * picture.height);
+    for (int y = 0; y < picture.height; ++y) for (int x = 0; x < picture.width; ++x)
+        pixels[std::size_t(y) * picture.width + x] = ((x / 8) + (y / 8)) % 2 ? Pixel{240, 240, 240, 255} : Pixel{20, 20, 20, 255};
+    picture.layers[0].raster = Raster::fromRgba(picture.width, picture.height, reinterpret_cast<const uint8_t*>(pixels.data()), std::size_t(picture.width) * 4);
+    return picture;
+}
+void saveShot(const QImage& image, const char* name) {
+    const char* dir = std::getenv("COMPOSITOR_GUIDE_SHOTS");
+    if (!dir || !*dir) return;
+    QDir().mkpath(QString::fromLocal8Bit(dir));
+    require(image.save(QString::fromLocal8Bit(dir) + QLatin1Char('/') + QLatin1String(name)), "guide screenshot save failed");
+}
+bool guideInk(QColor color) { return color.red() >= 250 && color.green() >= 250 && color.blue() >= 250; }
+QColor sampleDocument(const QImage& image, NativeCanvas& canvas, Point document) {
+    const auto view = canvas.viewMapping().toView(document);
+    const double scale = canvas.devicePixelRatioF();
+    const int x = std::clamp(int(std::lround(view.x * scale)), 0, image.width() - 1);
+    const int y = std::clamp(int(std::lround(view.y * scale)), 0, image.height() - 1);
+    return image.pixelColor(x, y);
+}
+QImage captureCanvas(NativeCanvas& canvas) {
+    QApplication::processEvents();
+    auto image = canvas.captureRendered();
+    require(!image.isNull() && canvas.deviceReady() && canvas.deviceError().isEmpty(), "canvas capture unavailable");
+    return image;
+}
+void sendPointer(NativeCanvas& canvas, QEvent::Type type, Point view, Qt::MouseButton button, Qt::MouseButtons buttons) {
+    const QPointF local(view.x, view.y);
+    require(local.x() >= 1 && local.y() >= 1 && local.x() < canvas.width() - 1 && local.y() < canvas.height() - 1, "guide pointer is outside the canvas");
+    QMouseEvent event(type, local, canvas.mapToGlobal(local), button, buttons, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &event);
+}
+Point viewPoint(NativeCanvas& canvas, Point document) {
+    const auto view = canvas.viewMapping().toView(document);
+    return {view.x, view.y};
+}
+void armGuides(QDialog& dialog) {
+    auto* geometry = field<QToolButton>(dialog, "Geometry");
+    if (!geometry->isChecked()) geometry->click();
+    auto* draw = field<QToolButton>(dialog, "Draw Guides");
+    require(!draw->isChecked(), "Draw Guides was already armed");
+    draw->click();
+    require(draw->isChecked(), "Draw Guides did not arm");
+}
+filters::CameraRawGeometryGuide guideFromDocument(const Transform& transform, Point start, Point end) {
+    auto axis = [&](Point point) {
+        const auto unit = transform.toUnit(point);
+        return std::pair{std::clamp(unit.x, 0., 1.), std::clamp(1. - unit.y, 0., 1.)};
+    };
+    const auto a = axis(start), b = axis(end);
+    return {a.first, a.second, b.first, b.second};
+}
+bool sameRaster(const Raster& left, const Raster& right) {
+    if (left.width != right.width || left.height != right.height) return false;
+    for (int y = 0; y < left.height; ++y) for (int x = 0; x < left.width; ++x) if (left.pixel(x, y) != right.pixel(x, y)) return false;
+    return true;
+}
+bool differentRaster(const Raster& left, const Raster& right) { return !sameRaster(left, right); }
+QDialog* openCameraRaw(Fixture& f) {
+    QPointer<QDialog> panel;
+    QEventLoop wait;
+    QTimer poll;
+    poll.setInterval(5);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    QObject::connect(&poll, &QTimer::timeout, &f.window, [&] {
+        if (elapsed.elapsed() > 15000) { wait.quit(); return; }
+        for (auto* object : f.window.findChildren<QObject*>()) if (auto* session = dynamic_cast<ui::EditPanelSession*>(object))
+            if (session->canvas() == f.window.canvas() && session->panel() && session->panel()->isVisible()) { panel = session->panel(); wait.quit(); }
+    });
+    poll.start();
+    f.trigger("filter.camera_raw");
+    wait.exec();
+    poll.stop();
+    require(panel, "Camera Raw panel opened");
+    return panel.data();
+}
+void guided_lines() {
+    Fixture f(checkerboard());
+    const auto untouched = f.a->document;
+    const Point start{30, 20}, end{66, 44};
+    const Point flippedStart{start.x, end.y};
+    f.window.show();
+    f.window.setGeometry(40, 40, 1200, 820);
+    QApplication::processEvents();
+    auto* canvas = f.window.canvas();
+    require(canvas && canvas->width() > 200 && canvas->height() > 200, "canvas has a layout size");
+    canvas->fit();
+    QApplication::processEvents();
+    auto* dialog = openCameraRaw(f);
+    armGuides(*dialog);
+    sendPointer(*canvas, QEvent::MouseButtonPress, viewPoint(*canvas, start), Qt::LeftButton, Qt::LeftButton);
+    sendPointer(*canvas, QEvent::MouseMove, viewPoint(*canvas, end), Qt::NoButton, Qt::LeftButton);
+    const auto during = captureCanvas(*canvas);
+    saveShot(during, "during.png");
+    require(guideInk(sampleDocument(during, *canvas, end)), "in-progress guide is not visible at the pointer");
+    require(!guideInk(sampleDocument(during, *canvas, flippedStart)), "in-progress guide uses the stored Y axis instead of the pointer");
+    sendPointer(*canvas, QEvent::MouseButtonRelease, viewPoint(*canvas, end), Qt::LeftButton, Qt::NoButton);
+    const auto accepted = captureCanvas(*canvas);
+    saveShot(accepted, "accepted.png");
+    require(guideInk(sampleDocument(accepted, *canvas, start)) && guideInk(sampleDocument(accepted, *canvas, end)), "accepted guide is not visible");
+    const auto anchor = viewPoint(*canvas, Point{(start.x + end.x) / 2, (start.y + end.y) / 2});
+    canvas->zoomAt(canvas->zoom * 2, QPointF(anchor.x, anchor.y));
+    canvas->panBy({28, -18});
+    QApplication::processEvents();
+    const auto zoomed = captureCanvas(*canvas);
+    saveShot(zoomed, "zoomed.png");
+    require(guideInk(sampleDocument(zoomed, *canvas, start)) && guideInk(sampleDocument(zoomed, *canvas, end)), "guide left the image after zoom and pan");
+    require(!guideInk(sampleDocument(zoomed, *canvas, flippedStart)), "zoomed guide follows the flipped axis");
+    field<QPushButton>(*dialog, "Clear Guides")->click();
+    QApplication::processEvents();
+    const auto cleared = captureCanvas(*canvas);
+    saveShot(cleared, "cleared.png");
+    require(!guideInk(sampleDocument(cleared, *canvas, start)) && !guideInk(sampleDocument(cleared, *canvas, end)), "Clear Guides left the guide visible");
+    armGuides(*dialog);
+    sendPointer(*canvas, QEvent::MouseButtonPress, viewPoint(*canvas, start), Qt::LeftButton, Qt::LeftButton);
+    sendPointer(*canvas, QEvent::MouseMove, viewPoint(*canvas, end), Qt::NoButton, Qt::LeftButton);
+    sendPointer(*canvas, QEvent::MouseButtonRelease, viewPoint(*canvas, end), Qt::LeftButton, Qt::NoButton);
+    require(guideInk(sampleDocument(captureCanvas(*canvas), *canvas, end)), "second guide is not visible");
+    dialog->reject();
+    QApplication::processEvents();
+    const auto cancelled = captureCanvas(*canvas);
+    saveShot(cancelled, "cancelled.png");
+    require(!guideInk(sampleDocument(cancelled, *canvas, start)) && !guideInk(sampleDocument(cancelled, *canvas, end)), "Cancel left the guide visible");
+    require(f.a->document == untouched && f.a->history.undoCount() == 0, "Cancel changed the document");
+    const auto source = f.a->document->layers.front().raster;
+    const auto transform = f.a->document->layers.front().transform;
+    filters::CameraRawGeometryGuide viewed{};
+    rawModal(f, [&](QDialog& panel) {
+        canvas->fit();
+        const auto center = viewPoint(*canvas, Point{(start.x + end.x) / 2, (start.y + end.y) / 2});
+        canvas->zoomAt(canvas->zoom * 2, QPointF(center.x, center.y));
+        canvas->panBy({36, -12});
+        QApplication::processEvents();
+        const auto viewStart = viewPoint(*canvas, start), viewEnd = viewPoint(*canvas, end);
+        viewed = guideFromDocument(transform, Point{viewStart.x, viewStart.y}, Point{viewEnd.x, viewEnd.y});
+        armGuides(panel);
+        sendPointer(*canvas, QEvent::MouseButtonPress, viewStart, Qt::LeftButton, Qt::LeftButton);
+        sendPointer(*canvas, QEvent::MouseMove, viewEnd, Qt::NoButton, Qt::LeftButton);
+        sendPointer(*canvas, QEvent::MouseButtonRelease, viewEnd, Qt::LeftButton, Qt::NoButton);
+        const auto committedView = captureCanvas(*canvas);
+        saveShot(committedView, "after.png");
+        require(guideInk(sampleDocument(committedView, *canvas, start)), "guide is not visible while zoomed before OK");
+    }, true);
+    require(f.a->history.undoCount() == 1 && f.a->history.undoName() == "Camera Raw Filter", "OK did not commit the guided grade");
+    const auto baked = f.a->document->layers.front().raster;
+    const auto& remembered = f.a->toolState.filterSettings.cameraRaw;
+    const auto expected = guideFromDocument(transform, start, end);
+    require(remembered.geometry.upright == filters::CameraRawUpright::Guided && remembered.geometry.guides.size() == 1, "OK did not remember one guided line");
+    const auto& guide = remembered.geometry.guides.front();
+    require(std::abs(guide.startX - expected.startX) < 1e-4 && std::abs(guide.startY - expected.startY) < 1e-4 && std::abs(guide.endX - expected.endX) < 1e-4 && std::abs(guide.endY - expected.endY) < 1e-4, "remembered guide is not the layer-unit line");
+    require(std::abs(guide.startX - viewed.startX) > 0.05 || std::abs(guide.startY - viewed.startY) > 0.05, "remembered guide follows view coordinates");
+    auto painted = filters::renderCameraRaw(*source, remembered, {}, nullptr);
+    require(painted.raster && baked && sameRaster(*painted.raster, *baked), "OK pixels differ from the guide correction");
+    filters::CameraRawSettings unflipped = remembered;
+    unflipped.geometry.guides[0] = {expected.startX, 1 - expected.startY, expected.endX, 1 - expected.endY};
+    auto mirrored = filters::renderCameraRaw(*source, unflipped, {}, nullptr);
+    require(mirrored.raster && differentRaster(*mirrored.raster, *baked), "Y-flipped guide coordinates produce the same correction");
+    const auto closed = captureCanvas(*canvas);
+    saveShot(closed, "after-ok.png");
+    require(!guideInk(sampleDocument(closed, *canvas, start)) && !guideInk(sampleDocument(closed, *canvas, end)), "OK left the guide overlay visible");
+}
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"glass_controls", glass_controls}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"glass_controls", glass_controls}, {"guided_lines", guided_lines}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();

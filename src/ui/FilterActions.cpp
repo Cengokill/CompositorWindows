@@ -170,7 +170,7 @@ class FilterPanel final:public ui::EditPanelSession {
     void change(){
         if(closed_||committing_)return;
         refine_=false;
-        if(raw_){request_.cameraRaw=raw_->rendered();request_.cameraRawView=raw_->previewView();}
+        if(raw_){request_.cameraRaw=raw_->rendered();request_.cameraRawView=raw_->previewView();syncGuideOverlay();}
         ++version_;if(worker_.isRunning())cancelled_->store(true);apply_->setEnabled(false);debounce_.start();
     }
     Pixel samplePixel(Point point,bool graded)const{
@@ -186,6 +186,16 @@ class FilterPanel final:public ui::EditPanelSession {
         if(unit.x<0||unit.y<0||unit.x>=1||unit.y>=1)return false;
         x=std::clamp(unit.x,0.,1.);y=std::clamp(1-unit.y,0.,1.);return true;
     }
+    // guidePoint stores y as 1-unit.y. Drawing uses that inverse so the segment stays on the sampled pixels.
+    Point guideDocument(double x,double y)const{return original_.transform.fromUnit({x,1-y});}
+    void syncGuideOverlay(){
+        auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas||!raw_)return;
+        const auto guides=raw_->guideOverlay();
+        std::vector<std::pair<Point,Point>> lines;lines.reserve(guides.size());
+        for(const auto& guide:guides)lines.push_back({guideDocument(guide.startX,guide.startY),guideDocument(guide.endX,guide.endY)});
+        canvas->setCameraRawGuides(std::move(lines));
+    }
+    void clearGuideOverlay(){if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data()))canvas->setCameraRawGuides({});}
     double viewY(Point point)const{
         if(auto* canvas=static_cast<NativeCanvas*>(host_.canvas.data()))return canvas->viewMapping().toView(point).y;
         return point.y;
@@ -220,7 +230,7 @@ class FilterPanel final:public ui::EditPanelSession {
             if(rememberLast_)rememberLast_(request_.kind);
         }}
         catch(const std::exception& error){if(host_.error)host_.error(QString::fromUtf8(error.what()));}
-        if(host_.preview)host_.preview({});if(host_.closed)host_.closed();host_={};retire();
+        clearGuideOverlay();if(host_.preview)host_.preview({});if(host_.closed)host_.closed();host_={};retire();
     }
 public:
     FilterPanel(QWidget* parent,Document before,Layer original,filters::Request request,QString title,ui::EditPanelHost host,std::function<void(const filters::Settings&)> remember,std::function<void(const filters::CameraRawSettings&)> rememberRaw={},std::function<void(filters::Kind)> rememberLast={})
@@ -310,14 +320,14 @@ public:
         if(auto* first=dialog_.findChild<QDoubleSpinBox*>())first->setFocus(Qt::ActiveWindowFocusReason);
         else preview_.setFocus(Qt::ActiveWindowFocusReason);
     }
-    ~FilterPanel()override{cancelled_->store(true);disconnect(&worker_,nullptr,&dialog_,nullptr);disconnect(&balance_,nullptr,&dialog_,nullptr);worker_.waitForFinished();balance_.waitForFinished();}
+    ~FilterPanel()override{clearGuideOverlay();cancelled_->store(true);disconnect(&worker_,nullptr,&dialog_,nullptr);disconnect(&balance_,nullptr,&dialog_,nullptr);worker_.waitForFinished();balance_.waitForFinished();}
     QDialog* panel()const override{return const_cast<FilterDialog*>(&dialog_);}
     bool committing()const override{return committing_;}
     void cancel()override{if(!closed_&&!committing_)dialog_.reject();}
     bool samplePress(Point point,double,Qt::KeyboardModifiers)override{
         if(!raw_||closed_||committing_||raw_->tool()==ui::CameraRawPanel::Tool::None)return false;
         dragKind_=raw_->tool();
-        if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->beginGuide(x,y);}
+        if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->beginGuide(x,y);syncGuideOverlay();}
         else if(dragKind_==ui::CameraRawPanel::Tool::Curve||dragKind_==ui::CameraRawPanel::Tool::Mixer)raw_->beginTarget(samplePixel(point,true),viewY(point));
         else if(dragKind_==ui::CameraRawPanel::Tool::PointColor)raw_->sampleGraded(samplePixel(point,true));
         else raw_->sampleOriginal(samplePixel(point,false));
@@ -325,7 +335,7 @@ public:
     }
     bool sampleMove(Point point,double,Qt::KeyboardModifiers,bool finish)override{
         if(dragKind_==ui::CameraRawPanel::Tool::None)return false;
-        if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->dragGuide(x,y);if(finish)raw_->endGuide();}
+        if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->dragGuide(x,y);if(finish)raw_->endGuide();syncGuideOverlay();}
         else if(dragKind_==ui::CameraRawPanel::Tool::Curve||dragKind_==ui::CameraRawPanel::Tool::Mixer)raw_->dragTarget(viewY(point));
         else if(dragKind_==ui::CameraRawPanel::Tool::PointColor)raw_->sampleGraded(samplePixel(point,true));
         else raw_->sampleOriginal(samplePixel(point,false));
