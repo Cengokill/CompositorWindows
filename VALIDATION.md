@@ -4,6 +4,7 @@ Results below describe actual local checkpoints, not Mac equivalence or broad ha
 
 | Checkpoint | Result |
 | --- | --- |
+| Preview 0.1.8 downloads | Six portable deployment checks pass: payload hashes, manual-update distribution, matching source, cleaned-PATH health, native editing, and Unicode project reopen/export. The package records `sourceDirty: false` at `f09ef02473bf83c707c414aeb860aae1a590353f`. MSI install checks were not run because a community preview is already registered. |
 | Preview 0.1.7 downloads | Six portable deployment checks pass: payload hashes, manual-update distribution, matching source, cleaned-PATH health, native editing, and Unicode project reopen/export. The package records `sourceDirty: false` at `278326c5c7d72147db38b6d4aca5ec7ac53b0c87`. MSI install checks were not run because a community preview is already registered. |
 | Preview 0.1.6 downloads | Six portable deployment checks pass: payload hashes, manual-update distribution, matching source, cleaned-PATH health, native editing, and Unicode project reopen/export. The package records `sourceDirty: false` at `e453040a3e3c3df4cc9dd3d604084b7284e27c90`. MSI install checks were not run because a community preview is already registered. |
 | Publication preview 0.1.4 | Release application builds from the staged source export using the prepared dependency cache. 24 selected CTest checks, the manual-update policy check, native window-control probe, and 18-step editing workflow pass. |
