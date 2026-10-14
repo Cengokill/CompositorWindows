@@ -161,6 +161,7 @@ public:
     // documentPoint, so a labeled pixel stays under its tick while zooming or panning.
     static constexpr double rulerThickness=24;
     bool showRulers{true};
+    void setRulersVisible(bool visible);
     QRectF contentRect() const;
     struct GuidePreview { bool horizontal{}; double position{}; int index{-1}; };
     std::optional<GuidePreview> guidePreview() const;

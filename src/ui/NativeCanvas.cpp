@@ -111,6 +111,12 @@ QRectF NativeCanvas::contentRect() const{
     if(!showRulers||documentWidth_<=0||documentHeight_<=0)return QRectF(0,0,width(),height());
     return QRectF(rulerThickness,rulerThickness,std::max(0.,double(width())-rulerThickness),std::max(0.,double(height())-rulerThickness));
 }
+void NativeCanvas::setRulersVisible(bool visible){
+    if(showRulers==visible)return;
+    if(!visible&&guideDrag_)cancelGuideDrag();
+    showRulers=visible;
+    synchronizeViewport();
+}
 double NativeCanvas::rulerMajorInterval() const{
     const double scale=pointsPerPixel();
     if(!(scale>0)||!std::isfinite(scale))return 1;

@@ -124,6 +124,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("view.fit","View","Fit Canvas","Ctrl+0",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:87");
         add("view.actual","View","Actual Pixels","Ctrl+1",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:88");
         add("view.pixel_grid","View","Pixel Grid","",C::View,G::Always,P::None,"Compositor/CompositorApp.swift:93");
+        add("view.rulers","View","Rulers","Ctrl+R",C::View,G::Always,P::None,"Windows canvas rulers");
         add("canvas.size","Canvas","Canvas Size…","Ctrl+Alt+C",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:196");
         add("canvas.image_size","Canvas","Image Size…","Ctrl+Alt+I",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:199");
         add("canvas.flip_horizontal","Canvas","Flip Canvas Horizontally","",C::Document,G::Layers,P::FinishAppearance,"Compositor/CompositorApp.swift:204");

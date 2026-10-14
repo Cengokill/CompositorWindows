@@ -112,6 +112,16 @@ test("guide_drag_commits_one_undo_and_restores",[]{
  action(w,"Undo Move Guide");action(w,"Undo Add Guide");
  require(p.document->guides.empty()&&*p.document==before,"Undo did not restore the original document");
 });
+test("rulers_menu_hides_the_bands_and_restores_the_canvas",[]{
+ MainWindow w(true);auto&p=w.addProject(example());w.resize(900,700);w.show();QTest::qWait(30);
+ auto* rulers=w.findChild<QAction*>("viewRulers");
+ require(rulers&&rulers->isChecked()&&rulers->shortcut()==QKeySequence("Ctrl+R"),"Rulers command missing");
+ require(p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Rulers hidden by default");
+ rulers->trigger();
+ require(!rulers->isChecked()&&!p.canvas->showRulers&&p.canvas->contentRect().left()==0&&p.canvas->contentRect().top()==0,"Hiding rulers left the inset");
+ rulers->trigger();
+ require(rulers->isChecked()&&p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Showing rulers did not restore the inset");
+});
 test("brush_outside_existing_source_grows_without_moving_original_pixels",[]{
  MainWindow w(true);auto d=example();d.layers.front().transform={40,30,32,32};d.layers.front().raster=Raster::filled(32,32,{180,80,20,255});auto&p=w.addProject(d);action(w,"Brush (B)");
  auto before=SoftwareRenderer().render(d,0,0,128,96);drag(p,{20,45},{22,45});const auto&layer=p.document->layers.front();require(layer.transform.x<40&&layer.raster->width>32,"Brush was clipped to source extent");
