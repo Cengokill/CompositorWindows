@@ -114,6 +114,32 @@ test("guide_drag_commits_one_undo_and_restores",[]{
  action(w,"Undo Move Guide");action(w,"Undo Add Guide");
  require(p.document->guides.empty()&&*p.document==before,"Undo did not restore the original document");
 });
+test("guide_release_uses_the_drop_and_rejects_the_letterbox",[]{
+ MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
+ auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ const auto frame=canvas->contentRect();
+ const auto origin=canvas->viewMapping().toView({0,0});
+ const auto opposite=canvas->viewMapping().toView({double(p.document->width),double(p.document->height)});
+ require(origin.y>frame.top()+4,"Fitted document left no letterbox");
+ auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
+ const QPointF inside(frame.center().x(),(origin.y+opposite.y)*.5),stale(inside.x(),origin.y+12);
+ const QPointF above((origin.x+opposite.x)*.5,(frame.top()+origin.y)*.5);
+ require(frame.contains(above)&&canvas->documentPoint(above).y()<0,"Above-document sample is inside the image");
+ require(std::abs(canvas->documentPoint(inside).y()-canvas->documentPoint(stale).y())>1,"Release sample matches the stale move");
+ require(canvas->documentPoint(inside).y()>=0&&canvas->documentPoint(inside).y()<=p.document->height,"Inside sample left the document");
+ const QPointF ruler(frame.left()+36,8);
+ send(QEvent::MouseButtonPress,ruler,Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,stale,Qt::NoButton,Qt::LeftButton);
+ send(QEvent::MouseButtonRelease,inside,Qt::LeftButton,Qt::NoButton);
+ require(p.history.undoCount()==1&&p.document->guides.size()==1,"Release inside the document did not commit");
+ require(std::abs(p.document->guides.front().position-canvas->documentPoint(inside).y())<1e-4,"Committed guide kept the stale move");
+ action(w,"Undo Add Guide");
+ require(p.history.undoCount()==0&&p.document->guides.empty(),"Undo left the guide");
+ send(QEvent::MouseButtonPress,ruler,Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,inside,Qt::NoButton,Qt::LeftButton);
+ send(QEvent::MouseButtonRelease,above,Qt::LeftButton,Qt::NoButton);
+ require(p.history.undoCount()==0&&p.document->guides.empty()&&!canvas->guidePreview(),"Letterbox release persisted a guide");
+});
 test("saved_guides_reopen_on_the_canvas",[]{
  QTemporaryDir dir;require(dir.isValid(),"Temporary project directory failed");
  const auto path=QDir(dir.path()).filePath("Guides.comp");

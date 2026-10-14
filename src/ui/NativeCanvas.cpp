@@ -183,12 +183,15 @@ void NativeCanvas::cancelGuideDrag(){
 }
 void NativeCanvas::finishGuideDrag(QPointF view){
     if(!guideDrag_)return;
+    updateGuideDrag(view);
     const GuideDrag drag=*guideDrag_;
     guideDrag_.reset();
     if(QWidget::mouseGrabber()==this)releaseMouse();
     unsetCursor();
     const bool creating=drag.index<0;
-    if(creating&&!contentRect().contains(view)){if(guideDragCanceled)guideDragCanceled();update();return;}
+    const double extent=drag.horizontal?double(documentHeight_):double(documentWidth_);
+    const bool outsideDocument=!(drag.position>=0&&drag.position<=extent);
+    if((creating&&!contentRect().contains(view))||outsideDocument){if(guideDragCanceled)guideDragCanceled();update();return;}
     if(!std::isfinite(drag.position)||std::abs(drag.position)>1000000){if(guideDragCanceled)guideDragCanceled();update();return;}
     if(guideDragFinished)guideDragFinished(drag.horizontal,drag.position,drag.index);
     update();
