@@ -1,9 +1,11 @@
 #include "ui/MainWindow.h"
 #include <QApplication>
+#include <QDir>
 #include <QMouseEvent>
 #include <QTest>
 #include <QTemporaryDir>
 #include "persistence/ProjectStore.h"
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -111,6 +113,31 @@ test("guide_drag_commits_one_undo_and_restores",[]{
  require(std::abs(p.document->guides.front().position-moved)<1e-6,"Redo did not restore the moved guide");
  action(w,"Undo Move Guide");action(w,"Undo Add Guide");
  require(p.document->guides.empty()&&*p.document==before,"Undo did not restore the original document");
+});
+test("saved_guides_reopen_on_the_canvas",[]{
+ QTemporaryDir dir;require(dir.isValid(),"Temporary project directory failed");
+ const auto path=QDir(dir.path()).filePath("Guides.comp");
+ MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
+ auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ const auto frame=canvas->contentRect();
+ auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
+ const QPointF drop(frame.center().x(),frame.top()+80);
+ send(QEvent::MouseButtonPress,QPointF(frame.left()+36,8),Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,drop,Qt::NoButton,Qt::LeftButton);
+ send(QEvent::MouseButtonRelease,drop,Qt::LeftButton,Qt::NoButton);
+ require(p.document->guides.size()==1&&canvas->showGuides,"Guide was not committed");
+ const double position=p.document->guides.front().position;const auto id=p.document->guides.front().id;
+ p.path=path;action(w,"&Save Project");require(!p.history.modified(),"Save left the project modified");
+ action(w,"Close Project");
+ w.openPath(path);
+ auto* reopened=w.canvas();
+ require(reopened&&reopened!=canvas&&reopened->showGuides&&reopened->guides.size()==1,"Reopened project hid its guides");
+ require(reopened->guides.front().first&&std::abs(reopened->guides.front().second-position)<1e-4,"Reopened guide moved");
+ auto* menu=w.findChild<QAction*>("viewGuides");
+ require(menu&&menu->isChecked(),"View → Guides was unchecked after reopen");
+ ProjectStore store(makeWicProjectCodec());
+ auto loaded=store.load(std::filesystem::path(path.toStdWString()));
+ require(loaded.document.guides.size()==1&&loaded.document.guides.front().id==id&&loaded.document.guides.front().horizontal&&std::abs(loaded.document.guides.front().position-position)<1e-6,"Saved project omitted the guide");
 });
 test("rulers_menu_hides_the_bands_and_restores_the_canvas",[]{
  MainWindow w(true);auto&p=w.addProject(example());w.resize(900,700);w.show();QTest::qWait(30);

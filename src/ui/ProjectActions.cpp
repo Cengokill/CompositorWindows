@@ -143,7 +143,7 @@ EditorProject& MainWindow::addProject(Document document,QString title,bool reuse
     selectingProjectForOpen_=true;
     const auto restoreSelecting=qScopeGuard([this,previousSelecting]{selectingProjectForOpen_=previousSelecting;});
     const bool replaceWelcome=!reuseEmpty&&projects_.size()==1&&!projects_.front()->document&&!projects_.front()->importing&&!projects_.front()->projectBusy&&(!importQueue_||!importQueue_->contains(projects_.front()->canvas));
-    auto&project=addEmptyProject(reuseEmpty);project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;
+    auto&project=addEmptyProject(reuseEmpty);project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;if(!project.document->guides.empty())project.canvas->showGuides=true;
     if(replaceWelcome){
         // ProjectWorkspace.swift:81-86: attach the successfully loaded fresh
         // session before discarding the sole empty welcome session. Tab-change
