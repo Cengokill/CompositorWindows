@@ -794,6 +794,9 @@ foreach(case identity_ok commit_ok commit_during_refinement cancel_keeps hidden_
   add_test(NAME camera_raw_session.${case} COMMAND camera_raw_session_tests ${case})
   set_tests_properties(camera_raw_session.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
 endforeach()
+# Guided lines read the swap chain. The offscreen platform does not complete that present.
+add_test(NAME camera_raw_session.guided_lines COMMAND camera_raw_session_tests guided_lines)
+set_tests_properties(camera_raw_session.guided_lines PROPERTIES TIMEOUT 45)
 add_library(cancellation_kernel_reference STATIC tests/filters/kernel-reference/NoisePixels.c tests/filters/kernel-reference/LensPixels.c tests/filters/kernel-reference/ContentFill.c)
 target_include_directories(cancellation_kernel_reference PRIVATE src/graphics/upstream)
 target_compile_definitions(cancellation_kernel_reference PRIVATE noise_add=noise_add_reference lens_distort=lens_distort_reference content_fill=content_fill_reference)

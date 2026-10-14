@@ -579,6 +579,12 @@ void CameraRawPanel::endGuide() {
     settings_.geometry.upright = filters::CameraRawUpright::Guided;
     publish();
 }
+std::vector<filters::CameraRawGeometryGuide> CameraRawPanel::guideOverlay() const {
+    auto lines = settings_.geometry.guides;
+    if (guiding_ && std::hypot(draftGuide_.endX - draftGuide_.startX, draftGuide_.endY - draftGuide_.startY) > 0.01)
+        lines.push_back(draftGuide_);
+    return lines;
+}
 void CameraRawPanel::releaseTool() { arm(Tool::None); }
 void CameraRawPanel::publish() { sync(); if (edited) edited(); }
 void CameraRawPanel::sync() {

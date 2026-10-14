@@ -173,6 +173,22 @@ if(gradientLine_&&documentWidth_>0&&documentHeight_>0){
     for(auto point:{start,end}){const auto handle=D2D1::Ellipse(point,6,6);context_->FillEllipse(handle,white.Get());context_->DrawEllipse(handle,black.Get(),1);}
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
+if(!cameraRawGuides_.empty()&&documentWidth_>0&&documentHeight_>0){
+    ComPtr<ID2D1SolidColorBrush> black,white;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.7f),&black),"Camera Raw guide outline");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Camera Raw guide");
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    const auto mapping=viewMapping();
+    for(const auto& segment:cameraRawGuides_){
+        const auto a=mapping.toView(segment.first),b=mapping.toView(segment.second);
+        const auto start=D2D1::Point2F(float(a.x),float(a.y)),end=D2D1::Point2F(float(b.x),float(b.y));
+        context_->DrawLine(start,end,black.Get(),3);context_->DrawLine(start,end,white.Get(),1);
+        black->SetColor(D2D1::ColorF(0,0,0));
+        for(auto point:{start,end}){const auto handle=D2D1::Ellipse(point,6,6);context_->FillEllipse(handle,white.Get());context_->DrawEllipse(handle,black.Get(),1);}
+        black->SetColor(D2D1::ColorF(0,0,0,.7f));
+    }
+    context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+}
 if((transformOverlay_||distortionOverlay_)&&documentWidth_>0&&documentHeight_>0){auto overlay=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());ComPtr<ID2D1SolidColorBrush> line,fill;check(context_->CreateSolidColorBrush(D2D1::ColorF(.3f,.7f,1),&line),"Transform outline");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&fill),"Transform handle");auto point=[](Point p){return D2D1::Point2F(float(p.x),float(p.y));};for(int i=0;i<4;++i)context_->DrawLine(point(overlay.outline[i]),point(overlay.outline[(i+1)%4]),line.Get(),1);for(auto h:overlay.handles){auto box=D2D1::RectF(float(h.x-3),float(h.y-3),float(h.x+3),float(h.y+3));context_->FillRectangle(box,fill.Get());context_->DrawRectangle(box,line.Get(),1);}if(overlay.showsRotation){context_->DrawLine(point(overlay.handles[1]),point(overlay.rotationHandle),line.Get(),1);context_->FillEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),fill.Get());context_->DrawEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),line.Get(),1);}}
 if(brushCursor_){
     const auto& cursor=*brushCursor_;const auto center=D2D1::Point2F(float(cursor.center.x),float(cursor.center.y));const float radius=float(cursor.diameter/2);
@@ -258,7 +274,7 @@ void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(
 graphics::CanvasViewport NativeCanvas::viewportState()const{return {{double(width()),double(height())},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
 void NativeCanvas::installViewport(const graphics::CanvasViewport& state){const bool wasVisible=navigatorPlacement().visible;zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;update();if(!wasVisible&&navigatorPlacement().visible&&navigatorDirty_&&!navigatorDeferred_)scheduleNavigator();}
 void NativeCanvas::synchronizeViewport(){auto state=viewportState();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({double(width()),double(height())},devicePixelRatioF(),document);installViewport(state);}
-void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
+void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();cameraRawGuides_.clear();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
 editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto state=viewportState();return {state.pointsPerPixel(),state.origin({double(documentWidth_),double(documentHeight_)})};}
 QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto point=viewportState().documentPoint({p.x(),p.y()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}
