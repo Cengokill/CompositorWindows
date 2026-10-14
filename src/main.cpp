@@ -14,7 +14,7 @@
 #include <QTextStream>
 
 int main(int argc,char**argv){
-    QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion("0.1.6");
+    QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion("0.1.7");
     compositor::logging::install();
     compositor::logging::trace(QString("startup executable=%1 arguments=%2")
         .arg(QCoreApplication::applicationFilePath(),app.arguments().join(" | ")));
