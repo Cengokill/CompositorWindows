@@ -1,8 +1,11 @@
 #include "ui/MainWindow.h"
 #include <QApplication>
+#include <QDir>
+#include <QMouseEvent>
 #include <QTest>
 #include <QTemporaryDir>
 #include "persistence/ProjectStore.h"
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -74,6 +77,103 @@ test("blank_30000_brush_preview_is_bounded_and_commit_grows_source",[]{
  auto patch=p.canvas->viewportProvider(14900,14900,256,256,1);require(patch.raster&&patch.raster->tiles.size()<=64,"Brush viewport exceeded tile budget");
  p.canvas->pointerUp({15020,15000},{});const auto&painted=p.document->layers.front();require(painted.raster&&painted.raster->width<100&&painted.raster->height<100&&p.history.undoCount()==1,"Blank brush allocated full canvas or lost history");
  require(Raster::materializationCount()==0&&!p.brushPreview,"Sparse brush flattened rgba or kept preview after commit");auto undo=p.history.undo();require(undo&&undo->document==std::optional(d),"Blank growth undo lost original");
+});
+test("guide_drag_commits_one_undo_and_restores",[]{
+ MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
+ auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ const auto before=*p.document;require(before.guides.empty(),"Example started with guides");
+ const auto frame=canvas->contentRect();
+ auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
+ const QPointF drop(frame.center().x(),frame.top()+80);
+ send(QEvent::MouseButtonPress,QPointF(frame.left()+36,8),Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,drop,Qt::NoButton,Qt::LeftButton);
+ require(p.history.undoCount()==0&&p.document->guides.empty()&&canvas->guidePreview(),"Drag committed before release");
+ require(std::abs(canvas->guidePreview()->position-canvas->documentPoint(drop).y())<1e-6,"Preview left the pointer");
+ send(QEvent::MouseButtonRelease,drop,Qt::LeftButton,Qt::NoButton);
+ require(p.history.undoCount()==1&&p.history.undoName()=="Add Guide"&&p.document->guides.size()==1,"Guide release did not commit one undo step");
+ const auto createdId=p.document->guides.front().id;const double createdPosition=p.document->guides.front().position;
+ require(p.document->guides.front().horizontal&&std::abs(createdPosition-canvas->documentPoint(drop).y())<1e-4,"Horizontal guide missed the drop");
+ require(canvas->showGuides&&canvas->guides.size()==1,"Committed guide stayed hidden");
+ send(QEvent::MouseButtonPress,QPointF(frame.left()+20,6),Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,QPointF(frame.center().x(),frame.top()+30),Qt::NoButton,Qt::LeftButton);
+ QTest::keyClick(canvas,Qt::Key_Escape);
+ require(p.history.undoCount()==1&&p.document->guides.size()==1&&std::abs(p.document->guides.front().position-createdPosition)<1e-6&&!canvas->guidePreview(),"Canceled drag changed the guide");
+ const auto line=canvas->viewMapping().toView({0,createdPosition});
+ const QPointF from(frame.center().x(),line.y),to(frame.center().x(),line.y+28);
+ send(QEvent::MouseButtonPress,from,Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,to,Qt::NoButton,Qt::LeftButton);
+ require(p.history.undoCount()==1&&std::abs(p.document->guides.front().position-createdPosition)<1e-6,"Move preview committed");
+ send(QEvent::MouseButtonRelease,to,Qt::LeftButton,Qt::NoButton);
+ require(p.history.undoCount()==2&&p.history.undoName()=="Move Guide","Move did not commit one undo step");
+ const double moved=p.document->guides.front().position;
+ require(p.document->guides.front().id==createdId&&std::abs(moved-canvas->documentPoint(to).y())<1e-4,"Move changed identity or missed the pointer");
+ action(w,"Undo Move Guide");
+ require(p.document->guides.size()==1&&std::abs(p.document->guides.front().position-createdPosition)<1e-6,"Undo did not restore the created guide");
+ action(w,"Redo Move Guide");
+ require(std::abs(p.document->guides.front().position-moved)<1e-6,"Redo did not restore the moved guide");
+ action(w,"Undo Move Guide");action(w,"Undo Add Guide");
+ require(p.document->guides.empty()&&*p.document==before,"Undo did not restore the original document");
+});
+test("guide_release_uses_the_drop_and_rejects_the_letterbox",[]{
+ MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
+ auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ const auto frame=canvas->contentRect();
+ const auto origin=canvas->viewMapping().toView({0,0});
+ const auto opposite=canvas->viewMapping().toView({double(p.document->width),double(p.document->height)});
+ require(origin.y>frame.top()+4,"Fitted document left no letterbox");
+ auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
+ const QPointF inside(frame.center().x(),(origin.y+opposite.y)*.5),stale(inside.x(),origin.y+12);
+ const QPointF above((origin.x+opposite.x)*.5,(frame.top()+origin.y)*.5);
+ require(frame.contains(above)&&canvas->documentPoint(above).y()<0,"Above-document sample is inside the image");
+ require(std::abs(canvas->documentPoint(inside).y()-canvas->documentPoint(stale).y())>1,"Release sample matches the stale move");
+ require(canvas->documentPoint(inside).y()>=0&&canvas->documentPoint(inside).y()<=p.document->height,"Inside sample left the document");
+ const QPointF ruler(frame.left()+36,8);
+ send(QEvent::MouseButtonPress,ruler,Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,stale,Qt::NoButton,Qt::LeftButton);
+ send(QEvent::MouseButtonRelease,inside,Qt::LeftButton,Qt::NoButton);
+ require(p.history.undoCount()==1&&p.document->guides.size()==1,"Release inside the document did not commit");
+ require(std::abs(p.document->guides.front().position-canvas->documentPoint(inside).y())<1e-4,"Committed guide kept the stale move");
+ action(w,"Undo Add Guide");
+ require(p.history.undoCount()==0&&p.document->guides.empty(),"Undo left the guide");
+ send(QEvent::MouseButtonPress,ruler,Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,inside,Qt::NoButton,Qt::LeftButton);
+ send(QEvent::MouseButtonRelease,above,Qt::LeftButton,Qt::NoButton);
+ require(p.history.undoCount()==0&&p.document->guides.empty()&&!canvas->guidePreview(),"Letterbox release persisted a guide");
+});
+test("saved_guides_reopen_on_the_canvas",[]{
+ QTemporaryDir dir;require(dir.isValid(),"Temporary project directory failed");
+ const auto path=QDir(dir.path()).filePath("Guides.comp");
+ MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
+ auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ const auto frame=canvas->contentRect();
+ auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
+ const QPointF drop(frame.center().x(),frame.top()+80);
+ send(QEvent::MouseButtonPress,QPointF(frame.left()+36,8),Qt::LeftButton,Qt::LeftButton);
+ send(QEvent::MouseMove,drop,Qt::NoButton,Qt::LeftButton);
+ send(QEvent::MouseButtonRelease,drop,Qt::LeftButton,Qt::NoButton);
+ require(p.document->guides.size()==1&&canvas->showGuides,"Guide was not committed");
+ const double position=p.document->guides.front().position;const auto id=p.document->guides.front().id;
+ p.path=path;action(w,"&Save Project");require(!p.history.modified(),"Save left the project modified");
+ action(w,"Close Project");
+ w.openPath(path);
+ auto* reopened=w.canvas();
+ require(reopened&&reopened!=canvas&&reopened->showGuides&&reopened->guides.size()==1,"Reopened project hid its guides");
+ require(reopened->guides.front().first&&std::abs(reopened->guides.front().second-position)<1e-4,"Reopened guide moved");
+ auto* menu=w.findChild<QAction*>("viewGuides");
+ require(menu&&menu->isChecked(),"View → Guides was unchecked after reopen");
+ ProjectStore store(makeWicProjectCodec());
+ auto loaded=store.load(std::filesystem::path(path.toStdWString()));
+ require(loaded.document.guides.size()==1&&loaded.document.guides.front().id==id&&loaded.document.guides.front().horizontal&&std::abs(loaded.document.guides.front().position-position)<1e-6,"Saved project omitted the guide");
+});
+test("rulers_menu_hides_the_bands_and_restores_the_canvas",[]{
+ MainWindow w(true);auto&p=w.addProject(example());w.resize(900,700);w.show();QTest::qWait(30);
+ auto* rulers=w.findChild<QAction*>("viewRulers");
+ require(rulers&&rulers->isChecked()&&rulers->shortcut()==QKeySequence("Ctrl+R"),"Rulers command missing");
+ require(p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Rulers hidden by default");
+ rulers->trigger();
+ require(!rulers->isChecked()&&!p.canvas->showRulers&&p.canvas->contentRect().left()==0&&p.canvas->contentRect().top()==0,"Hiding rulers left the inset");
+ rulers->trigger();
+ require(rulers->isChecked()&&p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Showing rulers did not restore the inset");
 });
 test("brush_outside_existing_source_grows_without_moving_original_pixels",[]{
  MainWindow w(true);auto d=example();d.layers.front().transform={40,30,32,32};d.layers.front().raster=Raster::filled(32,32,{180,80,20,255});auto&p=w.addProject(d);action(w,"Brush (B)");

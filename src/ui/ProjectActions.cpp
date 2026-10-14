@@ -26,6 +26,7 @@ namespace {
 void detach(NativeCanvas*canvas){
     canvas->pointerDown={};canvas->pointerDoubleClick={};canvas->pointerMove={};canvas->pointerUp={};canvas->pointerCancel={};canvas->pointerInterrupted={};
     canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};canvas->navigatorProvider={};
+    canvas->guideDragUpdated={};canvas->guideDragFinished={};canvas->guideDragCanceled={};
 }
 }
 MainWindow::~MainWindow(){
@@ -75,6 +76,19 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->textInput=[this](QInputMethodEvent* event){handleTextInput(event);};
     auto*owner=&project;project.canvas->viewportProvider=[this,owner](double x,double y,double w,double h,double units){return brushViewport(*owner,x,y,w,h,units);};
     project.canvas->navigatorProvider=[this,owner](int edge){return navigatorComposite(*owner,edge);};
+    project.canvas->guideDragUpdated=[this](bool horizontal,double position){statusBar()->showMessage(QString("%1 guide %2").arg(horizontal?QStringLiteral("Horizontal"):QStringLiteral("Vertical")).arg(position,0,'f',1));};
+    project.canvas->guideDragCanceled=[this]{statusBar()->clearMessage();};
+    project.canvas->guideDragFinished=[this](bool horizontal,double position,int index){
+        try{
+            if(auto* item=findChild<QAction*>("viewGuides"))item->setChecked(true);
+            if(auto* surface=canvas())surface->showGuides=true;
+            if(index<0)edit("Add Guide",[horizontal,position](Document& document){document.guides.push_back({newId(),horizontal,position});});
+            else edit("Move Guide",[index,horizontal,position](Document& document){
+                if(index<0||size_t(index)>=document.guides.size()||document.guides[size_t(index)].horizontal!=horizontal)return;
+                document.guides[size_t(index)].position=position;
+            });
+        }catch(const std::exception& error){statusBar()->showMessage(error.what());}
+    };
 }
 bool MainWindow::canSwitchProjects(){
     const auto state=commandState(activeProject_);return !state.modalDialog&&ui::canSwitchProject(state);
@@ -129,7 +143,7 @@ EditorProject& MainWindow::addProject(Document document,QString title,bool reuse
     selectingProjectForOpen_=true;
     const auto restoreSelecting=qScopeGuard([this,previousSelecting]{selectingProjectForOpen_=previousSelecting;});
     const bool replaceWelcome=!reuseEmpty&&projects_.size()==1&&!projects_.front()->document&&!projects_.front()->importing&&!projects_.front()->projectBusy&&(!importQueue_||!importQueue_->contains(projects_.front()->canvas));
-    auto&project=addEmptyProject(reuseEmpty);project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;
+    auto&project=addEmptyProject(reuseEmpty);project.document=std::move(document);project.active=project.document->layers.empty()?"":project.document->layers.back().id;project.selected={project.active};project.defaultTitle=title;if(!project.document->guides.empty())project.canvas->showGuides=true;
     if(replaceWelcome){
         // ProjectWorkspace.swift:81-86: attach the successfully loaded fresh
         // session before discarding the sole empty welcome session. Tab-change

@@ -128,6 +128,17 @@ private:
     void upload();
     void ensureChecker();
     void releaseDevice();
+    struct GuideDrag { bool horizontal{}; double position{}; int index{-1}; QPointF view; };
+    std::optional<GuideDrag> guideDrag_;
+    enum class RulerBand { None, Horizontal, Vertical };
+    RulerBand rulerBandAt(QPointF) const;
+    std::optional<int> guideIndexAt(QPointF) const;
+    bool beginGuideDrag(QPointF);
+    void updateGuideDrag(QPointF);
+    void finishGuideDrag(QPointF);
+    void cancelGuideDrag();
+    void drawRulers();
+    void drawGuideOverlay();
     void draw(bool present=true);
     void drawSelection();
     void updateSelectionAnimation();
@@ -146,6 +157,18 @@ public:
     bool showPixelGrid{};
     bool showGuides{};
     std::vector<std::pair<bool,double>> guides;
+    // Screen-space bands around the canvas. Tick marks use the same mapping as
+    // documentPoint, so a labeled pixel stays under its tick while zooming or panning.
+    static constexpr double rulerThickness=24;
+    bool showRulers{true};
+    void setRulersVisible(bool visible);
+    QRectF contentRect() const;
+    struct GuidePreview { bool horizontal{}; double position{}; int index{-1}; };
+    std::optional<GuidePreview> guidePreview() const;
+    double rulerMajorInterval() const;
+    std::function<void(bool horizontal,double position)> guideDragUpdated;
+    std::function<void(bool horizontal,double position,int index)> guideDragFinished;
+    std::function<void()> guideDragCanceled;
     std::function<void(QPointF,Qt::KeyboardModifiers)> pointerDown,pointerMove,pointerUp;
     std::function<void(QPointF,Qt::KeyboardModifiers)> pointerDoubleClick;
     std::function<void()> pointerCancel;

@@ -9,7 +9,7 @@ target_compile_definitions(persistence_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEA
 target_compile_options(persistence_tests PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(persistence_tests PRIVATE Qt6::Core ole32 windowscodecs oleaut32 propsys)
 enable_testing()
-foreach(case blank_roundtrip raster_mask_roundtrip legacy_version_gates malformed_metadata graph_boundaries rollback_faults crash_recovery allocation_preflight hostile_journal reparse_rejection real_png_exchange)
+foreach(case blank_roundtrip raster_mask_roundtrip legacy_version_gates malformed_metadata graph_boundaries rollback_faults crash_recovery allocation_preflight hostile_journal reparse_rejection real_png_exchange guides_roundtrip)
   add_test(NAME persistence.${case} COMMAND persistence_tests ${case})
 endforeach()
 set_tests_properties(persistence.reparse_rejection PROPERTIES SKIP_RETURN_CODE 77)
