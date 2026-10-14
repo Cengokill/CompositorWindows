@@ -79,17 +79,11 @@ void NativeCanvas::drawRasterTiles(const Raster& image,double docX,double docY,d
     context_->DrawBitmap(found->second.bitmap.Get(),rect,1,D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,D2D1::RectF(0,0,float(tw),float(th)));}
 }
 void NativeCanvas::drawMoveSprite(double scale){
-    if(!context_||!movePreview_||!movePreview_->layer||movePreview_->layer->width<1||movePreview_->layer->height<1||scale<=0)return;
-    const auto& image=*movePreview_->layer;const auto& placed=movePreview_->placed;if(!placed.valid())return;
-    const auto mapping=viewMapping();auto viewOf=[&](Point point){auto view=mapping.toView(point);return D2D1::Point2F(float(view.x),float(view.y));};
-    const auto origin=viewOf(placed.fromUnit({0,0})),axisX=viewOf(placed.fromUnit({1,0})),axisY=viewOf(placed.fromUnit({0,1}));
-    const float width=float(image.width),height=float(image.height);if(width<=0||height<=0)return;
-    D2D1_MATRIX_3X2_F previous{};context_->GetTransform(&previous);
-    context_->SetTransform(D2D1::Matrix3x2F((axisX.x-origin.x)/width,(axisX.y-origin.y)/width,(axisY.x-origin.x)/height,(axisY.y-origin.y)/height,origin.x,origin.y));
-    for(int ty=0;ty<image.height;ty+=256)for(int tx=0;tx<image.width;tx+=256){int tw=std::min(256,image.width-tx),th=std::min(256,image.height-ty);const size_t index=size_t(ty/256)*((image.width+255)/256)+size_t(tx/256);if(index>=image.tiles.size()||!image.tiles[index])continue;auto tile=image.tiles[index];auto found=displayTiles_.find(tile.get());
-        if(found==displayTiles_.end()){if(displayTiles_.size()>=1024)displayTiles_.erase(displayTiles_.begin());DisplayTile display;display.source=tile;auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));check(context_->CreateBitmap(D2D1::SizeU(256,256),tile->pixels.data(),256*4,&props,&display.bitmap),"Move preview tile");found=displayTiles_.emplace(tile.get(),std::move(display)).first;}
-        context_->DrawBitmap(found->second.bitmap.Get(),D2D1::RectF(float(tx*256),float(ty*256),float(tx*256+tw),float(ty*256+th)),float(std::clamp(movePreview_->opacity,0.,1.)),D2D1_INTERPOLATION_MODE_LINEAR,D2D1::RectF(0,0,float(tw),float(th)));}
-    context_->SetTransform(previous);
+    if(!context_||!movePreview_||!movePreview_->sprite||movePreview_->sprite->width<1||movePreview_->sprite->height<1||scale<=0)return;
+    const auto& placed=movePreview_->placed;if(!placed.valid())return;
+    const double dx=placed.x-movePreview_->anchorX,dy=placed.y-movePreview_->anchorY;
+    const auto mapping=viewMapping();const auto origin=mapping.toView({0,0});
+    drawRasterTiles(*movePreview_->sprite,movePreview_->spriteX+dx,movePreview_->spriteY+dy,movePreview_->baseUnits,float(origin.x),float(origin.y),scale);
 }
 void NativeCanvas::setMovePreview(MovePreview preview){if(preview.baseUnits<=0)preview.baseUnits=1;movePreview_=std::move(preview);update();}
 void NativeCanvas::setMovePreviewPlacement(Transform placed){if(!movePreview_)return;movePreview_->placed=placed;update();}

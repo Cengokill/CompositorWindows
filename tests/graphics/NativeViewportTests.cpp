@@ -142,18 +142,24 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
     });
     test("native_plain_layer_move_keeps_the_viewport_patch",[]{
         MainWindow window(true);
-        Document document;document.id=newId();document.width=800;document.height=600;
-        Layer layer;layer.id=newId();layer.name="Photo";layer.opacity=1;layer.raster=Raster::filled(300,200,{255,0,0,255});layer.transform={20,30,300,200};document.layers={layer};
+        constexpr int layerWidth=768,layerHeight=512,tileSide=256;
+        const std::array<Pixel,6> colors{{{255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255},{255,0,255,255},{0,255,255,255}}};
+        std::vector<Pixel> pixels(size_t(layerWidth)*layerHeight);
+        for(int y=0;y<layerHeight;++y)for(int x=0;x<layerWidth;++x)pixels[size_t(y)*layerWidth+x]=colors[size_t(y/tileSide)*3+x/tileSide];
+        Document document;document.id=newId();document.width=1000;document.height=700;
+        Layer layer;layer.id=newId();layer.name="Photo";layer.opacity=1;layer.raster=Raster::fromRgba(layerWidth,layerHeight,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(layerWidth)*4);layer.transform={20,30,layerWidth,layerHeight};layer.transform.sampling=Transform::Sampling::Nearest;document.layers={layer};
         auto& project=window.addProject(std::move(document));window.resize(900,700);window.show();flush();
         auto* canvas=project.canvas;canvas->fit();flush();canvas->repaint();
         int calls=0;auto provider=canvas->viewportProvider;canvas->viewportProvider=[&](double x,double y,double w,double h,double units){++calls;return provider(x,y,w,h,units);};
         canvas->pointerDown({170,130},{});canvas->repaint();const int baseline=calls;require(baseline>0,"Move press did not paint");
-        canvas->pointerMove({250,190},{});canvas->repaint();require(calls==baseline,"Plain layer move composited on drag");
-        require(canvas->hasMovePreview(),"Plain layer move did not use the direct preview");
-        const double dpr=canvas->devicePixelRatioF();auto sample=[&](Point documentPoint){auto view=canvas->viewMapping().toView(documentPoint);return canvas->captureRendered().pixelColor(int(std::lround(view.x*dpr)),int(std::lround(view.y*dpr)));};
-        const auto moved=sample({120,110});require(moved.red()>240&&moved.green()<40&&moved.blue()<40,"Moved layer was not drawn at the pointer");
-        const auto vacated=sample({30,40});require(!(vacated.red()>240&&vacated.green()<40),"Moved layer stayed at its original position");
-        canvas->pointerUp({250,190},{});canvas->repaint();require(calls>baseline,"Move release did not composite the document");
+        const auto start=canvas->documentPoint({170,130}),end=canvas->documentPoint({250,190});const Point delta{end.x()-start.x(),end.y()-start.y()};
+        canvas->pointerMove({250,190},Qt::ControlModifier);canvas->repaint();require(calls==baseline,"Plain layer move composited on drag");
+        QElapsedTimer previewTimer;previewTimer.start();while(!canvas->hasMovePreview()&&previewTimer.elapsed()<4000){QApplication::processEvents(QEventLoop::AllEvents,20);QThread::msleep(5);}
+        require(canvas->hasMovePreview(),"Plain layer move did not install its preview");
+        const double dpr=canvas->devicePixelRatioF();const auto frame=canvas->captureRendered();auto sample=[&](Point documentPoint){auto view=canvas->viewMapping().toView(documentPoint);return frame.pixelColor(int(std::lround(view.x*dpr)),int(std::lround(view.y*dpr)));};
+        for(int tileY=0;tileY<2;++tileY)for(int tileX=0;tileX<3;++tileX){const auto expected=colors[size_t(tileY)*3+tileX];const Point point{20+delta.x+tileX*tileSide+tileSide/2.,30+delta.y+tileY*tileSide+tileSide/2.};require(sample(point)==QColor(expected.r,expected.g,expected.b),"Move preview omitted or clipped a source raster tile");}
+        const auto vacated=sample({30,40});require(!(vacated.red()>240&&vacated.green()<40&&vacated.blue()<40),"Moved layer stayed at its original position");
+        canvas->pointerUp({250,190},Qt::ControlModifier);canvas->repaint();require(calls>baseline,"Move release did not composite the document");
         require(!canvas->hasMovePreview()&&project.document->layers.front().transform.x>20,"Move release did not keep the new placement");
     });
     test("native_tablet_pointer_mapping_no_pressure_or_duplicate_mouse",[]{NativeCanvas canvas(true);canvas.resize(400,300);canvas.setDocumentSize(200,100);canvas.show();flush();canvas.zoomAt(1,{200,150});QPointingDevice pen("Synthetic witness",717,QInputDevice::DeviceType::Stylus,QPointingDevice::PointerType::Pen,QInputDevice::Capability::Position|QInputDevice::Capability::Pressure,1,3);int downs=0,moves=0,ups=0;QPointF first,last;canvas.pointerDown=[&](QPointF p,Qt::KeyboardModifiers){first=p;++downs;};canvas.pointerMove=[&](QPointF p,Qt::KeyboardModifiers){last=p;++moves;};canvas.pointerUp=[&](QPointF,Qt::KeyboardModifiers){++ups;};auto tablet=[&](QEvent::Type type,QPointF position,double pressure,Qt::MouseButton button,Qt::MouseButtons buttons){QTabletEvent event(type,&pen,position,canvas.mapToGlobal(position),pressure,0,0,0,0,0,Qt::NoModifier,button,buttons);QApplication::sendEvent(&canvas,&event);require(event.isAccepted(),"Tablet event allowed duplicate mouse synthesis");};tablet(QEvent::TabletPress,{100,100},.2,Qt::LeftButton,Qt::LeftButton);pointer(canvas,QEvent::MouseButtonPress,{100,100},Qt::LeftButton,Qt::LeftButton);tablet(QEvent::TabletMove,{110,106},.9,Qt::NoButton,Qt::LeftButton);tablet(QEvent::TabletRelease,{110,106},0,Qt::LeftButton,Qt::NoButton);require(downs==1&&moves==1&&ups==1,"Tablet generated duplicate or missing transaction events");closeEnough(first,canvas.documentPoint({100,100}),"Tablet initial document mapping");closeEnough(last,canvas.documentPoint({110,106}),"Tablet update document mapping");});

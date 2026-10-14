@@ -76,21 +76,25 @@ void ViewportCompositeJob::start(Request request){
 namespace {
 MovePreviewJob::Result renderPreview(const MovePreviewJob::Request& request,uint64_t epoch,const std::shared_ptr<std::atomic<uint64_t>>& liveEpoch){
     MovePreviewJob::Result result;
-    result.gesture=request.gesture;result.layerId=request.layerId;result.epoch=epoch;result.opacity=request.opacity;result.anchorX=request.anchorX;result.anchorY=request.anchorY;
-    result.viewX=request.viewX;result.viewY=request.viewY;result.units=request.units;result.plateX=request.plateX;result.plateY=request.plateY;result.sprite=request.sprite;
+    result.gesture=request.gesture;result.layerId=request.layerId;result.epoch=epoch;result.masked=request.masked;result.anchorX=request.anchorX;result.anchorY=request.anchorY;
+    result.viewX=request.viewX;result.viewY=request.viewY;result.units=request.units;result.movingX=request.movingX;result.movingY=request.movingY;
     const auto abandoned=[&]{return !liveEpoch||liveEpoch->load()!=epoch;};
     if(abandoned()){result.stale=true;return result;}
     try{
         result.base=SoftwareRenderer().renderScaled(request.back,request.viewX,request.viewY,request.pixelsWide,request.pixelsHigh,request.units);
         if(request.wantFront&&!abandoned())result.front=SoftwareRenderer().renderScaled(request.front,request.viewX,request.viewY,request.pixelsWide,request.pixelsHigh,request.units);
-        if(request.wantPlate&&!abandoned())result.plate=SoftwareRenderer().renderScaled(request.plate,request.plateX,request.plateY,request.platePixelsWide,request.platePixelsHigh,request.units);
+        if(!abandoned()){
+            auto moving=SoftwareRenderer().renderScaled(request.movingLayer,request.movingX,request.movingY,request.movingPixelsWide,request.movingPixelsHigh,request.units);
+            if(!moving)throw std::runtime_error("Move preview renderer returned no layer image");
+            if(request.masked)result.plate=std::move(moving);else result.sprite=std::move(moving);
+        }
     }catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}
     if(abandoned())result.stale=true;
     return result;
 }
 }
-MovePlateBounds movingLayerPlateBounds(const Layer& layer,double units){
-    MovePlateBounds result;
+MovePreviewBounds movingLayerPreviewBounds(const Layer& layer,double units){
+    MovePreviewBounds result;
     if(!layer.raster||layer.raster->width<1||layer.raster->height<1||!layer.transform.valid()||!(units>=1./32)||units>32768||!std::isfinite(units))return result;
     const auto box=editing_transform::bounds(layer.transform);
     // Lanczos halving reads 10 source steps past the output sample. Smooth

@@ -48,31 +48,31 @@ private:
     void start(Request request);
 };
 // Background stills for one layer drag. Direct2D upload stays on the UI thread.
-// The plate covers the moving layer's painted bounds plus sampling margin, not
-// the viewport that happened to be visible when the drag started.
-struct MovePlateBounds { double x{},y{},width{},height{}; int pixelsWide{},pixelsHigh{}; bool valid{}; };
-MovePlateBounds movingLayerPlateBounds(const Layer& layer,double units);
+// The moving layer is rendered over its full painted bounds at the viewport's
+// sampling scale, rather than being drawn through a separate layer transform.
+struct MovePreviewBounds { double x{},y{},width{},height{}; int pixelsWide{},pixelsHigh{}; bool valid{}; };
+MovePreviewBounds movingLayerPreviewBounds(const Layer& layer,double units);
 class MovePreviewJob final:public QObject {
 public:
     struct Request {
         uint64_t gesture{};
         std::string layerId;
-        Document back,front,plate;
-        bool wantFront{},wantPlate{};
-        std::shared_ptr<const Raster> sprite;
-        double opacity{1},anchorX{},anchorY{};
+        Document back,front,movingLayer;
+        bool wantFront{},masked{};
+        double anchorX{},anchorY{};
         double viewX{},viewY{},viewWidth{},viewHeight{},units{1};
         int pixelsWide{},pixelsHigh{};
-        double plateX{},plateY{},plateWidth{},plateHeight{};
-        int platePixelsWide{},platePixelsHigh{};
+        double movingX{},movingY{};
+        int movingPixelsWide{},movingPixelsHigh{};
     };
     struct Result {
         uint64_t gesture{},epoch{};
         std::string layerId;
         std::shared_ptr<const Raster> base,front,plate,sprite;
-        double opacity{1},anchorX{},anchorY{};
+        bool masked{};
+        double anchorX{},anchorY{};
         double viewX{},viewY{},units{1};
-        double plateX{},plateY{};
+        double movingX{},movingY{};
         QString error;
         bool stale{};
     };
