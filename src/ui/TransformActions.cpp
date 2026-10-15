@@ -129,7 +129,11 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
                     movePreviewJob_->submit(std::move(request));
                 }
                 refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
-                const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;return;
+                const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;
+                // The sprite path returns before the shared publish. A persistent
+                // session still has to expose the draft without closing history.
+                if(state.persistent)publishTransformSession(false);
+                return;
             }catch(const std::exception&){canvas()->clearMovePreview();}
         }
         if(finish&&canvas()&&canvas()->hasMovePreview()){
