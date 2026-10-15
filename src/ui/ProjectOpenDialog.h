@@ -6,7 +6,7 @@ struct IFileOpenDialog;
 struct IShellItem;
 
 namespace compositor::ui {
-// Themed project picker. nullopt means Cancel; packages remain atomic folders.
+// Native Windows project picker. nullopt means Cancel; packages remain atomic folders.
 std::optional<QStringList> chooseProjectDirectories(QWidget* owner);
 
 // The native folder-picker API cannot use SetFileTypes. These shared rules

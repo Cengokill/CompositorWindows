@@ -378,8 +378,14 @@ void MainWindow::dropEvent(QDropEvent*event){
 }
 void MainWindow::openProjectDialog(){
     if(!canSwitchProjects())return;
+    if(property("nativePickerInProgress").toBool()){
+        reportPickerBusy(this);
+        return;
+    }
     // Destruction order clears the managing flag before refreshing commands.
     const auto update=qScopeGuard([this]{refresh(false,false);});
+    setProperty("nativePickerInProgress",true);
+    const auto clearPicker=qScopeGuard([this]{setProperty("nativePickerInProgress",false);});
     QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
     try{if(const auto paths=ui::chooseProjectDirectories(this))loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}
     catch(const std::exception& error){QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
