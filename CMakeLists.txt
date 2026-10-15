@@ -212,7 +212,7 @@ add_executable(layer_dock_width_tests tests/project_chrome/LayerDockWidthTests.c
 target_link_libraries(layer_dock_width_tests PRIVATE compositor_ui Qt6::Test)
 target_compile_options(layer_dock_width_tests PRIVATE /W4 /WX /utf-8)
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/evidence/project-chrome")
-foreach(case default_width restored_width resize_is_saved width_bounds restart_write restart_read)
+foreach(case default_width restored_width resize_is_saved width_bounds new_project_button_clearance restart_write restart_read)
   if(case MATCHES "^restart_")
     set(settings_name restart)
   else()

@@ -53,12 +53,14 @@ MainWindow::~MainWindow(){
 }
 void MainWindow::initializeProject(EditorProject&project){
     if(!tabs_->cornerWidget(Qt::TopRightCorner)){
-        auto* button=new QToolButton(tabs_);button->setObjectName("newProjectDropTarget");
+        auto* corner=new QWidget(tabs_);corner->setObjectName("newProjectCorner");
+        auto* layout=new QHBoxLayout(corner);layout->setContentsMargins(0,0,6,0);layout->setSpacing(0);
+        auto* button=new QToolButton(corner);button->setObjectName("newProjectDropTarget");
         for(auto* action:findChildren<QAction*>())if(action->property("commandId").toString()=="file.new"){button->setDefaultAction(action);break;}
         if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
         button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));button->setFixedSize(32,30);
         if(button->defaultAction())connect(button->defaultAction(),&QAction::changed,button,[button]{button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));});
-        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");tabs_->setCornerWidget(button,Qt::TopRightCorner);
+        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");layout->addWidget(button);corner->setFixedSize(38,30);tabs_->setCornerWidget(corner,Qt::TopRightCorner);
     }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;
