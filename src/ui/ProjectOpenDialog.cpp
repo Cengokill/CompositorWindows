@@ -1,5 +1,4 @@
 #include "ProjectOpenDialog.h"
-#include "MainWindow.h"
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
@@ -45,7 +44,7 @@ public:
     HRESULT STDMETHODCALLTYPE OnTypeChange(IFileDialog*) override{return S_OK;}
     HRESULT STDMETHODCALLTYPE OnOverwrite(IFileDialog*,IShellItem*,FDE_OVERWRITE_RESPONSE* response) override {if(response)*response=FDEOR_DEFAULT;return S_OK;}
 private:
-    HRESULT reject(IFileDialog* dialog) const {HWND window{};dialog->GetWindow(&window);MessageBoxW(window,L"Select one or more Compositor project folders ending in .comp.",L"Open Compositor Projects",MB_OK|MB_ICONINFORMATION);return S_FALSE;}
+    HRESULT reject(IFileDialog* dialog) const {HWND window{};if(SUCCEEDED(dialog->GetWindow(&window)))MessageBoxW(window,L"Select one or more Compositor project folders ending in .comp.",L"Open Compositor Projects",MB_OK|MB_ICONINFORMATION);return S_FALSE;}
     std::atomic_ulong references_{1};
 };
 
@@ -101,10 +100,9 @@ void configureProjectOpenDialog(IFileOpenDialog* dialog){
     checked(dialog->SetTitle(L"Open Compositor Projects"),"Set project picker title");checked(dialog->SetOkButtonLabel(L"Open"),"Set project picker action");
     checked(dialog->SetFileNameLabel(L"Project folders"),"Set project picker field label");
 }
-std::optional<QStringList> chooseProjectDirectories(QWidget* owner){
+std::optional<QStringList> chooseProjectDirectories(QWidget* owner,const QString& initialDirectory){
     if(!owner)throw std::invalid_argument("A project picker owner is required");
     const auto nativeOwner=reinterpret_cast<HWND>(owner->winId());
-    const auto initialDirectory=MainWindow::userDownloadsDirectory();
     struct Result {std::optional<QStringList> paths;std::exception_ptr error;};
     auto result=std::make_shared<Result>();
     auto* thread=QThread::create([result,nativeOwner,initialDirectory]{

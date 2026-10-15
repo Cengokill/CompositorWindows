@@ -7,7 +7,8 @@ struct IShellItem;
 
 namespace compositor::ui {
 // Native Windows project picker. nullopt means Cancel; packages remain atomic folders.
-std::optional<QStringList> chooseProjectDirectories(QWidget* owner);
+// initialDirectory is the starting folder; it remains Downloads when empty or invalid.
+std::optional<QStringList> chooseProjectDirectories(QWidget* owner,const QString& initialDirectory);
 
 // The native folder-picker API cannot use SetFileTypes. These shared rules
 // constrain the picker only; ProjectStore remains responsible for file safety.
