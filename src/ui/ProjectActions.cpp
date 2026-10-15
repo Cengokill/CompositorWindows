@@ -10,19 +10,91 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDialogButtonBox>
+#include <QDockWidget>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QEvent>
 #include <QLabel>
+#include <QMoveEvent>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QScopeGuard>
 #include <QStatusBar>
 #include <QTabBar>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
 namespace compositor {
 namespace {
+// Qt shortens the tab bar for the corner widget, so its bottom edge stops at the
+// button while the Layers title border sits on a lower pixel behind it. The
+// corner matches the tab-bar height and one separator runs from the strip's left
+// edge through the clearance before the dock. The Layers title uses that height
+// so its border is the same row.
+class WorkspaceTabCorner final : public QWidget {
+public:
+    explicit WorkspaceTabCorner(QTabWidget* tabs):QWidget(tabs),tabs_(tabs){
+        setObjectName("newProjectCorner");
+        auto* layout=new QHBoxLayout(this);
+        layout->setContentsMargins(0,0,6,0);
+        layout->setSpacing(0);
+        button_=new QToolButton(this);
+        button_->setObjectName("newProjectDropTarget");
+        button_->setFixedSize(32,30);
+        layout->addWidget(button_,0,Qt::AlignVCenter);
+        line_=new QWidget(tabs_);
+        line_->setObjectName("workspaceSeparator");
+        line_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        line_->setAttribute(Qt::WA_AlwaysStackOnTop);
+        line_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Ignored);
+        line_->setStyleSheet("background:#303237;");
+        line_->hide();
+        tabs_->installEventFilter(this);
+    }
+    QToolButton* button() const { return button_; }
+    QSize sizeHint() const override {
+        const int strip=tabs_?std::max(30,tabs_->tabBar()->sizeHint().height()):30;
+        return {38,strip};
+    }
+protected:
+    bool eventFilter(QObject* watched,QEvent* event) override {
+        if(watched==tabs_&&(event->type()==QEvent::Resize||event->type()==QEvent::Show||event->type()==QEvent::LayoutRequest))schedule();
+        return false;
+    }
+    void moveEvent(QMoveEvent* event) override { QWidget::moveEvent(event); schedule(); }
+    void resizeEvent(QResizeEvent* event) override { QWidget::resizeEvent(event); schedule(); }
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.fillRect(rect(),QColor(0x20,0x21,0x25));
+    }
+private:
+    void schedule(){if(pending_)return;pending_=true;QTimer::singleShot(0,this,[this]{pending_=false;align();});}
+    void align(){
+        if(!tabs_||aligning_)return;
+        const QRect bar=tabs_->tabBar()->geometry();
+        if(bar.height()<30||bar.width()<=0)return;
+        const QRect goal(bar.right()+1,bar.top(),38,bar.height());
+        const QRect separator(bar.left(),bar.bottom(),goal.right()-bar.left()+1,1);
+        if(auto* dock=tabs_->window()->findChild<QDockWidget*>("layersDock"))
+            if(auto* title=dock->titleBarWidget())if(title->height()!=bar.height())title->setFixedHeight(bar.height());
+        if(geometry()==goal&&line_->geometry()==separator)return;
+        aligning_=true;
+        setGeometry(goal);
+        line_->setGeometry(separator);
+        line_->show();
+        line_->raise();
+        aligning_=false;
+    }
+    QTabWidget* tabs_{};
+    QToolButton* button_{};
+    QWidget* line_{};
+    bool aligning_{};
+    bool pending_{};
+};
 void detach(NativeCanvas*canvas){
     canvas->pointerDown={};canvas->pointerDoubleClick={};canvas->pointerMove={};canvas->pointerUp={};canvas->pointerCancel={};canvas->pointerInterrupted={};
     canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};canvas->navigatorProvider={};
@@ -53,12 +125,12 @@ MainWindow::~MainWindow(){
 }
 void MainWindow::initializeProject(EditorProject&project){
     if(!tabs_->cornerWidget(Qt::TopRightCorner)){
-        auto* button=new QToolButton(tabs_);button->setObjectName("newProjectDropTarget");
+        auto* corner=new WorkspaceTabCorner(tabs_);auto* button=corner->button();
         for(auto* action:findChildren<QAction*>())if(action->property("commandId").toString()=="file.new"){button->setDefaultAction(action);break;}
         if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
-        button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));button->setFixedSize(32,30);
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));
         if(button->defaultAction())connect(button->defaultAction(),&QAction::changed,button,[button]{button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));});
-        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");tabs_->setCornerWidget(button,Qt::TopRightCorner);
+        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");tabs_->setCornerWidget(corner,Qt::TopRightCorner);
     }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;
