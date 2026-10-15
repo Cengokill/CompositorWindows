@@ -212,7 +212,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
     });
     test("native_tablet_pointer_mapping_no_pressure_or_duplicate_mouse",[]{NativeCanvas canvas(true);canvas.resize(400,300);canvas.setDocumentSize(200,100);canvas.show();flush();canvas.zoomAt(1,{200,150});QPointingDevice pen("Synthetic witness",717,QInputDevice::DeviceType::Stylus,QPointingDevice::PointerType::Pen,QInputDevice::Capability::Position|QInputDevice::Capability::Pressure,1,3);int downs=0,moves=0,ups=0;QPointF first,last;canvas.pointerDown=[&](QPointF p,Qt::KeyboardModifiers){first=p;++downs;};canvas.pointerMove=[&](QPointF p,Qt::KeyboardModifiers){last=p;++moves;};canvas.pointerUp=[&](QPointF,Qt::KeyboardModifiers){++ups;};auto tablet=[&](QEvent::Type type,QPointF position,double pressure,Qt::MouseButton button,Qt::MouseButtons buttons){QTabletEvent event(type,&pen,position,canvas.mapToGlobal(position),pressure,0,0,0,0,0,Qt::NoModifier,button,buttons);QApplication::sendEvent(&canvas,&event);require(event.isAccepted(),"Tablet event allowed duplicate mouse synthesis");};tablet(QEvent::TabletPress,{100,100},.2,Qt::LeftButton,Qt::LeftButton);pointer(canvas,QEvent::MouseButtonPress,{100,100},Qt::LeftButton,Qt::LeftButton);tablet(QEvent::TabletMove,{110,106},.9,Qt::NoButton,Qt::LeftButton);tablet(QEvent::TabletRelease,{110,106},0,Qt::LeftButton,Qt::NoButton);require(downs==1&&moves==1&&ups==1,"Tablet generated duplicate or missing transaction events");closeEnough(first,canvas.documentPoint({100,100}),"Tablet initial document mapping");closeEnough(last,canvas.documentPoint({110,106}),"Tablet update document mapping");});
     test("native_rulers_track_zoom_pan_and_guide_drags",[]{
-        NativeCanvas canvas(true);canvas.resize(640,480);canvas.setDocumentSize(400,300);canvas.show();flush();
+        NativeCanvas canvas(true);canvas.resize(640,480);canvas.setDocumentSize(400,300);canvas.setRulersVisible(true);canvas.show();flush();
         auto roundTrip=[&](const char* label){
             const auto frame=canvas.contentRect();
             closeEnough(frame.left(),NativeCanvas::rulerThickness,"Ruler inset");
@@ -293,7 +293,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         closeEnough(committed.position,canvas.documentPoint(releaseCreate).y(),"Create release kept the stale position");
     });
     test("native_new_guide_rejects_a_drop_outside_the_document",[]{
-        NativeCanvas canvas(true);canvas.resize(640,480);canvas.setDocumentSize(80,60);canvas.show();flush();
+        NativeCanvas canvas(true);canvas.resize(640,480);canvas.setDocumentSize(80,60);canvas.setRulersVisible(true);canvas.show();flush();
         canvas.fit();
         const auto frame=canvas.contentRect();
         const auto origin=canvas.viewMapping().toView({0,0});

@@ -160,7 +160,7 @@ public:
     // Screen-space bands around the canvas. Tick marks use the same mapping as
     // documentPoint, so a labeled pixel stays under its tick while zooming or panning.
     static constexpr double rulerThickness=24;
-    bool showRulers{true};
+    bool showRulers{};
     void setRulersVisible(bool visible);
     QRectF contentRect() const;
     struct GuidePreview { bool horizontal{}; double position{}; int index{-1}; };
