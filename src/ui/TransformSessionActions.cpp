@@ -195,7 +195,7 @@ void MainWindow::applyViewportComposite(ui::ViewportCompositeJob::Result result)
     if(!dragging){canvas->setCompositeHeld(false);canvas->setNavigatorDeferred(false);}
 }
 void MainWindow::applyMovePreview(ui::MovePreviewJob::Result result){
-    if(result.stale||result.gesture!=previewGesture_||previewSealed_||!result.base||result.layerId!=previewLayerId_){if(!result.error.isEmpty()&&result.gesture==previewGesture_&&!previewSealed_)statusBar()->showMessage(result.error);return;}
+    if(result.stale||result.gesture!=previewGesture_||previewSealed_||!result.base||!result.error.isEmpty()||(!result.sprite&&!result.plate)||result.layerId!=previewLayerId_){if(!result.error.isEmpty()&&result.gesture==previewGesture_&&!previewSealed_)statusBar()->showMessage(result.error);return;}
     EditorProject* project=nullptr;
     if(transformOwner_&&std::any_of(projects_.begin(),projects_.end(),[&](const std::unique_ptr<EditorProject>& item){return item.get()==transformOwner_;}))project=transformOwner_;
     else project=current();

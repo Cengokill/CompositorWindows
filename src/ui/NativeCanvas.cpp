@@ -88,7 +88,10 @@ void NativeCanvas::drawMoveSprite(double scale){
     context_->SetTransform(D2D1::Matrix3x2F((axisX.x-origin.x)/width,(axisX.y-origin.y)/width,(axisY.x-origin.x)/height,(axisY.y-origin.y)/height,origin.x,origin.y));
     for(int ty=0;ty<image.height;ty+=256)for(int tx=0;tx<image.width;tx+=256){int tw=std::min(256,image.width-tx),th=std::min(256,image.height-ty);const size_t index=size_t(ty/256)*((image.width+255)/256)+size_t(tx/256);if(index>=image.tiles.size()||!image.tiles[index])continue;auto tile=image.tiles[index];auto found=displayTiles_.find(tile.get());
         if(found==displayTiles_.end()){if(displayTiles_.size()>=1024)displayTiles_.erase(displayTiles_.begin());DisplayTile display;display.source=tile;auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));check(context_->CreateBitmap(D2D1::SizeU(256,256),tile->pixels.data(),256*4,&props,&display.bitmap),"Move preview tile");found=displayTiles_.emplace(tile.get(),std::move(display)).first;}
-        context_->DrawBitmap(found->second.bitmap.Get(),D2D1::RectF(float(tx*256),float(ty*256),float(tx*256+tw),float(ty*256+th)),float(std::clamp(movePreview_->opacity,0.,1.)),D2D1_INTERPOLATION_MODE_LINEAR,D2D1::RectF(0,0,float(tw),float(th)));}
+        // tx and ty are source-pixel offsets, already advanced by one tile.
+        // Multiplying them by 256 again sends every tile but the first
+        // outside the layer; the placement matrix supplies the view transform.
+        context_->DrawBitmap(found->second.bitmap.Get(),D2D1::RectF(float(tx),float(ty),float(tx+tw),float(ty+th)),float(std::clamp(movePreview_->opacity,0.,1.)),D2D1_INTERPOLATION_MODE_LINEAR,D2D1::RectF(0,0,float(tw),float(th)));}
     context_->SetTransform(previous);
 }
 void NativeCanvas::setMovePreview(MovePreview preview){if(preview.baseUnits<=0)preview.baseUnits=1;movePreview_=std::move(preview);update();}
