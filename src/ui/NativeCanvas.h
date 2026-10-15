@@ -29,11 +29,9 @@ public:
         uint64_t gesture{};
         std::shared_ptr<const Raster> base;
         double baseX{},baseY{},baseUnits{1};
-        // Pre-rendered at baseUnits and drawn with the same tiled path as the
-        // viewport. This avoids a second, independently transformed sprite.
-        std::shared_ptr<const Raster> sprite;
-        double spriteX{},spriteY{};
+        std::shared_ptr<const Raster> layer;
         Transform placed{};
+        double opacity{1};
         std::shared_ptr<const Raster> plate,front;
         double plateX{},plateY{},anchorX{},anchorY{};
     };

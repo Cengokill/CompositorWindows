@@ -37,7 +37,7 @@ void waitPreview(EditorProject& project,const std::string& layerId){
 std::shared_ptr<const GrayRaster> solidMask(int width,int height){auto gray=std::make_shared<GrayRaster>();gray->width=width;gray->height=height;gray->pixels.assign(size_t(width*height),255);return gray;}
 void expectShiftedPlate(const Document& document,const std::string& id,int dx,int dy,double units){
     const Layer* moving=nullptr;for(const auto& layer:document.layers)if(layer.id==id)moving=&layer;require(moving!=nullptr,"Plate layer missing");
-    const auto bounds=ui::movingLayerPreviewBounds(*moving,units);require(bounds.valid,"Moving layer preview bounds were rejected");
+    const auto bounds=ui::movingLayerPlateBounds(*moving,units);require(bounds.valid,"Moving layer plate bounds were rejected");
     const int wide=std::max(1,int(std::ceil(document.width/units))),high=std::max(1,int(std::ceil(document.height/units)));
     Document moved=document;for(auto& layer:moved.layers)if(layer.id==id){layer.transform.x+=dx;layer.transform.y+=dy;}
     auto full=SoftwareRenderer().renderScaled(moved,0,0,wide,high,units);
@@ -183,10 +183,10 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         Layer floor;floor.id=newId();floor.name="Floor";floor.transform={0,0,64,48};floor.transform.sampling=Transform::Sampling::Nearest;floor.raster=Raster::filled(64,48,{0,0,80,255});
         Layer moving;moving.id=newId();moving.name="Partial";moving.transform={-12,8,16,16};moving.transform.sampling=Transform::Sampling::Nearest;moving.raster=Raster::filled(16,16,{255,0,0,255});moving.mask=Mask{solidMask(16,16)};
         const auto id=moving.id;document.layers.push_back(std::move(floor));document.layers.push_back(std::move(moving));
-        const auto bounds=ui::movingLayerPreviewBounds(document.layers.back(),1);require(bounds.valid&&bounds.x<0,"Preview bounds stayed inside the viewport");
+        const auto bounds=ui::movingLayerPlateBounds(document.layers.back(),1);require(bounds.valid&&bounds.x<0,"Plate bounds stayed inside the viewport");
         expectShiftedPlate(document,id,20,4,1);expectShiftedPlate(document,id,20,4,.5);
         document.layers.back().transform={8,8,48,48,30};document.layers.back().transform.sampling=Transform::Sampling::Smooth;document.layers.back().raster=Raster::filled(16,16,{255,0,0,255});
-        const auto rotated=ui::movingLayerPreviewBounds(document.layers.back(),.25);require(rotated.valid&&rotated.x<8,"Rotated preview did not cover the layer");
+        const auto rotated=ui::movingLayerPlateBounds(document.layers.back(),.25);require(rotated.valid&&rotated.x<8,"Rotated plate did not cover the layer");
         const int wide=std::max(1,int(std::ceil(document.width/.25))),high=std::max(1,int(std::ceil(document.height/.25)));
         Document moved=document;moved.layers.back().transform.x+=6;moved.layers.back().transform.y+=3;
         auto full=SoftwareRenderer().renderScaled(moved,0,0,wide,high,.25);
@@ -207,7 +207,7 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         auto gate=std::make_shared<std::atomic_bool>(false);compositeJob(window)->setProceedGate(gate);
         drag(project,{-4,16},{16,20});waitPreview(project,id);
         Layer probe=project.document->layers.back();probe.transform=start;
-        const auto units=project.canvas->viewportBounds().units;const auto expected=ui::movingLayerPreviewBounds(probe,units);
+        const auto units=project.canvas->viewportBounds().units;const auto expected=ui::movingLayerPlateBounds(probe,units);
         const auto plate=project.canvas->previewPlate();
         require(expected.valid&&plate.has_value(),"Masked move did not install a full-layer plate");
         require(std::abs(plate->x-expected.x)<1e-4&&std::abs(plate->y-expected.y)<1e-4&&plate->width==expected.pixelsWide&&plate->height==expected.pixelsHigh,"Preview plate was cropped to the starting viewport");

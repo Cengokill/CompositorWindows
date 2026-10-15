@@ -195,15 +195,15 @@ void MainWindow::applyViewportComposite(ui::ViewportCompositeJob::Result result)
     if(!dragging){canvas->setCompositeHeld(false);canvas->setNavigatorDeferred(false);}
 }
 void MainWindow::applyMovePreview(ui::MovePreviewJob::Result result){
-    if(result.stale||result.gesture!=previewGesture_||previewSealed_||!result.base||!result.error.isEmpty()||(result.masked?!result.plate:!result.sprite)||result.layerId!=previewLayerId_){if(!result.error.isEmpty()&&result.gesture==previewGesture_&&!previewSealed_)statusBar()->showMessage(result.error);return;}
+    if(result.stale||result.gesture!=previewGesture_||previewSealed_||!result.base||!result.error.isEmpty()||(!result.sprite&&!result.plate)||result.layerId!=previewLayerId_){if(!result.error.isEmpty()&&result.gesture==previewGesture_&&!previewSealed_)statusBar()->showMessage(result.error);return;}
     EditorProject* project=nullptr;
     if(transformOwner_&&std::any_of(projects_.begin(),projects_.end(),[&](const std::unique_ptr<EditorProject>& item){return item.get()==transformOwner_;}))project=transformOwner_;
     else project=current();
     if(!project||!project->canvas||!project->document||std::none_of(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){return layer.id==result.layerId;}))return;
     NativeCanvas::MovePreview preview;
     preview.layerId=std::move(result.layerId);preview.gesture=result.gesture;preview.base=std::move(result.base);preview.baseX=result.viewX;preview.baseY=result.viewY;preview.baseUnits=result.units;
-    preview.sprite=std::move(result.sprite);preview.spriteX=result.movingX;preview.spriteY=result.movingY;preview.placed=previewDraft_;preview.plate=std::move(result.plate);preview.front=std::move(result.front);
-    preview.plateX=result.movingX;preview.plateY=result.movingY;preview.anchorX=result.anchorX;preview.anchorY=result.anchorY;
+    preview.layer=std::move(result.sprite);preview.placed=previewDraft_;preview.opacity=result.opacity;preview.plate=std::move(result.plate);preview.front=std::move(result.front);
+    preview.plateX=result.plateX;preview.plateY=result.plateY;preview.anchorX=result.anchorX;preview.anchorY=result.anchorY;
     project->canvas->setMovePreview(std::move(preview));
 }
 void MainWindow::applyTransformSession() {

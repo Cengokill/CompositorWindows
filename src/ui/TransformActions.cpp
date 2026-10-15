@@ -116,16 +116,16 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
                 else if(!movePreviewJob_->covers(previewGesture_)){
                     const auto bounds=canvas()->viewportBounds();
                     ui::MovePreviewJob::Request request;
-                    request.gesture=previewGesture_;request.layerId=moving->id;request.anchorX=moving->transform.x;request.anchorY=moving->transform.y;request.masked=preview.masked;
+                    request.gesture=previewGesture_;request.layerId=moving->id;request.opacity=preview.masked?1:moving->opacity;request.anchorX=moving->transform.x;request.anchorY=moving->transform.y;
                     request.viewX=bounds.x;request.viewY=bounds.y;request.viewWidth=bounds.width;request.viewHeight=bounds.height;request.units=bounds.units;
                     request.pixelsWide=std::max(1,int(std::ceil(bounds.width/bounds.units)));request.pixelsHigh=std::max(1,int(std::ceil(bounds.height/bounds.units)));
-                    const auto movingBounds=ui::movingLayerPreviewBounds(*moving,bounds.units);if(!movingBounds.valid)throw std::runtime_error("The moving layer does not fit a preview image");
-                    request.movingX=movingBounds.x;request.movingY=movingBounds.y;request.movingPixelsWide=movingBounds.pixelsWide;request.movingPixelsHigh=movingBounds.pixelsHigh;
-                    std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(layer.id!=moving->id)hidden.insert(layer.id);
-                    request.movingLayer=hideLayers(state.original,hidden);
+                    if(!preview.masked)request.sprite=moving->raster;
                     std::unordered_set<std::string> above;for(const auto* layer:preview.above)above.insert(layer->id);
                     auto backIds=above;backIds.insert(moving->id);request.back=hideLayers(state.original,backIds);
                     if(!above.empty()){request.wantFront=true;std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(!above.contains(layer.id))hidden.insert(layer.id);request.front=hideLayers(state.original,hidden);}
+                    if(preview.masked){const auto plate=ui::movingLayerPlateBounds(*moving,bounds.units);if(!plate.valid)throw std::runtime_error("The moving layer does not fit a preview plate");
+                        request.wantPlate=true;request.plateX=plate.x;request.plateY=plate.y;request.plateWidth=plate.width;request.plateHeight=plate.height;request.platePixelsWide=plate.pixelsWide;request.platePixelsHigh=plate.pixelsHigh;
+                        std::unordered_set<std::string> hidden;for(const auto& layer:state.original.layers)if(layer.id!=moving->id)hidden.insert(layer.id);request.plate=hideLayers(state.original,hidden);}
                     movePreviewJob_->submit(std::move(request));
                 }
                 refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
