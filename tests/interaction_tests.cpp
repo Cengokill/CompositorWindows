@@ -16,6 +16,7 @@ template<class T>T* named(MainWindow&w,const char*name){auto* result=w.findChild
 void action(MainWindow&w,const QString&text){for(auto*a:w.findChildren<QAction*>())if(a->text()==text){a->trigger();return;}throw std::runtime_error("Missing action");}
 Document example(){Document d;d.id=newId();d.width=128;d.height=96;Layer l;l.id=newId();l.name="Layer";l.transform={0,0,128,96};l.raster=Raster::filled(128,96,{80,110,130,255});d.layers.push_back(l);return d;}
 void drag(EditorProject&p,Point a,Point b){p.canvas->pointerDown({a.x,a.y},{});p.canvas->pointerMove({b.x,b.y},{});p.canvas->pointerUp({b.x,b.y},{});}
+void showRulers(MainWindow&w){auto* rulers=w.findChild<QAction*>("viewRulers");require(rulers&&!rulers->isChecked()&&w.canvas()&&!w.canvas()->showRulers,"Rulers command missing");rulers->trigger();require(rulers->isChecked()&&w.canvas()->showRulers,"Showing rulers failed");}
 }
 int main(int argc,char**argv){QApplication app(argc,argv);std::cout<<std::unitbuf;int passed=0,failed=0;
 auto test=[&](const char*name,const std::function<void()>&fn){if(argc>1&&std::string(argv[1])!=name)return;std::cout<<"START "<<name<<'\n';try{fn();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}};
@@ -81,6 +82,7 @@ test("blank_30000_brush_preview_is_bounded_and_commit_grows_source",[]{
 test("guide_drag_commits_one_undo_and_restores",[]{
  MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
  auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ showRulers(w);
  const auto before=*p.document;require(before.guides.empty(),"Example started with guides");
  const auto frame=canvas->contentRect();
  auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
@@ -117,6 +119,7 @@ test("guide_drag_commits_one_undo_and_restores",[]{
 test("guide_release_uses_the_drop_and_rejects_the_letterbox",[]{
  MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
  auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ showRulers(w);
  const auto frame=canvas->contentRect();
  const auto origin=canvas->viewMapping().toView({0,0});
  const auto opposite=canvas->viewMapping().toView({double(p.document->width),double(p.document->height)});
@@ -145,6 +148,7 @@ test("saved_guides_reopen_on_the_canvas",[]{
  const auto path=QDir(dir.path()).filePath("Guides.comp");
  MainWindow w(true);auto& p=w.addProject(example());w.resize(1100,820);w.show();QTest::qWait(50);
  auto* canvas=p.canvas;require(canvas->width()>200&&canvas->height()>160,"Canvas was not laid out");
+ showRulers(w);
  const auto frame=canvas->contentRect();
  auto send=[&](QEvent::Type type,QPointF position,Qt::MouseButton button,Qt::MouseButtons buttons){QMouseEvent event(type,position,canvas->mapToGlobal(position),button,buttons,Qt::NoModifier);QApplication::sendEvent(canvas,&event);};
  const QPointF drop(frame.center().x(),frame.top()+80);
@@ -168,12 +172,12 @@ test("saved_guides_reopen_on_the_canvas",[]{
 test("rulers_menu_hides_the_bands_and_restores_the_canvas",[]{
  MainWindow w(true);auto&p=w.addProject(example());w.resize(900,700);w.show();QTest::qWait(30);
  auto* rulers=w.findChild<QAction*>("viewRulers");
- require(rulers&&rulers->isChecked()&&rulers->shortcut()==QKeySequence("Ctrl+R"),"Rulers command missing");
- require(p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Rulers hidden by default");
+ require(rulers&&!rulers->isChecked()&&rulers->shortcut()==QKeySequence("Ctrl+R"),"Rulers command missing");
+ require(!p.canvas->showRulers&&p.canvas->contentRect().left()==0&&p.canvas->contentRect().top()==0,"Rulers shown by default");
+ rulers->trigger();
+ require(rulers->isChecked()&&p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Showing rulers did not inset the canvas");
  rulers->trigger();
  require(!rulers->isChecked()&&!p.canvas->showRulers&&p.canvas->contentRect().left()==0&&p.canvas->contentRect().top()==0,"Hiding rulers left the inset");
- rulers->trigger();
- require(rulers->isChecked()&&p.canvas->showRulers&&p.canvas->contentRect().left()==NativeCanvas::rulerThickness,"Showing rulers did not restore the inset");
 });
 test("brush_outside_existing_source_grows_without_moving_original_pixels",[]{
  MainWindow w(true);auto d=example();d.layers.front().transform={40,30,32,32};d.layers.front().raster=Raster::filled(32,32,{180,80,20,255});auto&p=w.addProject(d);action(w,"Brush (B)");
