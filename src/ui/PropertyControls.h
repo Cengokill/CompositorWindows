@@ -15,9 +15,11 @@ namespace compositor::ui {
 // default acceleration modifier. Return/Escape release the property field.
 class PropertyNumber final:public QDoubleSpinBox {
     bool stepping_{};
+    bool compactDisplay_{};
 public:
     explicit PropertyNumber(QWidget* parent=nullptr):QDoubleSpinBox(parent){setLocale(QLocale::C);}
     std::function<void()> releaseFocus;
+    void setCompactDisplay(bool value){compactDisplay_=value;}
     void synchronize(double value) {
         const bool typing=hasFocus()&&!stepping_;
         const auto text=lineEdit()->text();const int cursor=lineEdit()->cursorPosition();
@@ -25,6 +27,15 @@ public:
         if(typing){const QSignalBlocker blocked(lineEdit());lineEdit()->setText(text);lineEdit()->setCursorPosition(cursor);}
     }
 protected:
+    QString textFromValue(double value)const override {
+        auto text=QDoubleSpinBox::textFromValue(value);
+        if(!compactDisplay_)return text;
+        const auto separator=locale().decimalPoint();
+        if(!text.contains(separator))return text;
+        while(text.endsWith('0'))text.chop(1);
+        if(text.endsWith(separator))text.chop(1);
+        return text;
+    }
     void stepBy(int steps) override {
         const bool prior=stepping_;stepping_=true;QDoubleSpinBox::stepBy(steps);stepping_=prior;
     }
