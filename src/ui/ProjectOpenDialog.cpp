@@ -6,6 +6,7 @@
 #include <QWidget>
 #include <Windows.h>
 #include <ShObjIdl.h>
+#include <OleIdl.h>
 #include <wrl/client.h>
 #include <atomic>
 #include <exception>
@@ -45,8 +46,11 @@ public:
     HRESULT STDMETHODCALLTYPE OnTypeChange(IFileDialog*) override{return S_OK;}
     HRESULT STDMETHODCALLTYPE OnOverwrite(IFileDialog*,IShellItem*,FDE_OVERWRITE_RESPONSE* response) override {if(response)*response=FDEOR_DEFAULT;return S_OK;}
 private:
-    HRESULT reject(IFileDialog*) const {
-        MessageBoxW(owner_,L"Select one or more Compositor project folders ending in .comp.",L"Open Compositor Projects",MB_OK|MB_ICONINFORMATION);
+    HRESULT reject(IFileDialog* dialog) const {
+        HWND dialogWindow=owner_;
+        ComPtr<IOleWindow> oleWindow;
+        if(SUCCEEDED(dialog->QueryInterface(IID_PPV_ARGS(&oleWindow))))oleWindow->GetWindow(&dialogWindow);
+        MessageBoxW(dialogWindow,L"Select one or more Compositor project folders ending in .comp.",L"Open Compositor Projects",MB_OK|MB_ICONINFORMATION);
         return S_FALSE;
     }
     HWND owner_{};
