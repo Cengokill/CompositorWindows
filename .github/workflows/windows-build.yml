@@ -152,8 +152,9 @@ jobs:
           # skips conversion but must still exercise the EXIF/ICC import path.
           $pillow = @(Get-Content dependencies/imaging/model-requirements.hashes.txt | Where-Object { $_ -match '^pillow==' })
           if ($pillow.Count -ne 1) { throw 'Expected one pinned Pillow requirement.' }
-          $pillowArgs = $pillow[0] -split '\s+'
-          & python -m pip install --no-deps --require-hashes @pillowArgs
+          $requirements = Join-Path $env:RUNNER_TEMP 'ci-import-fixtures-requirements.txt'
+          Set-Content -LiteralPath $requirements -Value $pillow[0] -Encoding utf8
+          & python -m pip install --no-deps --require-hashes -r $requirements
           if ($LASTEXITCODE) { throw 'Pinned Pillow installation failed.' }
           & python tests/imaging/make_fixtures.py
           if ($LASTEXITCODE) { throw 'Import fixture generation failed.' }
