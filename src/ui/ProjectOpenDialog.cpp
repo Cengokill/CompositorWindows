@@ -1,4 +1,5 @@
 #include "ProjectOpenDialog.h"
+#include "StaWorker.h"
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
@@ -114,20 +115,11 @@ std::optional<QStringList> chooseProjectDirectories(QWidget* owner,const QString
     const auto nativeOwner=reinterpret_cast<HWND>(owner->winId());
     struct Result {std::optional<QStringList> paths;std::exception_ptr error;};
     auto result=std::make_shared<Result>();
-    auto* thread=QThread::create([result,nativeOwner,initialDirectory]{
-        const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-        struct Release {HRESULT value;~Release(){if(SUCCEEDED(value))CoUninitialize();}} release{apartment};
+    runOnStaThread([result,nativeOwner,initialDirectory]{
         try{
-            checked(apartment,"Initialize project picker apartment");
             result->paths=showProjectOpenDialog(nativeOwner,initialDirectory);
         }catch(...){result->error=std::current_exception();}
     });
-    if(!thread)throw std::runtime_error("Cannot create project picker thread");
-    QEventLoop loop;
-    QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
-    QObject::connect(thread,&QThread::finished,&loop,&QEventLoop::quit,Qt::QueuedConnection);
-    thread->start();
-    if(!thread->isFinished())loop.exec(QEventLoop::ExcludeUserInputEvents);
     if(result->error)std::rethrow_exception(result->error);
     return result->paths;
 }

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "AppLogging.h"
 #include "PropertyControls.h"
+#include "StaWorker.h"
 #include "persistence/ProjectStore.h"
 #include "imaging/wic_codec.h"
 #include "imaging/heif_codec.h"
@@ -145,20 +146,14 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     // Save-on-close needs a path before saveProject returns, so this waits.
     // GetSaveFileNameW still runs off the Qt GUI thread; ExcludeUserInputEvents
     // keeps the wait from dispatching close/deleteLater into this stack frame.
-    auto* thread=QThread::create([path,owner,directory,suggested,filter,title,defExt]{
-        const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-        struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
-        *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
-    });
-    if(!thread){
+    try{
+        runOnStaThread([path,owner,directory,suggested,filter,title,defExt]{
+            *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
+        });
+    }catch(const std::runtime_error&){
         logging::trace("native save picker thread could not be created");
         return {};
     }
-    QEventLoop loop;
-    QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
-    QObject::connect(thread,&QThread::finished,&loop,&QEventLoop::quit,Qt::QueuedConnection);
-    thread->start();
-    if(!thread->isFinished())loop.exec(QEventLoop::ExcludeUserInputEvents);
     if(!guard)return {};
     return *path;
 }
