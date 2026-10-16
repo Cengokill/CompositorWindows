@@ -5,13 +5,15 @@
 #include <string>
 
 namespace compositor {
-// Codecs must reject non-PNG, multiple frames, >8-bit samples and non-gray/alpha masks.
-// Each decoder must check dimensions before allocating and return canonical top-left pixels.
+// Color codecs reject non-PNG and multiple frames. Masks stay 8-bit gray without alpha.
+// 16-bit color PNG is format version 13. Each decoder checks dimensions before allocating.
 struct ProjectAssetCodec {
     std::function<std::shared_ptr<const Raster>(const std::filesystem::path&)> readColor;
     std::function<std::shared_ptr<const GrayRaster>(const std::filesystem::path&)> readGray;
     std::function<void(const std::filesystem::path&,const Raster&)> writeColor;
     std::function<void(const std::filesystem::path&,const GrayRaster&)> writeGray;
+    std::function<std::shared_ptr<const DeepImage>(const std::filesystem::path&)> readDeep;
+    std::function<void(const std::filesystem::path&,const DeepImage&)> writeDeep;
 };
 struct OpenProject { Document document; std::string activeLayer; int readVersion{7}; };
 enum class SaveFaultPoint { AfterStage, AfterJournal, AfterBackup, AfterInstall, BeforeCleanup };

@@ -1,5 +1,6 @@
 #include "PsdDocument.h"
 #include "PsdText.h"
+#include "core/DeepImage.h"
 #include "core/Document.h"
 #include "text/TextRaster.h"
 #include <algorithm>
@@ -185,7 +186,7 @@ std::vector<uint8_t> inflateZlib(const uint8_t* data, size_t size, size_t expect
     if (produced != expected) throw std::runtime_error("Unsupported PSD compression");
     return out;
 }
-std::vector<uint8_t> decodeChannel(Reader& in, int width, int height, uint16_t compression, int depth, size_t packedBytes = 0, const std::vector<uint32_t>* rowTable = nullptr, int rowIndex = 0) {
+std::vector<uint8_t> decodeChannel(Reader& in, int width, int height, uint16_t compression, int depth, size_t packedBytes = 0, const std::vector<uint32_t>* rowTable = nullptr, int rowIndex = 0, std::vector<uint16_t>* deep = nullptr) {
     const int sample = depth == 16 ? 2 : 1;
     if (width < 1 || height < 1 || width > 30000 || height > 30000 || uint64_t(width) * uint64_t(height) > 100000000) throw std::runtime_error("Raster dimensions exceed supported budget");
     const size_t row = size_t(width) * sample;
@@ -218,8 +219,25 @@ std::vector<uint8_t> decodeChannel(Reader& in, int width, int height, uint16_t c
     } else throw std::runtime_error("Unsupported PSD compression");
     if (depth == 8) return raw;
     std::vector<uint8_t> out(size_t(width) * height);
-    for (size_t i = 0; i < out.size(); ++i) out[i] = raw[i * 2];
+    if (deep) deep->assign(out.size(), 0);
+    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+        const size_t i = size_t(y) * size_t(width) + size_t(x);
+        const uint16_t scaled = scalePhotoshop16(uint16_t(uint16_t(raw[i * 2]) << 8 | raw[i * 2 + 1]));
+        if (deep) (*deep)[i] = scaled;
+        out[i] = ditherChannel(scaled, x, y);
+    }
     return out;
+}
+std::shared_ptr<const Raster> compose(int width, int height, const std::vector<uint8_t>& r, const std::vector<uint8_t>& g, const std::vector<uint8_t>& b, const std::vector<uint8_t>& a);
+void installImage(Layer& layer, int width, int height, const std::vector<uint8_t>& r, const std::vector<uint8_t>& g, const std::vector<uint8_t>& b, const std::vector<uint8_t>& a, const std::vector<uint16_t>& r16, const std::vector<uint16_t>& g16, const std::vector<uint16_t>& b16, const std::vector<uint16_t>& a16) {
+    const size_t count = size_t(width) * size_t(height);
+    if (!r16.empty() && r16.size() == count && g16.size() == count && b16.size() == count) {
+        layer.deep = deepFromPlanes(width, height, r16.data(), g16.data(), b16.data(), a16.size() == count ? a16.data() : nullptr);
+        layer.raster = rasterFromDeep(*layer.deep);
+        return;
+    }
+    layer.deep.reset();
+    layer.raster = compose(width, height, r, g, b, a);
 }
 std::shared_ptr<const Raster> compose(int width, int height, const std::vector<uint8_t>& r, const std::vector<uint8_t>& g, const std::vector<uint8_t>& b, const std::vector<uint8_t>& a) {
     std::vector<uint8_t> rgba(size_t(width) * height * 4);
@@ -338,18 +356,19 @@ bool readMerged(Reader& in, int width, int height, int depth, int channels, Laye
         rows.resize(size_t(height) * size_t(planes));
         for (auto& row : rows) row = in.psb ? in.u32() : in.u16();
     }
-    auto plane = [&](int index) { return decodeChannel(in, width, height, compression, depth, 0, rows.empty() ? nullptr : &rows, index * height); };
-    auto red = plane(0); auto green = plane(1); auto blue = plane(2);
+    std::vector<uint16_t> red16, green16, blue16, alpha16;
+    auto plane = [&](int index, std::vector<uint16_t>* samples) { return decodeChannel(in, width, height, compression, depth, 0, rows.empty() ? nullptr : &rows, index * height, samples); };
+    auto red = plane(0, depth == 16 ? &red16 : nullptr); auto green = plane(1, depth == 16 ? &green16 : nullptr); auto blue = plane(2, depth == 16 ? &blue16 : nullptr);
     std::vector<uint8_t> alpha;
     if (channels >= 4) {
-        try { alpha = plane(3); }
+        try { alpha = plane(3, depth == 16 ? &alpha16 : nullptr); }
         catch (const std::exception&) {
             report += "Merged image transparency could not be read.\n";
             return false;
         }
     }
     layer.id = newId(); layer.name = "Background"; layer.transform = {0, 0, double(width), double(height)};
-    layer.raster = compose(width, height, red, green, blue, alpha);
+    installImage(layer, width, height, red, green, blue, alpha, red16, green16, blue16, alpha16);
     return true;
 }
 }
@@ -366,8 +385,8 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     if (channels < 3 || (depth != 8 && depth != 16) || mode != 3) throw std::runtime_error("Only 8-bit or 16-bit RGB PSD files are supported");
     if (!width || !height || width > 30000 || height > 30000 || uint64_t(width) * height > 100000000) throw std::runtime_error("PSD exceeds the canvas limit");
     in.skip(in.u32()); in.skip(in.u32());
-    PsdImport result; result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report;
-    if (depth == 16) report += "16-bit channels were converted to 8-bit.\n";
+    PsdImport result; result.document.id = newId(); result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report;
+    if (depth == 16) report += "16-bit channels were preserved.\n";
     auto section = in.wide(); auto sectionEnd = in.at + size_t(std::min<uint64_t>(section, in.size > in.at ? in.size - in.at : 0));
     if (section) {
         try {
@@ -443,6 +462,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 if (!record.group && !record.closer && (w > 30000 || h > 30000 || (w > 0 && h > 0 && uint64_t(w) * uint64_t(h) > 100000000)))
                     report += (record.name.empty() ? "Layer" : record.name) + " exceeds the canvas limit and was skipped.\n";
                 std::vector<uint8_t> red, green, blue, alpha, maskPlane;
+                std::vector<uint16_t> red16, green16, blue16, alpha16;
                 for (auto [id, length] : record.channels) {
                     auto start = in.at;
                     try {
@@ -450,8 +470,12 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                         const size_t packed = length >= 2 ? size_t(length - 2) : 0;
                         if (!record.group && !record.closer && id == -2 && maskFits) maskPlane = decodeChannel(in, maskWidth, maskHeight, compression, int(depth), packed);
                         else if (fits && !record.group && !record.closer && (id == 0 || id == 1 || id == 2 || id == -1)) {
-                            auto plane = decodeChannel(in, w, h, compression, int(depth), packed);
-                            if (id == 0) red = std::move(plane); else if (id == 1) green = std::move(plane); else if (id == 2) blue = std::move(plane); else alpha = std::move(plane);
+                            std::vector<uint16_t> samples;
+                            auto plane = decodeChannel(in, w, h, compression, int(depth), packed, nullptr, 0, depth == 16 ? &samples : nullptr);
+                            if (id == 0) { red = std::move(plane); red16 = std::move(samples); }
+                            else if (id == 1) { green = std::move(plane); green16 = std::move(samples); }
+                            else if (id == 2) { blue = std::move(plane); blue16 = std::move(samples); }
+                            else { alpha = std::move(plane); alpha16 = std::move(samples); }
                         }
                     } catch (const std::exception&) { report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded.\n"; }
                     const size_t end = start > in.size || length > in.size - start ? in.size : start + size_t(length);
@@ -462,7 +486,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 Layer layer; layer.id = newId(); layer.name = record.name.empty() ? "Layer" : record.name; layer.opacity = record.opacity / 255.; layer.blend = record.group ? Blend::Normal : record.blend; layer.group = record.group; layer.visible = record.visible;
                 layer.transform = {double(record.left), double(record.top), double(std::max(w, 1)), double(std::max(h, 1))}; layer.parentId = folders.empty() ? std::string{} : folders.back();
                 if (record.group) folders.push_back(layer.id);
-                else if (fits && red.size() == size_t(w) * size_t(h) && green.size() == red.size() && blue.size() == red.size()) layer.raster = compose(w, h, red, green, blue, alpha);
+                else if (fits && red.size() == size_t(w) * size_t(h) && green.size() == red.size() && blue.size() == red.size()) installImage(layer, w, h, red, green, blue, alpha, red16, green16, blue16, alpha16);
                 if (!layer.raster && !record.group) { if (auto painted = rasterizeRoundedRect(record.fill, record.geometry, record.strokeData)) { layer.raster = std::move(painted->raster); layer.transform = painted->transform; } }
                 if (maskFits && maskPlane.size() == size_t(maskWidth) * size_t(maskHeight)) {
                     if (record.maskFlags & 0x04) for (auto& value : maskPlane) value = uint8_t(255 - value);

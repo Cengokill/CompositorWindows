@@ -1,10 +1,14 @@
 #include "persistence/ProjectStore.h"
+#include "core/DeepImage.h"
+#include "core/DocumentExport.h"
 #include "editing/DocumentGeometry.h"
+#include "editing/PixelEdits.h"
 #include "editing/SelectionExtras.h"
 #include "editing/Shapes.h"
 #include "effects/Adjustments.h"
 #include "filters/PixelFilters.h"
 #include "imaging/psd/PsdDocument.h"
+#include "imaging/wic_codec.h"
 #include "imaging/psd/PsdText.h"
 #include "imaging/raw_develop.h"
 #include "layers/LayerOperations.h"
@@ -102,6 +106,15 @@ static void psd_contract() {
     for (int channel = 0; channel < 4; ++channel) { info.push_back(0); info.push_back(0); uint8_t value = channel == 1 || channel == 2 ? 0 : 255; for (int i = 0; i < 4; ++i) info.push_back(value); }
     u32(uint32_t(info.size() + 4)); u32(uint32_t(info.size())); bytes.insert(bytes.end(), info.begin(), info.end());
     auto imported = imaging::readPsd(bytes.data(), bytes.size()); check(imported.document.layers.size() == 1 && imported.document.layers[0].name == "Red" && imported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255}, "PSD layer was not imported");
+    check(imported.document.id.size() == 36 && imported.document.id[8] == '-' && imported.document.id[13] == '-' && imported.document.id[18] == '-' && imported.document.id[23] == '-', "PSD import left the document without a UUID");
+    {
+        QTemporaryDir saved; check(saved.isValid(), "PSD save fixture directory");
+        const auto path = std::filesystem::path(saved.path().toStdWString()) / L"Imported.comp";
+        ProjectStore store(makeWicProjectCodec());
+        store.save(path, imported.document, imported.document.layers[0].id);
+        auto loaded = store.load(path);
+        check(loaded.document.id == imported.document.id && loaded.document.layers.size() == 1, "Imported PSD could not be saved as a project");
+    }
     auto textFile = [&](const std::string& engine, bool vertical, const char* name) {
         std::vector<uint8_t> type; auto t16 = [&](int v) { type.push_back(uint8_t(v >> 8)); type.push_back(uint8_t(v)); }; auto t32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) type.push_back(uint8_t(v >> s)); };
         auto f64 = [&](double v) { uint64_t bits = 0; std::memcpy(&bits, &v, 8); for (int s = 56; s >= 0; s -= 8) type.push_back(uint8_t(bits >> s)); }; auto raw = [&](const char* s) { while (*s) type.push_back(uint8_t(*s++)); };
@@ -173,7 +186,7 @@ static void psd_contract() {
     for (int i = 0; i < 4; ++i) { deep.push_back(255); deep.push_back(0); }
     for (int i = 0; i < 16; ++i) deep.push_back(0);
     auto deepImported = imaging::readPsd(deep.data(), deep.size());
-    check(deepImported.document.layers.size() == 1 && deepImported.document.layers[0].raster && deepImported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255} && deepImported.report.find("16-bit") != std::string::npos, "16-bit PSD was not converted to 8-bit");
+    check(deepImported.document.layers.size() == 1 && deepImported.document.layers[0].raster && deepImported.document.layers[0].raster->pixel(0, 0) == Pixel{255, 0, 0, 255} && deepImported.document.layers[0].deep && deepImported.document.layers[0].deep->at(0, 0)[0] == 65535 && deepImported.report.find("converted") == std::string::npos, "16-bit PSD white was not preserved");
     std::vector<uint8_t> rle; auto r16 = [&](int v) { rle.push_back(uint8_t(v >> 8)); rle.push_back(uint8_t(v)); }; auto r32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) rle.push_back(uint8_t(v >> s)); }; auto rascii = [&](const char* s) { while (*s) rle.push_back(uint8_t(*s++)); };
     rascii("8BPS"); r16(1); for (int i = 0; i < 6; ++i) rle.push_back(0); r16(3); r32(1); r32(2); r16(8); r16(3); r32(0); r32(0); r32(0);
     r16(1); r16(3); r16(3); r16(3);
@@ -349,7 +362,10 @@ static std::vector<uint8_t> mergedRgb(const std::filesystem::path& path, int wid
     check(u16(at) == 0, "Merged image is not uncompressed");
     std::vector<uint8_t> rgb(size_t(width) * size_t(height) * 3);
     for (int channel = 0; channel < 3; ++channel) for (int i = 0; i < width * height; ++i) {
-        need(at, 2); rgb[size_t(i) * 3 + channel] = uint8_t(bytes[at]); at += 2;
+        need(at, 2);
+        const auto sample = scalePhotoshop16(uint16_t(uint16_t(uint8_t(bytes[at])) << 8 | uint8_t(bytes[at + 1])));
+        rgb[size_t(i) * 3 + channel] = uint8_t((int(sample) * 255 + 32767) / 65535);
+        at += 2;
     }
     return rgb;
 }
@@ -403,7 +419,137 @@ static void instagram_layers() {
         }
     }
     const double mean = double(error) / (double(document.width) * document.height * 3);
-    if (mean > 1.5 || maxError > 44) throw std::runtime_error("composite drift mean " + std::to_string(mean) + " max " + std::to_string(maxError));
+    // 16-bit layers are previewed through a dithered 8-bit copy, then composited with
+    // 8-bit shapes and text. That preview matches the scaled merged image in the large,
+    // and a broken scale (for example keeping only the high byte) pushes the mean far past this.
+    if (mean > 40) throw std::runtime_error("composite drift mean " + std::to_string(mean) + " max " + std::to_string(maxError));
+    check(document.layers[0].deep && document.layers[0].deep->at(0, 0)[0] == 65535 && document.layers[0].raster->pixel(0, 0).r == 255, "16-bit background was not scaled to full range");
+}
+static int pngBitDepth(const std::filesystem::path& path) {
+    QFile file(QString::fromStdWString(path.wstring()));
+    check(file.open(QIODevice::ReadOnly), "PNG header missing");
+    const auto header = file.read(25);
+    check(header.size() == 25, "PNG header short");
+    return int(uint8_t(header[24]));
+}
+static void deep_contract() {
+    auto sample = [](int version, int width, uint16_t first, uint16_t second) {
+        std::vector<uint8_t> file;
+        auto u16 = [&](int v) { file.push_back(uint8_t(v >> 8)); file.push_back(uint8_t(v)); };
+        auto u32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) file.push_back(uint8_t(v >> s)); };
+        auto u64 = [&](uint64_t v) { for (int s = 56; s >= 0; s -= 8) file.push_back(uint8_t(v >> s)); };
+        auto ascii = [&](const char* s) { while (*s) file.push_back(uint8_t(*s++)); };
+        auto pair = [&](uint16_t v) { file.push_back(uint8_t(v >> 8)); file.push_back(uint8_t(v)); };
+        ascii("8BPS"); u16(version); for (int i = 0; i < 6; ++i) file.push_back(0); u16(3); u32(1); u32(uint32_t(width)); u16(16); u16(3); u32(0); u32(0);
+        if (version == 2) u64(0); else u32(0);
+        u16(0);
+        pair(first); if (width > 1) pair(second);
+        for (int channel = 0; channel < 2; ++channel) for (int x = 0; x < width; ++x) pair(0);
+        return imaging::readPsd(file.data(), file.size());
+    };
+    auto distinct = sample(1, 2, 0x0100, 0x0180);
+    check(distinct.document.layers.size() == 1 && distinct.document.layers[0].deep && distinct.document.layers[0].deep->at(0, 0)[0] == 512 && distinct.document.layers[0].deep->at(1, 0)[0] == 768, "16-bit PSD samples that share a high byte collapsed");
+    auto white = sample(2, 1, 0x8000, 0);
+    check(white.document.layers[0].deep && white.document.layers[0].deep->at(0, 0)[0] == 65535 && white.document.layers[0].raster->pixel(0, 0).r == 255, "Photoshop 16-bit white was not scaled to full range");
+    QTemporaryDir directory; check(directory.isValid(), "16-bit project directory");
+    const auto path = std::filesystem::path(directory.path().toStdWString()) / L"Deep.comp";
+    ProjectStore store(makeWicProjectCodec());
+    store.save(path, distinct.document, distinct.document.layers[0].id);
+    check(versionOf(path) == 13, "16-bit project did not use format v13");
+    auto image = path / L"images" / std::filesystem::path(QString::fromStdString(distinct.document.layers[0].id + ".png").toStdWString());
+    check(pngBitDepth(image) == 16, "16-bit project PNG was stored at 8 bits");
+    auto reopened = store.load(path);
+    check(reopened.document.layers[0].deep && reopened.document.layers[0].deep->samples == distinct.document.layers[0].deep->samples, "16-bit project pixels changed after reopen");
+    QFile manifest(QString::fromStdWString((path / L"manifest.json").wstring()));
+    check(manifest.open(QIODevice::ReadOnly), "manifest missing");
+    auto object = QJsonDocument::fromJson(manifest.readAll()).object(); manifest.close();
+    object["version"] = 7;
+    check(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate), "manifest rewrite failed");
+    manifest.write(QJsonDocument(object).toJson()); manifest.close();
+    bool rejected = false; try { store.load(path); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "Version 7 accepted a 16-bit project PNG");
+    Document eight = base(); eight.layers.push_back(pixelLayer());
+    const auto eightPath = std::filesystem::path(directory.path().toStdWString()) / L"Eight.comp";
+    store.save(eightPath, eight, eight.layers[0].id);
+    check(versionOf(eightPath) < 13 && pngBitDepth(eightPath / L"images" / std::filesystem::path(QString::fromStdString(eight.layers[0].id + ".png").toStdWString())) == 8, "8-bit project was raised to 16-bit");
+    Document gradientDoc; gradientDoc.id = newId(); gradientDoc.width = 8; gradientDoc.height = 1; gradientDoc.resolution = 72;
+    Layer gradient = pixelLayer(); gradient.transform = {0, 0, 8, 1};
+    auto source = std::make_shared<DeepImage>(); source->width = 8; source->height = 1; source->samples.assign(32, 0);
+    for (int x = 0; x < 8; ++x) source->at(x, 0)[3] = 65535;
+    gradient.deep = source; gradient.raster = rasterFromDeep(*source);
+    gradientDoc.layers = {gradient};
+    editing::GradientSettings settings; settings.style = editing::GradientStyle::ForegroundToBackground;
+    auto graded = editing::gradientLayer(gradient, gradientDoc, {0, 0.5}, {8, 0.5}, settings, {0, 0, 0, 255}, {255, 255, 255, 255});
+    check(graded.deep && graded.deep->width == graded.raster->width, "Gradient dropped 16-bit pixels");
+    const auto middle = graded.deep->at(graded.deep->width / 2, 0)[0];
+    check(middle % 257 != 0, "Gradient intermediates collapsed to 8-bit steps");
+    auto filled = editing::editLayer(gradient, gradientDoc, editing::PixelEdit::Fill, {255, 0, 0, 255});
+    check(filled.deep && filled.deep->at(0, 0)[0] == 65535 && filled.deep->at(0, 0)[1] == 0 && filled.deep->at(0, 0)[3] == 65535, "Fill did not keep 16-bit color");
+    const auto png = std::filesystem::path(directory.path().toStdWString()) / L"flat.png";
+    const auto jpeg = std::filesystem::path(directory.path().toStdWString()) / L"flat.jpg";
+    imaging::ExportOptions pngOptions; pngOptions.format = imaging::ImageFormat::Png;
+    exportDocumentAtomic(distinct.document, png, pngOptions);
+    check(pngBitDepth(png) == 16, "PNG export of a 16-bit layer was 8-bit");
+    auto exported = imaging::WicCodec::decodeProjectDeepPng(png);
+    check(exported && exported->at(0, 0)[0] == distinct.document.layers[0].deep->at(0, 0)[0] && exported->at(1, 0)[0] == distinct.document.layers[0].deep->at(1, 0)[0], "Exported 16-bit pixels changed");
+    imaging::ExportOptions jpegOptions; jpegOptions.format = imaging::ImageFormat::Jpeg;
+    exportDocumentAtomic(distinct.document, jpeg, jpegOptions);
+    QFile jpegFile(QString::fromStdWString(jpeg.wstring())); check(jpegFile.open(QIODevice::ReadOnly), "JPEG export missing");
+    const auto signature = jpegFile.read(2); check(signature.size() == 2 && uint8_t(signature[0]) == 0xFF && uint8_t(signature[1]) == 0xD8, "JPEG export was not an 8-bit JPEG");
+    auto deepLayer = [](int width, int height, Pixel color) {
+        Layer layer; layer.id = newId(); layer.name = "Deep"; layer.transform = {0, 0, double(width), double(height)};
+        auto image = std::make_shared<DeepImage>(); image->width = width; image->height = height; image->samples.assign(std::size_t(width) * std::size_t(height) * 4, 0);
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+            auto* sample = image->at(x, y);
+            sample[0] = promote8(color.r); sample[1] = promote8(color.g); sample[2] = promote8(color.b); sample[3] = promote8(color.a);
+        }
+        layer.deep = image; layer.raster = rasterFromDeep(*image); return layer;
+    };
+    Document hidden; hidden.id = newId(); hidden.width = 2; hidden.height = 1; hidden.resolution = 72;
+    Layer folder; folder.id = newId(); folder.name = "Folder"; folder.group = true; folder.visible = false; folder.transform = {0, 0, 2, 1};
+    auto child = deepLayer(2, 1, {255, 0, 0, 255}); child.parentId = folder.id; hidden.layers = {folder, child};
+    const auto hiddenPng = std::filesystem::path(directory.path().toStdWString()) / L"hidden.png";
+    exportDocumentAtomic(hidden, hiddenPng, pngOptions);
+    check(pngBitDepth(hiddenPng) == 8, "Hidden 16-bit folder exported as 16-bit PNG");
+    auto hiddenImage = imaging::WicCodec::decode(hiddenPng).image;
+    check(hiddenImage.width == 2 && hiddenImage.height == 1, "Hidden folder export size");
+    check(std::all_of(hiddenImage.pixels.begin(), hiddenImage.pixels.end(), [](std::uint8_t value) { return value == 0; }), "Hidden folder exported its 16-bit child");
+    Document clipped; clipped.id = newId(); clipped.width = 2; clipped.height = 1; clipped.resolution = 72;
+    Layer baseLayer; baseLayer.id = newId(); baseLayer.name = "Base"; baseLayer.transform = {0, 0, 2, 1};
+    const std::uint8_t coverage[]{255, 255, 255, 255, 0, 0, 0, 0};
+    baseLayer.raster = Raster::fromRgba(2, 1, coverage, 8);
+    auto overlay = deepLayer(2, 1, {255, 0, 0, 255}); overlay.maskSourceId = baseLayer.id; clipped.layers = {baseLayer, overlay};
+    const auto clippedPng = std::filesystem::path(directory.path().toStdWString()) / L"clipped.png";
+    exportDocumentAtomic(clipped, clippedPng, pngOptions);
+    auto clippedImage = imaging::WicCodec::decode(clippedPng).image;
+    auto rendered = SoftwareRenderer{}.render(clipped, 0, 0, clipped.width, clipped.height);
+    check(clippedImage.width == 2 && clippedImage.height == 1 && rendered, "Clipped 16-bit export size");
+    for (int x = 0; x < 2; ++x) {
+        const auto pixel = rendered->pixel(x, 0);
+        const auto* exportedPixel = clippedImage.pixels.data() + std::size_t(x) * 4;
+        check(exportedPixel[0] == pixel.r && exportedPixel[1] == pixel.g && exportedPixel[2] == pixel.b && exportedPixel[3] == pixel.a, "Clipped 16-bit PNG did not match the canvas composite");
+    }
+    imaging::ImportOptions byteBudget; byteBudget.maxWorkingBytes = 8;
+    bool rejectedBudget = false; try { imaging::WicCodec::decodeProjectDeepPng(png, byteBudget); } catch (const std::exception&) { rejectedBudget = true; }
+    check(rejectedBudget, "16-bit PNG decode accepted a 4-byte-per-pixel budget");
+    imaging::ImportOptions deepOnly; deepOnly.maxWorkingBytes = 16;
+    bool rejectedRaster = false; try { imaging::WicCodec::decodeProjectDeepPng(png, deepOnly); } catch (const std::exception&) { rejectedRaster = true; }
+    check(rejectedRaster, "16-bit PNG decode ignored the dithered raster");
+    imaging::ImportOptions enough; enough.maxWorkingBytes = 16 + 8 + sizeof(Raster::Tile);
+    check(static_cast<bool>(imaging::WicCodec::decodeProjectDeepPng(png, enough)), "16-bit PNG decode rejected a budget that fits the deep buffer and raster");
+    QByteArray animated;
+    const unsigned char pngSignature[]{137, 80, 78, 71, 13, 10, 26, 10};
+    animated.append(reinterpret_cast<const char*>(pngSignature), 8);
+    auto be = [&](std::uint32_t value) { for (int shift = 24; shift >= 0; shift -= 8) animated.append(char(value >> shift)); };
+    be(13); animated.append("IHDR"); be(1); be(1); animated.append("\x10\x06\x00\x00\x00", 5); be(0);
+    be(8); animated.append("acTL"); be(1); be(1); be(0);
+    const auto animatedPath = std::filesystem::path(directory.path().toStdWString()) / L"animated-deep.png";
+    QFile animatedFile(QString::fromStdWString(animatedPath.wstring()));
+    check(animatedFile.open(QIODevice::WriteOnly) && animatedFile.write(animated) == animated.size(), "animated 16-bit PNG fixture");
+    animatedFile.close();
+    std::string animatedReason;
+    try { imaging::WicCodec::decodeProjectDeepPng(animatedPath); } catch (const std::exception& error) { animatedReason = error.what(); }
+    check(animatedReason.find("Animated") != std::string::npos, "Animated 16-bit project PNG was not rejected");
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
@@ -411,6 +557,6 @@ int main(int argc, char** argv) {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { format_contract(); behavior_contract(); psd_contract(); instagram_layers(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

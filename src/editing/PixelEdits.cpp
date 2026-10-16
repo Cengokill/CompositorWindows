@@ -3,6 +3,7 @@
 // MIT notice in graphics/upstream/LICENSE.
 #include "PixelEdits.h"
 #include "GradientPreview.h"
+#include "core/DeepImage.h"
 #include "graphics/MaskSampling.h"
 #include <algorithm>
 #include <cmath>
@@ -107,8 +108,16 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
         return Pixel{byte(color.r*a+old.r*(1-a)),byte(color.g*a+old.g*(1-a)),byte(color.b*a+old.b*(1-a)),byte(255*a+old.a*(1-a))};
     });
     if(changed==source)return layer;
-    if(operation!=PixelEdit::Invert){auto crop=alphaBounds(*changed);changed=reframe(changed,crop);grid.x+=crop.x;grid.y+=crop.y;grid.width=crop.width;grid.height=crop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
-    auto result=layer;result.raster=changed;result.transform=transform;result.shapeJson.clear();result.text.reset();
+    const int sourceX=int(grid.x),sourceY=int(grid.y);Rect pixelCrop{0,0,double(source->width),double(source->height)};
+    if(operation!=PixelEdit::Invert){pixelCrop=alphaBounds(*changed);changed=reframe(changed,pixelCrop);grid.x+=pixelCrop.x;grid.y+=pixelCrop.y;grid.width=pixelCrop.width;grid.height=pixelCrop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
+    auto result=layer;result.raster=changed;result.transform=transform;result.shapeJson.clear();result.text.reset();result.deep.reset();
+    if(operation==PixelEdit::Fill&&!gradient&&layer.deep&&layer.deep->valid()){
+        auto deep=std::make_shared<DeepImage>();deep->width=source->width;deep->height=source->height;deep->samples.assign(std::size_t(deep->width)*std::size_t(deep->height)*4,0);
+        for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x){int sx=x+sourceX,sy=y+sourceY;if(sx>=0&&sy>=0&&sx<layer.deep->width&&sy<layer.deep->height)std::copy_n(layer.deep->at(sx,sy),4,deep->at(x,y));}
+        for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x){double a=coverage?coverage->pixel(x,y)/255.:1.;if(a==0)continue;auto* sample=deep->at(x,y);auto mix=[&](uint16_t old,uint8_t color){return uint16_t(std::clamp(std::lround(promote8(color)*a+old*(1-a)),0L,65535L));};sample[0]=mix(sample[0],color.r);sample[1]=mix(sample[1],color.g);sample[2]=mix(sample[2],color.b);sample[3]=uint16_t(std::clamp(std::lround(65535*a+sample[3]*(1-a)),0L,65535L));}
+        if(pixelCrop.x||pixelCrop.y||pixelCrop.width!=deep->width||pixelCrop.height!=deep->height){auto tight=std::make_shared<DeepImage>();tight->width=int(pixelCrop.width);tight->height=int(pixelCrop.height);tight->samples.resize(std::size_t(tight->width)*std::size_t(tight->height)*4);for(int y=0;y<tight->height;++y)for(int x=0;x<tight->width;++x)std::copy_n(deep->at(int(pixelCrop.x)+x,int(pixelCrop.y)+y),4,tight->at(x,y));deep=std::move(tight);}
+        result.deep=deep;result.raster=rasterFromDeep(*deep);
+    }
     if(result.mask&&!result.mask->placement&&grid!=Rect{0,0,double(baseWidth),double(baseHeight)})result.mask->raster=reframeMask(*result.mask->raster,grid,baseWidth,baseHeight);
     return result;
 }

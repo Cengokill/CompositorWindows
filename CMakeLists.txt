@@ -32,7 +32,7 @@ add_custom_target(deploy_imaging_runtime
   COMMAND "${CMAKE_COMMAND}" "-DIMAGING_ROOT=${CMAKE_SOURCE_DIR}/dependencies/imaging" "-DRUNTIME_DESTINATION=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
     -P "${CMAKE_SOURCE_DIR}/scripts/deploy-imaging-runtime.cmake"
   VERBATIM)
-add_library(compositor_core src/core/Document.cpp src/core/CompositeCache.cpp)
+add_library(compositor_core src/core/Document.cpp src/core/DeepImage.cpp src/core/CompositeCache.cpp)
 target_include_directories(compositor_core PUBLIC src)
 target_compile_definitions(compositor_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(compositor_core PRIVATE /W4 /permissive- /utf-8)

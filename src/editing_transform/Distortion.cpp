@@ -67,7 +67,7 @@ GrayWarp warpGray(std::shared_ptr<const GrayRaster> source,const Transform& orig
     return {out,g.placed};
 }
 Layer distortLayer(const Layer& original,const Transform& draft,const Corners& c,WarpOptions options){
-    if(!original.raster||original.group)throw std::invalid_argument("Distortion requires image pixels");auto imageOptions=options;imageOptions.trim=options.longestSide==0;auto warped=warpRaster(original.raster,draft,c,imageOptions);auto result=original;result.raster=warped.raster;result.transform=warped.transform;
+    if(!original.raster||original.group)throw std::invalid_argument("Distortion requires image pixels");auto imageOptions=options;imageOptions.trim=options.longestSide==0;auto warped=warpRaster(original.raster,draft,c,imageOptions);auto result=original;result.raster=warped.raster;result.deep.reset();result.transform=warped.transform;
     if(original.mask&&original.mask->raster){const auto& mask=*original.mask;auto maskOptions=options;maskOptions.trim=false;
         if(mask.linked&&!mask.placement){auto moved=warpGray(mask.raster,draft,c,0,maskOptions);result.mask->raster=moved.raster==mask.raster?mask.raster:cropGray(*moved.raster,warped.crop);}
         else if(mask.linked&&mask.placement){auto placed=following(*mask.placement,original.transform,draft);const auto carried=carriedCorners(placed,draft,c);if(usableCorners(carried)){auto moved=warpGray(mask.raster,placed,carried,graphics::cachedMaskBackground(mask.raster),maskOptions);result.mask->raster=moved.raster;result.mask->placement=moved.transform;}}

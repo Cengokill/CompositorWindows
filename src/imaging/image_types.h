@@ -21,11 +21,12 @@ struct ImportOptions {
     std::function<bool()> cancelled;
 };
 inline void checkCancelled(const ImportOptions& o) { if(o.cancelled && o.cancelled()) throw std::runtime_error("Image operation cancelled"); }
-inline std::size_t checkedBytes(std::uint32_t w,std::uint32_t h,std::uint32_t channels,const ImportOptions& o={}) {
+inline std::size_t checkedBytes(std::uint32_t w,std::uint32_t h,std::uint32_t channels,const ImportOptions& o={},std::uint32_t bytesPerSample=1) {
     const auto n=std::uint64_t(w)*h;
-    if(!channels || channels>4 || !w || !h || w>std::min(o.maxSide,30000U) || h>std::min(o.maxSide,30000U) || n>std::min(o.remainingPixels,100000000ULL) || n>std::numeric_limits<std::size_t>::max()/channels || n*channels>o.maxWorkingBytes)
+    const auto sampleBytes=std::uint64_t(channels)*bytesPerSample;
+    if(!bytesPerSample || bytesPerSample>2 || !channels || channels>4 || !w || !h || w>std::min(o.maxSide,30000U) || h>std::min(o.maxSide,30000U) || n>std::min(o.remainingPixels,100000000ULL) || !sampleBytes || n>std::numeric_limits<std::size_t>::max()/sampleBytes || n*sampleBytes>o.maxWorkingBytes)
         throw std::runtime_error("Image exceeds dimensions, pixel, or allocation budget");
-    return static_cast<std::size_t>(n*channels);
+    return static_cast<std::size_t>(n*sampleBytes);
 }
 inline void validate(const RgbaImage& image) {
     checkedBytes(image.width,image.height,4);

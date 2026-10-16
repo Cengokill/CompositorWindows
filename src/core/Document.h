@@ -1,4 +1,5 @@
 #pragma once
+#include "DeepImage.h"
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -152,6 +153,8 @@ struct Layer {
     Blend blend{Blend::Normal};
     Transform transform;
     std::shared_ptr<const Raster> raster;
+    // Optional 16-bit pixels. The raster is their dithered 8-bit working copy.
+    std::shared_ptr<const DeepImage> deep;
     std::optional<Mask> mask;
     // Exact serialized live metadata is retained while its editing implementation lands.
     std::string adjustmentJson,shapeJson;

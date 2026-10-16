@@ -52,13 +52,13 @@ Hierarchy validation (`LayerGroups.swift:31–49`) rejects duplicate IDs, missin
 
 Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskSourceID` path and admits at most **256 nodes**, including the starting target. Missing nodes, repeated nodes, group endpoints and adjustment sources are rejected. Adjustment targets are permitted. The validator does not require the source to be a lower sibling or in the same folder. UI operations separately create/release contiguous clipping stacks (`LiveLayerMask.swift:27–62, 207–252`). A hidden or black source still supplies alpha; source opacity, transform, raster mask and upstream live links contribute. Deleting a source offers bake/cancel/unlink, and baking retains the target's raster mask and appearance.
 
-`ProjectStore.swift:116–168, 216–231` limits the manifest to 4 MiB and each encoded asset to 512 MiB; assets must decode as one PNG frame with depth at most 8. Images and masks each have their own cumulative 100000000-pixel budget, each side 1–30000. A valid canvas may exceed 100 million pixels until an operation requiring a full raster/export enforces its own budget. Grayscale masks must be monochrome, 8-bit, no alpha, and not a CGImage mask (`LayerMask.swift:28–31`). Disabled masks are persisted. Asset and metadata files must resolve inside the package and be regular, non-symlink files. Windows reparse and replacement handling requires its own verified policy.
+`ProjectStore.swift:116–168, 216–231` limits the manifest to 4 MiB and each encoded asset to 512 MiB; assets must decode as one PNG frame. Versions 1–12 keep color depth at most 8. Version 13 may store a layer image as 16-bit RGBA; masks stay 8-bit. Images and masks each have their own cumulative 100000000-pixel budget, each side 1–30000. A valid canvas may exceed 100 million pixels until an operation requiring a full raster/export enforces its own budget. Grayscale masks must be monochrome, 8-bit, no alpha, and not a CGImage mask (`LayerMask.swift:28–31`). Disabled masks are persisted. Asset and metadata files must resolve inside the package and be regular, non-symlink files. Windows reparse and replacement handling requires its own verified policy.
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 12
+## Windows reader through version 13
 
-The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–12 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
+The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–13 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
 | Version | Additional content |
 |---|---|
@@ -67,6 +67,7 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 10 | Text `colorRuns` |
 | 11 | Text `fontRuns` |
 | 12 | Text paragraph fields: `alignment`, `tracking`, `leading`, `boxSize`, or a non-regular `fontStyle` |
+| 13 | A layer image stored as 16-bit RGBA PNG. Masks stay 8-bit. A lower version that contains a 16-bit PNG is rejected. Documents with only 8-bit images stay on their previous version. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
 
