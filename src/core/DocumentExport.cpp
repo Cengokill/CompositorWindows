@@ -39,25 +39,22 @@ bool sampleLayer(const Layer& layer, int x, int y, std::uint16_t sample[4], doub
     }
     return coverage > 0;
 }
+// Root layers only. Folders, clipping, adjustments, and effects change coverage in
+// SoftwareRenderer; this walk does not, so those documents export through that renderer.
+bool flatDeepExport(const Document& document) {
+    bool anyDeep = false;
+    for (const auto& layer : document.layers) {
+        if (layer.group || !layer.parentId.empty() || !layer.maskSourceId.empty()) return false;
+        if (!layer.visible) continue;
+        if (!layer.adjustmentJson.empty() || layer.effects.active()) return false;
+        if (layer.opacity > 0 && layer.deep && layer.deep->valid()) anyDeep = true;
+    }
+    return anyDeep;
+}
 std::shared_ptr<const DeepImage> flattenDeep(const Document& document, const imaging::ExportOptions& options) {
-    const bool complex = std::any_of(document.layers.begin(), document.layers.end(), [](const Layer& layer) { return layer.visible && (!layer.adjustmentJson.empty() || layer.effects.active()); });
     auto image = std::make_shared<DeepImage>();
     image->width = document.width; image->height = document.height;
     image->samples.assign(std::size_t(document.width) * std::size_t(document.height) * 4, 0);
-    if (complex) {
-        SoftwareRenderer renderer;
-        for (int top = 0; top < document.height; top += 64) {
-            if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
-            const int rows = std::min(64, document.height - top);
-            auto raster = renderer.render(document, 0, top, document.width, rows);
-            for (int y = 0; y < rows; ++y) for (int x = 0; x < document.width; ++x) {
-                const auto pixel = raster->pixel(x, y);
-                auto* destination = image->at(x, top + y);
-                destination[0] = promote8(pixel.r); destination[1] = promote8(pixel.g); destination[2] = promote8(pixel.b); destination[3] = promote8(pixel.a);
-            }
-        }
-        return image;
-    }
     for (const auto& layer : document.layers) {
         if (!layer.visible || layer.group || layer.opacity <= 0 || (!layer.deep && !layer.raster)) continue;
         for (int y = 0; y < document.height; ++y) {
@@ -100,7 +97,7 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     imaging::validateExportExtent(std::uint32_t(document.width), std::uint32_t(document.height));
     validateDocument(document);
     options.dpi = document.resolution;
-    const bool deepPng = options.format == imaging::ImageFormat::Png && std::any_of(document.layers.begin(), document.layers.end(), [](const Layer& layer) { return layer.visible && layer.deep && layer.opacity > 0; });
+    const bool deepPng = options.format == imaging::ImageFormat::Png && flatDeepExport(document);
     if (deepPng) {
         auto flat = flattenDeep(document, options);
         imaging::WicCodec::encodeProjectDeepPng(path, *flat);

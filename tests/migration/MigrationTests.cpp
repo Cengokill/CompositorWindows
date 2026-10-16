@@ -496,6 +496,60 @@ static void deep_contract() {
     exportDocumentAtomic(distinct.document, jpeg, jpegOptions);
     QFile jpegFile(QString::fromStdWString(jpeg.wstring())); check(jpegFile.open(QIODevice::ReadOnly), "JPEG export missing");
     const auto signature = jpegFile.read(2); check(signature.size() == 2 && uint8_t(signature[0]) == 0xFF && uint8_t(signature[1]) == 0xD8, "JPEG export was not an 8-bit JPEG");
+    auto deepLayer = [](int width, int height, Pixel color) {
+        Layer layer; layer.id = newId(); layer.name = "Deep"; layer.transform = {0, 0, double(width), double(height)};
+        auto image = std::make_shared<DeepImage>(); image->width = width; image->height = height; image->samples.assign(std::size_t(width) * std::size_t(height) * 4, 0);
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+            auto* sample = image->at(x, y);
+            sample[0] = promote8(color.r); sample[1] = promote8(color.g); sample[2] = promote8(color.b); sample[3] = promote8(color.a);
+        }
+        layer.deep = image; layer.raster = rasterFromDeep(*image); return layer;
+    };
+    Document hidden; hidden.id = newId(); hidden.width = 2; hidden.height = 1; hidden.resolution = 72;
+    Layer folder; folder.id = newId(); folder.name = "Folder"; folder.group = true; folder.visible = false; folder.transform = {0, 0, 2, 1};
+    auto child = deepLayer(2, 1, {255, 0, 0, 255}); child.parentId = folder.id; hidden.layers = {folder, child};
+    const auto hiddenPng = std::filesystem::path(directory.path().toStdWString()) / L"hidden.png";
+    exportDocumentAtomic(hidden, hiddenPng, pngOptions);
+    check(pngBitDepth(hiddenPng) == 8, "Hidden 16-bit folder exported as 16-bit PNG");
+    auto hiddenImage = imaging::WicCodec::decode(hiddenPng).image;
+    check(hiddenImage.width == 2 && hiddenImage.height == 1, "Hidden folder export size");
+    check(std::all_of(hiddenImage.pixels.begin(), hiddenImage.pixels.end(), [](std::uint8_t value) { return value == 0; }), "Hidden folder exported its 16-bit child");
+    Document clipped; clipped.id = newId(); clipped.width = 2; clipped.height = 1; clipped.resolution = 72;
+    Layer baseLayer; baseLayer.id = newId(); baseLayer.name = "Base"; baseLayer.transform = {0, 0, 2, 1};
+    const std::uint8_t coverage[]{255, 255, 255, 255, 0, 0, 0, 0};
+    baseLayer.raster = Raster::fromRgba(2, 1, coverage, 8);
+    auto overlay = deepLayer(2, 1, {255, 0, 0, 255}); overlay.maskSourceId = baseLayer.id; clipped.layers = {baseLayer, overlay};
+    const auto clippedPng = std::filesystem::path(directory.path().toStdWString()) / L"clipped.png";
+    exportDocumentAtomic(clipped, clippedPng, pngOptions);
+    auto clippedImage = imaging::WicCodec::decode(clippedPng).image;
+    auto rendered = SoftwareRenderer{}.render(clipped, 0, 0, clipped.width, clipped.height);
+    check(clippedImage.width == 2 && clippedImage.height == 1 && rendered, "Clipped 16-bit export size");
+    for (int x = 0; x < 2; ++x) {
+        const auto pixel = rendered->pixel(x, 0);
+        const auto* exportedPixel = clippedImage.pixels.data() + std::size_t(x) * 4;
+        check(exportedPixel[0] == pixel.r && exportedPixel[1] == pixel.g && exportedPixel[2] == pixel.b && exportedPixel[3] == pixel.a, "Clipped 16-bit PNG did not match the canvas composite");
+    }
+    imaging::ImportOptions byteBudget; byteBudget.maxWorkingBytes = 8;
+    bool rejectedBudget = false; try { imaging::WicCodec::decodeProjectDeepPng(png, byteBudget); } catch (const std::exception&) { rejectedBudget = true; }
+    check(rejectedBudget, "16-bit PNG decode accepted a 4-byte-per-pixel budget");
+    imaging::ImportOptions deepOnly; deepOnly.maxWorkingBytes = 16;
+    bool rejectedRaster = false; try { imaging::WicCodec::decodeProjectDeepPng(png, deepOnly); } catch (const std::exception&) { rejectedRaster = true; }
+    check(rejectedRaster, "16-bit PNG decode ignored the dithered raster");
+    imaging::ImportOptions enough; enough.maxWorkingBytes = 16 + 8 + sizeof(Raster::Tile);
+    check(static_cast<bool>(imaging::WicCodec::decodeProjectDeepPng(png, enough)), "16-bit PNG decode rejected a budget that fits the deep buffer and raster");
+    QByteArray animated;
+    const unsigned char pngSignature[]{137, 80, 78, 71, 13, 10, 26, 10};
+    animated.append(reinterpret_cast<const char*>(pngSignature), 8);
+    auto be = [&](std::uint32_t value) { for (int shift = 24; shift >= 0; shift -= 8) animated.append(char(value >> shift)); };
+    be(13); animated.append("IHDR"); be(1); be(1); animated.append("\x10\x06\x00\x00\x00", 5); be(0);
+    be(8); animated.append("acTL"); be(1); be(1); be(0);
+    const auto animatedPath = std::filesystem::path(directory.path().toStdWString()) / L"animated-deep.png";
+    QFile animatedFile(QString::fromStdWString(animatedPath.wstring()));
+    check(animatedFile.open(QIODevice::WriteOnly) && animatedFile.write(animated) == animated.size(), "animated 16-bit PNG fixture");
+    animatedFile.close();
+    std::string animatedReason;
+    try { imaging::WicCodec::decodeProjectDeepPng(animatedPath); } catch (const std::exception& error) { animatedReason = error.what(); }
+    check(animatedReason.find("Animated") != std::string::npos, "Animated 16-bit project PNG was not rejected");
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
