@@ -16,17 +16,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
+
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      
+
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
@@ -39,7 +39,7 @@ jobs:
             dependencies/imaging/model/birefnet-lite.onnx
             evidence/imaging
           key: compositor-deps-v3-${{ hashFiles('dependencies.lock.json', 'dependencies/imaging/lock.json') }}
-      
+
       - name: Bootstrap dependencies
         shell: pwsh
         run: |
@@ -158,32 +158,32 @@ jobs:
           if ($LASTEXITCODE) { throw 'Pinned Pillow installation failed.' }
           & python tests/imaging/make_fixtures.py
           if ($LASTEXITCODE) { throw 'Import fixture generation failed.' }
-      
+
       - name: Configure CMake
         shell: pwsh
         run: |
           cmake --preset windows-x64-ci
           if ($LASTEXITCODE) { throw 'CMake configuration failed.' }
-      
+
       - name: Build Compositor
         shell: pwsh
         run: |
           cmake --build --preset windows-x64-ci --target Compositor --parallel 4
           if ($LASTEXITCODE) { throw 'Compositor build failed.' }
-      
+
       - name: Build all tests
         shell: pwsh
         run: |
           cmake --build --preset windows-x64-ci --parallel 4
           if ($LASTEXITCODE) { throw 'Test build failed.' }
-      
+
       - name: Run tests
         shell: pwsh
         run: |
           Write-Host 'Running CI tests (excluding interactive, known_failure, and external_fixture labels).'
           ctest --preset windows-x64-ci --output-on-failure
           if ($LASTEXITCODE) { throw 'CI tests failed.' }
-      
+
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -193,7 +193,7 @@ jobs:
             build/ci/Testing/Temporary/LastTest.log
             build/ci/Testing/Temporary/LastTestsFailed.log
           if-no-files-found: ignore
-      
+
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
