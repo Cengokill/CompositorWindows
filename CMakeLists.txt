@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.31.6)
 project(CompositorWindows VERSION 0.1.8 LANGUAGES C CXX)
 option(COMPOSITOR_ASAN "Instrument native code with MSVC AddressSanitizer" OFF)
+option(COMPOSITOR_SKIP_IMAGING_HASH_CHECK "Allow source-built codec DLL hashes to differ from release binaries (CI only)" OFF)
 if(COMPOSITOR_ASAN)
   add_compile_options(/fsanitize=address /Zi)
   add_link_options(/INCREMENTAL:NO /DEBUG)
@@ -22,7 +23,7 @@ foreach(index RANGE ${imaging_binary_last})
   string(JSON expected_hash GET "${imaging_lock}" binaries ${index} sha256)
   set(binary_file "${CMAKE_SOURCE_DIR}/dependencies/imaging/${binary_path}")
   file(SHA256 "${binary_file}" actual_hash)
-  if(NOT actual_hash STREQUAL expected_hash)
+  if(NOT (COMPOSITOR_SKIP_IMAGING_HASH_CHECK AND binary_path MATCHES "^install/bin/(heif|libde265)\\.dll$") AND NOT actual_hash STREQUAL expected_hash)
     message(FATAL_ERROR "Locked imaging runtime checksum mismatch: ${binary_path}")
   endif()
   list(APPEND imaging_runtime_files "${binary_file}")
@@ -30,6 +31,7 @@ endforeach()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
 add_custom_target(deploy_imaging_runtime
   COMMAND "${CMAKE_COMMAND}" "-DIMAGING_ROOT=${CMAKE_SOURCE_DIR}/dependencies/imaging" "-DRUNTIME_DESTINATION=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    "-DCOMPOSITOR_SKIP_IMAGING_HASH_CHECK=${COMPOSITOR_SKIP_IMAGING_HASH_CHECK}"
     -P "${CMAKE_SOURCE_DIR}/scripts/deploy-imaging-runtime.cmake"
   VERBATIM)
 add_library(compositor_core src/core/Document.cpp src/core/CompositeCache.cpp)
@@ -94,7 +96,7 @@ foreach(case identity down_even down_odd up_small mixed_wide mixed_tall thin_wid
     --executable $<TARGET_FILE:subject_input_tests> --case ${case}
     --fixtures "${CMAKE_SOURCE_DIR}/tests/imaging/input_resize42/fixtures-02"
     --output-root "${CMAKE_BINARY_DIR}/subject-input-evidence")
-  set_tests_properties(subject_input.${case} PROPERTIES TIMEOUT 150)
+  set_tests_properties(subject_input.${case} PROPERTIES TIMEOUT 150 LABELS "external_fixture")
 endforeach()
 target_sources(compositor_imaging PRIVATE src/imaging/stream_export.cpp)
 target_sources(compositor_render PRIVATE src/core/DocumentExport.cpp)
