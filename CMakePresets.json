@@ -88,6 +88,15 @@
       }
     },
     {
+      "name": "windows-x64-release-noninteractive",
+      "inherits": "windows-x64-release",
+      "filter": {
+        "exclude": {
+          "label": "interactive"
+        }
+      }
+    },
+    {
       "name": "windows-x64-asan",
       "inherits": "windows-x64-release",
       "configurePreset": "windows-x64-asan",
