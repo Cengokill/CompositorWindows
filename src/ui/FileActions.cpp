@@ -382,13 +382,14 @@ void MainWindow::openProjectDialog(){
         reportPickerBusy(this);
         return;
     }
+    QPointer<MainWindow> guard(this);
     // Destruction order clears the managing flag before refreshing commands.
-    const auto update=qScopeGuard([this]{refresh(false,false);});
+    const auto update=qScopeGuard([this,guard]{if(guard)refresh(false,false);});
     setProperty("nativePickerInProgress",true);
-    const auto clearPicker=qScopeGuard([this]{setProperty("nativePickerInProgress",false);});
+    const auto clearPicker=qScopeGuard([this,guard]{if(guard)setProperty("nativePickerInProgress",false);});
     QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
-    try{if(const auto paths=ui::chooseProjectDirectories(this))loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}
-    catch(const std::exception& error){QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
+    try{if(const auto paths=ui::chooseProjectDirectories(this,MainWindow::userDownloadsDirectory()))loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}
+    catch(const std::exception& error){if(guard)QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
 }
 bool MainWindow::openProjectPaths(const QStringList& paths){
     if(!canSwitchProjects()||paths.isEmpty())return false;

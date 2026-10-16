@@ -512,7 +512,7 @@ foreach(case drop_order drop_existing drop_pending_guard drop_mixed_failure batc
   set_tests_properties(project_open_batch.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()
 add_test(NAME project_open_batch.native_dialog_cancel COMMAND project_open_batch_tests native_dialog_cancel)
-set_tests_properties(project_open_batch.native_dialog_cancel PROPERTIES TIMEOUT 30)
+set_tests_properties(project_open_batch.native_dialog_cancel PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows" TIMEOUT 30 LABELS "interactive")
 target_link_libraries(project_reopen_tests PRIVATE compositor_ui Qt6::Test)
 target_compile_options(project_reopen_tests PRIVATE /W4 /WX /utf-8)
 foreach(case same_active other_tab case_unicode_dot_alias junction_alias distinct_directories pending_gradient busy_guard failed_load)
