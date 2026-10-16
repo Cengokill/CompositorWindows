@@ -387,8 +387,10 @@ void MainWindow::openProjectDialog(){
     const auto update=qScopeGuard([this,guard]{if(guard)refresh(false,false);});
     setProperty("nativePickerInProgress",true);
     const auto clearPicker=qScopeGuard([this,guard]{if(guard)setProperty("nativePickerInProgress",false);});
-    QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
-    try{if(const auto paths=ui::chooseProjectDirectories(this,MainWindow::userDownloadsDirectory()))loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}
+    const auto managing=qScopeGuard([this,guard]{if(guard)managingProjectOpen_=false;});
+    if(!guard)return;
+    managingProjectOpen_=true;refresh(false,false);
+    try{if(const auto paths=ui::chooseProjectDirectories(this,MainWindow::userDownloadsDirectory())){if(!guard)return;loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}}
     catch(const std::exception& error){if(guard)QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
 }
 bool MainWindow::openProjectPaths(const QStringList& paths){
