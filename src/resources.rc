@@ -13,7 +13,7 @@ BEGIN
   BLOCK "040904B0"
   BEGIN
    VALUE "CompanyName", "Compositor Windows contributors"
-   VALUE "FileDescription", "Compositor Windows preview"
+   VALUE "FileDescription", "Compositor Windows"
    VALUE "FileVersion", "0.1.8-preview"
    VALUE "ProductName", "Compositor Windows"
    VALUE "ProductVersion", "0.1.8-preview"
