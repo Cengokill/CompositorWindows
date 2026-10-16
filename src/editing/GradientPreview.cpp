@@ -2,6 +2,7 @@
 // a19db9011282399785dc18efcfded904627bdcc2. Copyright (c) 2026 Wonder Assembly LLC.
 // MIT notice: graphics/upstream/LICENSE.
 #include "GradientPreview.h"
+#include "core/DeepImage.h"
 #include "graphics/RasterSampling.h"
 #include "graphics/SamplingSource.h"
 #include <algorithm>
@@ -73,6 +74,15 @@ struct GradientPreview::Impl {
         if(mask){auto v=channel(foreground.r,background.r,old.r);return {v,v,v,255};}
         return {channel(foreground.r,background.r,old.r),channel(foreground.g,background.g,old.g),channel(foreground.b,background.b,old.b),byte(255*amount+old.a*(1-amount))};
     }
+    void sampleDeep(int x,int y,uint16_t out[4])const{if(!original.deep||!original.deep->valid()||x<0||y<0||x>=original.deep->width||y>=original.deep->height){out[0]=out[1]=out[2]=out[3]=0;return;}std::copy_n(original.deep->at(x,y),4,out);}
+    void pixel16(int x,int y,uint16_t out[4])const{
+        sampleDeep(x,y,out);if(!active||mask)return;auto p=documentPoint(x,y);double amount=coverage(p);if(amount==0)return;
+        double dx=end.x-start.x,dy=end.y-start.y,l2=dx*dx+dy*dy;
+        double t=settings.shape==GradientShape::Radial?std::hypot(p.x-start.x,p.y-start.y)/std::sqrt(l2):((p.x-start.x)*dx+(p.y-start.y)*dy)/l2;t=std::clamp(t,0.,1.);if(settings.reversed)t=1-t;
+        amount*=std::clamp(settings.opacity,0.,1.);if(settings.style==GradientStyle::ForegroundToTransparent)amount*=1-t;
+        auto channel=[&](uint8_t f,uint8_t b,uint16_t o){double c=settings.style==GradientStyle::ForegroundToTransparent?promote8(f):promote8(f)+(int(promote8(b))-int(promote8(f)))*t;return uint16_t(std::clamp(std::lround(c*amount+o*(1-amount)),0L,65535L));};
+        out[0]=channel(foreground.r,background.r,out[0]);out[1]=channel(foreground.g,background.g,out[1]);out[2]=channel(foreground.b,background.b,out[2]);out[3]=uint16_t(std::clamp(std::lround(65535*amount+out[3]*(1-amount)),0L,65535L));
+    }
     uint8_t inheritedMask(int x,int y)const{if(x<0||y<0||x>=baseWidth||y>=baseHeight)return 255;const auto& g=*original.mask->raster;return g.pixel(int((x+.5)*g.width/baseWidth),int((y+.5)*g.height/baseHeight));}
     uint8_t maskExterior()const{ // Same 96px edge-majority thumbnail contract as GrowingBrush.
         double factor=std::min(1.,96./std::max(baseWidth,baseHeight));int w=std::max(1,int(baseWidth*factor)),h=std::max(1,int(baseHeight*factor));uint64_t sum=0,count=0;
@@ -105,7 +115,8 @@ Layer GradientPreview::materializeLayer()const{
     for(size_t key=0;key<image->tiles.size();++key){auto tile=std::make_shared<Raster::Tile>();int tx=int(key%columns)*256,ty=int(key/columns)*256;for(int y=0;y<std::min(256,h-ty);++y)for(int x=0;x<std::min(256,w-tx);++x){auto value=s.pixel(ox+tx+x,oy+ty+y);tile->pixels[size_t(y)*256+x]=value;if(value.a){left=std::min(left,tx+x);top=std::min(top,ty+y);right=std::max(right,tx+x+1);bottom=std::max(bottom,ty+y+1);}}image->tiles[key]=std::move(tile);}
     if(right<=left){left=top=0;right=w;bottom=h;}Rect crop{double(ox+left),double(oy+top),double(right-left),double(bottom-top)};
     if(left||top||right!=w||bottom!=h){auto tight=std::make_shared<Raster>(*Raster::filled(right-left,bottom-top));int cols=(tight->width+255)/256;for(size_t key=0;key<tight->tiles.size();++key){auto tile=std::make_shared<Raster::Tile>();int tx=int(key%cols)*256,ty=int(key/cols)*256;for(int y=0;y<std::min(256,tight->height-ty);++y)for(int x=0;x<std::min(256,tight->width-tx);++x)tile->pixels[size_t(y)*256+x]=image->pixel(left+tx+x,top+ty+y);tight->tiles[key]=std::move(tile);}image=std::move(tight);}
-    result.raster=image;result.transform=s.placement(crop);result.shapeJson.clear();
+    result.raster=image;result.transform=s.placement(crop);result.shapeJson.clear();result.deep.reset();
+    if(s.original.deep){auto deep=std::make_shared<DeepImage>();deep->width=image->width;deep->height=image->height;deep->samples.resize(std::size_t(deep->width)*std::size_t(deep->height)*4);for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x)s.pixel16(ox+left+x,oy+top+y,deep->at(x,y));result.deep=deep;result.raster=rasterFromDeep(*deep);}
     if(result.mask&&!result.mask->placement&&crop!=Rect{0,0,double(s.baseWidth),double(s.baseHeight)}){auto gray=std::make_shared<GrayRaster>();gray->width=int(crop.width);gray->height=int(crop.height);gray->pixels.resize(size_t(gray->width)*gray->height);for(int y=0;y<gray->height;++y)for(int x=0;x<gray->width;++x)gray->pixels[size_t(y)*gray->width+x]=s.inheritedMask(int(crop.x)+x,int(crop.y)+y);result.mask->raster=gray;}
     return result;
 }

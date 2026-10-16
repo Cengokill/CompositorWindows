@@ -94,12 +94,12 @@ Layer carryFilterMask(const Layer& original,Layer layer,const filters::Request& 
 struct PreparedFilter {Layer layer;std::optional<filters::CameraRawScope> scope;};
 PreparedFilter filteredLayer(const Layer& original,const filters::Request& job){
     auto result=filters::apply(job);auto layer=original;
-    layer.raster=result.raster;layer.transform=result.transform;if(result.changed){layer.shapeJson.clear();layer.text.reset();}
+    layer.raster=result.raster;if(result.raster!=original.raster)layer.deep.reset();layer.transform=result.transform;if(result.changed){layer.shapeJson.clear();layer.text.reset();}
     return {carryFilterMask(original,std::move(layer),job,result.changed),result.cameraRawScope};
 }
 std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer& original,const filters::Request& job){
     return [rendered,original,job](const Layer& current){
-        auto layer=current;layer.raster=rendered.raster;layer.transform=rendered.transform;layer.shapeJson=rendered.shapeJson;
+        auto layer=current;layer.raster=rendered.raster;if(rendered.raster!=current.raster)layer.deep.reset();layer.transform=rendered.transform;layer.shapeJson=rendered.shapeJson;
         if(current.mask==original.mask&&current.transform==original.transform){layer.mask=rendered.mask;return layer;}
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };

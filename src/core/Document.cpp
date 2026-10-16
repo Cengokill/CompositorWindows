@@ -95,7 +95,7 @@ void validateDocument(const Document& d) {
         if (layer.id.empty() || !layers.emplace(layer.id, &layer).second || layer.name.empty() ||
             layer.name.size() > 16384 || !layer.transform.valid() || !std::isfinite(layer.opacity) ||
             layer.opacity < 0 || layer.opacity > 1 || int(layer.blend) < 0 || size_t(layer.blend) >= blendNames.size() ||
-            (layer.group && (layer.blend != Blend::Normal || layer.raster || layer.effects.specified || layer.text)) ||
+            (layer.group && (layer.blend != Blend::Normal || layer.raster || layer.deep || layer.effects.specified || layer.text)) ||
             (!layer.adjustmentJson.empty() && (layer.group || layer.raster)))
             throw std::runtime_error("Invalid layer metadata");
         if (layer.raster) {
@@ -105,6 +105,8 @@ void validateDocument(const Document& d) {
                 throw std::runtime_error("Invalid raster tile storage");
             imagePixels += uint64_t(layer.raster->width) * layer.raster->height;
         }
+        if (layer.deep && (!layer.raster || !layer.deep->valid() || layer.deep->width != layer.raster->width || layer.deep->height != layer.raster->height))
+            throw std::runtime_error("Invalid 16-bit layer pixels");
         if (layer.mask) {
             if (!layer.mask->raster) throw std::runtime_error("Missing mask coverage");
             const auto& mask = *layer.mask->raster;
@@ -227,6 +229,7 @@ size_t History::retainedBytes(const std::optional<Document>& doc,std::span<const
                 if(seen.insert(tile.get()).second&&count)bytes+=sizeof(Raster::Tile);
             if(layer.mask&&layer.mask->raster&&seen.insert(layer.mask->raster.get()).second&&count)
                 bytes+=layer.mask->raster->pixels.size();
+            if(layer.deep&&seen.insert(layer.deep.get()).second&&count)bytes+=layer.deep->samples.size()*sizeof(std::uint16_t);
         }
         if(document->selection&&document->selection->coverage&&seen.insert(document->selection->coverage.get()).second&&count)
             bytes+=document->selection->coverage->retainedBytes();

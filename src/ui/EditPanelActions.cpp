@@ -19,7 +19,7 @@ struct EditViewState {
         Document shown=current;auto& layer=shown.layers[size_t(target-current.layers.begin())];
         if(live)layer.adjustmentJson=result->adjustmentJson;
         else {
-            layer.raster=result->raster;
+            layer.raster=result->raster;layer.deep.reset();
             // Filters have a fixed grown preview placement; Hue and ordinary
             // ungrown previews follow the current layer transform after Undo.
             if(result->transform!=original.transform){
@@ -71,7 +71,7 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
         Document prepared=*owner->document;auto& changed=prepared.layers[size_t(target-owner->document->layers.begin())];
         if(state->live)changed.adjustmentJson=rendered->adjustmentJson;
         else if(value.mergeLayer)changed=value.mergeLayer(*target);
-        else {changed.raster=rendered->raster;changed.shapeJson=rendered->shapeJson;}
+        else {changed.raster=rendered->raster;changed.deep.reset();changed.shapeJson=rendered->shapeJson;}
         validateDocument(prepared);
         if(!state->live)owner->history.begin(action,owner->document,owner->active);
         try{owner->document=std::move(prepared);owner->history.end(owner->document,owner->active);state->livePending=false;if(value.maskSelected)owner->maskSelected=true;}

@@ -108,7 +108,7 @@ struct PixelTransformSession::Impl {
                 const auto value=over(under,copied);tile->pixels[size_t(y)*256+x]=value;if(value!=base)tileUnchanged=false;}}
             image->tiles.push_back(tileUnchanged?source.tiles[key]:std::move(tile));
         }
-        auto layer=original;layer.raster=image;layer.transform=sourceExtentTransform(extent);
+        auto layer=original;layer.raster=image;layer.deep.reset();layer.transform=sourceExtentTransform(extent);
         if(layer.mask&&!layer.mask->placement&&!sameGrid){const auto& current=*layer.mask->raster;auto grown=std::make_shared<GrayRaster>();grown->width=w;grown->height=h;grown->pixels.resize(size_t(w)*h,255);
             for(int y=0;y<h;++y){cancelled(check);for(int x=0;x<w;++x){const double px=extent.x+x+.5,py=extent.y+y+.5;if(px>=0&&py>=0&&px<source.width&&py<source.height)grown->pixels[size_t(y)*w+x]=byte(graphics::sampleGray(current,{px/source.width,py/source.height},Transform::Sampling::Nearest)*255);}}
             layer.mask->raster=std::move(grown);
@@ -133,7 +133,7 @@ FloatingPixelPreview PixelTransformSession::floatingPreview(CancelCheck check){a
         for(size_t key=0;key<source.tiles.size();++key){std::shared_ptr<Raster::Tile> copy;const int x0=int(key%size_t(columns))*256,y0=int(key/size_t(columns))*256;
             for(int y=0;y<std::min(256,source.height-y0);++y){cancelled(check);for(int x=0;x<std::min(256,source.width-x0);++x){const size_t local=size_t(y)*256+x;const auto base=source.tiles[key]->pixels[local],value=s.duplicate?base:scale(base,1-s.selected(s.toDocument({x0+x+.5,y0+y+.5})));if(value!=base){if(!copy)copy=std::make_shared<Raster::Tile>(*source.tiles[key]);copy->pixels[local]=value;}}}if(copy)image->tiles[key]=std::move(copy);}
         s.cleared=std::move(image);s.temporaryId=newId();}
-    Layer base=s.original;base.raster=s.cleared;Layer floating;floating.id=s.temporaryId;floating.name="Floating Selection";floating.parentId=s.original.parentId;floating.opacity=s.original.opacity;floating.blend=s.original.blend;floating.raster=s.lifted;floating.transform=s.floatingDraft;
+    Layer base=s.original;base.raster=s.cleared;base.deep.reset();Layer floating;floating.id=s.temporaryId;floating.name="Floating Selection";floating.parentId=s.original.parentId;floating.opacity=s.original.opacity;floating.blend=s.original.blend;floating.raster=s.lifted;floating.transform=s.floatingDraft;
     if(s.distortion)floating=distortLayer(floating,s.floatingDraft,*s.distortion,{2048,false,check});cancelled(check);return {std::move(base),std::move(floating)};
 }
 PixelTransformResult PixelTransformSession::apply(CancelCheck check){auto& s=*impl_;if(s.finished)return s.result;if(s.started)s.render(std::move(check));s.finished=true;return s.result;}
