@@ -1,6 +1,6 @@
 # Windows preview packages
 
-Use the x64 MSI on Windows 11 to install for the current user. It needs no administrator account, Python, .NET or developer tools. The default location is `%LOCALAPPDATA%\Programs\CompositorWindows`; the Start menu entry is **Compositor Windows Preview**. The portable ZIP contains the same files: extract it into a new folder and run `Compositor.exe`.
+Use the x64 MSI on Windows 11 to install for the current user. It needs no administrator account, Python, .NET or developer tools. The default location is `%LOCALAPPDATA%\Programs\CompositorWindows`; the Start menu entry is **Compositor Windows**. The portable ZIP contains the same files: extract it into a new folder and run `Compositor.exe`.
 
 The preview is unsigned. Windows can show an unknown-publisher warning. Keep Windows security enabled and obtain the download and published SHA256 from the release page. Save projects in your own document folders. MSI repair, upgrade and uninstall operate on installer-owned files; unlisted project folders are preserved. `.comp` projects are directories, with an **Open in Compositor** folder action; the default Explorer directory action is unchanged.
 

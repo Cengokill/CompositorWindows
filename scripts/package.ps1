@@ -154,7 +154,7 @@ try {
  $policy=[ordered]@{schema=1;channel='community-preview';automaticUpdates=$false;upstream='a19db9011282399785dc18efcfded904627bdcc2'}
  [IO.File]::WriteAllText((Join-Path $payload 'release-policy.json'),($policy|ConvertTo-Json),$encoding)
  $readme=@"
-Compositor Windows $Version preview
+Compositor Windows $Version
 
 Run Compositor.exe. Windows 11 x64 is required. Codecs, the offline foreground model and runtime DLLs are included.
 Read RELEASE-NOTES.md, USER-GUIDE.md and KNOWN-ISSUES.md. Save projects outside the application directory.
