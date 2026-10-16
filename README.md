@@ -4,9 +4,9 @@ A picture is a stack of decisions. Where the subject sits. What stays sharp. Wha
 
 Compositor is the image editor [Robbie Tilton](https://robbietilton.com/compositor) built for the Mac. This is the Windows 11 version of that editor: layers, masks, selections, paint, adjustments, filters, and background removal that runs on your machine.
 
-<img width="1178" height="755" alt="The Compositor editor on Windows, with the canvas, layers, and tool rail" src="https://github.com/user-attachments/assets/6d5fbea3-1280-42e0-8423-d89de5977959" />
+<img width="1279" height="849" alt="The Compositor editor on Windows, with the canvas, layers, and tool rail" src="https://github.com/user-attachments/assets/21092e76-284d-43a5-ae85-b0eaf495ca52" />
 
-<img width="841" height="554" alt="A closer view of the Windows editor and its dark controls" src="https://github.com/user-attachments/assets/d2ac8039-cc50-4367-b036-5ccff573b83a" />
+<img width="1279" height="849" alt="A closer view of the Windows editor and its dark controls" src="https://github.com/user-attachments/assets/6896c6be-8e06-43cb-978d-9efb747e1f78" />
 
 Hello,
 
