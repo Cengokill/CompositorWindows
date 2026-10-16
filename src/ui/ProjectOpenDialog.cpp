@@ -20,6 +20,7 @@ QString fileSystemPath(IShellItem* item){PWSTR value{};checked(item->GetDisplayN
 
 class ProjectOpenDialogEvents final : public IFileDialogEvents {
 public:
+    explicit ProjectOpenDialogEvents(HWND owner) : owner_(owner) {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** object) override {
         if(!object)return E_POINTER;
         if(id==IID_IUnknown||id==IID_IFileDialogEvents){*object=static_cast<IFileDialogEvents*>(this);AddRef();return S_OK;}
@@ -44,7 +45,11 @@ public:
     HRESULT STDMETHODCALLTYPE OnTypeChange(IFileDialog*) override{return S_OK;}
     HRESULT STDMETHODCALLTYPE OnOverwrite(IFileDialog*,IShellItem*,FDE_OVERWRITE_RESPONSE* response) override {if(response)*response=FDEOR_DEFAULT;return S_OK;}
 private:
-    HRESULT reject(IFileDialog* dialog) const {HWND window{};if(SUCCEEDED(dialog->GetWindow(&window)))MessageBoxW(window,L"Select one or more Compositor project folders ending in .comp.",L"Open Compositor Projects",MB_OK|MB_ICONINFORMATION);return S_FALSE;}
+    HRESULT reject(IFileDialog*) const {
+        MessageBoxW(owner_,L"Select one or more Compositor project folders ending in .comp.",L"Open Compositor Projects",MB_OK|MB_ICONINFORMATION);
+        return S_FALSE;
+    }
+    HWND owner_{};
     std::atomic_ulong references_{1};
 };
 
@@ -69,7 +74,7 @@ std::optional<QStringList> showProjectOpenDialog(HWND owner,const QString& initi
         const auto path=initialDirectory.toStdWString();ComPtr<IShellItem> folder;
         if(SUCCEEDED(SHCreateItemFromParsingName(path.c_str(),nullptr,IID_PPV_ARGS(&folder))))dialog->SetFolder(folder.Get());
     }
-    ComPtr<ProjectOpenDialogEvents> events;events.Attach(new ProjectOpenDialogEvents);
+    ComPtr<ProjectOpenDialogEvents> events;events.Attach(new ProjectOpenDialogEvents(owner));
     DWORD cookie{};checked(dialog->Advise(events.Get(),&cookie),"Attach project picker validation");
     const auto shown=dialog->Show(owner);dialog->Unadvise(cookie);
     if(shown==HRESULT_FROM_WIN32(ERROR_CANCELLED))return std::nullopt;
