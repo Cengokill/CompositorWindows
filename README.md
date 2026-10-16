@@ -6,7 +6,7 @@ Compositor is the image editor [Robbie Tilton](https://robbietilton.com/composit
 
 <img width="1279" height="849" alt="The Compositor editor on Windows, with the canvas, layers, and tool rail" src="https://github.com/user-attachments/assets/21092e76-284d-43a5-ae85-b0eaf495ca52" />
 
-<img width="1279" height="849" alt="A closer view of the Windows editor and its dark controls" src="https://github.com/user-attachments/assets/6896c6be-8e06-43cb-978d-9efb747e1f78" />
+<img width="672" height="552" alt="image" src="https://github.com/user-attachments/assets/f6c6cbd4-a085-423f-9f2b-c466897edaa6" />
 
 Hello,
 
