@@ -14,6 +14,11 @@ void runOnStaThread(Callable&& work){
     auto* thread=QThread::create([&work,&error]{
         const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
         struct Release{HRESULT value;~Release(){if(SUCCEEDED(value))CoUninitialize();}} release{apartment};
+        if(FAILED(apartment)){
+            try{throw std::runtime_error("Initialize STA apartment (HRESULT 0x"+std::to_string(static_cast<uint32_t>(apartment))+")");}
+            catch(...){error=std::current_exception();}
+            return;
+        }
         try{work();}catch(...){error=std::current_exception();}
     });
     if(!thread)throw std::runtime_error("Cannot create STA worker thread");
