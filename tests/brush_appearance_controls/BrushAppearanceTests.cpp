@@ -30,7 +30,7 @@ struct Fixture {
     Fixture():project(window.addProject(document(),"Brush appearance A")),before(*project.document){window.resize(1500,900);window.show();window.activateWindow();events();project.canvas->setFocus();events();}
     void select(EditorProject& value){window.findChild<QTabWidget*>()->setCurrentWidget(value.page);events();require(window.findChild<QTabWidget*>()->currentWidget()==value.page,"Fixture project switch");}
 };
-QAction* rail(MainWindow& window,ProjectTool tool){auto* bar=control<QToolBar>(window,"tools");for(auto* action:bar->actions())if(action->property("editorTool").isValid()&&action->property("editorTool").toInt()==int(tool))return action;throw std::runtime_error("Fixture rail tool missing");}
+QAction* rail(MainWindow& window,ProjectTool tool){for(auto* action:window.findChildren<QAction*>())if(action->property("editorTool").isValid()&&action->property("editorTool").toInt()==int(tool))return action;throw std::runtime_error("Fixture rail tool missing");}
 void clickRail(MainWindow& window,ProjectTool tool){auto* bar=control<QToolBar>(window,"tools");auto* action=rail(window,tool);require(action->isEnabled(),"Fixture rail enabled");auto* button=bar->widgetForAction(action);require(button&&button->isVisible(),"Fixture visible rail button");QTest::mouseClick(button,Qt::LeftButton);events();}
 bool erasing(MainWindow& window){return rail(window,ProjectTool::Eraser)->isChecked();}
 void key(Fixture& f,Qt::Key value){f.project.canvas->setFocus();events();QTest::keyClick(f.project.canvas,value);events();}

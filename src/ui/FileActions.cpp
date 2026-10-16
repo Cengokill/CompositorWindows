@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "AppLogging.h"
 #include "PropertyControls.h"
+#include "StaWorker.h"
 #include "persistence/ProjectStore.h"
 #include "imaging/wic_codec.h"
 #include "imaging/heif_codec.h"
@@ -145,20 +146,14 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     // Save-on-close needs a path before saveProject returns, so this waits.
     // GetSaveFileNameW still runs off the Qt GUI thread; ExcludeUserInputEvents
     // keeps the wait from dispatching close/deleteLater into this stack frame.
-    auto* thread=QThread::create([path,owner,directory,suggested,filter,title,defExt]{
-        const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-        struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
-        *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
-    });
-    if(!thread){
+    try{
+        ui::runOnStaThread([path,owner,directory,suggested,filter,title,defExt]{
+            *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
+        });
+    }catch(const std::runtime_error&){
         logging::trace("native save picker thread could not be created");
         return {};
     }
-    QEventLoop loop;
-    QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
-    QObject::connect(thread,&QThread::finished,&loop,&QEventLoop::quit,Qt::QueuedConnection);
-    thread->start();
-    if(!thread->isFinished())loop.exec(QEventLoop::ExcludeUserInputEvents);
     if(!guard)return {};
     return *path;
 }
@@ -378,11 +373,20 @@ void MainWindow::dropEvent(QDropEvent*event){
 }
 void MainWindow::openProjectDialog(){
     if(!canSwitchProjects())return;
+    if(property("nativePickerInProgress").toBool()){
+        reportPickerBusy(this);
+        return;
+    }
+    QPointer<MainWindow> guard(this);
     // Destruction order clears the managing flag before refreshing commands.
-    const auto update=qScopeGuard([this]{refresh(false,false);});
-    QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
-    try{if(const auto paths=ui::chooseProjectDirectories(this))loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}
-    catch(const std::exception& error){QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
+    const auto update=qScopeGuard([this,guard]{if(guard)refresh(false,false);});
+    setProperty("nativePickerInProgress",true);
+    const auto clearPicker=qScopeGuard([this,guard]{if(guard)setProperty("nativePickerInProgress",false);});
+    const auto managing=qScopeGuard([this,guard]{if(guard)managingProjectOpen_=false;});
+    if(!guard)return;
+    managingProjectOpen_=true;refresh(false,false);
+    try{if(const auto paths=ui::chooseProjectDirectories(this,MainWindow::userDownloadsDirectory())){if(!guard)return;loadProjectBatch(this,*paths,[this](const QString& path){return loadProjectDirectory(path);});}}
+    catch(const std::exception& error){if(guard)QMessageBox::critical(this,"Open Compositor Projects",QString::fromUtf8(error.what()));}
 }
 bool MainWindow::openProjectPaths(const QStringList& paths){
     if(!canSwitchProjects()||paths.isEmpty())return false;

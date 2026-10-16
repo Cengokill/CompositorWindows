@@ -243,12 +243,13 @@ public:
         tree->setMinimumWidth(0);
         // LayersPanel.swift39...55 uses three icon-only footer actions. Keep
         // their existing callbacks/names while allowing the source202 minimum.
-        for (const auto* name : {"layerGroupButton", "layerAddMaskButton", "layerDeleteButton"})
+        for (const auto* name : {"layerGroupButton", "layerAddMaskButton", "layerEffectsButton", "layerDeleteButton"})
             if (auto* button = dock->findChild<QAbstractButton*>(name)) {
                 const auto label = button->accessibleName(); button->setToolTip(label); button->setText({});
                 button->setFixedSize(36, 36); button->setIconSize({20, 20});
-                button->setIcon(editorIcon(qstrcmp(name,"layerGroupButton")==0 ? EditorIcon::Group
-                    : qstrcmp(name,"layerAddMaskButton")==0 ? EditorIcon::Mask : EditorIcon::Delete));
+                if(qstrcmp(name,"layerEffectsButton")!=0)
+                    button->setIcon(editorIcon(qstrcmp(name,"layerGroupButton")==0 ? EditorIcon::Group
+                        : qstrcmp(name,"layerAddMaskButton")==0 ? EditorIcon::Mask : EditorIcon::Delete));
                 button->setStyleSheet("QAbstractButton { background: transparent; border: 1px solid transparent; border-radius: 6px; }"
                     "QAbstractButton:hover { background: rgba(128,128,128,32); }"
                     "QAbstractButton:pressed { background: rgba(128,128,128,55); }"
