@@ -147,7 +147,7 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     // GetSaveFileNameW still runs off the Qt GUI thread; ExcludeUserInputEvents
     // keeps the wait from dispatching close/deleteLater into this stack frame.
     try{
-        runOnStaThread([path,owner,directory,suggested,filter,title,defExt]{
+        ui::runOnStaThread([path,owner,directory,suggested,filter,title,defExt]{
             *path=nativeSavePath(owner,directory,suggested,filter,title,defExt);
         });
     }catch(const std::runtime_error&){

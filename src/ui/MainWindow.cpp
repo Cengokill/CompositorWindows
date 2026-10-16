@@ -148,7 +148,12 @@ p->canvas->setTransformOverlay(tool_==Tool::Move&&(transformControls_||transform
     if(actionTool==Tool::Marquee)a->setIcon(ui::editorIcon(ellipse_?ui::EditorIcon::EllipseMarquee:ui::EditorIcon::Marquee));
     if(actionTool==Tool::Lasso)a->setIcon(ui::editorIcon(lassoKind_==editing::LassoKind::Polygonal?ui::EditorIcon::Polygon:ui::EditorIcon::Lasso));
     if(actionTool==Tool::Brush)a->setIcon(ui::editorIcon(brushMode_==ProjectBrushMode::Erase?ui::EditorIcon::Eraser:ui::EditorIcon::Brush));
-}}refreshing_=false;refreshSelectionGesture();if(commands_)commands_->refresh();refreshPaletteControls();
+}}
+for(auto*a:findChildren<QAction*>())if(a->property("editorTool").isValid()){
+    const auto actionTool=Tool(a->property("editorTool").toInt());
+    a->setChecked(actionTool==tool_||(actionTool==Tool::Brush&&tool_==Tool::Eraser)||(actionTool==Tool::Lasso&&tool_==Tool::Polygon));
+}
+refreshing_=false;refreshSelectionGesture();if(commands_)commands_->refresh();refreshPaletteControls();
     for(const char* name:{"selectionExpandAmount","selectionContractAmount"})if(auto* control=findChild<QSpinBox*>(name))control->setEnabled(ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()));
     if(auto* control=findChild<QComboBox*>("cropRatioChoice")){control->setVisible(tool_==Tool::Crop);control->setEnabled(p&&p->document&&!p->projectBusy&&!p->importing);}
     if(auto* control=findChild<QComboBox*>("lassoKind"))control->setVisible(tool_==Tool::Lasso||tool_==Tool::Polygon);

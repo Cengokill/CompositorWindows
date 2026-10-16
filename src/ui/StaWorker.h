@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QThread>
 #include <Windows.h>
+#include <objbase.h>
 #include <exception>
 #include <functional>
 #include <stdexcept>

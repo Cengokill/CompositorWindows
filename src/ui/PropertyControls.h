@@ -1,5 +1,6 @@
 #pragma once
 #include <QDoubleSpinBox>
+#include <QLocale>
 #include <QLineEdit>
 #include <QSignalBlocker>
 #include <QKeyEvent>
@@ -15,7 +16,7 @@ namespace compositor::ui {
 class PropertyNumber final:public QDoubleSpinBox {
     bool stepping_{};
 public:
-    using QDoubleSpinBox::QDoubleSpinBox;
+    explicit PropertyNumber(QWidget* parent=nullptr):QDoubleSpinBox(parent){setLocale(QLocale::C);}
     std::function<void()> releaseFocus;
     void synchronize(double value) {
         const bool typing=hasFocus()&&!stepping_;
