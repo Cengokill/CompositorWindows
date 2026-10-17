@@ -11,10 +11,22 @@
 #include <objbase.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <sstream>
+#include <stdexcept>
+#include <utility>
 
 namespace compositor::imaging::detail {
+// The preview size: the image scaled down to fit maxWidth x maxHeight with its aspect ratio kept, never enlarged.
+inline std::pair<std::uint32_t, std::uint32_t> fitPreview(std::uint32_t width, std::uint32_t height, std::uint32_t maxWidth, std::uint32_t maxHeight) {
+    if (!maxWidth || !maxHeight) return {0, 0};
+    const double scale = std::min({1., double(maxWidth) / width, double(maxHeight) / height});
+    return {std::max(1U, std::uint32_t(std::floor(width * scale))), std::max(1U, std::uint32_t(std::floor(height * scale)))};
+}
 inline void ok(HRESULT hr, const char* context) {
     if (FAILED(hr)) { std::ostringstream text; text << context << " (HRESULT 0x" << std::hex << static_cast<unsigned long>(hr) << ")"; throw std::runtime_error(text.str()); }
 }

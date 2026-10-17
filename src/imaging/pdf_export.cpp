@@ -1,11 +1,19 @@
 #include "export_temporary_file.h"
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iterator>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace compositor::imaging {
 using Microsoft::WRL::ComPtr;
@@ -13,20 +21,15 @@ namespace {
 using detail::Apartment;
 using detail::cancelled;
 using detail::factory;
+using detail::fitPreview;
 using detail::Handle;
 using detail::ok;
 using detail::regularFile;
 using detail::TemporaryFile;
 
-// Mac Export As floors its scale at 1%.
+// The minimum scale is 1 %, a Windows choice; the dialog offers 25 % and above.
 constexpr double minimumScale = 0.01;
 constexpr std::size_t copyChunk = 1024 * 1024;
-
-std::pair<std::uint32_t, std::uint32_t> fitPreview(std::uint32_t width, std::uint32_t height, std::uint32_t maxWidth, std::uint32_t maxHeight) {
-    if (!maxWidth || !maxHeight) return {0, 0};
-    const double scale = std::min({1., double(maxWidth) / width, double(maxHeight) / height});
-    return {std::max(1U, std::uint32_t(std::floor(width * scale))), std::max(1U, std::uint32_t(std::floor(height * scale)))};
-}
 
 // Locale-independent, so a PDF never gets a decimal comma.
 std::string number(double value) {
@@ -148,6 +151,119 @@ void writePdf(PdfFile& pdf, const std::filesystem::path& png, const std::vector<
     pdf.write("trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n");
     pdf.flush();
 }
+
+using PreviewSum = std::array<std::uint64_t, 3>;
+
+// Rejects a row whose color exceeds its alpha, the same check encodeRowsAtomic applies to its input.
+void checkedRows(const RgbaRows& rows, std::uint32_t width, std::uint32_t top, std::uint32_t count, std::span<std::uint8_t> output, std::size_t stride) {
+    rows(top, count, output, stride);
+    for (std::uint32_t row = 0; row < count; ++row)
+        for (const auto* p = output.data() + std::size_t(row) * stride, *end = p + std::size_t(width) * 4; p != end; p += 4)
+            if (p[0] > p[3] || p[1] > p[3] || p[2] > p[3]) throw std::runtime_error("Export rows contain invalid premultiplied pixels");
+}
+
+// The opaque page averaged into the preview: each preview pixel is the mean of the page pixels in its box.
+class PagePreview {
+public:
+    // A zero width or height means no preview was requested; the sums are then never touched.
+    PagePreview(ExportSize page, std::uint32_t width, std::uint32_t height)
+        : page_(page), width_(width), height_(height), columns_(page.width), sums_(std::size_t(width) * height) {
+        for (std::uint32_t x = 0; x < page.width; ++x) columns_[x] = std::uint32_t(std::uint64_t(x) * width / page.width);
+    }
+    // The sums of the preview row that covers page row `pageRow`, or null when no preview was requested.
+    PreviewSum* row(std::uint32_t pageRow) {
+        return sums_.empty() ? nullptr : sums_.data() + std::size_t(std::uint64_t(pageRow) * height_ / page_.height) * width_;
+    }
+    std::uint32_t column(std::uint32_t pageColumn) const { return columns_[pageColumn]; }
+    RgbaImage average() const {
+        RgbaImage out{width_, height_, std::size_t(width_) * 4, std::vector<std::uint8_t>(std::size_t(width_) * height_ * 4)};
+        auto boundary = [](std::uint32_t i, std::uint32_t source, std::uint32_t target) { return (std::uint64_t(i) * source + target - 1) / target; };
+        for (std::uint32_t y = 0; y < height_; ++y) for (std::uint32_t x = 0; x < width_; ++x) {
+            const auto count = (boundary(x + 1, page_.width, width_) - boundary(x, page_.width, width_)) * (boundary(y + 1, page_.height, height_) - boundary(y, page_.height, height_));
+            const auto& sum = sums_[std::size_t(y) * width_ + x];
+            auto* pixel = out.pixels.data() + (std::size_t(y) * width_ + x) * 4;
+            for (int c = 0; c < 3; ++c) pixel[c] = std::uint8_t((sum[c] + count / 2) / count);
+            pixel[3] = 255;
+        }
+        return out;
+    }
+private:
+    ExportSize page_;
+    std::uint32_t width_, height_;
+    std::vector<std::uint32_t> columns_;
+    std::vector<PreviewSum> sums_;
+};
+
+// The canvas rendered in stripes into a premultiplied bitmap, and resampled to `size` by WIC's scaler. A scaled stripe
+// needs source rows on both sides of it, so the whole canvas is held here; its bytes are added to ownedBytes.
+ComPtr<IWICBitmapScaler> scaledCanvas(IWICImagingFactory* imaging, const RgbaRows& rows, std::uint32_t width, std::uint32_t height, ExportSize size,
+    std::uint32_t stripeRows, const ExportOptions& options, const ExportProgress& progress, std::uint32_t progressTotal, std::size_t& ownedBytes) {
+    ComPtr<IWICBitmap> canvas;
+    ok(imaging->CreateBitmap(width, height, GUID_WICPixelFormat32bppPRGBA, WICBitmapCacheOnDemand, &canvas), "Create PDF source canvas");
+    {
+        const WICRect all{0, 0, INT(width), INT(height)};
+        ComPtr<IWICBitmapLock> lock; ok(canvas->Lock(&all, WICBitmapLockWrite, &lock), "Lock PDF source canvas");
+        UINT stride = 0, bytes = 0; BYTE* data = nullptr;
+        ok(lock->GetStride(&stride), "Read PDF source stride"); ok(lock->GetDataPointer(&bytes, &data), "Read PDF source pixels");
+        ownedBytes += bytes;
+        for (std::uint32_t top = 0; top < height; top += stripeRows) {
+            cancelled(options.cancelled);
+            const auto count = std::min(stripeRows, height - top);
+            checkedRows(rows, width, top, count, std::span(data + std::size_t(top) * stride, std::size_t(stride) * count), stride);
+            if (progress) progress(top + count, progressTotal);
+        }
+    }
+    // Premultiplied resampling, so transparent pixels do not bleed their color into the edges they border.
+    ComPtr<IWICBitmapScaler> scaler;
+    ok(imaging->CreateBitmapScaler(&scaler), "Create PDF scaler");
+    ok(scaler->Initialize(canvas.Get(), size.width, size.height, WICBitmapInterpolationModeHighQualityCubic), "Scale the PDF canvas");
+    return scaler;
+}
+
+// Encodes the page over the matte as the lossless 8-bit RGB PNG that the PDF takes its image data from, one stripe at a
+// time. The rows come from `scaler` when the page is scaled, otherwise straight from `rows`. Each stripe is also summed
+// into `preview`. Progress reports progressOffset plus the output rows completed, out of progressTotal.
+void encodePageImage(IWICImagingFactory* imaging, const std::filesystem::path& png, ExportSize size, std::uint32_t stripeRows,
+    IWICBitmapScaler* scaler, const RgbaRows& rows, const ExportOptions& options, const ExportProgress& progress,
+    std::uint32_t progressOffset, std::uint32_t progressTotal, std::vector<std::uint8_t>& rgba, std::vector<std::uint8_t>& rgb, PagePreview& preview) {
+    const std::array<std::uint8_t, 3> matte{options.matteR, options.matteG, options.matteB};
+    ComPtr<IWICStream> stream; ok(imaging->CreateStream(&stream), "Create PDF image stream");
+    ok(stream->InitializeFromFilename(png.c_str(), GENERIC_WRITE), "Open PDF image stream");
+    ComPtr<IWICBitmapEncoder> encoder; ok(imaging->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder), "Create PDF image encoder");
+    ok(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "Initialize PDF image encoder");
+    ComPtr<IWICBitmapFrameEncode> frame; ComPtr<IPropertyBag2> properties;
+    ok(encoder->CreateNewFrame(&frame, &properties), "Create PDF image frame");
+    PROPBAG2 filter{}; filter.pstrName = const_cast<LPOLESTR>(L"FilterOption");
+    VARIANT adaptive; VariantInit(&adaptive); adaptive.vt = VT_UI1; adaptive.bVal = WICPngFilterAdaptive;
+    ok(properties->Write(1, &filter, &adaptive), "Choose adaptive PNG filtering");
+    ok(frame->Initialize(properties.Get()), "Initialize PDF image frame");
+    ok(frame->SetSize(size.width, size.height), "Set PDF image size");
+    GUID format = GUID_WICPixelFormat24bppBGR;
+    ok(frame->SetPixelFormat(&format), "Choose PDF image pixel format");
+    if (format != GUID_WICPixelFormat24bppBGR) throw std::runtime_error("Encoder changed the required PDF image pixel format");
+    for (std::uint32_t top = 0; top < size.height; top += stripeRows) {
+        cancelled(options.cancelled);
+        const auto count = std::min(stripeRows, size.height - top);
+        if (scaler) {
+            const WICRect area{0, INT(top), INT(size.width), INT(count)};
+            ok(scaler->CopyPixels(&area, size.width * 4, UINT(rgba.size()), rgba.data()), "Scale PDF canvas rows");
+        } else checkedRows(rows, size.width, top, count, std::span(rgba).first(std::size_t(size.width) * count * 4), std::size_t(size.width) * 4);
+        for (std::uint32_t row = 0; row < count; ++row) {
+            auto* sum = preview.row(top + row);
+            for (std::uint32_t x = 0; x < size.width; ++x) {
+                const auto* p = rgba.data() + (std::size_t(row) * size.width + x) * 4;
+                auto* q = rgb.data() + (std::size_t(row) * size.width + x) * 3;
+                // The JPEG matte formula: the background shows through in proportion to the missing alpha.
+                for (int c = 0; c < 3; ++c) q[2 - c] = std::uint8_t(std::min(255U, unsigned(p[c]) + (unsigned(matte[c]) * (255 - p[3]) + 127) / 255));
+                if (sum) for (int c = 0; c < 3; ++c) sum[preview.column(x)][c] += q[2 - c];
+            }
+        }
+        ok(frame->WritePixels(count, size.width * 3, UINT(std::size_t(size.width) * count * 3), rgb.data()), "Encode PDF image rows");
+        if (progress) progress(progressOffset + top + count, progressTotal);
+    }
+    cancelled(options.cancelled);
+    ok(frame->Commit(), "Commit PDF image frame"); ok(encoder->Commit(), "Commit PDF image container");
+}
 }
 
 ExportSize scaledExportSize(std::uint32_t width, std::uint32_t height, double scale) {
@@ -173,104 +289,30 @@ StreamingExportResult encodePdfAtomic(const std::filesystem::path& destination, 
     cancelled(options.cancelled);
 
     const auto [previewWidth, previewHeight] = fitPreview(size.width, size.height, limits.previewWidth, limits.previewHeight);
-    using Sum = std::array<std::uint64_t, 3>;
     const std::size_t previewPixels = std::size_t(previewWidth) * previewHeight;
-    const std::size_t previewStorage = previewPixels * (sizeof(Sum) + 4) + std::size_t(size.width) * sizeof(std::uint32_t);
+    const std::size_t previewStorage = previewPixels * (sizeof(PreviewSum) + 4) + std::size_t(size.width) * sizeof(std::uint32_t);
     constexpr std::size_t renderReserve = 8 * 1024 * 1024;   // as encodeRowsAtomic: the canonical renderer's own buffers
     const std::size_t bytesPerRow = std::size_t(size.width) * (4 + 3);
     if (limits.maxBufferBytes <= previewStorage + renderReserve + bytesPerRow) throw std::invalid_argument("Streaming export buffer budget is too small");
     const auto stripeRows = std::uint32_t(std::min<std::size_t>({size.height, limits.stripeRows, (limits.maxBufferBytes - previewStorage - renderReserve) / bytesPerRow}));
     std::vector<std::uint8_t> rgba(std::size_t(size.width) * stripeRows * 4), rgb(std::size_t(size.width) * stripeRows * 3);
-    std::vector<Sum> sums(previewPixels);
-    std::vector<std::uint32_t> previewX(size.width);
-    for (std::uint32_t x = 0; x < size.width; ++x) previewX[x] = std::uint32_t(std::uint64_t(x) * previewWidth / size.width);
+    PagePreview preview(size, previewWidth, previewHeight);
     StreamingExportResult result;
     result.stripeRows = stripeRows;
     result.peakOwnedPixelBytes = rgba.size() + rgb.size() + previewStorage;
 
     Apartment apartment;
     auto imaging = factory();
-    // Where the canvas comes from, a stripe at a time: straight from the renderer, or through WIC's scaler over a
-    // premultiplied copy of the whole canvas (a scaled stripe needs source rows on both sides of it).
+    // A scaled page renders its source rows first, then encodes its output rows, so progress covers both in that order.
+    const std::uint32_t progressTotal = scaling ? height + size.height : size.height;
     ComPtr<IWICBitmapScaler> scaler;
-    const auto checkedRows = [&](std::uint32_t top, std::uint32_t count, std::span<std::uint8_t> output, std::size_t stride) {
-        rows(top, count, output, stride);
-        for (std::uint32_t row = 0; row < count; ++row)
-            for (const auto* p = output.data() + std::size_t(row) * stride, *end = p + std::size_t(width) * 4; p != end; p += 4)
-                if (p[0] > p[3] || p[1] > p[3] || p[2] > p[3]) throw std::runtime_error("Export rows contain invalid premultiplied pixels");
-    };
-    if (scaling) {
-        ComPtr<IWICBitmap> canvas;
-        ok(imaging->CreateBitmap(width, height, GUID_WICPixelFormat32bppPRGBA, WICBitmapCacheOnDemand, &canvas), "Create PDF source canvas");
-        {
-            const WICRect all{0, 0, INT(width), INT(height)};
-            ComPtr<IWICBitmapLock> lock; ok(canvas->Lock(&all, WICBitmapLockWrite, &lock), "Lock PDF source canvas");
-            UINT stride = 0, bytes = 0; BYTE* data = nullptr;
-            ok(lock->GetStride(&stride), "Read PDF source stride"); ok(lock->GetDataPointer(&bytes, &data), "Read PDF source pixels");
-            result.peakOwnedPixelBytes += bytes;
-            for (std::uint32_t top = 0; top < height; top += limits.stripeRows) {
-                cancelled(options.cancelled);
-                const auto count = std::min(limits.stripeRows, height - top);
-                checkedRows(top, count, std::span(data + std::size_t(top) * stride, std::size_t(stride) * count), stride);
-            }
-        }
-        // Premultiplied resampling, so transparent pixels do not bleed their color into the edges they border.
-        ok(imaging->CreateBitmapScaler(&scaler), "Create PDF scaler");
-        ok(scaler->Initialize(canvas.Get(), size.width, size.height, WICBitmapInterpolationModeHighQualityCubic), "Scale the PDF canvas");
-    }
+    if (scaling) scaler = scaledCanvas(imaging.Get(), rows, width, height, size, limits.stripeRows, options, progress, progressTotal, result.peakOwnedPixelBytes);
 
     // The page's pixels, over the background, as a lossless 8-bit RGB PNG from which the PDF takes its image data.
     TemporaryFile pngFile(destination);
-    {
-        ComPtr<IWICStream> stream; ok(imaging->CreateStream(&stream), "Create PDF image stream");
-        ok(stream->InitializeFromFilename(pngFile.path.c_str(), GENERIC_WRITE), "Open PDF image stream");
-        ComPtr<IWICBitmapEncoder> encoder; ok(imaging->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder), "Create PDF image encoder");
-        ok(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "Initialize PDF image encoder");
-        ComPtr<IWICBitmapFrameEncode> frame; ComPtr<IPropertyBag2> properties;
-        ok(encoder->CreateNewFrame(&frame, &properties), "Create PDF image frame");
-        PROPBAG2 filter{}; filter.pstrName = const_cast<LPOLESTR>(L"FilterOption");
-        VARIANT adaptive; VariantInit(&adaptive); adaptive.vt = VT_UI1; adaptive.bVal = WICPngFilterAdaptive;
-        ok(properties->Write(1, &filter, &adaptive), "Choose adaptive PNG filtering");
-        ok(frame->Initialize(properties.Get()), "Initialize PDF image frame");
-        ok(frame->SetSize(size.width, size.height), "Set PDF image size");
-        GUID format = GUID_WICPixelFormat24bppBGR;
-        ok(frame->SetPixelFormat(&format), "Choose PDF image pixel format");
-        if (format != GUID_WICPixelFormat24bppBGR) throw std::runtime_error("Encoder changed the required PDF image pixel format");
-        const std::array<std::uint8_t, 3> matte{options.matteR, options.matteG, options.matteB};
-        for (std::uint32_t top = 0; top < size.height; top += stripeRows) {
-            cancelled(options.cancelled);
-            const auto count = std::min(stripeRows, size.height - top);
-            if (scaler) {
-                const WICRect area{0, INT(top), INT(size.width), INT(count)};
-                ok(scaler->CopyPixels(&area, size.width * 4, UINT(rgba.size()), rgba.data()), "Scale PDF canvas rows");
-            } else checkedRows(top, count, std::span(rgba).first(std::size_t(size.width) * count * 4), std::size_t(size.width) * 4);
-            for (std::uint32_t row = 0; row < count; ++row) {
-                auto* sum = sums.data() + std::size_t(std::uint64_t(top + row) * previewHeight / size.height) * previewWidth;
-                for (std::uint32_t x = 0; x < size.width; ++x) {
-                    const auto* p = rgba.data() + (std::size_t(row) * size.width + x) * 4;
-                    auto* q = rgb.data() + (std::size_t(row) * size.width + x) * 3;
-                    // The JPEG matte formula: the background shows through in proportion to the missing alpha.
-                    for (int c = 0; c < 3; ++c) q[2 - c] = std::uint8_t(std::min(255U, unsigned(p[c]) + (unsigned(matte[c]) * (255 - p[3]) + 127) / 255));
-                    if (previewPixels) for (int c = 0; c < 3; ++c) sum[previewX[x]][c] += q[2 - c];
-                }
-            }
-            ok(frame->WritePixels(count, size.width * 3, UINT(std::size_t(size.width) * count * 3), rgb.data()), "Encode PDF image rows");
-            if (progress) progress(std::uint32_t(std::uint64_t(top + count) * height / size.height), height);
-        }
-        cancelled(options.cancelled);
-        ok(frame->Commit(), "Commit PDF image frame"); ok(encoder->Commit(), "Commit PDF image container");
-    }
+    encodePageImage(imaging.Get(), pngFile.path, size, stripeRows, scaler.Get(), rows, options, progress, scaling ? height : 0, progressTotal, rgba, rgb, preview);
     cancelled(options.cancelled);
-    if (previewPixels) {
-        result.preview = {previewWidth, previewHeight, std::size_t(previewWidth) * 4, std::vector<std::uint8_t>(previewPixels * 4)};
-        auto boundary = [](std::uint32_t i, std::uint32_t source, std::uint32_t target) { return (std::uint64_t(i) * source + target - 1) / target; };
-        for (std::uint32_t y = 0; y < previewHeight; ++y) for (std::uint32_t x = 0; x < previewWidth; ++x) {
-            const auto count = (boundary(x + 1, size.width, previewWidth) - boundary(x, size.width, previewWidth)) * (boundary(y + 1, size.height, previewHeight) - boundary(y, size.height, previewHeight));
-            auto* out = result.preview.pixels.data() + (std::size_t(y) * previewWidth + x) * 4;
-            for (int c = 0; c < 3; ++c) out[c] = std::uint8_t((sums[std::size_t(y) * previewWidth + x][c] + count / 2) / count);
-            out[3] = 255;
-        }
-    }
+    if (previewPixels) result.preview = preview.average();
 
     // The page is the export's pixels at the document's resolution; PDF points are 1/72 inch.
     const auto image = pngImageData(pngFile.path, size.width, size.height);

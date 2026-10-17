@@ -10,15 +10,11 @@ namespace {
 using detail::Apartment;
 using detail::cancelled;
 using detail::factory;
+using detail::fitPreview;
 using detail::Handle;
 using detail::ok;
 using detail::regularFile;
 using detail::TemporaryFile;
-std::pair<UINT, UINT> fit(UINT width, UINT height, UINT maxWidth, UINT maxHeight) {
-    if (!maxWidth || !maxHeight) return {0, 0};
-    const double scale = std::min({1., double(maxWidth) / width, double(maxHeight) / height});
-    return {std::max(1U, UINT(std::floor(width * scale))), std::max(1U, UINT(std::floor(height * scale)))};
-}
 RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& path, UINT requestedWidth, UINT requestedHeight,
                       std::size_t availableBytes, std::size_t& peakBytes, const std::function<bool()>& check) {
     cancelled(check);
@@ -94,7 +90,7 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         limits.previewWidth > 1000 || limits.previewHeight > 1000 || limits.maxBufferBytes > 1024ULL * 1024 * 1024)
         throw std::invalid_argument("Invalid streaming image export settings");
     cancelled(options.cancelled);
-    const auto [previewWidth, previewHeight] = fit(width, height, limits.previewWidth, limits.previewHeight);
+    const auto [previewWidth, previewHeight] = fitPreview(width, height, limits.previewWidth, limits.previewHeight);
     const bool pngPreview = options.format == ImageFormat::Png && previewWidth && previewHeight;
     using Accumulator = std::array<std::uint64_t, 4>;
     const std::size_t previewPixels = std::size_t(previewWidth) * previewHeight;

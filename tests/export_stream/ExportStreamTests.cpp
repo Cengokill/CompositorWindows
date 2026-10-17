@@ -147,13 +147,22 @@ void pdf_scale_background(){
  // The document is a snapshot; nothing about it changed.
  REQUIRE(d==before);only(temp,1);
 }
+void pdf_scale_stripes(){
+ // A scaled page does not depend on the stripe size: every stripe reads the same resampled rows a single stripe would.
+ QTemporaryDir temp;auto d=translucentLeft(64,40,96);const std::array<uint8_t,3> blue{20,40,250};
+ ExportOptions options;options.format=ImageFormat::Pdf;options.scale=.75;options.matteR=blue[0];options.matteG=blue[1];options.matteB=blue[2];
+ auto reference=path(temp,"reference.pdf");const auto referenceResult=exportDocumentAtomic(d,reference,options);const auto expected=readPdf(reference);
+ REQUIRE(expected.image.width==48&&expected.image.height==30);
+ for(uint32_t stripe:{1U,7U}){StreamExportLimits limits;limits.stripeRows=stripe;auto target=path(temp,("stripes-"+std::to_string(stripe)+".pdf").c_str());auto result=exportDocumentAtomic(d,target,options,limits);auto page=readPdf(target);REQUIRE(page.image.pixels==expected.image.pixels&&result.preview.pixels==referenceResult.preview.pixels);}
+ only(temp,3);
+}
 void pdf_cancel_atomic(){
  QTemporaryDir temp;auto target=path(temp,"keep.pdf");original(target);const auto before=bytes(target);auto d=translucentLeft(64,40,72);
- // Cancelled at every stage, with and without scaling: while rendering rows, while encoding, and after the last row.
+ // Cancelled at every stage, with and without scaling: while rendering rows, after the second progress report, and after the last one.
  for(double scale:{1.,.5})for(int stage=0;stage<3;++stage){
   bool stop=false;int rowCalls=0,progressCalls=0;ExportOptions options;options.format=ImageFormat::Pdf;options.scale=scale;options.cancelled=[&]{return stop;};
   StreamExportLimits limits;limits.stripeRows=8;bool wasCancelled=false;
-  try{encodePdfAtomic(target,64,40,[&](uint32_t,uint32_t,std::span<uint8_t> out,size_t){if(stage==0&&++rowCalls==2)stop=true;std::fill(out.begin(),out.end(),0);},options,limits,[&](uint32_t done,uint32_t height){++progressCalls;if((stage==1&&progressCalls==2)||(stage==2&&done==height))stop=true;});}
+  try{encodePdfAtomic(target,64,40,[&](uint32_t,uint32_t,std::span<uint8_t> out,size_t){if(stage==0&&++rowCalls==2)stop=true;std::fill(out.begin(),out.end(),0);},options,limits,[&](uint32_t done,uint32_t total){++progressCalls;if((stage==1&&progressCalls==2)||(stage==2&&done==total))stop=true;});}
   catch(const ExportCancelled&){wasCancelled=true;}
   REQUIRE(wasCancelled&&bytes(target)==before);only(temp,1);
  }
@@ -180,4 +189,4 @@ void large_pdf(){
  std::cout<<"format=pdf bytes="<<result.encodedBytes<<" owned_pixel_bytes="<<result.peakOwnedPixelBytes<<" render_bound="<<result.maxRenderPixelBytes<<" peak_working_set="<<memory.PeakWorkingSetSize<<" peak_commit="<<memory.PeakPagefileUsage<<"\n";
  REQUIRE(memory.PeakWorkingSetSize<256*1024*1024&&memory.PeakPagefileUsage<256*1024*1024&&Raster::materializationCount()==0);
 }
-int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"extent_guard",extent_guard},{"row_png",row_png},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
+int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"extent_guard",extent_guard},{"row_png",row_png},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_scale_stripes",pdf_scale_stripes},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}

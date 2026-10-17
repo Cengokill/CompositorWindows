@@ -568,18 +568,18 @@ void MainWindow::exportImage(){
     QDialogButtonBox buttons(QDialogButtonBox::Save|QDialogButtonBox::Cancel);buttons.setObjectName("exportButtons");layout.addRow(&buttons);
     struct Prepared {imaging::StreamingExportResult result;QString path,error;bool cancelled{};};
     QFutureWatcher<Prepared> watcher;QTimer debounce,progress;debounce.setSingleShot(true);debounce.setInterval(200);progress.setInterval(80);
-    auto cancel=std::make_shared<std::atomic_bool>(false);auto completed=std::make_shared<std::atomic_uint32_t>(0);
+    auto cancel=std::make_shared<std::atomic_bool>(false);auto percent=std::make_shared<std::atomic_uint32_t>(0);
     quint64 generation=0,runningGeneration=0;bool running=false,closed=false;QString readyPath;
     std::function<void()> start;
     auto changed=[&]{++generation;cancel->store(true);readyPath.clear();buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();};
     start=[&]{
         if(running||closed)return;
-        running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);completed->store(0);
+        running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);percent->store(0);
         imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:imaging::ImageFormat::Pdf;options.jpegQuality=quality.value()/100.;
         if(kind()==ExportKind::Pdf)options.scale=scale.currentData().toDouble();
         options.matteR=uint8_t(matteColor.red());options.matteG=uint8_t(matteColor.green());options.matteB=uint8_t(matteColor.blue());options.cancelled=[flag=cancel]{return flag->load();};
         const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":"pdf"));
-        watcher.setFuture(QtConcurrent::run([snapshot,path,options,completed]{Prepared out;out.path=path;try{out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[completed](uint32_t rows,uint32_t){completed->store(rows);});}catch(const imaging::ExportCancelled&){out.cancelled=true;}catch(const std::exception&e){out.error=QString::fromUtf8(e.what());}return out;}));
+        watcher.setFuture(QtConcurrent::run([snapshot,path,options,percent]{Prepared out;out.path=path;try{out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});}catch(const imaging::ExportCancelled&){out.cancelled=true;}catch(const std::exception&e){out.error=QString::fromUtf8(e.what());}return out;}));
     };
     connect(&watcher,&QFutureWatcher<Prepared>::finished,&dialog,[&]{
         running=false;if(closed)return;auto prepared=watcher.result();
@@ -594,7 +594,7 @@ void MainWindow::exportImage(){
         dialog.setProperty("readyExportPath",readyPath);dialog.setProperty("readyExportGeneration",generation);
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
-    connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(100ULL*completed->load()/uint32_t(snapshot.height)));});
+    connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
     auto applyKind=[&]{quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(kind()!=ExportKind::Png);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
     connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&scale,&QComboBox::currentIndexChanged,&dialog,[&]{showPageSize();changed();});

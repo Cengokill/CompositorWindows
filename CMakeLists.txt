@@ -589,7 +589,7 @@ set_tests_properties(layer_panel.source_cursor_conflict PROPERTIES LABELS "parit
 add_executable(export_stream_tests tests/export_stream/ExportStreamTests.cpp)
 target_link_libraries(export_stream_tests PRIVATE compositor_render compositor_imaging Qt6::Core psapi)
 target_compile_options(export_stream_tests PRIVATE /W4 /utf-8)
-foreach(case extent_guard row_png canonical_partition jpeg_matte_preview cancel_atomic row_failure_atomic copy_atomic pdf_page_size pdf_scale_background pdf_cancel_atomic large_blank large_narrow large_pdf)
+foreach(case extent_guard row_png canonical_partition jpeg_matte_preview cancel_atomic row_failure_atomic copy_atomic pdf_page_size pdf_scale_background pdf_scale_stripes pdf_cancel_atomic large_blank large_narrow large_pdf)
   add_test(NAME export_stream.${case} COMMAND export_stream_tests ${case})
   set_tests_properties(export_stream.${case} PROPERTIES TIMEOUT 90)
 endforeach()
