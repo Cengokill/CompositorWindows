@@ -117,7 +117,7 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     // of allocating and discarding transparent Raster tiles for every chunk.
     // Adjustments still go through the renderer so invalid effects remain errors.
     const bool emptyStack=std::none_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.raster||!layer.adjustmentJson.empty();});
-    auto result = imaging::encodeRowsAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height),
+    const imaging::RgbaRows fillRows =
         [&](std::uint32_t top, std::uint32_t rows, std::span<std::uint8_t> output, std::size_t stride) {
             if(emptyStack){for(std::uint32_t y=0;y<rows;++y)std::fill_n(output.data()+std::size_t(y)*stride,std::size_t(document.width)*4,uint8_t(0));return;}
             for (int left = 0; left < document.width; left += chunkWidth) {
@@ -135,7 +135,12 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
                     }
                 }
             }
-        }, options, limits, progress);
+        };
+    // A PDF page is the same 8-bit composite as the canvas (never the 16-bit PNG path), encoded at the document's
+    // resolution; encodePdfAtomic scales it and fills transparent pixels with the chosen background.
+    auto result = options.format == imaging::ImageFormat::Pdf
+        ? imaging::encodePdfAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height), fillRows, options, limits, progress)
+        : imaging::encodeRowsAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height), fillRows, options, limits, progress);
     result.maxRenderPixelBytes = renderBound;
     return result;
 }

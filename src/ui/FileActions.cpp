@@ -157,20 +157,29 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     if(!guard)return {};
     return *path;
 }
-QString withExportSuffix(QString path,bool jpeg){
+// The Format combo's entries, in order. The index is also what the export tests select.
+enum class ExportKind {Png,Jpeg,Pdf};
+QString withExportSuffix(QString path,ExportKind kind){
     QFileInfo info(path);
     const auto suffix=info.suffix().toLower();
-    if(jpeg){if(suffix=="jpg"||suffix=="jpeg")return path;}
-    else if(suffix=="png")return path;
+    switch(kind){
+    case ExportKind::Jpeg:if(suffix=="jpg"||suffix=="jpeg")return path;break;
+    case ExportKind::Png:if(suffix=="png")return path;break;
+    case ExportKind::Pdf:if(suffix=="pdf")return path;break;
+    }
     const auto stem=info.completeBaseName().isEmpty()?QStringLiteral("Untitled"):info.completeBaseName();
-    return QDir::cleanPath(QDir(info.path()).filePath(stem+(jpeg?".jpg":".png")));
+    const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":".png";
+    return QDir::cleanPath(QDir(info.path()).filePath(stem+extension));
 }
-QString chooseNativeExportDestination(MainWindow* window,bool jpeg,const QString& suggested){
+QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested){
     static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
     static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
-    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,jpeg?jpegFilter:pngFilter,L"Export Image",jpeg?L"jpg":L"png");
+    static const wchar_t pdfFilter[]=L"PDF\0*.pdf\0All files\0*.*\0";
+    const wchar_t* filter=kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:pngFilter;
+    const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":L"png";
+    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,L"Export Image",defaultExtension);
     if(path.isEmpty())return {};
-    return withExportSuffix(path,jpeg);
+    return withExportSuffix(path,kind);
 }
 QString chooseNativeProjectDestination(MainWindow* window,const QString& suggested){
     static const wchar_t filter[]=L"Compositor project directory\0*.comp\0All files\0*.*\0";
@@ -538,27 +547,39 @@ void MainWindow::exportImage(){
     struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
     QTemporaryDir temp;if(!temp.isValid())throw std::runtime_error("Cannot create image export storage");
     QDialog dialog(this);dialog.setObjectName("imageExportDialog");dialog.setWindowTitle("Export Image");QFormLayout layout(&dialog);
-    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG"});layout.addRow("Format",&format);
+    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF"});layout.addRow("Format",&format);
+    const auto kind=[&]{return ExportKind(format.currentIndex());};
+    // PDF only: the page holds the canvas resampled by this factor, at the document's resolution, so it prints that much larger or smaller.
+    QComboBox scale;scale.setObjectName("exportScale");for(const int percent:{25,50,75,100,200})scale.addItem(QString("%1%").arg(percent),percent/100.);scale.setCurrentIndex(3);layout.addRow("Scale",&scale);
+    QLabel pageSize;pageSize.setObjectName("exportPageSize");layout.addRow("Page",&pageSize);
     QSettings settings;double remembered=settings.value("jpegExportQuality",.85).toDouble();if(!std::isfinite(remembered))remembered=.85;
     ui::TrackSlider quality(Qt::Horizontal);quality.setObjectName("exportQuality");quality.setRange(0,100);quality.setValue(int(std::round(std::clamp(remembered,0.,1.)*100)));layout.addRow("JPEG quality",&quality);
-    QPushButton matte("White");matte.setObjectName("exportMatte");QColor matteColor=Qt::white;layout.addRow("JPEG background",&matte);
+    // JPEG and PDF have no transparency in the preview or the file; this color fills the canvas wherever it is transparent.
+    QPushButton matte("White");matte.setObjectName("exportMatte");QColor matteColor=Qt::white;layout.addRow("Background",&matte);
+    auto showPageSize=[&]{
+        const auto size=imaging::scaledExportSize(uint32_t(snapshot.width),uint32_t(snapshot.height),scale.currentData().toDouble());
+        auto inches=[&](uint32_t pixels){auto text=QString::number(pixels/snapshot.resolution,'f',2);while(text.endsWith('0'))text.chop(1);if(text.endsWith('.'))text.chop(1);return text;};
+        pageSize.setText(QString("%1 × %2 in at %3 DPI (%4 × %5 px)").arg(inches(size.width),inches(size.height)).arg(qRound(snapshot.resolution)).arg(size.width).arg(size.height));
+    };
+    showPageSize();layout.setRowVisible(&pageSize,false);
     QLabel preview;preview.setObjectName("exportPreview");preview.setMinimumSize(520,320);preview.setAlignment(Qt::AlignCenter);layout.addRow(&preview);
     QSlider previewZoom(Qt::Horizontal);previewZoom.setObjectName("exportPreviewZoom");previewZoom.setRange(25,400);previewZoom.setValue(100);layout.addRow("Preview zoom",&previewZoom);QPixmap previewSource;auto showPreview=[&]{if(previewSource.isNull())return;preview.setPixmap(previewSource.scaled(previewSource.size()*previewZoom.value()/100.,Qt::KeepAspectRatio,Qt::SmoothTransformation));};
     QLabel bytesLabel;bytesLabel.setObjectName("exportEncodedSize");layout.addRow("Encoded size",&bytesLabel);
     QDialogButtonBox buttons(QDialogButtonBox::Save|QDialogButtonBox::Cancel);buttons.setObjectName("exportButtons");layout.addRow(&buttons);
     struct Prepared {imaging::StreamingExportResult result;QString path,error;bool cancelled{};};
     QFutureWatcher<Prepared> watcher;QTimer debounce,progress;debounce.setSingleShot(true);debounce.setInterval(200);progress.setInterval(80);
-    auto cancel=std::make_shared<std::atomic_bool>(false);auto completed=std::make_shared<std::atomic_uint32_t>(0);
+    auto cancel=std::make_shared<std::atomic_bool>(false);auto percent=std::make_shared<std::atomic_uint32_t>(0);
     quint64 generation=0,runningGeneration=0;bool running=false,closed=false;QString readyPath;
     std::function<void()> start;
     auto changed=[&]{++generation;cancel->store(true);readyPath.clear();buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();};
     start=[&]{
         if(running||closed)return;
-        running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);completed->store(0);
-        imaging::ExportOptions options;options.format=format.currentIndex()==0?imaging::ImageFormat::Png:imaging::ImageFormat::Jpeg;options.jpegQuality=quality.value()/100.;
+        running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);percent->store(0);
+        imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:imaging::ImageFormat::Pdf;options.jpegQuality=quality.value()/100.;
+        if(kind()==ExportKind::Pdf)options.scale=scale.currentData().toDouble();
         options.matteR=uint8_t(matteColor.red());options.matteG=uint8_t(matteColor.green());options.matteB=uint8_t(matteColor.blue());options.cancelled=[flag=cancel]{return flag->load();};
-        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(format.currentIndex()==0?"png":"jpg"));
-        watcher.setFuture(QtConcurrent::run([snapshot,path,options,completed]{Prepared out;out.path=path;try{out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[completed](uint32_t rows,uint32_t){completed->store(rows);});}catch(const imaging::ExportCancelled&){out.cancelled=true;}catch(const std::exception&e){out.error=QString::fromUtf8(e.what());}return out;}));
+        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":"pdf"));
+        watcher.setFuture(QtConcurrent::run([snapshot,path,options,percent]{Prepared out;out.path=path;try{out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});}catch(const imaging::ExportCancelled&){out.cancelled=true;}catch(const std::exception&e){out.error=QString::fromUtf8(e.what());}return out;}));
     };
     connect(&watcher,&QFutureWatcher<Prepared>::finished,&dialog,[&]{
         running=false;if(closed)return;auto prepared=watcher.result();
@@ -573,19 +594,22 @@ void MainWindow::exportImage(){
         dialog.setProperty("readyExportPath",readyPath);dialog.setProperty("readyExportGeneration",generation);
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
-    connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(100ULL*completed->load()/uint32_t(snapshot.height)));});
-    connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{quality.setEnabled(format.currentIndex()==1);matte.setEnabled(format.currentIndex()==1);changed();});
+    connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
+    auto applyKind=[&]{quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(kind()!=ExportKind::Png);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
+    connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
+    connect(&scale,&QComboBox::currentIndexChanged,&dialog,[&]{showPageSize();changed();});
     connect(&quality,&QSlider::valueChanged,&dialog,changed);
     connect(&previewZoom,&QSlider::valueChanged,&dialog,showPreview);
-    connect(&matte,&QPushButton::clicked,&dialog,[&]{auto color=QColorDialog::getColor(matteColor,&dialog,"JPEG background");if(color.isValid()){matteColor=color;matte.setText(color.name());changed();}});
+    connect(&matte,&QPushButton::clicked,&dialog,[&]{auto color=QColorDialog::getColor(matteColor,&dialog,"Export background");if(color.isValid()){matteColor=color;matte.setText(color.name());changed();}});
     connect(&buttons,&QDialogButtonBox::accepted,&dialog,[&]{if(!readyPath.isEmpty()&&!running)dialog.accept();});
     connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-    quality.setEnabled(false);matte.setEnabled(false);changed();progress.start();
+    applyKind();changed();progress.start();
     const auto response=dialog.exec();closed=true;debounce.stop();progress.stop();cancel->store(true);watcher.waitForFinished();
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
-    if(format.currentIndex()==1)settings.setValue("jpegExportQuality",quality.value()/100.);
-    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(format.currentIndex()==0?".png":".jpg");
-    const auto destination=chooseNativeExportDestination(this,format.currentIndex()==1,suggested);if(destination.isEmpty())return;
+    const auto chosen=kind();
+    if(chosen==ExportKind::Jpeg)settings.setValue("jpegExportQuality",quality.value()/100.);
+    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(chosen==ExportKind::Png?".png":chosen==ExportKind::Jpeg?".jpg":".pdf");
+    const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
     QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;
     connect(&saving,&QProgressDialog::canceled,&saving,[copyCancelled]{copyCancelled->store(true);});

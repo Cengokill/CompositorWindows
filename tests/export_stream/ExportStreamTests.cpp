@@ -11,7 +11,9 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -44,7 +46,7 @@ void row_failure_atomic(){
  QTemporaryDir temp;auto target=path(temp,"failure.png");original(target);auto before=bytes(target);
  rejects([&]{encodeRowsAtomic(target,30,200,[](uint32_t y,uint32_t,std::span<uint8_t> data,size_t){if(y)throw std::runtime_error("injected row failure");std::fill(data.begin(),data.end(),0);});});REQUIRE(bytes(target)==before);
  rejects([&]{encodeRowsAtomic(target,1,1,[](uint32_t,uint32_t,std::span<uint8_t> data,size_t){data[0]=255;data[1]=data[2]=data[3]=0;});});REQUIRE(bytes(target)==before);
- for(auto format:{ImageFormat::Tiff,ImageFormat(999)}){ExportOptions option;option.format=format;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),option);});}
+ for(auto format:{ImageFormat::Tiff,ImageFormat::Pdf,ImageFormat(999)}){ExportOptions option;option.format=format;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),option);});}
  for(double dpi:{0.,-1.,std::numeric_limits<double>::infinity()}){ExportOptions option;option.dpi=dpi;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),option);});}
  ExportOptions nan;nan.jpegQuality=std::numeric_limits<double>::quiet_NaN();rejects([&]{encodeRowsAtomic(target,10,10,pattern(),nan);});
  auto invalid=StreamExportLimits{};invalid.maxBufferBytes=10;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),{},invalid);});
@@ -66,4 +68,125 @@ void copy_atomic(){
  copyEncodedAtomic(source,target);REQUIRE(bytes(source)==bytes(target));only(temp,3);
 }
 void large(bool narrow){QTemporaryDir temp;auto d=blank(narrow?30000:10000,narrow?3333:10000);auto before=d;Raster::resetMaterializationCount();auto start=std::chrono::steady_clock::now();for(auto format:{ImageFormat::Png,ImageFormat::Jpeg}){ExportOptions options;options.format=format;auto file=path(temp,format==ImageFormat::Png?"large.png":"large.jpg");auto result=exportDocumentAtomic(d,file,options);REQUIRE(result.preview.width<=520&&result.preview.height<=320&&!result.preview.pixels.empty());REQUIRE(result.peakOwnedPixelBytes+result.maxRenderPixelBytes<64*1024*1024);auto p=pixel(result.preview,0,0);REQUIRE(p== (format==ImageFormat::Png?Pixel{}:Pixel{255,255,255,255}));metadata(file,format);std::cout<<"format="<<(format==ImageFormat::Png?"png":"jpeg")<<" width="<<d.width<<" height="<<d.height<<" bytes="<<result.encodedBytes<<" owned_pixel_bytes="<<result.peakOwnedPixelBytes<<" render_bound="<<result.maxRenderPixelBytes<<"\n";}PROCESS_MEMORY_COUNTERS_EX memory{};memory.cb=sizeof(memory);REQUIRE(GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory)));std::cout<<"peak_working_set="<<memory.PeakWorkingSetSize<<" peak_commit="<<memory.PeakPagefileUsage<<" elapsed_ms="<<std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()<<"\n";std::cout.flush();REQUIRE(memory.PeakWorkingSetSize<256*1024*1024&&memory.PeakPagefileUsage<256*1024*1024);REQUIRE(d==before&&Raster::materializationCount()==0);}
-int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"extent_guard",extent_guard},{"row_png",row_png},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
+// ---- PDF export. The reader below knows just enough of the file to check what the exporter promises: a valid cross-reference
+// table, one page of the expected size, and the pixels of its single image, which it rewraps as a PNG for WIC to decode.
+uint32_t crc32(const uint8_t* data,size_t size){static const auto table=[]{std::array<uint32_t,256> t{};for(uint32_t n=0;n<256;++n){uint32_t c=n;for(int k=0;k<8;++k)c=c&1?0xEDB88320u^(c>>1):c>>1;t[n]=c;}return t;}();uint32_t c=0xFFFFFFFFu;for(size_t i=0;i<size;++i)c=table[(c^data[i])&0xFF]^(c>>8);return c^0xFFFFFFFFu;}
+void pngChunk(std::vector<uint8_t>& out,const char* type,const std::vector<uint8_t>& data){auto be=[&](uint32_t v){for(int s=24;s>=0;s-=8)out.push_back(uint8_t(v>>s));};be(uint32_t(data.size()));const auto start=out.size();out.insert(out.end(),type,type+4);out.insert(out.end(),data.begin(),data.end());be(crc32(out.data()+start,data.size()+4));}
+struct PdfPage{double width{},height{};int pages{};bool lossless{};RgbaImage image;};
+PdfPage readPdf(const std::filesystem::path& file){
+ const auto data=bytes(file);const std::string s(data.begin(),data.end());PdfPage page;const auto npos=std::string::npos;
+ REQUIRE(s.rfind("%PDF-",0)==0&&s.size()>5&&s.compare(s.size()-6,5,"%%EOF")==0);
+ // The cross-reference table must point at each object, and startxref at the table.
+ const auto start=s.rfind("startxref\n");REQUIRE(start!=npos);const auto xref=size_t(std::stoull(s.substr(start+10)));REQUIRE(s.compare(xref,5,"xref\n")==0&&s.compare(xref+5,2,"0 ")==0);
+ const auto count=std::stoi(s.substr(xref+7));REQUIRE(count==7&&s.find("/Size 7")!=npos);
+ for(int id=1;id<count;++id){const auto entry=s.substr(xref+9+size_t(id)*20+0,20);REQUIRE(entry.size()==20&&entry.substr(10)==" 00000 n \n");const auto offset=size_t(std::stoull(entry.substr(0,10)));REQUIRE(s.compare(offset,std::to_string(id).size()+6,std::to_string(id)+" 0 obj")==0);}
+ for(size_t at=0;(at=s.find("/Type /Page ",at))!=npos;++at)++page.pages;
+ const auto box=s.find("/MediaBox [0 0 ");REQUIRE(box!=npos);size_t used=0;const auto boxText=s.substr(box+15,80);page.width=std::stod(boxText,&used);page.height=std::stod(boxText.substr(used));REQUIRE(boxText.find(']')!=npos);
+ const auto image=s.find("/Subtype /Image");REQUIRE(image!=npos);const auto number=[&](const char* key){const auto at=s.find(key,image);REQUIRE(at!=npos);return std::stoul(s.substr(at+strlen(key)));};
+ const auto width=uint32_t(number("/Width ")),height=uint32_t(number("/Height ")),length=uint32_t(number("/Length "));
+ page.lossless=s.find("/Filter /FlateDecode",image)!=npos&&s.find("/Predictor 15",image)!=npos&&s.find("/Colors 3",image)!=npos&&s.find("DCTDecode")==npos;
+ const auto streamAt=s.find("stream\n",image);REQUIRE(streamAt!=npos);const auto payload=streamAt+7;REQUIRE(payload+length<=data.size());
+ std::vector<uint8_t> png{0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A},ihdr;for(auto v:{width,height})for(int shift=24;shift>=0;shift-=8)ihdr.push_back(uint8_t(v>>shift));ihdr.insert(ihdr.end(),{8,2,0,0,0});
+ pngChunk(png,"IHDR",ihdr);pngChunk(png,"IDAT",std::vector<uint8_t>(data.begin()+std::ptrdiff_t(payload),data.begin()+std::ptrdiff_t(payload+length)));pngChunk(png,"IEND",{});
+ const auto rebuilt=std::filesystem::path(file.native()+L".image.png");{std::ofstream out(rebuilt,std::ios::binary);out.write(reinterpret_cast<const char*>(png.data()),std::streamsize(png.size()));}
+ page.image=WicCodec::decode(rebuilt).image;std::filesystem::remove(rebuilt);return page;
+}
+// The matte formula the JPEG export uses, applied to a canvas rendered by the document's own renderer.
+RgbaImage mattedExpectation(const Document& d,std::array<uint8_t,3> matte){
+ const auto source=SoftwareRenderer().render(d,0,0,d.width,d.height)->rgba();RgbaImage out{uint32_t(d.width),uint32_t(d.height),size_t(d.width)*4,std::vector<uint8_t>(source.size())};
+ for(size_t i=0;i<source.size();i+=4){for(int c=0;c<3;++c)out.pixels[i+size_t(c)]=uint8_t(std::min(255u,unsigned(source[i+size_t(c)])+(unsigned(matte[size_t(c)])*(255-source[i+3])+127)/255));out.pixels[i+3]=255;}
+ return out;
+}
+Document translucentLeft(int width,int height,double dpi){
+ // Pixels (partly transparent) fill the left half only, so the right half is transparent canvas.
+ auto d=blank(width,height);d.resolution=dpi;Layer layer;layer.id=newId();layer.name="Left half";layer.transform={0,0,double(width/2),double(height)};
+ auto source=std::vector<uint8_t>(size_t(width/2)*size_t(height)*4);pattern()(0,uint32_t(height),source,size_t(width/2)*4);layer.raster=Raster::fromRgba(width/2,height,source.data(),size_t(width/2)*4);d.layers.push_back(layer);return d;
+}
+void pdf_page_size(){
+ QTemporaryDir temp;struct Case{int width,height;double dpi,scale;uint32_t outWidth,outHeight;};
+ for(auto c:{Case{300,200,150,1,300,200},Case{1031,131,72,1,1031,131},Case{300,200,300,.5,150,100},Case{97,41,96,2,194,82},Case{64,48,96,.01,1,1}}){
+  auto d=blank(c.width,c.height);d.resolution=c.dpi;ExportOptions options;options.format=ImageFormat::Pdf;options.scale=c.scale;auto target=path(temp,"page.pdf");
+  auto result=exportDocumentAtomic(d,target,options);auto page=readPdf(target);
+  REQUIRE(page.pages==1&&page.lossless);REQUIRE(page.image.width==c.outWidth&&page.image.height==c.outHeight);
+  // Print size is the exported pixels at the document's resolution, in PDF points (1/72 in), whatever the scale.
+  REQUIRE(std::abs(page.width-c.outWidth*72./c.dpi)<.001&&std::abs(page.height-c.outHeight*72./c.dpi)<.001);
+  REQUIRE(std::abs(page.width/page.height-double(c.outWidth)/c.outHeight)<.001);
+  REQUIRE(result.encodedBytes==bytes(target).size()&&result.preview.width==std::min(c.outWidth,520u)&&result.preview.height<=std::min(c.outHeight,320u)&&result.preview.height>0);
+  only(temp,1);
+ }
+ // Scale never leaves the export limits, and never changes the proportions by more than a pixel.
+ REQUIRE(scaledExportSize(30000,3333,2).width==30000&&scaledExportSize(10000,10000,2).width==10000&&scaledExportSize(10000,10000,2).height==10000);
+ const auto wide=scaledExportSize(20000,4000,3);REQUIRE(uint64_t(wide.width)*wide.height<=100000000&&wide.width<=30000&&std::abs(double(wide.width)/wide.height-5.)<.01);
+ REQUIRE(scaledExportSize(1000,800,1).width==1000&&scaledExportSize(1000,800,.5).height==400);
+ for(double scale:{0.,-1.,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()})rejects([&]{scaledExportSize(10,10,scale);});
+ // A document's own print size is kept as pixels / resolution even at 100%.
+ auto d=blank(150,100);d.resolution=300;ExportOptions options;options.format=ImageFormat::Pdf;auto target=path(temp,"print.pdf");exportDocumentAtomic(d,target,options);auto page=readPdf(target);REQUIRE(std::abs(page.width-36)<.001&&std::abs(page.height-24)<.001);
+}
+void pdf_scale_background(){
+ QTemporaryDir temp;auto d=translucentLeft(64,40,96);const auto before=d;auto target=path(temp,"background.pdf");
+ const auto exportAt=[&](double scale,std::array<uint8_t,3> matte){ExportOptions options;options.format=ImageFormat::Pdf;options.scale=scale;options.matteR=matte[0];options.matteG=matte[1];options.matteB=matte[2];auto result=exportDocumentAtomic(d,target,options);return std::pair{readPdf(target),result};};
+ // 100%: the file's pixels are the canvas over the background, exactly, and the preview shows the same.
+ const std::array<uint8_t,3> blue{20,40,250};
+ auto [full,fullResult]=exportAt(1,{255,255,255});const auto white=mattedExpectation(d,{255,255,255});
+ REQUIRE(full.image.pixels==white.pixels&&fullResult.preview.pixels==white.pixels);
+ auto [tinted,tintedResult]=exportAt(1,blue);const auto tintedExpected=mattedExpectation(d,blue);
+ REQUIRE(tinted.image.pixels==tintedExpected.pixels&&tintedResult.preview.pixels==tintedExpected.pixels&&tinted.image.pixels!=full.image.pixels);
+ REQUIRE(pixel(tinted.image,63,0)==Pixel{blue[0],blue[1],blue[2],255}&&pixel(full.image,63,0)==Pixel{255,255,255,255});   // transparent canvas shows the background
+ // 50%: half the pixels and half the printed size; the background still fills what the layer leaves transparent, and the
+ // preview is the exported page.
+ auto [half,halfResult]=exportAt(.5,blue);
+ REQUIRE(half.image.width==32&&half.image.height==20&&std::abs(half.width*2-full.width)<.001&&std::abs(half.height*2-full.height)<.001);
+ REQUIRE(pixel(half.image,31,0)==Pixel{blue[0],blue[1],blue[2],255}&&pixel(half.image,31,19)==Pixel{blue[0],blue[1],blue[2],255}&&pixel(half.image,2,10)!=Pixel{blue[0],blue[1],blue[2],255});
+ REQUIRE(halfResult.preview.width==32&&halfResult.preview.pixels==half.image.pixels);
+ // Resampling is premultiplied: a fully transparent neighbour adds no color to an opaque edge, so no pixel is darker than the
+ // background-only or layer-only extremes.
+ for(size_t i=0;i<half.image.pixels.size();i+=4)REQUIRE(half.image.pixels[i+3]==255);
+ // 200%: the page doubles.
+ auto [doubled,doubledResult]=exportAt(2,blue);REQUIRE(doubled.image.width==128&&doubled.image.height==80&&std::abs(doubled.width-full.width*2)<.001);
+ REQUIRE(pixel(doubled.image,127,79)==Pixel{blue[0],blue[1],blue[2],255});
+ // The document is a snapshot; nothing about it changed.
+ REQUIRE(d==before);only(temp,1);
+}
+void pdf_scale_stripes(){
+ // A scaled page does not depend on the stripe size: every stripe reads the same resampled rows a single stripe would.
+ QTemporaryDir temp;auto d=translucentLeft(64,40,96);const std::array<uint8_t,3> blue{20,40,250};
+ ExportOptions options;options.format=ImageFormat::Pdf;options.scale=.75;options.matteR=blue[0];options.matteG=blue[1];options.matteB=blue[2];
+ auto reference=path(temp,"reference.pdf");const auto referenceResult=exportDocumentAtomic(d,reference,options);const auto expected=readPdf(reference);
+ REQUIRE(expected.image.width==48&&expected.image.height==30);
+ for(uint32_t stripe:{1U,7U}){StreamExportLimits limits;limits.stripeRows=stripe;auto target=path(temp,("stripes-"+std::to_string(stripe)+".pdf").c_str());auto result=exportDocumentAtomic(d,target,options,limits);auto page=readPdf(target);REQUIRE(page.image.pixels==expected.image.pixels&&result.preview.pixels==referenceResult.preview.pixels);}
+ only(temp,3);
+}
+void pdf_cancel_atomic(){
+ QTemporaryDir temp;auto target=path(temp,"keep.pdf");original(target);const auto before=bytes(target);auto d=translucentLeft(64,40,72);
+ // Cancelled at every stage, with and without scaling: while rendering rows, after the second progress report, and after the last one.
+ for(double scale:{1.,.5})for(int stage=0;stage<3;++stage){
+  bool stop=false;int rowCalls=0,progressCalls=0;ExportOptions options;options.format=ImageFormat::Pdf;options.scale=scale;options.cancelled=[&]{return stop;};
+  StreamExportLimits limits;limits.stripeRows=8;bool wasCancelled=false;
+  try{encodePdfAtomic(target,64,40,[&](uint32_t,uint32_t,std::span<uint8_t> out,size_t){if(stage==0&&++rowCalls==2)stop=true;std::fill(out.begin(),out.end(),0);},options,limits,[&](uint32_t done,uint32_t total){++progressCalls;if((stage==1&&progressCalls==2)||(stage==2&&done==total))stop=true;});}
+  catch(const ExportCancelled&){wasCancelled=true;}
+  REQUIRE(wasCancelled&&bytes(target)==before);only(temp,1);
+ }
+ // A failing export leaves the destination alone too: bad rows, bad destination, bad settings.
+ rejects([&]{ExportOptions options;options.format=ImageFormat::Pdf;encodePdfAtomic(target,8,8,[](uint32_t,uint32_t,std::span<uint8_t> out,size_t){out[0]=255;out[1]=out[2]=out[3]=0;},options);});REQUIRE(bytes(target)==before);
+ rejects([&]{ExportOptions options;options.format=ImageFormat::Pdf;options.scale=.5;encodePdfAtomic(target,8,8,[](uint32_t,uint32_t,std::span<uint8_t> out,size_t){out[0]=255;out[1]=out[2]=out[3]=0;},options);});REQUIRE(bytes(target)==before);
+ rejects([&]{ExportOptions options;options.format=ImageFormat::Pdf;options.scale=std::numeric_limits<double>::quiet_NaN();exportDocumentAtomic(d,target,options);});
+ rejects([&]{ExportOptions options;options.format=ImageFormat::Png;encodePdfAtomic(target,8,8,pattern(),options);});
+ rejects([&]{ExportOptions options;options.format=ImageFormat::Pdf;options.dpi=0;encodePdfAtomic(target,8,8,pattern(),options);});
+ rejects([&]{ExportOptions options;options.format=ImageFormat::Pdf;encodePdfAtomic(target,30001,1,pattern(),options);});
+ auto directory=path(temp,"directory.pdf");std::filesystem::create_directory(directory);original(directory/"project.comp");const auto protectedBytes=bytes(directory/"project.comp");
+ ExportOptions options;options.format=ImageFormat::Pdf;rejects([&]{exportDocumentAtomic(d,directory,options);});REQUIRE(std::filesystem::is_directory(directory)&&bytes(directory/"project.comp")==protectedBytes&&bytes(target)==before);only(temp,2);
+ // The WIC encoders do not take PDF.
+ rejects([&]{encodeRowsAtomic(target,10,10,pattern(),options);});REQUIRE(bytes(target)==before);only(temp,2);
+ // Finally an uncancelled export does replace the file.
+ exportDocumentAtomic(d,target,options);REQUIRE(bytes(target)!=before&&readPdf(target).pages==1);only(temp,2);
+}
+void large_pdf(){
+ // Unscaled PDF export streams in stripes like PNG and JPEG, so a very large canvas stays inside the same memory bounds.
+ QTemporaryDir temp;auto d=blank(10000,10000);d.resolution=300;Raster::resetMaterializationCount();ExportOptions options;options.format=ImageFormat::Pdf;auto file=path(temp,"large.pdf");
+ auto result=exportDocumentAtomic(d,file,options);REQUIRE(result.preview.width<=520&&result.preview.height<=320&&!result.preview.pixels.empty());REQUIRE(result.peakOwnedPixelBytes+result.maxRenderPixelBytes<64*1024*1024);REQUIRE(pixel(result.preview,0,0)==Pixel{255,255,255,255});
+ const auto text=bytes(file);const std::string s(text.begin(),text.end());REQUIRE(s.find("/MediaBox [0 0 2400.0000 2400.0000]")!=std::string::npos&&s.find("/Width 10000")!=std::string::npos&&result.encodedBytes==text.size());
+ PROCESS_MEMORY_COUNTERS_EX memory{};memory.cb=sizeof(memory);REQUIRE(GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory)));
+ std::cout<<"format=pdf bytes="<<result.encodedBytes<<" owned_pixel_bytes="<<result.peakOwnedPixelBytes<<" render_bound="<<result.maxRenderPixelBytes<<" peak_working_set="<<memory.PeakWorkingSetSize<<" peak_commit="<<memory.PeakPagefileUsage<<"\n";
+ REQUIRE(memory.PeakWorkingSetSize<256*1024*1024&&memory.PeakPagefileUsage<256*1024*1024&&Raster::materializationCount()==0);
+}
+int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"extent_guard",extent_guard},{"row_png",row_png},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_scale_stripes",pdf_scale_stripes},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
