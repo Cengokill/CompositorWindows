@@ -4,6 +4,7 @@
 #include "core/Document.h"
 #include "text/TextRaster.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -77,24 +78,6 @@ std::string macRomanToUtf8(const std::string& raw) {
     return utf8;
 }
 // ZIP prediction stores each row as deltas. 16-bit samples are big-endian.
-void unpredict(std::vector<uint8_t>& raw, int width, int height, int depth) {
-    const int sample = depth == 16 ? 2 : 1;
-    for (int y = 0; y < height; ++y) {
-        size_t row = size_t(y) * size_t(width) * sample;
-        if (depth == 16) {
-            uint32_t previous = 0;
-            for (int x = 0; x < width; ++x) {
-                uint32_t current = uint32_t(raw[row + size_t(x) * 2] << 8 | raw[row + size_t(x) * 2 + 1]);
-                uint32_t value = (previous + current) & 0xFFFF;
-                raw[row + size_t(x) * 2] = uint8_t(value >> 8);
-                raw[row + size_t(x) * 2 + 1] = uint8_t(value);
-                previous = value;
-            }
-        } else {
-            for (int x = 1; x < width; ++x) raw[row + size_t(x)] = uint8_t(raw[row + size_t(x)] + raw[row + size_t(x) - 1]);
-        }
-    }
-}
 struct BitReader {
     const uint8_t* data; size_t size, at{}; uint32_t bits{}; int count{};
     uint32_t pull(int width) {
@@ -122,11 +105,18 @@ struct Huffman {
         throw std::runtime_error("Unsupported PSD compression");
     }
 };
-std::vector<uint8_t> inflateZlib(const uint8_t* data, size_t size, size_t expected) {
+template<typename Sink>
+void inflateZlib(const uint8_t* data, size_t size, uint64_t expected, Sink&& emit) {
     if (size < 8 || (data[0] & 0x0F) != 8) throw std::runtime_error("Unsupported PSD compression");
     BitReader reader{data + 2, size - 6};
-    std::vector<uint8_t> out(expected);
-    size_t produced = 0;
+    std::array<uint8_t, 32768> history{};
+    uint64_t produced = 0;
+    auto append = [&](uint8_t value) {
+        if (produced >= expected) throw std::runtime_error("Unsupported PSD compression");
+        history[size_t(produced & 32767)] = value;
+        emit(value);
+        ++produced;
+    };
     const int lengthBase[] = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
     const int lengthExtra[] = {0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0};
     const int distanceBase[] = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
@@ -139,9 +129,9 @@ std::vector<uint8_t> inflateZlib(const uint8_t* data, size_t size, size_t expect
             reader.bits = 0; reader.count = 0;
             if (reader.at + 4 > reader.size) throw std::runtime_error("Unsupported PSD compression");
             uint16_t length = uint16_t(reader.data[reader.at] | reader.data[reader.at + 1] << 8); reader.at += 4;
-            if (produced + length > expected) throw std::runtime_error("Unsupported PSD compression");
+            if (uint64_t(length) > expected - produced) throw std::runtime_error("Unsupported PSD compression");
             if (reader.at + length > reader.size) throw std::runtime_error("Unsupported PSD compression");
-            std::memcpy(out.data() + produced, reader.data + reader.at, length); reader.at += length; produced += length;
+            for (size_t i = 0; i < length; ++i) append(reader.data[reader.at++]);
         } else if (type == 1 || type == 2) {
             int literalLengths[288]{}, distanceLengths[32]{};
             if (type == 1) {
@@ -170,61 +160,127 @@ std::vector<uint8_t> inflateZlib(const uint8_t* data, size_t size, size_t expect
             Huffman distances = Huffman::build(distanceLengths, type == 1 ? 32 : 32);
             for (;;) {
                 int symbol = literals.decode(reader);
-                if (symbol < 256) { if (produced >= expected) throw std::runtime_error("Unsupported PSD compression"); out[produced++] = uint8_t(symbol); }
+                if (symbol < 256) append(uint8_t(symbol));
                 else if (symbol == 256) break;
                 else {
                     int lengthIndex = symbol - 257; if (lengthIndex < 0 || lengthIndex > 28) throw std::runtime_error("Unsupported PSD compression");
                     int length = lengthBase[lengthIndex] + int(lengthExtra[lengthIndex] ? reader.pull(lengthExtra[lengthIndex]) : 0);
                     int distanceIndex = distances.decode(reader); if (distanceIndex < 0 || distanceIndex > 29) throw std::runtime_error("Unsupported PSD compression");
                     int distance = distanceBase[distanceIndex] + int(distanceExtra[distanceIndex] ? reader.pull(distanceExtra[distanceIndex]) : 0);
-                    if (distance < 1 || size_t(distance) > produced || produced + size_t(length) > expected) throw std::runtime_error("Unsupported PSD compression");
-                    for (int n = 0; n < length; ++n) out[produced] = out[produced - size_t(distance)], ++produced;
+                    if (distance < 1 || uint64_t(distance) > produced || uint64_t(length) > expected - produced) throw std::runtime_error("Unsupported PSD compression");
+                    for (int n = 0; n < length; ++n) append(history[size_t((produced - size_t(distance)) & 32767)]);
                 }
             }
         } else throw std::runtime_error("Unsupported PSD compression");
     }
     if (produced != expected) throw std::runtime_error("Unsupported PSD compression");
-    return out;
 }
-std::vector<uint8_t> decodeChannel(Reader& in, int width, int height, uint16_t compression, int depth, size_t packedBytes = 0, const std::vector<uint32_t>* rowTable = nullptr, int rowIndex = 0, std::vector<uint16_t>* deep = nullptr) {
+std::vector<uint8_t> decodeChannel(Reader& in, uint64_t width, uint64_t height, uint64_t cropLeft, uint64_t cropTop, int cropWidth, int cropHeight, uint16_t compression, int depth, size_t packedBytes = 0, const std::vector<uint32_t>* rowTable = nullptr, int rowIndex = 0, std::vector<uint16_t>* deep = nullptr) {
     const int sample = depth == 16 ? 2 : 1;
-    if (width < 1 || height < 1 || width > 30000 || height > 30000 || uint64_t(width) * uint64_t(height) > 100000000) throw std::runtime_error("Raster dimensions exceed supported budget");
-    const size_t row = size_t(width) * sample;
-    std::vector<uint8_t> raw(row * size_t(height));
-    if (compression == 0) { for (auto& byte : raw) byte = in.u8(); }
+    if (!width || !height || cropWidth < 1 || cropHeight < 1 || cropWidth > 30000 || cropHeight > 30000 || cropLeft > width || cropTop > height || uint64_t(cropWidth) > width - cropLeft || uint64_t(cropHeight) > height - cropTop)
+        throw std::runtime_error("Raster dimensions exceed supported budget");
+    const uint64_t pixels = uint64_t(cropWidth) * uint64_t(cropHeight);
+    if (pixels > 100000000) throw std::runtime_error("Raster dimensions exceed supported budget");
+    if (in.at > in.size || packedBytes > in.size - in.at) throw std::runtime_error("PSD ended early");
+    if (width > std::numeric_limits<uint64_t>::max() / uint64_t(sample) / height) throw std::runtime_error("PSD channel dimensions overflow");
+    const uint64_t rowBytes = width * uint64_t(sample);
+    const uint64_t expectedBytes = rowBytes * height;
+    if (pixels > std::numeric_limits<size_t>::max() / size_t(sample)) throw std::runtime_error("Raster dimensions exceed supported budget");
+    std::vector<uint8_t> raw(size_t(pixels) * size_t(sample));
+    const uint64_t cropByteLeft = cropLeft * uint64_t(sample);
+    const uint64_t cropByteCount = uint64_t(cropWidth) * uint64_t(sample);
+    if (compression == 0) {
+        if (expectedBytes > packedBytes) throw std::runtime_error("PSD channel is shorter than its dimensions");
+        for (int y = 0; y < cropHeight; ++y) {
+            const uint64_t sourceOffset = (cropTop + uint64_t(y)) * rowBytes + cropByteLeft;
+            std::memcpy(raw.data() + size_t(y) * size_t(cropByteCount), in.data + in.at + size_t(sourceOffset), size_t(cropByteCount));
+        }
+        in.at += size_t(expectedBytes);
+    }
     else if (compression == 2 || compression == 3) {
-        if (packedBytes > in.size - in.at) throw std::runtime_error("PSD ended early");
-        raw = inflateZlib(in.data + in.at, packedBytes, raw.size());
-        if (compression == 3) unpredict(raw, width, height, depth);
+        uint64_t rawAt = 0;
+        uint8_t previousByte = 0;
+        uint8_t highByte = 0;
+        uint16_t previousSample = 0;
+        inflateZlib(in.data + in.at, packedBytes, expectedBytes, [&](uint8_t byte) {
+            const uint64_t y = rawAt / rowBytes;
+            const uint64_t byteX = rawAt % rowBytes;
+            if (depth == 8) {
+                uint8_t value = byte;
+                if (compression == 3) value = uint8_t(value + previousByte);
+                previousByte = value;
+                const uint64_t x = byteX;
+                if (y >= cropTop && y < cropTop + uint64_t(cropHeight) && x >= cropLeft && x < cropLeft + uint64_t(cropWidth))
+                    raw[size_t(y - cropTop) * size_t(cropWidth) + size_t(x - cropLeft)] = value;
+            } else if ((byteX & 1u) == 0) highByte = byte;
+            else {
+                uint16_t value = uint16_t(uint16_t(highByte) << 8 | byte);
+                if (compression == 3) { value = uint16_t(value + previousSample); previousSample = value; }
+                const uint64_t x = byteX / 2;
+                if (y >= cropTop && y < cropTop + uint64_t(cropHeight) && x >= cropLeft && x < cropLeft + uint64_t(cropWidth))
+                    raw[(size_t(y - cropTop) * size_t(cropWidth) + size_t(x - cropLeft)) * 2] = uint8_t(value >> 8), raw[(size_t(y - cropTop) * size_t(cropWidth) + size_t(x - cropLeft)) * 2 + 1] = uint8_t(value);
+            }
+            if (byteX + 1 == rowBytes) { previousByte = 0; previousSample = 0; }
+            ++rawAt;
+        });
+        if (rawAt != expectedBytes) throw std::runtime_error("PSD channel is shorter than its dimensions");
     }
     else if (compression == 1) {
-        std::vector<uint32_t> local;
         const std::vector<uint32_t>* rows = rowTable;
+        uint64_t dataAt = in.at;
+        const uint64_t channelEnd = in.at + packedBytes;
+        uint64_t tableAt = 0;
+        const uint64_t entryBytes = in.psb ? 4u : 2u;
         if (!rows) {
-            local.resize(size_t(height));
-            for (int y = 0; y < height; ++y) local[y] = in.psb ? in.u32() : in.u16();
-            rows = &local;
-        } else if (rowIndex < 0 || size_t(rowIndex) + size_t(height) > rows->size()) throw std::runtime_error("PSD channel overrun");
-        for (int y = 0; y < height; ++y) {
-            const auto count = (*rows)[size_t(rowIndex) + y];
-            if (count > in.size - in.at) throw std::runtime_error("PSD ended early");
-            size_t written = 0; const size_t end = in.at + count;
-            while (in.at < end && written < row) {
+            if (height > packedBytes / entryBytes) throw std::runtime_error("PSD channel row table is truncated");
+            tableAt = in.at;
+            dataAt += height * entryBytes;
+        } else if (rowIndex < 0 || uint64_t(rowIndex) + height > rows->size()) throw std::runtime_error("PSD channel overrun");
+        in.at = size_t(dataAt);
+        if (in.at > channelEnd) throw std::runtime_error("PSD channel row table is truncated");
+        for (uint64_t y = 0; y < height; ++y) {
+            uint64_t count = 0;
+            if (rows) count = (*rows)[size_t(rowIndex) + size_t(y)];
+            else { Reader table = in; table.at = size_t(tableAt + y * entryBytes); count = in.psb ? table.u32() : table.u16(); }
+            if (count > channelEnd - in.at) throw std::runtime_error("PSD channel row exceeds channel data");
+            size_t written = 0; const size_t end = in.at + size_t(count);
+            const bool keepRow = y >= cropTop && y < cropTop + uint64_t(cropHeight);
+            if (!keepRow) { in.at = end; continue; }
+            while (in.at < end && written < rowBytes) {
                 int control = int8_t(in.u8());
-                if (control >= 0) { int n = control + 1; for (int i = 0; i < n && written < row && in.at < end; ++i) raw[size_t(y) * row + written++] = in.u8(); }
-                else if (control > -128) { if (in.at >= end) break; auto value = in.u8(); int n = 1 - control; for (int i = 0; i < n && written < row; ++i) raw[size_t(y) * row + written++] = value; }
+                if (control >= 0) {
+                    const size_t n = size_t(control + 1);
+                    if (n > rowBytes - written || n > end - in.at) throw std::runtime_error("Invalid PSD PackBits row");
+                    const uint64_t runBegin = written, runEnd = runBegin + n;
+                    const uint64_t keepBegin = std::max(runBegin, cropByteLeft);
+                    const uint64_t keepEnd = std::min(runEnd, cropByteLeft + cropByteCount);
+                    if (keepRow && keepBegin < keepEnd) std::memcpy(raw.data() + size_t(y - cropTop) * size_t(cropByteCount) + size_t(keepBegin - cropByteLeft), in.data + in.at + size_t(keepBegin - runBegin), size_t(keepEnd - keepBegin));
+                    in.at += n;
+                    written += n;
+                }
+                else if (control > -128) {
+                    if (in.at >= end) throw std::runtime_error("Invalid PSD PackBits row");
+                    const auto value = in.u8(); const size_t n = size_t(1 - control);
+                    if (n > rowBytes - written) throw std::runtime_error("Invalid PSD PackBits row");
+                    const uint64_t runBegin = written, runEnd = runBegin + n;
+                    const uint64_t keepBegin = std::max(runBegin, cropByteLeft);
+                    const uint64_t keepEnd = std::min(runEnd, cropByteLeft + cropByteCount);
+                    if (keepRow && keepBegin < keepEnd) std::fill_n(raw.data() + size_t(y - cropTop) * size_t(cropByteCount) + size_t(keepBegin - cropByteLeft), size_t(keepEnd - keepBegin), value);
+                    written += n;
+                }
             }
+            if (written != rowBytes) throw std::runtime_error("Invalid PSD PackBits row");
             in.at = end;
         }
     } else throw std::runtime_error("Unsupported PSD compression");
     if (depth == 8) return raw;
-    std::vector<uint8_t> out(size_t(width) * height);
-    if (deep) deep->assign(out.size(), 0);
-    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-        const size_t i = size_t(y) * size_t(width) + size_t(x);
+    std::vector<uint8_t> out(static_cast<size_t>(pixels));
+    if (deep) deep->assign(size_t(pixels), 0);
+    for (int y = 0; y < cropHeight; ++y) for (int x = 0; x < cropWidth; ++x) {
+        const size_t i = size_t(y) * size_t(cropWidth) + size_t(x);
         const uint16_t scaled = scalePhotoshop16(uint16_t(uint16_t(raw[i * 2]) << 8 | raw[i * 2 + 1]));
         if (deep) (*deep)[i] = scaled;
-        out[i] = ditherChannel(scaled, x, y);
+        out[i] = ditherChannel(scaled, int((cropLeft + uint64_t(x)) & 3), int((cropTop + uint64_t(y)) & 3));
     }
     return out;
 }
@@ -357,7 +413,7 @@ bool readMerged(Reader& in, int width, int height, int depth, int channels, Laye
         for (auto& row : rows) row = in.psb ? in.u32() : in.u16();
     }
     std::vector<uint16_t> red16, green16, blue16, alpha16;
-    auto plane = [&](int index, std::vector<uint16_t>* samples) { return decodeChannel(in, width, height, compression, depth, 0, rows.empty() ? nullptr : &rows, index * height, samples); };
+    auto plane = [&](int index, std::vector<uint16_t>* samples) { return decodeChannel(in, uint64_t(width), uint64_t(height), 0, 0, width, height, compression, depth, in.size - in.at, rows.empty() ? nullptr : &rows, index * height, samples); };
     auto red = plane(0, depth == 16 ? &red16 : nullptr); auto green = plane(1, depth == 16 ? &green16 : nullptr); auto blue = plane(2, depth == 16 ? &blue16 : nullptr);
     std::vector<uint8_t> alpha;
     if (channels >= 4) {
@@ -455,12 +511,50 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             }
             std::vector<std::string> folders;
             for (auto& record : records) {
-                int w = std::max(0, record.right - record.left), h = std::max(0, record.bottom - record.top);
-                int maskWidth = std::max(0, record.maskRight - record.maskLeft), maskHeight = std::max(0, record.maskBottom - record.maskTop);
-                const bool fits = w > 0 && h > 0 && w <= 30000 && h <= 30000 && uint64_t(w) * uint64_t(h) <= 100000000;
-                const bool maskFits = record.hasMask && maskWidth > 0 && maskHeight > 0 && maskWidth <= 30000 && maskHeight <= 30000 && uint64_t(maskWidth) * uint64_t(maskHeight) <= 100000000;
-                if (!record.group && !record.closer && (w > 30000 || h > 30000 || (w > 0 && h > 0 && uint64_t(w) * uint64_t(h) > 100000000)))
-                    report += (record.name.empty() ? "Layer" : record.name) + " exceeds the canvas limit and was skipped.\n";
+                const int64_t sourceWidth = int64_t(record.right) - record.left;
+                const int64_t sourceHeight = int64_t(record.bottom) - record.top;
+                const int64_t visibleLeft = std::max<int64_t>(record.left, 0);
+                const int64_t visibleTop = std::max<int64_t>(record.top, 0);
+                const int64_t visibleRight = std::min<int64_t>(record.right, result.document.width);
+                const int64_t visibleBottom = std::min<int64_t>(record.bottom, result.document.height);
+                const int cropWidth = visibleRight > visibleLeft ? int(visibleRight - visibleLeft) : 0;
+                const int cropHeight = visibleBottom > visibleTop ? int(visibleBottom - visibleTop) : 0;
+                const uint64_t cropLeft = visibleRight > visibleLeft ? uint64_t(visibleLeft - record.left) : 0;
+                const uint64_t cropTop = visibleBottom > visibleTop ? uint64_t(visibleTop - record.top) : 0;
+                const uint64_t cropPixels = uint64_t(cropWidth) * uint64_t(cropHeight);
+                const bool hasVisibleLayer = cropWidth > 0 && cropHeight > 0;
+                const bool sourceFits = sourceWidth > 0 && sourceHeight > 0 && sourceWidth <= 30000 && sourceHeight <= 30000 && uint64_t(sourceWidth) * uint64_t(sourceHeight) <= 100000000;
+                const bool cropFits = hasVisibleLayer && cropWidth <= 30000 && cropHeight <= 30000 && cropPixels <= 100000000;
+                const bool cropOversizedSource = !sourceFits;
+                const int decodeWidth = sourceFits ? int(sourceWidth) : cropWidth;
+                const int decodeHeight = sourceFits ? int(sourceHeight) : cropHeight;
+                const uint64_t decodeLeft = sourceFits ? 0 : cropLeft;
+                const uint64_t decodeTop = sourceFits ? 0 : cropTop;
+                const uint64_t decodedPixels = uint64_t(decodeWidth) * uint64_t(decodeHeight);
+
+                const int64_t maskSourceWidth = int64_t(record.maskRight) - record.maskLeft;
+                const int64_t maskSourceHeight = int64_t(record.maskBottom) - record.maskTop;
+                const int64_t maskVisibleLeft = std::max<int64_t>(record.maskLeft, 0);
+                const int64_t maskVisibleTop = std::max<int64_t>(record.maskTop, 0);
+                const int64_t maskVisibleRight = std::min<int64_t>(record.maskRight, result.document.width);
+                const int64_t maskVisibleBottom = std::min<int64_t>(record.maskBottom, result.document.height);
+                const int maskCropWidth = maskVisibleRight > maskVisibleLeft ? int(maskVisibleRight - maskVisibleLeft) : 0;
+                const int maskCropHeight = maskVisibleBottom > maskVisibleTop ? int(maskVisibleBottom - maskVisibleTop) : 0;
+                const uint64_t maskCropLeft = maskVisibleRight > maskVisibleLeft ? uint64_t(maskVisibleLeft - record.maskLeft) : 0;
+                const uint64_t maskCropTop = maskVisibleBottom > maskVisibleTop ? uint64_t(maskVisibleTop - record.maskTop) : 0;
+                const bool maskSourceFits = record.hasMask && maskSourceWidth > 0 && maskSourceHeight > 0 && maskSourceWidth <= 30000 && maskSourceHeight <= 30000 && uint64_t(maskSourceWidth) * uint64_t(maskSourceHeight) <= 100000000;
+                const bool maskCropFits = record.hasMask && maskSourceWidth > 0 && maskSourceHeight > 0 && maskCropWidth > 0 && maskCropHeight > 0 && maskCropWidth <= 30000 && maskCropHeight <= 30000 && uint64_t(maskCropWidth) * uint64_t(maskCropHeight) <= 100000000;
+                const bool cropMask = !maskSourceFits;
+                const int decodeMaskWidth = cropMask ? maskCropWidth : int(maskSourceWidth);
+                const int decodeMaskHeight = cropMask ? maskCropHeight : int(maskSourceHeight);
+                const uint64_t decodeMaskLeft = cropMask ? maskCropLeft : 0;
+                const uint64_t decodeMaskTop = cropMask ? maskCropTop : 0;
+                const bool maskFits = hasVisibleLayer && (maskSourceFits || maskCropFits);
+                const bool hasVectorData = !record.fill.empty() || !record.geometry.empty() || !record.strokeData.empty();
+                if (!record.group && !record.closer && !hasVisibleLayer && !hasVectorData && record.typeTool.empty())
+                    report += (record.name.empty() ? "Layer" : record.name) + " is outside the document canvas and was skipped.\n";
+                else if (!record.group && !record.closer && !sourceFits && !cropFits && !hasVectorData && record.typeTool.empty())
+                    report += (record.name.empty() ? "Layer" : record.name) + " has no visible pixels within the supported limits and was skipped.\n";
                 std::vector<uint8_t> red, green, blue, alpha, maskPlane;
                 std::vector<uint16_t> red16, green16, blue16, alpha16;
                 for (auto [id, length] : record.channels) {
@@ -468,37 +562,48 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                     try {
                         uint16_t compression = length >= 2 ? in.u16() : 0;
                         const size_t packed = length >= 2 ? size_t(length - 2) : 0;
-                        if (!record.group && !record.closer && id == -2 && maskFits) maskPlane = decodeChannel(in, maskWidth, maskHeight, compression, int(depth), packed);
-                        else if (fits && !record.group && !record.closer && (id == 0 || id == 1 || id == 2 || id == -1)) {
+                        if (!record.group && !record.closer && maskFits && id == -2)
+                            maskPlane = decodeChannel(in, uint64_t(maskSourceWidth), uint64_t(maskSourceHeight), decodeMaskLeft, decodeMaskTop, decodeMaskWidth, decodeMaskHeight, compression, int(depth), packed);
+                        else if ((sourceFits || cropFits) && hasVisibleLayer && !record.group && !record.closer && (id == 0 || id == 1 || id == 2 || id == -1)) {
                             std::vector<uint16_t> samples;
-                            auto plane = decodeChannel(in, w, h, compression, int(depth), packed, nullptr, 0, depth == 16 ? &samples : nullptr);
+                            auto plane = decodeChannel(in, uint64_t(sourceWidth), uint64_t(sourceHeight), decodeLeft, decodeTop, decodeWidth, decodeHeight, compression, int(depth), packed, nullptr, 0, depth == 16 ? &samples : nullptr);
                             if (id == 0) { red = std::move(plane); red16 = std::move(samples); }
                             else if (id == 1) { green = std::move(plane); green16 = std::move(samples); }
                             else if (id == 2) { blue = std::move(plane); blue16 = std::move(samples); }
                             else { alpha = std::move(plane); alpha16 = std::move(samples); }
                         }
-                    } catch (const std::exception&) { report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded.\n"; }
+                    } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded (" + error.what() + ").\n"; }
                     const size_t end = start > in.size || length > in.size - start ? in.size : start + size_t(length);
                     in.at = end;
                 }
                 try {
                 if (record.closer) { if (!folders.empty()) folders.pop_back(); continue; }
+                if (!record.group && !hasVisibleLayer && !hasVectorData && record.typeTool.empty()) continue;
+                if (!record.group && !sourceFits && !cropFits && !hasVectorData && record.typeTool.empty()) continue;
                 Layer layer; layer.id = newId(); layer.name = record.name.empty() ? "Layer" : record.name; layer.opacity = record.opacity / 255.; layer.blend = record.group ? Blend::Normal : record.blend; layer.group = record.group; layer.visible = record.visible;
-                layer.transform = {double(record.left), double(record.top), double(std::max(w, 1)), double(std::max(h, 1))}; layer.parentId = folders.empty() ? std::string{} : folders.back();
+                layer.transform = record.group
+                    ? Transform{double(record.left), double(record.top), double(std::max<int64_t>(sourceWidth, 1)), double(std::max<int64_t>(sourceHeight, 1))}
+                    : cropOversizedSource && cropFits
+                        ? Transform{double(visibleLeft), double(visibleTop), double(cropWidth), double(cropHeight)}
+                        : Transform{double(record.left), double(record.top), double(std::max<int64_t>(sourceWidth, 1)), double(std::max<int64_t>(sourceHeight, 1))};
+                layer.parentId = folders.empty() ? std::string{} : folders.back();
                 if (record.group) folders.push_back(layer.id);
-                else if (fits && red.size() == size_t(w) * size_t(h) && green.size() == red.size() && blue.size() == red.size()) installImage(layer, w, h, red, green, blue, alpha, red16, green16, blue16, alpha16);
+                else if ((sourceFits || cropFits) && red.size() == size_t(decodedPixels) && green.size() == red.size() && blue.size() == red.size()) installImage(layer, decodeWidth, decodeHeight, red, green, blue, alpha, red16, green16, blue16, alpha16);
                 if (!layer.raster && !record.group) { if (auto painted = rasterizeRoundedRect(record.fill, record.geometry, record.strokeData)) { layer.raster = std::move(painted->raster); layer.transform = painted->transform; } }
-                if (maskFits && maskPlane.size() == size_t(maskWidth) * size_t(maskHeight)) {
+                const size_t decodedMaskPixels = size_t(decodeMaskWidth) * size_t(decodeMaskHeight);
+                if (maskFits && maskPlane.size() == decodedMaskPixels) {
                     if (record.maskFlags & 0x04) for (auto& value : maskPlane) value = uint8_t(255 - value);
-                    auto gray = std::make_shared<GrayRaster>(); gray->width = maskWidth; gray->height = maskHeight; gray->pixels = std::move(maskPlane);
+                    auto gray = std::make_shared<GrayRaster>(); gray->width = decodeMaskWidth; gray->height = decodeMaskHeight; gray->pixels = std::move(maskPlane);
                     Mask mask; mask.raster = std::move(gray); mask.enabled = (record.maskFlags & 0x02) == 0; mask.linked = true;
                     if (record.maskLeft != record.left || record.maskTop != record.top || record.maskRight != record.right || record.maskBottom != record.bottom)
-                        mask.placement = Transform{double(record.maskLeft), double(record.maskTop), double(maskWidth), double(maskHeight)};
+                        mask.placement = cropMask
+                            ? Transform{double(maskVisibleLeft), double(maskVisibleTop), double(maskCropWidth), double(maskCropHeight)}
+                            : Transform{double(record.maskLeft), double(record.maskTop), double(maskSourceWidth), double(maskSourceHeight)};
                     layer.mask = std::move(mask);
                 }
                 if (!record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); } if (imported.editable) { if (layer.raster) layer.text = imported.text; else { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; } } } }
                 if (layer.group || layer.raster || layer.text || layer.mask) result.document.layers.push_back(std::move(layer));
-                } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(w) + "x" + std::to_string(h) + "): " + error.what() + "\n"; }
+                } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(sourceWidth) + "x" + std::to_string(sourceHeight) + "): " + error.what() + "\n"; }
             }
             in.at = std::max(in.at, infoEnd);
             }
