@@ -274,7 +274,7 @@ std::vector<uint8_t> decodeChannel(Reader& in, uint64_t width, uint64_t height, 
         }
     } else throw std::runtime_error("Unsupported PSD compression");
     if (depth == 8) return raw;
-    std::vector<uint8_t> out(size_t(pixels));
+    std::vector<uint8_t> out(static_cast<size_t>(pixels));
     if (deep) deep->assign(size_t(pixels), 0);
     for (int y = 0; y < cropHeight; ++y) for (int x = 0; x < cropWidth; ++x) {
         const size_t i = size_t(y) * size_t(cropWidth) + size_t(x);
@@ -413,7 +413,7 @@ bool readMerged(Reader& in, int width, int height, int depth, int channels, Laye
         for (auto& row : rows) row = in.psb ? in.u32() : in.u16();
     }
     std::vector<uint16_t> red16, green16, blue16, alpha16;
-    auto plane = [&](int index, std::vector<uint16_t>* samples) { return decodeChannel(in, uint64_t(width), uint64_t(height), 0, 0, width, height, compression, depth, 0, rows.empty() ? nullptr : &rows, index * height, samples); };
+    auto plane = [&](int index, std::vector<uint16_t>* samples) { return decodeChannel(in, uint64_t(width), uint64_t(height), 0, 0, width, height, compression, depth, in.size - in.at, rows.empty() ? nullptr : &rows, index * height, samples); };
     auto red = plane(0, depth == 16 ? &red16 : nullptr); auto green = plane(1, depth == 16 ? &green16 : nullptr); auto blue = plane(2, depth == 16 ? &blue16 : nullptr);
     std::vector<uint8_t> alpha;
     if (channels >= 4) {
@@ -603,7 +603,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 }
                 if (!record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); } if (imported.editable) { if (layer.raster) layer.text = imported.text; else { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; } } } }
                 if (layer.group || layer.raster || layer.text || layer.mask) result.document.layers.push_back(std::move(layer));
-                } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(w) + "x" + std::to_string(h) + "): " + error.what() + "\n"; }
+                } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(sourceWidth) + "x" + std::to_string(sourceHeight) + "): " + error.what() + "\n"; }
             }
             in.at = std::max(in.at, infoEnd);
             }

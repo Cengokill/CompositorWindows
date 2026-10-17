@@ -57,7 +57,7 @@ struct Fixture {
 bool drop(MainWindow&w,const QMimeData& mime,QPoint point){QDragEnterEvent enter(point,Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(&w,&enter);if(!enter.isAccepted())return false;QDropEvent event(point,Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(&w,&event);return event.isAccepted();}
 void finish(MainWindow&w){auto*q=ui::ImportQueue::find(&w);require(q,"Missing actual UI import queue");until([&]{auto*d=ui::WorkspaceDropQueue::find(&w);return q->idle()&&(!d||d->idle());});for(auto*m:w.findChildren<QMessageBox*>())m->accept();QApplication::processEvents();}
 QPoint canvasPoint(MainWindow&w,Point p){auto*c=w.canvas();const auto view=c->viewMapping().toView(p);return c->mapTo(&w,QPoint(int(std::round(view.x)),int(std::round(view.y))));}
-enum class PsdFixtureCompression { Raw, PackBits, Zip, ZipPrediction, Unsupported };
+enum class PsdFixtureCompression { Raw, PackBits, Zip, ZipPrediction, ZipFixedHuffman, Unsupported };
 struct PsdFixtureLayer { int top{},left{},bottom{},right{}; std::array<std::vector<uint8_t>,3> channels; std::array<uint8_t,3> solidChannels{}; bool generatedSolid{}; PsdFixtureCompression compression{PsdFixtureCompression::Raw}; std::string name{"Fixture"}; };
 void psdU16(std::vector<uint8_t>& out,uint16_t value){out.push_back(uint8_t(value>>8));out.push_back(uint8_t(value));}
 void psdU32(std::vector<uint8_t>& out,uint32_t value){for(int shift=24;shift>=0;shift-=8)out.push_back(uint8_t(value>>shift));}
@@ -72,10 +72,40 @@ std::vector<uint8_t> packBitsRow(const uint8_t* data,size_t size){
     }
     return out;
 }
+uint32_t zipAdler(const std::vector<uint8_t>& raw){uint32_t a=1,b=0;for(uint8_t value:raw){a=(a+value)%65521;b=(b+a)%65521;}return (b<<16)|a;}
 std::vector<uint8_t> zipStored(const std::vector<uint8_t>& raw){
     std::vector<uint8_t> out{0x78,0x01};size_t at=0;
     do{const size_t count=std::min<size_t>(65535,raw.size()-at);const bool final=at+count==raw.size();out.push_back(final?1:0);const uint16_t n=uint16_t(count);out.push_back(uint8_t(n));out.push_back(uint8_t(n>>8));out.push_back(uint8_t(~n));out.push_back(uint8_t((~n)>>8));out.insert(out.end(),raw.begin()+at,raw.begin()+at+count);at+=count;}while(at<raw.size());
-    uint32_t a=1,b=0;for(uint8_t value:raw){a=(a+value)%65521;b=(b+a)%65521;}const uint32_t adler=(b<<16)|a;psdU32(out,adler);return out;
+    psdU32(out,zipAdler(raw));return out;
+}
+struct ZipBits { std::vector<uint8_t> bytes; uint32_t bits{}; int count{}; void put(uint32_t value,int width){bits|=value<<count;count+=width;while(count>=8){bytes.push_back(uint8_t(bits));bits>>=8;count-=8;}} void putMsb(uint32_t code,int length){for(int i=length-1;i>=0;--i)put((code>>i)&1u,1);} void flush(){if(count){bytes.push_back(uint8_t(bits));bits=0;count=0;}} };
+void zipFixedLiteral(ZipBits& bits,uint8_t value){if(value<144)bits.putMsb(0x30u+value,8);else bits.putMsb(0x190u+(value-144u),9);}
+void zipFixedLength(ZipBits& bits,int length){
+    static const int base[]={3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
+    static const int extra[]={0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0};
+    int index=0;while(index<28&&length>=base[index+1])++index;
+    const int symbol=257+index;if(symbol<280)bits.putMsb(uint32_t(symbol-256),7);else bits.putMsb(0xC0u+uint32_t(symbol-280),8);
+    if(extra[index])bits.put(uint32_t(length-base[index]),extra[index]);
+}
+void zipFixedDistance(ZipBits& bits,int distance){
+    static const int base[]={1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
+    static const int extra[]={0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
+    int index=0;while(index<29&&distance>=base[index+1])++index;
+    bits.putMsb(uint32_t(index),5);if(extra[index])bits.put(uint32_t(distance-base[index]),extra[index]);
+}
+std::vector<uint8_t> zipFixedHuffman(const std::vector<uint8_t>& raw){
+    ZipBits bits;bits.put(1,1);bits.put(1,2);
+    size_t at=0;
+    while(at<raw.size()){
+        size_t run=1;while(at+run<raw.size()&&raw[at+run]==raw[at]&&run<size_t(1)+258*128)++run;
+        if(run>=4){zipFixedLiteral(bits,raw[at]);size_t copied=1;while(copied<run){const int n=int(std::min<size_t>(258,run-copied));zipFixedLength(bits,n);zipFixedDistance(bits,1);copied+=size_t(n);}at+=run;continue;}
+        constexpr size_t period=32;
+        if(at>=period){size_t match=0;while(at+match<raw.size()&&match<258&&raw[at+match]==raw[at-period+match])++match;
+            if(match>=3){zipFixedLength(bits,int(match));zipFixedDistance(bits,int(period));at+=match;continue;}}
+        zipFixedLiteral(bits,raw[at++]);
+    }
+    bits.putMsb(0,7);bits.flush();
+    std::vector<uint8_t> out{0x78,0x01};out.insert(out.end(),bits.bytes.begin(),bits.bytes.end());psdU32(out,zipAdler(raw));return out;
 }
 std::vector<uint8_t> psdChannelData(const PsdFixtureLayer& layer,size_t channel,size_t width,size_t height,bool psb){
     const auto& samples=layer.channels[channel];std::vector<uint8_t> out;
@@ -85,13 +115,13 @@ std::vector<uint8_t> psdChannelData(const PsdFixtureLayer& layer,size_t channel,
     std::vector<uint8_t> encoded=samples;
     const uint16_t compression=layer.compression==PsdFixtureCompression::ZipPrediction?3:2;
     if(compression==3)for(size_t y=0;y<height;++y)for(size_t x=width;x-->1;)encoded[y*width+x]=uint8_t(encoded[y*width+x]-encoded[y*width+x-1]);
-    psdU16(out,compression);auto zip=zipStored(encoded);out.insert(out.end(),zip.begin(),zip.end());return out;
+    psdU16(out,compression);auto zip=layer.compression==PsdFixtureCompression::ZipFixedHuffman?zipFixedHuffman(encoded):zipStored(encoded);out.insert(out.end(),zip.begin(),zip.end());return out;
 }
 std::vector<uint8_t> psdFixture(int documentWidth,int documentHeight,const std::vector<PsdFixtureLayer>& layers,bool psb=false){
     std::vector<std::vector<uint8_t>> records,channelData;
     for(const auto& layer:layers){const size_t width=size_t(int64_t(layer.right)-layer.left),height=size_t(int64_t(layer.bottom)-layer.top);std::vector<uint8_t> record;
         psdU32(record,uint32_t(layer.top));psdU32(record,uint32_t(layer.left));psdU32(record,uint32_t(layer.bottom));psdU32(record,uint32_t(layer.right));psdU16(record,3);
-        for(int channel=0;channel<3;++channel){auto packed=psdChannelData(layer,size_t(channel),width,height,psb);psdU16(record,uint16_t(channel));if(psb)psdU64(record,uint64_t(packed.size()+2));else psdU32(record,uint32_t(packed.size()+2));channelData.push_back(std::move(packed));}
+        for(int channel=0;channel<3;++channel){auto packed=psdChannelData(layer,size_t(channel),width,height,psb);psdU16(record,uint16_t(channel));if(psb)psdU64(record,uint64_t(packed.size()));else psdU32(record,uint32_t(packed.size()));channelData.push_back(std::move(packed));}
         record.insert(record.end(),{'8','B','I','M','n','o','r','m'});record.push_back(255);record.push_back(0);record.push_back(0);record.push_back(0);
         std::vector<uint8_t> extra;psdU32(extra,0);psdU32(extra,0);extra.push_back(uint8_t(layer.name.size()));extra.insert(extra.end(),layer.name.begin(),layer.name.end());while(extra.size()%4)extra.push_back(0);psdU32(record,uint32_t(extra.size()));record.insert(record.end(),extra.begin(),extra.end());records.push_back(std::move(record));
     }
@@ -117,7 +147,7 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
     test("qt_bitmap_drop_lifetime_and_empty_tab_external_routing",[&]{MainWindow w(true);auto&p=w.addProject(document());w.show();QApplication::processEvents();QImage bitmap(8,6,QImage::Format_ARGB32);bitmap.fill(QColor(255,0,0,128));{QMimeData mime;mime.setImageData(bitmap);require(drop(w,mime,canvasPoint(w,{64,64})),"Bitmap drop rejected");}finish(w);require(p.document->layers.size()==1&&p.document->layers[0].raster->width==8&&p.document->layers[0].raster->pixel(0,0)==Pixel{128,0,0,128},"Copied bitmap lifetime/premultiplication failed");MainWindow external(true);external.openPath(first);external.openPath(second);finish(external);auto*tabs=external.findChild<QTabWidget*>();require(tabs&&tabs->count()==2,"Rapid external images reused an already reserved empty tab");});
     test("default_100mp_budget_side_and_corrupt_partial_failure",[&]{auto d=document();Layer full;full.id="full-budget";full.transform={0,0,10000,10000};full.raster=Raster::filled(10000,10000);d.layers={full};ui::ImportState before{d,full.id};auto result=ui::prepareImportBatch(before,{{path(first)}});require(result.imported==0&&result.errors.size()==1&&result.after==before,"100MP document limit underflowed or changed original");imaging::ImportOptions tiny;tiny.maxSide=63;result=ui::prepareImportBatch({},{{path(first)}},ui::decodeImportImage,tiny);require(result.imported==0&&result.errors.size()==1,"Side budget bypassed by batch decoder");auto corrupt=temporary.filePath("corrupt.jpg");QFile file(corrupt);require(file.open(QIODevice::WriteOnly)&&file.write("not an image")==12,"Could not write corrupt fixture");file.close();result=ui::prepareImportBatch({},{{path(corrupt),path(first)}});require(result.imported==1&&result.errors.size()==1&&result.after.document->width==64,"Corrupt first image prevented later success");});
     test("psd_in_limit_partial_layer_preserves_pixels_and_position",[&]{
-        auto layer=solidPsdLayer(-1,-1,4,4,0,0,0);for(int y=0;y<4;++y)for(int x=0;x<4;++x)layer.channels[0][size_t(y)*4+x]=uint8_t(y*10+x);
+        auto layer=solidPsdLayer(-1,-1,4,4,0,40,80);for(int y=0;y<4;++y)for(int x=0;x<4;++x)layer.channels[0][size_t(y)*4+x]=uint8_t(y*10+x);
         const auto bytes=psdFixture(2,2,{layer});const auto imported=imaging::readPsd(bytes.data(),bytes.size());
         require(imported.document.layers.size()==1,"Partially visible PSD layer was not imported");const auto& result=imported.document.layers[0];
         require(result.transform.x==-1&&result.transform.y==-1&&result.transform.width==4&&result.transform.height==4,"In-limit PSD layer lost its off-canvas pixels");
@@ -127,7 +157,7 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         const auto verify=[&](int documentWidth,int documentHeight,int left,int top,int width,int height,int expectedX,int expectedY,int expectedWidth,int expectedHeight){auto layer=solidPsdLayer(left,top,width,height,201,72,33);const auto bytes=psdFixture(documentWidth,documentHeight,{layer});const auto imported=imaging::readPsd(bytes.data(),bytes.size());require(imported.document.layers.size()==1,"Oversized PSD layer with a visible crop was skipped");const auto& result=imported.document.layers[0];require(result.transform.x==expectedX&&result.transform.y==expectedY&&result.transform.width==expectedWidth&&result.transform.height==expectedHeight,"Oversized PSD layer was cropped to the wrong canvas bounds");require(result.raster&&result.raster->pixel(0,0)==Pixel{201,72,33,255},"Oversized PSD crop changed visible channel values");};
         verify(2,1,-30000,0,30001,1,0,0,1,1);
         verify(2,1,1,0,30001,1,1,0,1,1);
-        verify(1,2,0,-30000,1,30001,0,0,1,2);
+        verify(1,2,0,-30000,1,30001,0,0,1,1);
         verify(1,2,0,1,1,30001,0,1,1,1);
     });
     test("psd_layer_over_pixel_budget_decodes_only_visible_rle_rows",[&]{
@@ -148,6 +178,26 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         auto layer=solidPsdLayer(-30000,0,30001,1,91,102,113);const auto bytes=psdFixture(2,1,{layer},true);const auto imported=imaging::readPsd(bytes.data(),bytes.size());
         require(imported.document.layers.size()==1&&imported.document.layers[0].raster->pixel(0,0)==Pixel{91,102,113,255},"Oversized PSB layer was not cropped to its visible pixels");
         require(imported.document.layers[0].transform.x==0&&imported.document.layers[0].transform.width==1,"PSB crop lost its canvas placement");
+    });
+    test("psd_oversized_zip_fixed_huffman_backreferences",[&]{
+        auto solid=solidPsdLayer(-39999,0,40000,1,201,72,33,PsdFixtureCompression::ZipFixedHuffman);
+        const auto solidBytes=psdFixture(1,1,{solid});const auto solidImported=imaging::readPsd(solidBytes.data(),solidBytes.size());
+        require(solidImported.document.layers.size()==1,"Oversized ZIP Huffman PSD layer was skipped");
+        require(solidImported.document.layers[0].transform.x==0&&solidImported.document.layers[0].transform.width==1,"ZIP Huffman crop lost its canvas placement");
+        require(solidImported.document.layers[0].raster&&solidImported.document.layers[0].raster->pixel(0,0)==Pixel{201,72,33,255},"ZIP Huffman distance-1 copies lost the cropped pixel");
+        auto patterned=solidPsdLayer(-30000,0,30001,1,0,40,80,PsdFixtureCompression::ZipFixedHuffman);
+        for(int x=0;x<30001;++x)patterned.channels[0][size_t(x)]=uint8_t(10+(x%32));
+        const auto patternedBytes=psdFixture(1,1,{patterned});const auto patternedImported=imaging::readPsd(patternedBytes.data(),patternedBytes.size());
+        require(patternedImported.document.layers.size()==1&&patternedImported.document.layers[0].raster->pixel(0,0)==Pixel{uint8_t(10+(30000%32)),40,80,255},"ZIP Huffman distance-32 copies lost the cropped pixel");
+    });
+    test("psd_merged_image_raw_and_packbits_without_layers",[&]{
+        const auto merged=[&](uint16_t compression){std::vector<uint8_t> out{'8','B','P','S'};psdU16(out,1);out.insert(out.end(),6,0);psdU16(out,3);psdU32(out,1);psdU32(out,2);psdU16(out,8);psdU16(out,3);psdU32(out,0);psdU32(out,0);psdU32(out,0);psdU16(out,compression);
+            const std::array<std::array<uint8_t,2>,3> planes{{{10,11},{20,21},{30,31}}};
+            if(compression==0){for(const auto& plane:planes)out.insert(out.end(),plane.begin(),plane.end());return out;}
+            std::vector<std::vector<uint8_t>> rows;for(const auto& plane:planes)rows.push_back(packBitsRow(plane.data(),plane.size()));for(const auto& row:rows)psdU16(out,uint16_t(row.size()));for(const auto& row:rows)out.insert(out.end(),row.begin(),row.end());return out;};
+        for(const uint16_t compression:{uint16_t(0),uint16_t(1)}){const auto bytes=merged(compression);const auto imported=imaging::readPsd(bytes.data(),bytes.size());
+            require(imported.document.layers.size()==1&&imported.document.layers[0].raster,"Merged PSD image was not imported");
+            require(imported.document.layers[0].raster->pixel(0,0)==Pixel{10,20,30,255}&&imported.document.layers[0].raster->pixel(1,0)==Pixel{11,21,31,255},"Merged PSD image changed channel samples");}
     });
     test("psd_fully_off_canvas_layer_skips_channel_decode",[&]{
         auto offCanvas=solidPsdLayer(-30001,0,30000,1,255,0,0,PsdFixtureCompression::Unsupported);offCanvas.name="off canvas";
