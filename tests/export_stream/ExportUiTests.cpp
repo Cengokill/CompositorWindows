@@ -52,9 +52,10 @@ int main(int argc,char**argv){
             auto*page=control<QLabel>(dialog,"exportPageSize");auto*preview_=control<QLabel>(dialog,"exportPreview");auto*save=control<QDialogButtonBox>(dialog,"exportButtons")->button(QDialogButtonBox::Save);
             if(step==0){
                 require(format->count()==3&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG","Format order changed");
-                require(!scale->isEnabled()&&!matte->isEnabled()&&page->isHidden(),"PNG offered PDF-only controls");
+                auto*quality=control<QSlider>(dialog,"exportQuality");
+                require(!scale->isEnabled()&&!matte->isEnabled()&&page->isHidden()&&scale->isHidden()&&quality->isHidden(),"PNG offered PDF-only or JPEG-only controls");
                 format->setCurrentIndex(2);
-                require(scale->isEnabled()&&matte->isEnabled()&&!page->isHidden()&&scale->currentText()=="100%","PDF controls not offered");
+                require(scale->isEnabled()&&matte->isEnabled()&&!page->isHidden()&&!scale->isHidden()&&quality->isHidden()&&scale->currentText()=="100%","PDF controls not offered");
                 require(page->text()=="2 × 1.33 in at 150 DPI (300 × 200 px)","Page size not shown at 100%");
                 scale->setCurrentIndex(1);require(page->text()=="1 × 0.67 in at 150 DPI (150 × 100 px)","Page size ignored the scale");
                 require(!save->isEnabled(),"Stale encoded result remained saveable");step=1;
