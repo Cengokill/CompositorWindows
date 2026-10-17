@@ -50,11 +50,14 @@ struct ImageMetadata {
     std::string decoder;
 };
 struct DecodedImage { RgbaImage image; ImageMetadata metadata; };
-enum class ImageFormat { Png, Jpeg, Tiff };
+// Pdf is written only by the streaming document export (encodePdfAtomic); WicCodec has no PDF encoder.
+enum class ImageFormat { Png, Jpeg, Tiff, Pdf };
 struct ExportOptions {
     ImageFormat format{ImageFormat::Png};
     double dpi{72},jpegQuality{0.85};
     std::uint8_t matteR{255},matteG{255},matteB{255};
+    // PDF only: resamples the flattened canvas, keeping dpi, so the printed page scales with it.
+    double scale{1.0};
     std::function<bool()> cancelled;
 };
 }

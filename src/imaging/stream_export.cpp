@@ -1,11 +1,4 @@
-#include "stream_export.h"
-#include "win32_file_path.h"
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <wincodec.h>
-#include <wrl/client.h>
+#include "export_temporary_file.h"
 #include <propvarutil.h>
 #include <array>
 #include <cmath>
@@ -14,48 +7,13 @@
 namespace compositor::imaging {
 using Microsoft::WRL::ComPtr;
 namespace {
-void ok(HRESULT hr, const char* context) {
-    if (FAILED(hr)) { std::ostringstream text; text << context << " (HRESULT 0x" << std::hex << static_cast<unsigned long>(hr) << ")"; throw std::runtime_error(text.str()); }
-}
-void cancelled(const std::function<bool()>& check) { if (check && check()) throw ExportCancelled(); }
-struct Apartment {
-    HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    Apartment() { if (FAILED(result) && result != RPC_E_CHANGED_MODE) ok(result, "Initialize export COM apartment"); }
-    ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); }
-};
-struct Handle {
-    HANDLE value{INVALID_HANDLE_VALUE};
-    ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
-};
-void regularFile(HANDLE handle) {
-    BY_HANDLE_FILE_INFORMATION info{};
-    if (GetFileType(handle) != FILE_TYPE_DISK || !GetFileInformationByHandle(handle, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-        throw std::runtime_error("Image export requires a regular file");
-}
-struct TemporaryFile {
-    std::filesystem::path path;
-    explicit TemporaryFile(const std::filesystem::path& destination) {
-        GUID id{}; ok(CoCreateGuid(&id), "Create temporary export identifier");
-        wchar_t text[40]{}; if (!StringFromGUID2(id, text, 40)) throw std::runtime_error("Cannot name temporary export");
-        path = win32FilePath(destination); path += std::wstring(L".") + text + L".tmp";
-        Handle file{CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr)};
-        if (file.value == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot create temporary export beside destination");
-        try { regularFile(file.value); }
-        catch (...) { CloseHandle(file.value); file.value = INVALID_HANDLE_VALUE; DeleteFileW(path.c_str()); throw; }
-    }
-    ~TemporaryFile() { std::error_code error; std::filesystem::remove(path, error); }
-    void replace(const std::filesystem::path& destination, const std::function<bool()>& check) {
-        cancelled(check);
-        const auto target=win32FilePath(destination);
-        if (!MoveFileExW(path.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-            throw std::runtime_error("Atomic export replacement failed");
-    }
-};
-ComPtr<IWICImagingFactory> factory() {
-    ComPtr<IWICImagingFactory> value;
-    ok(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&value)), "Create export imaging factory");
-    return value;
-}
+using detail::Apartment;
+using detail::cancelled;
+using detail::factory;
+using detail::Handle;
+using detail::ok;
+using detail::regularFile;
+using detail::TemporaryFile;
 std::pair<UINT, UINT> fit(UINT width, UINT height, UINT maxWidth, UINT maxHeight) {
     if (!maxWidth || !maxHeight) return {0, 0};
     const double scale = std::min({1., double(maxWidth) / width, double(maxHeight) / height});
@@ -124,7 +82,7 @@ void writeProfile(IWICImagingFactory* imaging, IWICBitmapFrameEncode* frame, Ima
 }
 
 void validateExportExtent(std::uint32_t width, std::uint32_t height) {
-    if (!width || !height || width > 30000 || height > 30000 || std::uint64_t(width) * height > 100000000)
+    if (!width || !height || width > maxExportSide || height > maxExportSide || std::uint64_t(width) * height > maxExportPixels)
         throw std::invalid_argument("Image export supports canvases up to 100 megapixels and 30,000 pixels per side.");
 }
 

@@ -24,7 +24,7 @@ Windows title bars and system buttons are the default. If you prefer the colored
 - Windows 11 x64. The runtime libraries and the foreground-removal model are already in the package. There is no account, and there is no model download on first launch.
 - Preview builds. They are unsigned, and you install the next one yourself.
 
-A project is a `.comp` folder. Copy or back up the whole folder. **File > Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer. **File > Open Project** and the welcome **Open project** button open the Windows folder picker in Downloads, and you can select one or more `.comp` folders. Export a flattened PNG or JPEG when another application needs a single image.
+A project is a `.comp` folder. Copy or back up the whole folder. **File > Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer. **File > Open Project** and the welcome **Open project** button open the Windows folder picker in Downloads, and you can select one or more `.comp` folders. Export a flattened PNG, JPEG or one-page PDF when another application needs a single image.
 
 <img width="1264" height="740" alt="Opening and saving projects from the Windows editor" src="https://github.com/user-attachments/assets/f3e120d0-9b1e-4a72-8535-2345bacf6c2d" />
 

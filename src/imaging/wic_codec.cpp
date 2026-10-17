@@ -67,7 +67,7 @@ void WicCodec::normalizeStraightRgba(std::span<std::uint8_t> rgba,std::uint32_t 
 }
 void WicCodec::encode(const std::filesystem::path& filename,const RgbaImage& image,const ExportOptions& options){
     const auto path=win32FilePath(filename);
-    validate(image);if(!std::isfinite(options.dpi)||options.dpi<=0||!std::isfinite(options.jpegQuality))throw std::runtime_error("Invalid export settings");
+    validate(image);if(!std::isfinite(options.dpi)||options.dpi<=0||!std::isfinite(options.jpegQuality)||options.format==ImageFormat::Pdf)throw std::runtime_error("Invalid export settings");
     auto cancelled=[&]{if(options.cancelled&&options.cancelled())throw std::runtime_error("Image export cancelled");};cancelled();Apartment apartment;auto f=factory();
     GUID id{};ok(CoCreateGuid(&id),"Create output identifier");wchar_t guid[40]{};StringFromGUID2(id,guid,40);auto temp=path;temp+=std::wstring(L".")+guid+L".tmp";
     struct Cleanup{std::filesystem::path path;~Cleanup(){std::error_code ec;std::filesystem::remove(path,ec);}}cleanup{temp};
