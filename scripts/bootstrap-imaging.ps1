@@ -19,7 +19,13 @@ function Fetch-Asset($Asset){
     if(-not (Test-Path -LiteralPath $path)){Invoke-WebRequest $Asset.url -OutFile $path}
     Assert-Hash $path $Asset.sha256
 }
-foreach($asset in $lock.assets){if(-not ($SkipModel -and $asset.group -eq 'model')){Fetch-Asset $asset}}
+foreach($asset in $lock.assets){
+    # Skip conversion inputs, but retain the pinned runtime and images used
+    # by the native tests when the exact ONNX model is supplied separately.
+    if(-not $SkipModel -or $asset.group -ne 'model' -or $asset.path -in @('dependencies/imaging/onnxruntime-win-x64-1.30.0.zip','evidence/imaging/astronaut.png','evidence/imaging/chelsea.png')){
+        Fetch-Asset $asset
+    }
+}
 foreach($repository in $lock.repositories){
     $path=Join-Path $dependency $repository.name
     if(-not (Test-Path -LiteralPath $path)){& git clone --depth 1 --branch $repository.tag $repository.url $path;if($LASTEXITCODE){throw 'Dependency source clone failed'}}
@@ -44,8 +50,8 @@ function Configure-Build([string]$Name,[string[]]$Options){
 }
 Configure-Build 'libde265' @('-DENABLE_DECODER=OFF','-DENABLE_ENCODER=OFF','-DENABLE_SDL=OFF')
 Configure-Build 'libheif' @('-DENABLE_PLUGIN_LOADING=OFF','-DWITH_LIBDE265=ON','-DWITH_LIBDE265_PLUGIN=OFF','-DWITH_X265=OFF','-DWITH_X264=OFF','-DWITH_OpenH264_DECODER=OFF','-DWITH_AOM_DECODER=OFF','-DWITH_AOM_ENCODER=OFF','-DWITH_LIBSHARPYUV=OFF','-DWITH_GDK_PIXBUF=OFF','-DWITH_EXAMPLES=OFF','-DBUILD_TESTING=OFF','-DBUILD_DOCUMENTATION=OFF')
+Expand-Archive (Join-Path $dependency 'onnxruntime-win-x64-1.30.0.zip') -DestinationPath $dependency -Force
 if(-not $SkipModel){
-    Expand-Archive (Join-Path $dependency 'onnxruntime-win-x64-1.30.0.zip') -DestinationPath $dependency -Force
     $venv=Join-Path $dependency 'model-venv'
     if(-not (Test-Path (Join-Path $venv 'Scripts/python.exe'))){& $Python -m venv $venv;if($LASTEXITCODE){throw 'Python 3.12 environment creation failed'}}
     $pythonExe=Join-Path $venv 'Scripts/python.exe'

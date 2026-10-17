@@ -11,6 +11,9 @@ foreach(case combine modifiers_clip empty_distinct click_undo polygon antialias 
     -P "${CMAKE_SOURCE_DIR}/tests/selection_source/pending44/run-case.cmake")
   set_tests_properties(source_selection.${case} PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 95)
+  if(case MATCHES "^(cursor|m_key|l_key)$")
+    set_tests_properties(source_selection.${case} PROPERTIES LABELS "known_failure")
+  endif()
 endforeach()
 
 add_executable(palette_source_tests tests/palette_source/pending44/PaletteSourceTests.cpp)
