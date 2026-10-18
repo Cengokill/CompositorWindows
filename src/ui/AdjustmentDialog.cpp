@@ -217,11 +217,11 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         auto* levels=new QWidget;auto* levelsLayout=new QHBoxLayout(levels);levelsLayout->setContentsMargins(0,0,0,0);
         levelsLayout->addWidget(new QLabel("Color Levels:"));
         std::array<QSpinBox*,3> levelBoxes{};std::array<ui::TrackSlider*,3> sliders{};
-        auto* sliderArea=new QWidget;auto* grid=new QGridLayout(sliderArea);grid->setContentsMargins(0,0,0,0);
+        auto* sliderArea=new QWidget;auto* grid=new QGridLayout(sliderArea);grid->setContentsMargins(0,10,0,0);grid->setVerticalSpacing(10);
         for(int i=0;i<3;++i){
             const QString pairName=leftLabels[i]+"-"+rightLabels[i];
             levelBoxes[size_t(i)]=new QSpinBox;levelBoxes[size_t(i)]->setRange(-100,100);levelBoxes[size_t(i)]->setObjectName(QString("colorLevel%1").arg(i));levelBoxes[size_t(i)]->setAccessibleName(pairName+" value");levelsLayout->addWidget(levelBoxes[size_t(i)]);
-            sliders[size_t(i)]=new ui::TrackSlider(Qt::Horizontal);sliders[size_t(i)]->setRange(-100,100);sliders[size_t(i)]->setDefaultValue(0);sliders[size_t(i)]->setObjectName(QString("colorBalanceSlider%1").arg(i));sliders[size_t(i)]->setAccessibleName(pairName+" slider");
+            sliders[size_t(i)]=new ui::TrackSlider(Qt::Horizontal);sliders[size_t(i)]->setRange(-100,100);sliders[size_t(i)]->setDefaultValue(0);sliders[size_t(i)]->setObjectName(QString("colorBalanceSlider%1").arg(i));sliders[size_t(i)]->setAccessibleName(pairName+" slider");sliders[size_t(i)]->setMinimumHeight(22);
             // Same muted palette as the Hue/Saturation sliders.
             const char* gradient[]{"#6bbcc3, stop:1 #db6868","#c879c5, stop:1 #7bb878","#d5c46b, stop:1 #738cda"};
             sliders[size_t(i)]->setStyleSheet(QString("QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 %1); } QSlider::sub-page:horizontal { background: transparent; }").arg(gradient[i]));
