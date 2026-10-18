@@ -21,6 +21,11 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QRadioButton>
+#include <QSlider>
+#include <QSpinBox>
 #include <QColorDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -152,6 +157,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     std::function<void()> changed,start;
     std::vector<std::function<void()>> reloadControls;
     LevelsAdvancedControls* levelsControls{};
+    QString balanceTone{"midtones"};
     HueAdvancedControls* hueControls{};
     static std::map<Kind,QPoint>& positions(){static std::map<Kind,QPoint> value;return value;}
     void retire(){if(closed_&&!watcher.isRunning()&&!histogramWatcher.isRunning())deleteLater();}
@@ -170,6 +176,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     if(kind=="Exposure"&&!settings.contains("exposureSettings"))settings["exposureSettings"]=Object{{"exposure",0},{"offset",0},{"gamma",1}};
     if(kind=="Gradient Map"&&!settings.contains("gradientMapSettings"))settings["gradientMapSettings"]=Object{{"shadows",Object{{"red",0},{"green",0},{"blue",0}}},{"highlights",Object{{"red",1},{"green",1},{"blue",1}}},{"reversed",false}};
     if(kind=="Grain"&&!settings.contains("grainSettings"))settings["grainSettings"]=Object{{"amount",25},{"size",1.5},{"roughness",50},{"seed",0}};
+    if(kind=="Color Balance"&&!settings.contains("colorBalanceSettings")){const Object zero{{"cyanRed",0},{"magentaGreen",0},{"yellowBlue",0}};settings["colorBalanceSettings"]=Object{{"shadows",zero},{"midtones",zero},{"highlights",zero}};}
     dialog.mayReject=[this]{return !committing_;};dialog.setObjectName("adjustmentDialog");dialog.setWindowTitle(kind);dialog.resize(840,560);
     layout.addWidget(&fields);
     preview.documentWidth=original.width;preview.documentHeight=original.height;preview.setMinimumSize(400,300);preview.setAlignment(Qt::AlignCenter);rightLayout.addWidget(&preview,1);status.setWordWrap(true);rightLayout.addWidget(&status);
@@ -201,6 +208,43 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         property("exposureSettings","exposure","Exposure",0,-20,20,2);property("exposureSettings","offset","Offset",0,-.5,.5,4);property("exposureSettings","gamma","Gamma",1,.01,9.99,2);
     }else if(kind=="Grain"){
         property("grainSettings","amount","Amount",25,0,100,1);property("grainSettings","size","Size",1.5,.5,20,2);property("grainSettings","roughness","Roughness",50,0,100,1);
+    }else if(kind=="Color Balance"){
+        // Mirrors the reference layout: Color Levels readouts, three opposing sliders, and a tone selector.
+        const QStringList channelKeys{"cyanRed","magentaGreen","yellowBlue"};
+        const QStringList leftLabels{"Cyan","Magenta","Yellow"},rightLabels{"Red","Green","Blue"};
+        auto write=[this](const QString& channel,double value){auto group=settings["colorBalanceSettings"].toObject();auto band=group[balanceTone].toObject();band[channel]=value;group[balanceTone]=band;settings["colorBalanceSettings"]=group;};
+        auto* levels=new QWidget;auto* levelsLayout=new QHBoxLayout(levels);levelsLayout->setContentsMargins(0,0,0,0);
+        levelsLayout->addWidget(new QLabel("Color Levels:"));
+        std::array<QSpinBox*,3> levelBoxes{};std::array<ui::TrackSlider*,3> sliders{};
+        auto* sliderArea=new QWidget;auto* grid=new QGridLayout(sliderArea);grid->setContentsMargins(0,0,0,0);
+        for(int i=0;i<3;++i){
+            levelBoxes[size_t(i)]=new QSpinBox;levelBoxes[size_t(i)]->setRange(-100,100);levelBoxes[size_t(i)]->setObjectName(QString("colorLevel%1").arg(i));levelsLayout->addWidget(levelBoxes[size_t(i)]);
+            sliders[size_t(i)]=new ui::TrackSlider(Qt::Horizontal);sliders[size_t(i)]->setRange(-100,100);sliders[size_t(i)]->setDefaultValue(0);sliders[size_t(i)]->setObjectName(QString("colorBalanceSlider%1").arg(i));
+            const char* gradient[]{"#00ffff, stop:1 #ff0000","#ff00ff, stop:1 #00ff00","#ffff00, stop:1 #0000ff"};
+            sliders[size_t(i)]->setStyleSheet(QString("QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 %1); } QSlider::sub-page:horizontal { background: transparent; }").arg(gradient[i]));
+            grid->addWidget(new QLabel(leftLabels[i]),i,0);grid->addWidget(sliders[size_t(i)],i,1);grid->addWidget(new QLabel(rightLabels[i]),i,2);
+        }
+        levelsLayout->addStretch();
+        auto sync=[this,levelBoxes,sliders,channelKeys]{
+            const auto values=settings["colorBalanceSettings"].toObject()[balanceTone].toObject();
+            for(size_t i=0;i<3;++i){const int value=int(std::lround(values.value(channelKeys[int(i)]).toDouble()));QSignalBlocker spin(levelBoxes[i]),slider(sliders[i]);levelBoxes[i]->setValue(value);sliders[i]->setValue(value);}
+        };
+        for(int i=0;i<3;++i){
+            const QString channel=channelKeys[i];
+            QObject::connect(sliders[size_t(i)],&QSlider::valueChanged,&dialog,[&,write,sync,channel](int value){if(loadingSettings_)return;write(channel,value);sync();changed();});
+            QObject::connect(levelBoxes[size_t(i)],&QSpinBox::valueChanged,&dialog,[&,write,sync,channel](int value){if(loadingSettings_)return;write(channel,value);sync();changed();});
+        }
+        auto* toneGroup=new QGroupBox("Tone Balance");auto* toneLayout=new QHBoxLayout(toneGroup);
+        const std::array<std::pair<const char*,const char*>,3> toneChoices{{{"shadows","Shadows"},{"midtones","Midtones"},{"highlights","Highlights"}}};
+        for(const auto& [toneKey,toneLabel]:toneChoices){
+            auto* radio=new QRadioButton(toneLabel);radio->setObjectName(QString("colorBalanceTone_%1").arg(toneKey));radio->setChecked(balanceTone==toneKey);toneLayout->addWidget(radio);
+            QObject::connect(radio,&QRadioButton::toggled,&dialog,[&,sync,toneKey](bool on){if(!on)return;balanceTone=toneKey;sync();});
+        }
+        form.addRow(levels);form.addRow(sliderArea);form.addRow(toneGroup);
+        reloadControls.push_back(sync);sync();
+    }else if(kind=="Black & White"){
+        property("blackWhiteSettings","reds","Reds",40,-200,300,0);property("blackWhiteSettings","yellows","Yellows",60,-200,300,0);property("blackWhiteSettings","greens","Greens",40,-200,300,0);
+        property("blackWhiteSettings","cyans","Cyans",60,-200,300,0);property("blackWhiteSettings","blues","Blues",20,-200,300,0);property("blackWhiteSettings","magentas","Magentas",80,-200,300,0);
     }else if(kind=="Gradient Map"){
         for(const QString key:{"shadows","highlights"}){auto*button=new QPushButton;auto update=[&,button,key]{auto c=settings["gradientMapSettings"].toObject()[key].toObject();button->setText(QColor::fromRgbF(c["red"].toDouble(key=="highlights"),c["green"].toDouble(key=="highlights"),c["blue"].toDouble(key=="highlights")).name());};update();reloadControls.push_back(update);form.addRow(key=="shadows"?"Shadows":"Highlights",button);
             QObject::connect(button,&QPushButton::clicked,&dialog,[&,key,update]{auto o=settings["gradientMapSettings"].toObject();auto c=o[key].toObject();
