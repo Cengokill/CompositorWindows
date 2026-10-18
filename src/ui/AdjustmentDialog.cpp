@@ -177,6 +177,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     if(kind=="Gradient Map"&&!settings.contains("gradientMapSettings"))settings["gradientMapSettings"]=Object{{"shadows",Object{{"red",0},{"green",0},{"blue",0}}},{"highlights",Object{{"red",1},{"green",1},{"blue",1}}},{"reversed",false}};
     if(kind=="Grain"&&!settings.contains("grainSettings"))settings["grainSettings"]=Object{{"amount",25},{"size",1.5},{"roughness",50},{"seed",0}};
     if(kind=="Color Balance"&&!settings.contains("colorBalanceSettings")){const Object zero{{"cyanRed",0},{"magentaGreen",0},{"yellowBlue",0}};settings["colorBalanceSettings"]=Object{{"shadows",zero},{"midtones",zero},{"highlights",zero}};}
+    if(kind=="Black & White"&&!settings.contains("blackWhiteSettings"))settings["blackWhiteSettings"]=Object{{"reds",40},{"yellows",60},{"greens",40},{"cyans",60},{"blues",20},{"magentas",80}};
     dialog.mayReject=[this]{return !committing_;};dialog.setObjectName("adjustmentDialog");dialog.setWindowTitle(kind);dialog.resize(840,560);
     layout.addWidget(&fields);
     preview.documentWidth=original.width;preview.documentHeight=original.height;preview.setMinimumSize(400,300);preview.setAlignment(Qt::AlignCenter);rightLayout.addWidget(&preview,1);status.setWordWrap(true);rightLayout.addWidget(&status);
@@ -189,7 +190,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"){
+        if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=label=="Gamma"||label=="Size";const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
@@ -218,9 +219,11 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         std::array<QSpinBox*,3> levelBoxes{};std::array<ui::TrackSlider*,3> sliders{};
         auto* sliderArea=new QWidget;auto* grid=new QGridLayout(sliderArea);grid->setContentsMargins(0,0,0,0);
         for(int i=0;i<3;++i){
-            levelBoxes[size_t(i)]=new QSpinBox;levelBoxes[size_t(i)]->setRange(-100,100);levelBoxes[size_t(i)]->setObjectName(QString("colorLevel%1").arg(i));levelsLayout->addWidget(levelBoxes[size_t(i)]);
-            sliders[size_t(i)]=new ui::TrackSlider(Qt::Horizontal);sliders[size_t(i)]->setRange(-100,100);sliders[size_t(i)]->setDefaultValue(0);sliders[size_t(i)]->setObjectName(QString("colorBalanceSlider%1").arg(i));
-            const char* gradient[]{"#00ffff, stop:1 #ff0000","#ff00ff, stop:1 #00ff00","#ffff00, stop:1 #0000ff"};
+            const QString pairName=leftLabels[i]+"-"+rightLabels[i];
+            levelBoxes[size_t(i)]=new QSpinBox;levelBoxes[size_t(i)]->setRange(-100,100);levelBoxes[size_t(i)]->setObjectName(QString("colorLevel%1").arg(i));levelBoxes[size_t(i)]->setAccessibleName(pairName+" value");levelsLayout->addWidget(levelBoxes[size_t(i)]);
+            sliders[size_t(i)]=new ui::TrackSlider(Qt::Horizontal);sliders[size_t(i)]->setRange(-100,100);sliders[size_t(i)]->setDefaultValue(0);sliders[size_t(i)]->setObjectName(QString("colorBalanceSlider%1").arg(i));sliders[size_t(i)]->setAccessibleName(pairName+" slider");
+            // Same muted palette as the Hue/Saturation sliders.
+            const char* gradient[]{"#6bbcc3, stop:1 #db6868","#c879c5, stop:1 #7bb878","#d5c46b, stop:1 #738cda"};
             sliders[size_t(i)]->setStyleSheet(QString("QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 %1); } QSlider::sub-page:horizontal { background: transparent; }").arg(gradient[i]));
             grid->addWidget(new QLabel(leftLabels[i]),i,0);grid->addWidget(sliders[size_t(i)],i,1);grid->addWidget(new QLabel(rightLabels[i]),i,2);
         }
