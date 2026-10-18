@@ -10,6 +10,26 @@ The code itself is the implementation reference. Read and link to it instead of 
 
 Visual quality matters. The target for interior controls is a very modern Windows style: flat, Fluent-like surfaces, clean typography, subtle hover and pressed states, and cohesive custom controls. Use the Mac iOS 26 Liquid Glass design only as a reference for layout and clarity, not as a style to copy. Native Windows title bars are the default; Mac-style window controls are an optional saved preference.
 
+## Working principles
+
+These principles bias toward caution over speed. For trivial tasks, use judgment.
+
+**Think before coding.**
+- State assumptions explicitly. If something is unclear or several interpretations exist, name them and ask instead of choosing silently.
+- If a simpler approach exists, say so and push back when warranted.
+
+**Simplicity first.**
+- Write the minimum code that solves the problem: no unrequested features, no abstractions for single-use code, no configurability that was not asked for, no handling of impossible scenarios.
+- If a change could be much shorter, rewrite it.
+
+**Surgical changes.**
+- Every changed line must trace to the user's request. Do not "improve" adjacent code, comments, or formatting, and match the existing style.
+- Remove only the imports, variables, and functions that your own change made unused. Mention unrelated dead code instead of deleting it.
+
+**Goal-driven execution.**
+- Turn the task into a verifiable goal: a bug fix starts with a test that reproduces it; a refactor keeps tests passing before and after.
+- For multi-step work, state a brief plan with a check per step (`1. [Step] → verify: [check]`), then loop until the checks pass.
+
 ## 1. Product and upstream relationship
 
 - CompositorWindows is an independently maintained, native Windows 11 x64 port of Robbie Tilton's Compositor. Preserve the original attribution, MIT notices, and applicable third-party licenses. Do not imply that the Mac maintainer endorses the port.
