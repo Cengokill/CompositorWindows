@@ -243,36 +243,31 @@ public:
         status_.setWordWrap(true);status_.setStyleSheet("color: #989ba3; font-size: 11px;");layout_.addWidget(&status_);
         if(cameraRaw&&request_.selection){auto* note=new QLabel("Limited to the selection");note->setObjectName("cameraRawSelection");layout_.addWidget(note);}
         layout_.addWidget(&buttons_);apply_=buttons_.button(cameraRaw?QDialogButtonBox::Ok:QDialogButtonBox::Apply);apply_->setEnabled(false);apply_->setDefault(true);buttons_.button(QDialogButtonBox::Cancel)->setAutoDefault(false);
-        if(cameraRaw){
-            dialog_.setAttribute(Qt::WA_StyledBackground,true);
-            dialog_.setStyleSheet("QDialog#filterPanel { background: #16181c; }");
-            const QString glass="QPushButton { background: rgba(255,255,255,0.16); color: white; border: 1px solid rgba(255,255,255,0.46); border-top-color: rgba(255,255,255,0.78); border-radius: 14px; padding: 6px 16px; min-height: 22px; min-width: 72px; } QPushButton:hover { background: rgba(255,255,255,0.28); } QPushButton:default { background: rgba(255,255,255,0.30); }";
-            apply_->setStyleSheet(glass);buttons_.button(QDialogButtonBox::Cancel)->setStyleSheet(glass);
-        }
         layout_.setContentsMargins(18,16,18,16);layout_.setSpacing(12);fields_.setVerticalSpacing(12);
         debounce_.setSingleShot(true);debounce_.setInterval(120);
-        auto number=[this](const QString& label,double& value,double low,double high,int decimals){
+        const filters::Settings factory{};
+        auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
             auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"?1:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
             auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=label=="Radius"||label=="Distance"||label=="Amount";
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
-            slider->setValue(position(spin->value()));layout->addWidget(slider,1);layout->addWidget(spin);fields_.addRow(label,row);
+            slider->setValue(position(spin->value()));slider->setDefaultValue(position(fallback));layout->addWidget(slider,1);layout->addWidget(spin);fields_.addRow(label,row);
             connect(slider,&QSlider::valueChanged,&dialog_,[spin,first,last,logarithmic,stepDecimals](int v){const double normalized=first+(last-first)*v/10000.;const double factor=std::pow(10.,stepDecimals);spin->setValue(std::round((logarithmic?std::exp(normalized):normalized)*factor)/factor);});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[slider,position](double v){QSignalBlocker block(slider);slider->setValue(position(v));});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[this,field=&value](double next){*field=next;change();});
         };
         switch(request_.kind){
-        case filters::Kind::GaussianBlur:number("Radius",request_.settings.radius,.1,250,1);break;
-        case filters::Kind::MotionBlur:number("Angle",request_.settings.angle,-90,90,1);number("Distance",request_.settings.distance,1,2000,1);break;
-        case filters::Kind::AddNoise:{number("Amount",request_.settings.amount,.1,400,1);auto* gaussian=new QCheckBox("Gaussian");auto* mono=new QCheckBox("Monochromatic");gaussian->setChecked(request_.settings.gaussian);mono->setChecked(request_.settings.monochromatic);fields_.addRow(gaussian);fields_.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.gaussian=value;change();});connect(mono,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.monochromatic=value;change();});break;}
-        case filters::Kind::LensCorrection:number("Distortion",request_.settings.distortion,-100,100,1);break;
+        case filters::Kind::GaussianBlur:number("Radius",request_.settings.radius,.1,250,1,factory.radius);break;
+        case filters::Kind::MotionBlur:number("Angle",request_.settings.angle,-90,90,1,factory.angle);number("Distance",request_.settings.distance,1,2000,1,factory.distance);break;
+        case filters::Kind::AddNoise:{number("Amount",request_.settings.amount,.1,400,1,factory.amount);auto* gaussian=new QCheckBox("Gaussian");auto* mono=new QCheckBox("Monochromatic");gaussian->setChecked(request_.settings.gaussian);mono->setChecked(request_.settings.monochromatic);fields_.addRow(gaussian);fields_.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.gaussian=value;change();});connect(mono,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.monochromatic=value;change();});break;}
+        case filters::Kind::LensCorrection:number("Distortion",request_.settings.distortion,-100,100,1,factory.distortion);break;
         case filters::Kind::ContentAwareFill:break;
-        case filters::Kind::Vignette:number("Strength",request_.settings.vignette,0,100,1);number("Midpoint",request_.settings.vignetteMidpoint,0,1,2);break;
-        case filters::Kind::Bloom:number("Strength",request_.settings.bloom,0,100,1);number("Threshold",request_.settings.bloomThreshold,0,1,2);break;
-        case filters::Kind::TonalContrast:number("Strength",request_.settings.tonal,-100,100,1);break;
+        case filters::Kind::Vignette:number("Strength",request_.settings.vignette,0,100,1,factory.vignette);number("Midpoint",request_.settings.vignetteMidpoint,0,1,2,factory.vignetteMidpoint);break;
+        case filters::Kind::Bloom:number("Strength",request_.settings.bloom,0,100,1,factory.bloom);number("Threshold",request_.settings.bloomThreshold,0,1,2,factory.bloomThreshold);break;
+        case filters::Kind::TonalContrast:number("Strength",request_.settings.tonal,-100,100,1,factory.tonal);break;
         case filters::Kind::Dither:break;
-        case filters::Kind::Scanlines:number("Strength",request_.settings.scanline,0,100,1);number("Glow",request_.settings.scanlineGlow,0,100,1);break;
+        case filters::Kind::Scanlines:number("Strength",request_.settings.scanline,0,100,1,factory.scanline);number("Glow",request_.settings.scanlineGlow,0,100,1,factory.scanlineGlow);break;
         case filters::Kind::CameraRaw:break;
         }
         if(cameraRaw){

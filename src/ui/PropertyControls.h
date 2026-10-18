@@ -9,6 +9,7 @@
 #include <QStyle>
 #include <QStyleOptionSlider>
 #include <functional>
+#include <optional>
 
 namespace compositor::ui {
 // ContentView.ArrowStepper uses Shift, regardless of the platform spinbox's
@@ -56,11 +57,30 @@ inline void synchronizeNumber(QDoubleSpinBox* number,double value){
 
 // SliderSnap.swift: center the knob under a track press immediately, preserving
 // native knob dragging, keyboard behavior, direction and style geometry.
+// Double-click restores the default value through the same press/value/release
+// transaction as a drag. A double-click follows a track press that already
+// committed its snap, so owners withdraw that step first (withdrawPressStep).
 class TrackSlider:public QSlider {
+    std::optional<int> defaultValue_;
+    bool pressSnapped_{};
 public:
     using QSlider::QSlider;
+    void setDefaultValue(int value){defaultValue_=value;}
+    std::function<void()> withdrawPressStep;
 protected:
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if(!defaultValue_){QSlider::mouseDoubleClickEvent(event);return;}
+        if(isEnabled()&&event->button()==Qt::LeftButton){
+            if(pressSnapped_&&withdrawPressStep)withdrawPressStep();
+            pressSnapped_=false;
+            setSliderDown(true);
+            setValue(*defaultValue_);
+            setSliderDown(false);
+        }
+        event->accept();
+    }
     void mousePressEvent(QMouseEvent* event) override {
+        pressSnapped_=false;
         if(isEnabled()&&orientation()==Qt::Horizontal&&event->button()==Qt::LeftButton&&maximum()>minimum()){
             QStyleOptionSlider option;initStyleOption(&option);
             const auto knob=style()->subControlRect(QStyle::CC_Slider,&option,QStyle::SC_SliderHandle,this);
@@ -71,6 +91,7 @@ protected:
                 // Start the transaction before publishing the snapped value.
                 setSliderDown(true);
                 setValue(QStyle::sliderValueFromPosition(minimum(),maximum(),position,travel,option.upsideDown));
+                pressSnapped_=true;
             }
         }
         QSlider::mousePressEvent(event);

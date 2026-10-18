@@ -197,7 +197,7 @@ QPointF brightCentroid(const QImage& image) {
     if (weight < 20) throw std::runtime_error("control mark is not visible");
     return {sumX / weight, sumY / weight};
 }
-void glass_controls() {
+void slider_knob_geometry() {
     Fixture f;
     rawModal(f, [](QDialog& dialog) {
         QApplication::sendPostedEvents();
@@ -400,7 +400,7 @@ void guided_lines() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"glass_controls", glass_controls}, {"guided_lines", guided_lines}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();

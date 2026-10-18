@@ -76,7 +76,7 @@ void MainWindow::setupRetouchActions() {
     for(size_t i=0;i<retouchTip_.size();++i) {
         auto* label=new QLabel(QString::fromUtf8(labels[i]).trimmed());if(i==2)label->setObjectName("retouchOpacityLabel");
         if(i){
-            auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setObjectName(i==1?"retouchHardnessSlider":"retouchOpacitySlider");slider->setAccessibleName(i==1?"Retouch hardness slider":"Retouch opacity slider");slider->setRange(i==1?0:100,10000);slider->setFixedWidth(100);retouchSliders_[i-1]=slider;
+            auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setObjectName(i==1?"retouchHardnessSlider":"retouchOpacitySlider");slider->setAccessibleName(i==1?"Retouch hardness slider":"Retouch opacity slider");slider->setRange(i==1?0:100,10000);slider->setDefaultValue(10000);slider->setFixedWidth(100);retouchSliders_[i-1]=slider;
             connect(slider,&QSlider::valueChanged,this,[this,i](int value){
                 if(refreshing_||retouch_||stroke_)return;
                 double* field=nullptr;
@@ -143,7 +143,9 @@ void MainWindow::refreshRetouchControls() {
     for(size_t i=0;i<retouchTip_.size();++i) {
         const QSignalBlocker block(retouchTip_[i]);ui::synchronizeNumber(retouchTip_[i],values[i]);retouchTip_[i]->setEnabled(enabled&&(clone||heal||smear));
     }
-    for(size_t i=0;i<retouchSliders_.size();++i)if(auto* slider=retouchSliders_[i]){const QSignalBlocker block(slider);slider->setValue(int(std::lround(values[i+1]*100)));slider->setEnabled(enabled&&(clone||heal||smear));}
+    for(size_t i=0;i<retouchSliders_.size();++i)if(auto* slider=retouchSliders_[i]){const QSignalBlocker block(slider);slider->setValue(int(std::lround(values[i+1]*100)));
+        // Factory hardness differs by tool: clone and blur start soft (0), the healing brush starts at 100%.
+        slider->setDefaultValue(i==0&&(clone||smear)?0:10000);slider->setEnabled(enabled&&(clone||heal||smear));}
     if(auto* label=retouchBar_->findChild<QLabel*>("retouchOpacityLabel"))label->setText(smear?"Strength":"Opacity");
     if(auto* label=retouchBar_->findChild<QLabel*>("retouchFamily"))label->setText(clone?"Clone Stamp":heal?"Spot Healing":"Smear");
 }

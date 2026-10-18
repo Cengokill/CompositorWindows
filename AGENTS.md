@@ -8,7 +8,7 @@ This is an independent Windows preview based on Robbie Tilton's Compositor. Keep
 
 The code itself is the implementation reference. Read and link to it instead of writing a second description of its behavior. Documentation should explain user workflows, build steps, external contracts, and decisions that cannot be inferred from the code. People and coding agents use the same documentation.
 
-Visual quality matters. Use the rendered Mac iOS 26 Liquid Glass design as a reference and maintain cohesive custom interior controls. Native Windows title bars are the default; Mac-style window controls are an optional saved preference.
+Visual quality matters. The target for interior controls is a very modern Windows style: flat, Fluent-like surfaces, clean typography, subtle hover and pressed states, and cohesive custom controls. Use the Mac iOS 26 Liquid Glass design only as a reference for layout and clarity, not as a style to copy. Native Windows title bars are the default; Mac-style window controls are an optional saved preference.
 
 ## 1. Product and upstream relationship
 
@@ -48,7 +48,7 @@ The project uses C++20, Qt Widgets, and Direct3D 11. `docs/architecture.md` iden
 - Ordinary layer transforms should retain source pixels unless the user explicitly applies a destructive operation. An applied destructive edit must leave metadata consistent with the resulting pixels.
 - Preserve layer identity, order, visibility, opacity, blending, masks, transforms, editable metadata, and transparency when an operation is intended to retain them. Test transitions that intentionally discard editability.
 - A temporary preview must have clear Apply and Cancel behavior. Cancel restores the prior document; Apply creates an appropriate undoable edit. Guard against a late worker result changing a cancelled or different document.
-- Keep controls coherent with the existing Windows interface. Use the original Mac design as a visual reference, while retaining native Windows title bars by default and the saved optional Mac-style appearance.
+- Keep controls coherent with a very modern Windows style. Use the original Mac design only for layout and clarity, and retain native Windows title bars by default and the saved optional Mac-style appearance. Do not add Liquid Glass translucency, gloss highlights, or glass-style gradients to new or changed controls.
 - Use Windows shortcut labels and actual Windows interactions in UI documentation. Do not copy Command-key, Finder, AppKit, or macOS title-bar instructions into the Windows guide.
 - For UI work, inspect the rendered application when feasible and include a real screenshot or recording with the PR. An offscreen Qt test alone does not establish the appearance or behavior of a native window.
 - Check canvas display, export, thumbnails, and reopened projects for agreement when changing shared rendering behavior. Test device or software fallback paths when they are affected.

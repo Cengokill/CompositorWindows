@@ -1,6 +1,10 @@
+#include "ui/CameraRawPanel.h"
 #include "ui/MainWindow.h"
+#include "ui/PropertyControls.h"
 #include <QApplication>
+#include <QLabel>
 #include <QLineEdit>
+#include <QSlider>
 #include <QTest>
 #include <QToolBar>
 #include <cstdio>
@@ -36,6 +40,18 @@ void opacityTrack(){
     QTest::mouseRelease(slider,Qt::LeftButton,{},at);require(f.project.history.undoCount()==1,"track release must commit exactly one edit");
     invoke(f.window,"edit.undo");require(f.project.document==f.before,"opacity Undo restores exact document");
 }
+void opacityDoubleClick(){
+    Fixture f;auto* slider=f.window.findChild<QSlider*>("layerOpacity");require(slider&&slider->isVisible(),"opacity slider missing");
+    slider->setValue(30);
+    const Document baseline=*f.project.document;const auto steps=f.project.history.undoCount();
+    // Windows delivers Press, Release, DblClick, Release; QTest::mouseDClick alone sends only the DblClick.
+    const QPoint at(slider->width()*4/5,slider->height()/2);
+    QTest::mouseClick(slider,Qt::LeftButton,{},at);QTest::mouseDClick(slider,Qt::LeftButton,{},at);QTest::mouseRelease(slider,Qt::LeftButton,{},at);
+    QApplication::processEvents();
+    require(slider->value()==100&&f.project.document->layers[0].opacity==1.,"double-click must reset layer opacity to 100 percent");
+    require(f.project.history.undoCount()==steps+1,"double-click away from the knob must add exactly one history step");
+    invoke(f.window,"edit.undo");require(f.project.document==baseline,"one undo must restore the opacity from before the double-click");
+}
 void brushField(){
     Fixture f;invoke(f.window,"tool.brush");auto* opacity=number(f.window,"Brush opacity");require(opacity->minimum()==1,"source brush opacity minimum is one percent");
     opacity->setValue(5);opacity->setFocus();QTest::keyClick(opacity,Qt::Key_Down,Qt::ShiftModifier);require(opacity->value()==1,"Shift decrement clamps brush opacity to one");
@@ -43,5 +59,29 @@ void brushField(){
     QTest::keyClick(diameter,Qt::Key_Return);QApplication::processEvents();require(f.project.canvas->hasFocus(),"Return must give brush keyboard commands back to canvas");
     require(f.project.document==f.before&&f.project.history.undoCount()==0,"tool option editing must preserve document history");
 }
+QSlider* sliderNamed(QWidget& root,const char* name){for(auto* slider:root.findChildren<QSlider*>())if(slider->accessibleName()==name)return slider;throw std::runtime_error("slider missing");}
+void sliderDoubleClick(){
+    compositor::ui::TrackSlider slider(Qt::Horizontal);slider.setRange(0,10000);slider.setDefaultValue(10000);slider.setValue(2500);slider.resize(300,24);slider.show();QApplication::processEvents();
+    int withdrawals=0;slider.withdrawPressStep=[&]{++withdrawals;};
+    QTest::mouseClick(&slider,Qt::LeftButton,{},QPoint(60,12));QTest::mouseDClick(&slider,Qt::LeftButton,{},QPoint(60,12));QTest::mouseRelease(&slider,Qt::LeftButton,{},QPoint(60,12));QApplication::processEvents();
+    require(slider.value()==10000&&!slider.isSliderDown(),"double-click must restore the default value and end the drag");
+    require(withdrawals==1,"a double-click after a track snap must withdraw that snap exactly once");
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"transform_typing",transformTyping},{"opacity_track_history",opacityTrack},{"brush_field_focus",brushField}};try{require(argc==2&&cases.contains(argv[1]),"provide named property UI case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}
+void cameraRawAlignment(){
+    compositor::ui::CameraRawPanel panel(compositor::filters::CameraRawSettings{});panel.show();QApplication::processEvents();
+    const auto labels=panel.findChildren<QLabel*>("sliderLabel");require(labels.size()>10,"camera raw sliders missing");
+    const int width=labels.front()->minimumWidth();
+    for(auto* label:labels)require(label->minimumWidth()==width&&label->maximumWidth()==width,"camera raw label columns must share one width");
+}
+void cameraRawTrackAnchors(){
+    compositor::ui::CameraRawPanel panel(compositor::filters::CameraRawSettings{});panel.resize(440,900);panel.show();QApplication::processEvents();
+    auto* temperature=sliderNamed(panel,"Temperature slider");require(temperature->isVisible(),"temperature slider must be visible");
+    // A (left) and B (right) must stay at the groove ends; moving the knob only changes how much is dimmed.
+    temperature->setValue(3000);const auto low=temperature->grab().toImage();
+    temperature->setValue(5000);const auto mid=temperature->grab().toImage();
+    const int y=temperature->height()/2;
+    require(low.pixel(10,y)==mid.pixel(10,y),"track start colour moved with the knob");
+    require(low.pixel(low.width()-11,y)==mid.pixel(mid.width()-11,y),"track end colour moved with the knob");
+}
+}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"transform_typing",transformTyping},{"opacity_track_history",opacityTrack},{"brush_field_focus",brushField},{"slider_double_click",sliderDoubleClick},{"camera_raw_alignment",cameraRawAlignment},{"camera_raw_track_anchors",cameraRawTrackAnchors},{"opacity_double_click_history",opacityDoubleClick}};try{require(argc==2&&cases.contains(argv[1]),"provide named property UI case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}
