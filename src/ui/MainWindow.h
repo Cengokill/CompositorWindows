@@ -183,6 +183,7 @@ class MainWindow final:public QMainWindow {
     std::array<ui::TrackSlider*,2> brushSliders_{};
     std::optional<std::pair<int,qint64>> opacityDigit_;
     EditorProject* opacityOwner_{};
+    std::optional<size_t> opacityPressUndoCount_;
     bool strokeMask_{},maskPaintWhite_{};
     std::optional<Point> lastBrushPoint_;
     std::string lastBrushLayer_;
@@ -276,6 +277,7 @@ class MainWindow final:public QMainWindow {
     void cancelBrushTip();
     bool canvasNavigationAllowed();
     void finishOpacityEdit();
+    void withdrawOpacityPress();
     QWidget* createLayerOpacityControl();
     void refreshOpacityPercent();
     void detachOpacityPercent();

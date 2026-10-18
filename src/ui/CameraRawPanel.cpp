@@ -218,15 +218,14 @@ void paintThumb(QPainter& painter, const QRectF& bounds, bool hovered) {
 }
 // Windows-style slider. Two-colour tracks (A left, B right) paint their gradient across the whole
 // groove, so the colour ends stay fixed while the knob moves; the part not yet reached is dimmed.
-class CameraRawSlider final : public QSlider {
+class CameraRawSlider final : public TrackSlider {
 public:
-    explicit CameraRawSlider(Qt::Orientation orientation, QWidget* parent = nullptr) : QSlider(orientation, parent) {
+    explicit CameraRawSlider(Qt::Orientation orientation, QWidget* parent = nullptr) : TrackSlider(orientation, parent) {
         setFixedHeight(24);
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
     }
     void setTrackColors(QColor left, QColor right) { left_ = left; right_ = right; }
-    void setDefaultValue(int value) { defaultValue_ = value; }
 protected:
     static constexpr int knob = 16;
     QRectF groove() const {
@@ -274,15 +273,6 @@ protected:
         painter.setClipping(false);
         paintThumb(painter, QRectF(center.x() - knob / 2.0, center.y() - knob / 2.0, knob, knob), underMouse());
     }
-    void mouseDoubleClickEvent(QMouseEvent* event) override {
-        if (!defaultValue_) { QSlider::mouseDoubleClickEvent(event); return; }
-        if (isEnabled() && event->button() == Qt::LeftButton) {
-            setSliderDown(true);
-            setValue(*defaultValue_);
-            setSliderDown(false);
-        }
-        event->accept();
-    }
     void mousePressEvent(QMouseEvent* event) override {
         if (event->button() != Qt::LeftButton || !isEnabled()) return;
         setSliderDown(true);
@@ -300,7 +290,6 @@ protected:
     }
 private:
     QColor left_, right_;
-    std::optional<int> defaultValue_;
 };
 class SectionChevron final : public QToolButton {
 public:
