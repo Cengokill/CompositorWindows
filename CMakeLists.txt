@@ -270,7 +270,7 @@ add_executable(property_control_before_tests tests/property_controls/PropertyCon
 add_executable(property_ui_tests tests/property_controls/PropertyUiTests.cpp)
 target_link_libraries(property_ui_tests PRIVATE compositor_ui Qt6::Test)
 target_compile_options(property_ui_tests PRIVATE /W4 /WX /utf-8)
-foreach(case transform_typing opacity_track_history brush_field_focus)
+foreach(case transform_typing opacity_track_history brush_field_focus slider_double_click camera_raw_alignment camera_raw_track_anchors)
   add_test(NAME property_ui.${case} COMMAND property_ui_tests ${case})
   set_tests_properties(property_ui.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

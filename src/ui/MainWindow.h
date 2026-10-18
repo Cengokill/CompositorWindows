@@ -16,6 +16,7 @@
 #include <QToolBar>
 #include <QCheckBox>
 #include "PaletteDialog.h"
+#include "PropertyControls.h"
 #include "EditPanelSession.h"
 #include "ProjectToolState.h"
 #include "CommandPalette.h"
@@ -71,7 +72,7 @@ class MainWindow final:public QMainWindow {
     QTabWidget* tabs_{};
     QTreeWidget* layers_{};
     QComboBox* blend_{};
-    QSlider* opacity_{};
+    ui::TrackSlider* opacity_{};
     ui::LayerOpacityField* opacityPercent_{};
     QComboBox* target_{};
     std::array<QDoubleSpinBox*,5> geometry_{};
@@ -112,7 +113,7 @@ class MainWindow final:public QMainWindow {
     std::optional<Point> retouchAxisAnchor_;
     std::optional<bool> retouchAxisHorizontal_;
     std::array<QDoubleSpinBox*,3> retouchTip_{};
-    std::array<QSlider*,2> retouchSliders_{};
+    std::array<ui::TrackSlider*,2> retouchSliders_{};
     QComboBox *healingModes_{}, *blurModes_{};
     QToolBar* retouchBar_{};
     QCheckBox *cloneAligned_{}, *cloneAllLayers_{};
@@ -179,7 +180,7 @@ class MainWindow final:public QMainWindow {
     std::optional<QPointF> brushPointer_;
     Qt::KeyboardModifiers brushPointerModifiers_{};
     std::array<QDoubleSpinBox*,3> brushTip_{};
-    std::array<QSlider*,2> brushSliders_{};
+    std::array<ui::TrackSlider*,2> brushSliders_{};
     std::optional<std::pair<int,qint64>> opacityDigit_;
     EditorProject* opacityOwner_{};
     bool strokeMask_{},maskPaintWhite_{};

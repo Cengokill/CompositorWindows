@@ -204,44 +204,33 @@ protected:
     }
     int drag_{-1};
 };
-void paintGlassDisc(QPainter& painter, const QRectF& bounds, bool lens) {
+// Windows 11 slider thumb: a solid disc with a hairline border and a soft shadow.
+void paintThumb(QPainter& painter, const QRectF& bounds, bool hovered) {
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0, 0, 0, lens ? 70 : 80));
-    painter.drawEllipse(bounds.translated(0, 1.2));
-    painter.setBrush(lens ? QColor(255, 255, 255, 30) : QColor(12, 14, 18, 170));
-    painter.drawEllipse(bounds);
-    QLinearGradient fill(bounds.topLeft(), bounds.bottomLeft());
-    if (lens) {
-        fill.setColorAt(0, QColor(255, 255, 255, 248));
-        fill.setColorAt(0.48, QColor(246, 247, 250, 242));
-        fill.setColorAt(1, QColor(220, 224, 232, 236));
-    } else {
-        fill.setColorAt(0, QColor(255, 255, 255, 96));
-        fill.setColorAt(0.42, QColor(255, 255, 255, 28));
-        fill.setColorAt(1, QColor(255, 255, 255, 10));
-    }
-    painter.setBrush(fill);
-    painter.setPen(QPen(QColor(255, 255, 255, lens ? 220 : 150), 1));
+    painter.setBrush(QColor(0, 0, 0, 70));
+    painter.drawEllipse(bounds.translated(0, 1));
+    painter.setPen(QPen(QColor("#b9bdc7"), 1));
+    painter.setBrush(QColor(hovered ? "#ffffff" : "#e3e6eb"));
     painter.drawEllipse(bounds.adjusted(0.5, 0.5, -0.5, -0.5));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(255, 255, 255, lens ? 160 : 110));
-    painter.drawEllipse(bounds.adjusted(bounds.width() * 0.26, bounds.height() * 0.12, -bounds.width() * 0.26, -bounds.height() * 0.58));
     painter.restore();
 }
-class GlassSlider final : public QSlider {
+// Windows-style slider. Two-colour tracks (A left, B right) paint their gradient across the whole
+// groove, so the colour ends stay fixed while the knob moves; the part not yet reached is dimmed.
+class CameraRawSlider final : public QSlider {
 public:
-    explicit GlassSlider(Qt::Orientation orientation, QWidget* parent = nullptr) : QSlider(orientation, parent) {
-        setFixedHeight(28);
+    explicit CameraRawSlider(Qt::Orientation orientation, QWidget* parent = nullptr) : QSlider(orientation, parent) {
+        setFixedHeight(24);
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
     }
     void setTrackColors(QColor left, QColor right) { left_ = left; right_ = right; }
+    void setDefaultValue(int value) { defaultValue_ = value; }
 protected:
-    static constexpr int knob = 20;
+    static constexpr int knob = 16;
     QRectF groove() const {
-        constexpr double thickness = 7;
+        constexpr double thickness = 4;
         return {knob / 2.0, (height() - thickness) / 2.0, std::max(0.0, width() - double(knob)), thickness};
     }
     double ratio() const {
@@ -261,24 +250,38 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         const auto track = groove();
+        const double radius = track.height() / 2;
+        const bool bicolor = left_.isValid() && right_.isValid();
+        // Gradient geometry is the full groove: A stays at the left end and B at the right end.
+        QLinearGradient fill(track.topLeft(), track.topRight());
+        fill.setColorAt(0, bicolor ? left_ : QColor("#579cf5"));
+        fill.setColorAt(1, bicolor ? right_ : QColor("#579cf5"));
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(255, 255, 255, 28));
-        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2);
-        const QRectF active(track.left(), track.top(), std::max(track.height(), knobCenter().x() - track.left()), track.height());
-        QLinearGradient fill(active.topLeft(), active.topRight());
-        if (left_.isValid() && right_.isValid()) {
-            fill.setColorAt(0, left_);
-            fill.setColorAt(1, right_);
-        } else {
-            fill.setColorAt(0, QColor(255, 255, 255, 70));
-            fill.setColorAt(1, QColor(255, 255, 255, 150));
+        painter.setBrush(QColor("#494c53"));
+        painter.drawRoundedRect(track, radius, radius);
+        if (bicolor) {
+            painter.setBrush(fill);
+            painter.setOpacity(0.35);
+            painter.drawRoundedRect(track, radius, radius);
+            painter.setOpacity(1);
         }
-        painter.setBrush(fill);
-        painter.drawRoundedRect(active, track.height() / 2, track.height() / 2);
-        painter.setPen(QPen(QColor(255, 255, 255, 90), 1));
-        painter.drawLine(QPointF(track.left() + 4, track.top() + 1), QPointF(track.right() - 4, track.top() + 1));
         const QPointF center = knobCenter();
-        paintGlassDisc(painter, QRectF(center.x() - knob / 2.0, center.y() - knob / 2.0, knob, knob), true);
+        QPainterPath reached;
+        reached.addRoundedRect(QRectF(track.left(), track.top(), std::max(0., center.x() - track.left()), track.height()), radius, radius);
+        painter.setClipPath(reached);
+        painter.setBrush(fill);
+        painter.drawRoundedRect(track, radius, radius);
+        painter.setClipping(false);
+        paintThumb(painter, QRectF(center.x() - knob / 2.0, center.y() - knob / 2.0, knob, knob), underMouse());
+    }
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (!defaultValue_) { QSlider::mouseDoubleClickEvent(event); return; }
+        if (isEnabled() && event->button() == Qt::LeftButton) {
+            setSliderDown(true);
+            setValue(*defaultValue_);
+            setSliderDown(false);
+        }
+        event->accept();
     }
     void mousePressEvent(QMouseEvent* event) override {
         if (event->button() != Qt::LeftButton || !isEnabled()) return;
@@ -297,10 +300,11 @@ protected:
     }
 private:
     QColor left_, right_;
+    std::optional<int> defaultValue_;
 };
-class GlassChevron final : public QToolButton {
+class SectionChevron final : public QToolButton {
 public:
-    explicit GlassChevron(QWidget* parent = nullptr) : QToolButton(parent) {
+    explicit SectionChevron(QWidget* parent = nullptr) : QToolButton(parent) {
         setFixedSize(26, 26);
         setCheckable(true);
         setAutoRaise(true);
@@ -311,8 +315,12 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        paintGlassDisc(painter, QRectF(rect()).adjusted(2, 2, -2, -2), false);
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        if (underMouse()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor("#3d4047"));
+            painter.drawRoundedRect(QRectF(rect()), 6, 6);
+        }
+        painter.setPen(QPen(QColor("#e4e5e7"), 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         const QPointF center = rect().center();
         QPainterPath path;
         if (isChecked()) {
@@ -327,9 +335,9 @@ protected:
         painter.drawPath(path);
     }
 };
-class GlassEye final : public QToolButton {
+class SectionEye final : public QToolButton {
 public:
-    explicit GlassEye(QWidget* parent = nullptr) : QToolButton(parent) {
+    explicit SectionEye(QWidget* parent = nullptr) : QToolButton(parent) {
         setFixedSize(26, 26);
         setCheckable(true);
         setAutoRaise(true);
@@ -340,8 +348,12 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        paintGlassDisc(painter, QRectF(rect()).adjusted(2, 2, -2, -2), false);
-        painter.setPen(QPen(QColor(255, 255, 255, isChecked() ? 235 : 120), 1.3));
+        if (underMouse()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor("#3d4047"));
+            painter.drawRoundedRect(QRectF(rect()), 6, 6);
+        }
+        painter.setPen(QPen(QColor(228, 229, 231, isChecked() ? 235 : 120), 1.3));
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(QRectF(7.5, 10.2, 11, 6.4));
         painter.setPen(Qt::NoPen);
@@ -381,12 +393,10 @@ protected:
         painter.setBrush(gradient);
         painter.drawEllipse(origin, outer, outer);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(18, 19, 22, 235));
+        painter.setBrush(QColor("#1c1d20"));
         painter.drawEllipse(origin, outer * 0.46, outer * 0.46);
-        painter.setBrush(QColor(255, 255, 255, 36));
-        painter.drawEllipse(QPointF(origin.x(), origin.y() - outer * 0.55), outer * 0.34, outer * 0.12);
         const QPointF knob = knobAt();
-        paintGlassDisc(painter, QRectF(knob.x() - 7, knob.y() - 7, 14, 14), true);
+        paintThumb(painter, QRectF(knob.x() - 7, knob.y() - 7, 14, 14), underMouse());
     }
     void place(QPointF at) {
         const QPointF origin = center();
@@ -424,7 +434,7 @@ void hsvOf(const Pixel& pixel, double& hue, double& saturation, double& value) {
     hue = turns * 60;
     if (hue < 0) hue += 360;
 }
-void applyTrackColors(GlassSlider* slider, const QString& stops) {
+void applyTrackColors(CameraRawSlider* slider, const QString& stops) {
     QColor colors[2];
     int found = 0;
     for (int index = 0; index < stops.size() && found < 2; ++index) {
@@ -444,14 +454,9 @@ QString hueStops(double center) {
 CameraRawPanel::CameraRawPanel(filters::CameraRawSettings settings, QWidget* parent) : QWidget(parent), settings_(std::move(settings)) {
     setObjectName("cameraRawPanel");
     setAttribute(Qt::WA_StyledBackground, true);
+    // Controls use the application's Windows theme; only the transparent scroll content needs overrides.
     setStyleSheet(
-        "QWidget#cameraRawPanel { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(255,255,255,0.08), stop:0.55 rgba(255,255,255,0.03), stop:1 rgba(255,255,255,0.07)); }"
-        "QWidget#cameraRawPanel QLabel { background: transparent; color: rgba(244,246,248,0.96); }"
-        "QWidget#cameraRawPanel QComboBox, QWidget#cameraRawPanel QPushButton, QWidget#cameraRawPanel QToolButton { background: rgba(255,255,255,0.14); color: white; border: 1px solid rgba(255,255,255,0.38); border-top-color: rgba(255,255,255,0.68); border-radius: 12px; padding: 4px 10px; min-height: 18px; }"
-        "QWidget#cameraRawPanel QPushButton:hover, QWidget#cameraRawPanel QToolButton:hover, QWidget#cameraRawPanel QComboBox:hover { background: rgba(255,255,255,0.22); }"
-        "QWidget#cameraRawPanel QToolButton:checked, QWidget#cameraRawPanel QPushButton:checked { background: rgba(255,255,255,0.32); border-color: rgba(255,255,255,0.72); }"
-        "QWidget#cameraRawPanel QComboBox::drop-down { border: 0; width: 22px; }"
-        "QWidget#cameraRawPanel QCheckBox { background: transparent; spacing: 8px; }"
+        "QWidget#cameraRawPanel QLabel { background: transparent; }"
         "QWidget#cameraRawPanel QScrollArea, QWidget#cameraRawPanel QScrollArea > QWidget > QWidget { background: transparent; border: 0; }");
     build();
     qApp->installEventFilter(this);
@@ -662,7 +667,8 @@ void CameraRawPanel::build() {
         auto* label = new ResetLabel(stacked ? name.section(QLatin1Char(' '), -1) : name);
         label->setToolTip(name);
         if (stacked) label->setAlignment(Qt::AlignCenter);
-        auto* slider = new GlassSlider(Qt::Horizontal);
+        else label->setObjectName("sliderLabel");
+        auto* slider = new CameraRawSlider(Qt::Horizontal);
         auto* spin = new PropertyNumber;
         spin->setRange(low, high);
         spin->setDecimals(decimals);
@@ -672,13 +678,12 @@ void CameraRawPanel::build() {
         spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
         spin->setAlignment(Qt::AlignCenter);
         spin->setFixedWidth(72);
-        spin->setStyleSheet("QDoubleSpinBox { background: rgba(255,255,255,0.16); color: white; border: 1px solid rgba(255,255,255,0.42); border-top-color: rgba(255,255,255,0.72); border-radius: 11px; padding: 0 6px; min-height: 22px; }"
-                             "QDoubleSpinBox QLineEdit { background: transparent; border: 0; padding: 0; margin: 0; color: white; }");
         slider->setRange(0, 10000);
         slider->setAccessibleName(name + " slider");
         applyTrackColors(slider, gradient);
         const auto position = [low, high](double value) { return int(std::lround((value - low) / (high - low) * 10000)); };
         slider->setValue(position(*field));
+        slider->setDefaultValue(position(fallback));
         line->addWidget(label);
         line->addWidget(slider, stacked ? 0 : 1);
         line->addWidget(spin, 0, stacked ? Qt::AlignHCenter : Qt::Alignment());
@@ -705,12 +710,12 @@ void CameraRawPanel::build() {
         auto* header = new QWidget;
         auto* row = new QHBoxLayout(header);
         row->setContentsMargins(0, 0, 0, 0);
-        auto* disclosure = new GlassChevron;
+        auto* disclosure = new SectionChevron;
         disclosure->setObjectName("section." + title);
         disclosure->setChecked(expanded);
         disclosure->setAccessibleName(title);
         auto* label = new QLabel(title);
-        auto* eye = new GlassEye;
+        auto* eye = new SectionEye;
         eye->setObjectName("eye." + id);
         eye->setAccessibleName("Show " + title);
         eye->setChecked(*shown);
@@ -816,7 +821,7 @@ void CameraRawPanel::build() {
     });
     sync_.push_back([graph, refine, this] { graph->update(); refine->setEnabled(curveChannel_ == 0 || curveParametric_); });
 
-    auto* mixer = addSection(sections, "Mixer", "mixer", false, &eyes_.mixer, [this] { return settings_.mixer.adjusts(); });
+    auto* mixer = addSection(sections, "Mixer", "mixer", true, &eyes_.mixer, [this] { return settings_.mixer.adjusts(); });
     auto* mixerPages = new QHBoxLayout;
     auto* hsl = new QPushButton("HSL");
     auto* colors = new QPushButton("Color");
@@ -824,7 +829,7 @@ void CameraRawPanel::build() {
     hsl->setCheckable(true);
     colors->setCheckable(true);
     points->setCheckable(true);
-    hsl->setChecked(true);
+    colors->setChecked(true);
     auto* mixerGroup = new QButtonGroup(this);
     mixerGroup->addButton(hsl, 0);
     mixerGroup->addButton(colors, 1);
@@ -856,6 +861,7 @@ void CameraRawPanel::build() {
         hueRows[size_t(i)] = addSlider(mixer, family, &settings_.mixer.hue[size_t(i)], -100, 100, 0, 0, 0, hueStops(filters::CameraRawMixerSettings::centers[size_t(i)]), false)->parentWidget();
         satRows[size_t(i)] = addSlider(mixer, family + " Saturation", &settings_.mixer.saturation[size_t(i)], -100, 100, 0, 0, 0, "stop:0 #8a8a8a, stop:1 " + QColor::fromHsv(int(filters::CameraRawMixerSettings::centers[size_t(i)]), 180, 210).name(), false)->parentWidget();
         lumRows[size_t(i)] = addSlider(mixer, family + " Luminance", &settings_.mixer.luminance[size_t(i)], -100, 100, 0, 0, 0, {}, false)->parentWidget();
+        hueRows[size_t(i)]->hide();
         satRows[size_t(i)]->hide();
         lumRows[size_t(i)]->hide();
     }
@@ -880,7 +886,7 @@ void CameraRawPanel::build() {
     auto* familySat = addSlider(colorLayout, "Saturation", &settings_.mixer.saturation[0], -100, 100, 0, 0, 0, {}, false);
     auto* familyLum = addSlider(colorLayout, "Luminance", &settings_.mixer.luminance[0], -100, 100, 0, 0, 0, {}, false);
     mixer->addWidget(colorHost);
-    colorHost->hide();
+    tabHost->hide();
     auto* pointHost = new QWidget;
     auto* pointLayout = new QVBoxLayout(pointHost);
     pointLayout->setContentsMargins(0, 0, 0, 0);
@@ -1172,6 +1178,11 @@ void CameraRawPanel::build() {
         process->setCurrentIndex(int(settings_.calibration.process) - 1);
         processSummary_->setText(filters::CameraRawCalibrationSettings::summary(settings_.calibration.process));
     });
+    // One label column for every non-stacked slider keeps all tracks aligned and equally long.
+    const auto labels = findChildren<QLabel*>("sliderLabel");
+    int labelWidth = 0;
+    for (auto* label : labels) labelWidth = std::max(labelWidth, label->fontMetrics().horizontalAdvance(label->text()));
+    for (auto* label : labels) label->setFixedWidth(labelWidth + 4);
     sections->addStretch(1);
     sync();
 }

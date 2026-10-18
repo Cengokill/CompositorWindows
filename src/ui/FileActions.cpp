@@ -553,7 +553,7 @@ void MainWindow::exportImage(){
     QComboBox scale;scale.setObjectName("exportScale");for(const int percent:{25,50,75,100,200})scale.addItem(QString("%1%").arg(percent),percent/100.);scale.setCurrentIndex(3);layout.addRow("Scale",&scale);
     QLabel pageSize;pageSize.setObjectName("exportPageSize");layout.addRow("Page",&pageSize);
     QSettings settings;double remembered=settings.value("jpegExportQuality",.85).toDouble();if(!std::isfinite(remembered))remembered=.85;
-    ui::TrackSlider quality(Qt::Horizontal);quality.setObjectName("exportQuality");quality.setRange(0,100);quality.setValue(int(std::round(std::clamp(remembered,0.,1.)*100)));layout.addRow("JPEG quality",&quality);
+    ui::TrackSlider quality(Qt::Horizontal);quality.setObjectName("exportQuality");quality.setRange(0,100);quality.setDefaultValue(85);quality.setValue(int(std::round(std::clamp(remembered,0.,1.)*100)));layout.addRow("JPEG quality",&quality);
     // JPEG and PDF have no transparency in the preview or the file; this color fills the canvas wherever it is transparent.
     QPushButton matte("White");matte.setObjectName("exportMatte");QColor matteColor=Qt::white;layout.addRow("Background",&matte);
     auto showPageSize=[&]{
@@ -563,7 +563,7 @@ void MainWindow::exportImage(){
     };
     showPageSize();layout.setRowVisible(&pageSize,false);
     QLabel preview;preview.setObjectName("exportPreview");preview.setMinimumSize(520,320);preview.setAlignment(Qt::AlignCenter);layout.addRow(&preview);
-    QSlider previewZoom(Qt::Horizontal);previewZoom.setObjectName("exportPreviewZoom");previewZoom.setRange(25,400);previewZoom.setValue(100);layout.addRow("Preview zoom",&previewZoom);QPixmap previewSource;auto showPreview=[&]{if(previewSource.isNull())return;preview.setPixmap(previewSource.scaled(previewSource.size()*previewZoom.value()/100.,Qt::KeepAspectRatio,Qt::SmoothTransformation));};
+    ui::TrackSlider previewZoom(Qt::Horizontal);previewZoom.setObjectName("exportPreviewZoom");previewZoom.setRange(25,400);previewZoom.setDefaultValue(100);previewZoom.setValue(100);layout.addRow("Preview zoom",&previewZoom);QPixmap previewSource;auto showPreview=[&]{if(previewSource.isNull())return;preview.setPixmap(previewSource.scaled(previewSource.size()*previewZoom.value()/100.,Qt::KeepAspectRatio,Qt::SmoothTransformation));};
     QLabel bytesLabel;bytesLabel.setObjectName("exportEncodedSize");layout.addRow("Encoded size",&bytesLabel);
     QDialogButtonBox buttons(QDialogButtonBox::Save|QDialogButtonBox::Cancel);buttons.setObjectName("exportButtons");layout.addRow(&buttons);
     struct Prepared {imaging::StreamingExportResult result;QString path,error;bool cancelled{};};

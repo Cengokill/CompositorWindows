@@ -9,6 +9,7 @@
 #include <QStyle>
 #include <QStyleOptionSlider>
 #include <functional>
+#include <optional>
 
 namespace compositor::ui {
 // ContentView.ArrowStepper uses Shift, regardless of the platform spinbox's
@@ -56,10 +57,23 @@ inline void synchronizeNumber(QDoubleSpinBox* number,double value){
 
 // SliderSnap.swift: center the knob under a track press immediately, preserving
 // native knob dragging, keyboard behavior, direction and style geometry.
+// Double-click restores the default value through the same press/value/release
+// transaction as a drag, so owners commit history exactly once.
 class TrackSlider:public QSlider {
+    std::optional<int> defaultValue_;
 public:
     using QSlider::QSlider;
+    void setDefaultValue(int value){defaultValue_=value;}
 protected:
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if(!defaultValue_){QSlider::mouseDoubleClickEvent(event);return;}
+        if(isEnabled()&&event->button()==Qt::LeftButton){
+            setSliderDown(true);
+            setValue(*defaultValue_);
+            setSliderDown(false);
+        }
+        event->accept();
+    }
     void mousePressEvent(QMouseEvent* event) override {
         if(isEnabled()&&orientation()==Qt::Horizontal&&event->button()==Qt::LeftButton&&maximum()>minimum()){
             QStyleOptionSlider option;initStyleOption(&option);
