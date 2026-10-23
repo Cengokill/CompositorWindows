@@ -1,5 +1,7 @@
 #include "ui/ImportActions.h"
 #include "ui/WorkspaceDropQueue.h"
+#include "ui/RawImportDialog.h"
+#include "ui/PropertyControls.h"
 #include "ui/MainWindow.h"
 #include "imaging/psd/PsdDocument.h"
 #include "imaging/wic_codec.h"
@@ -17,9 +19,11 @@
 #include <QMimeData>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QSlider>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 #include <QThread>
 #include <QTreeWidget>
 #include <knownfolders.h>
@@ -133,6 +137,37 @@ PsdFixtureLayer solidPsdLayer(int left,int top,int width,int height,uint8_t red,
     PsdFixtureLayer layer;layer.left=left;layer.top=top;layer.right=left+width;layer.bottom=top+height;layer.compression=compression;const size_t count=size_t(width)*size_t(height);layer.channels={std::vector<uint8_t>(count,red),std::vector<uint8_t>(count,green),std::vector<uint8_t>(count,blue)};return layer;
 }
 PsdFixtureLayer solidPackBitsPsdLayer(int left,int top,int width,int height,uint8_t red,uint8_t green,uint8_t blue){PsdFixtureLayer layer;layer.left=left;layer.top=top;layer.right=left+width;layer.bottom=top+height;layer.compression=PsdFixtureCompression::PackBits;layer.generatedSolid=true;layer.solidChannels={red,green,blue};return layer;}
+}
+// Runs the RAW review with a stub developer, answering the modal dialog once its preview is ready.
+// The real LibRaw development is covered by migration.contract; this checks only the review flow.
+bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,std::map<std::filesystem::path,imaging::RawAdjustments>& settings){
+    const ui::RawImportDialog::Developer stub=[](const std::filesystem::path&,const imaging::ImportOptions&,std::uint32_t){
+        imaging::RawDevelopment developed;
+        developed.image.image={2,2,8,std::vector<std::uint8_t>(16,255)};
+        developed.image.metadata.decoder="stub";
+        developed.capabilities={true,true,true,true,true,2000,12000};
+        developed.asShot={0.0,0.0,0.0,5000};
+        return developed;
+    };
+    bool timedOut=false;
+    QTimer poll;poll.setInterval(10);
+    QObject::connect(&poll,&QTimer::timeout,[&]{
+        auto* dialog=QApplication::activeModalWidget();
+        if(!dialog||dialog->objectName()!="rawImportDialog")return;
+        auto* button=dialog->findChild<QPushButton*>("rawImportButton");
+        if(!button||!button->isEnabled())return;
+        poll.stop();
+        if(!accept){QTest::keyClick(dialog,Qt::Key_Escape);return;}
+        if(editExposure)dialog->findChild<QSlider*>("rawExposureSlider")->setValue(100);
+        button->click();
+    });
+    QTimer watchdog;watchdog.setSingleShot(true);watchdog.setInterval(15000);
+    QObject::connect(&watchdog,&QTimer::timeout,[&]{timedOut=true;poll.stop();if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->reject();});
+    poll.start();watchdog.start();
+    const auto accepted=ui::reviewRawImports(nullptr,{file},settings,stub);
+    poll.stop();watchdog.stop();
+    require(!timedOut,"RAW review dialog never became ready");
+    return accepted;
 }
 int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;auto test=[&](const char* name,const std::function<void()>&run){try{run();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}};
     QTemporaryDir temporary;require(temporary.isValid(),"Missing temporary fixture directory");const auto first=image(temporary.path(),QString::fromUtf8("first-画像.png")),second=image(temporary.path(),"second.png"),missing=temporary.path()+"/missing.png";
@@ -311,6 +346,31 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         auto* layers=w.findChild<QTreeWidget*>();
         require(layers&&layers->topLevelItemCount()==1&&layers->topLevelItem(0)->text(0).contains("Background"),"Opened 16-bit PSD did not import the merged image");
         require(w.findChildren<QMessageBox*>().isEmpty(),"Opened PSD showed a success dialog");
+    });
+    test("raw review records an edited exposure and leaves untouched files as shot",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        const std::filesystem::path raw(temporary.filePath("edited.dng").toStdWString());
+        std::map<std::filesystem::path,imaging::RawAdjustments> settings;
+        require(reviewRaw(raw,true,true,settings),"Accepted RAW review returned cancel");
+        require(settings.count(raw)&&settings[raw].exposure&&*settings[raw].exposure==1.0,"Edited exposure was not recorded");
+        require(!settings[raw].kelvin&&!settings[raw].tint&&!settings[raw].noiseReduction,"Untouched RAW settings were recorded");
+        const std::filesystem::path untouched(temporary.filePath("untouched.arw").toStdWString());
+        require(reviewRaw(untouched,false,true,settings),"Accepted untouched RAW review returned cancel");
+        require(settings[untouched]==imaging::RawAdjustments{},"Untouched RAW review recorded settings");
+    });
+    test("raw review cancel adds nothing to the batch",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        const std::filesystem::path raw(temporary.filePath("cancelled.cr2").toStdWString());
+        std::map<std::filesystem::path,imaging::RawAdjustments> settings;
+        require(!reviewRaw(raw,true,false,settings),"Cancelled RAW review reported acceptance");
+        require(settings.empty(),"Cancelled RAW review recorded settings");
+    });
+    test("raw review skips non-RAW files without a dialog",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        std::map<std::filesystem::path,imaging::RawAdjustments> settings;
+        const auto png=std::filesystem::path(temporary.filePath("plain.png").toStdWString());
+        require(ui::reviewRawImports(nullptr,{png},settings,imaging::developRaw),"Non-RAW file was blocked by the RAW review");
+        require(settings.empty(),"Non-RAW file recorded RAW settings");
     });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }

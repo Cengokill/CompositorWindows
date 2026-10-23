@@ -138,6 +138,7 @@ target_sources(compositor_ui PRIVATE src/ui/UpdatePanel.cpp src/ui/UpdateActions
 target_link_libraries(compositor_ui PUBLIC shell32 uuid dwmapi)
 target_link_libraries(compositor_ui PUBLIC compositor_platform)
 target_sources(compositor_ui PRIVATE src/ui/AdjustmentActions.cpp src/ui/AdjustmentDialog.cpp)
+target_sources(compositor_ui PRIVATE src/ui/RawImportDialog.cpp)
 target_sources(compositor_ui PRIVATE src/ui/SelectionActions.cpp src/ui/SelectionCursors.cpp)
 target_sources(compositor_ui PRIVATE src/ui/WandActions.cpp)
 target_sources(compositor_ui PRIVATE src/ui/PaletteDialog.cpp src/ui/PaletteActions.cpp)

@@ -10,6 +10,7 @@
 #include "core/DocumentExport.h"
 #include "ImportActions.h"
 #include "ImportCommit.h"
+#include "RawImportDialog.h"
 #include "ProjectOpenDialog.h"
 #include "WorkspaceDropQueue.h"
 #include "VirtualImageDrop.h"
@@ -242,8 +243,10 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
         auto ext=QFileInfo(path).suffix().toLower();
         if(ext=="psd"||ext=="psb"){importPhotoshop(path);if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,false);return;}
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
-        finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);
+        // RAW review precedes every document-changing step; cancelling it stops the drop without importing.
+        if(!ui::reviewRawImports(this,batch.files,batch.rawAdjustments)){if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,true);return;}
+        finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
     host.cancelImage=[this](QObject* target){if(importQueue_)importQueue_->cancel(target);};
@@ -263,6 +266,9 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
         else images.append(path);
     }
     if(images.isEmpty())return;
+    ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
+    // RAW review runs before any document change, so cancelling it leaves the project and its drafts untouched.
+    if(!ui::reviewRawImports(this,batch.files,batch.rawAdjustments))return;
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -271,7 +277,6 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refreshCropControls();
     if(transformSession_)applyTransformSession();
     if(!target)target=&addEmptyProject();
-    ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
     ensureImportQueue()->enqueue(target->canvas,std::move(batch));
 }
 EditorProject* MainWindow::dropDestinationAt(QPoint location,std::optional<Point>& point){
