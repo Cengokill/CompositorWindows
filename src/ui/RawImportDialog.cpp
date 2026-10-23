@@ -30,6 +30,7 @@ RawImportDialog::RawImportDialog(const std::filesystem::path& file, Developer de
     setWindowTitle("RAW Development – " + QString::fromStdWString(file_.filename().wstring()));
     setObjectName("rawImportDialog");
     setModal(true);
+    resize(1280, 820);
     build();
     connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] { finishPreview(); });
     startPreview();

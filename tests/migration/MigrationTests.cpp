@@ -614,6 +614,11 @@ static void raw_development_contract() {
     imaging::ImportOptions brighter;
     brighter.raw.exposure = 1.0;
     check(meanLuma(imaging::developRaw(raw, brighter).image.image) > meanLuma(asShot.image.image) + 1.0, "+1 EV did not brighten the developed frame");
+    // Noise reduction must change the developed pixels; the slider cannot be a no-op.
+    imaging::ImportOptions denoised;
+    denoised.raw.noiseReduction = 100.0;
+    const auto strongNr = imaging::developRaw(raw, denoised).image.image;
+    check(strongNr.pixels != asShot.image.image.pixels, "noise reduction 100 left the pixels unchanged");
     // Out-of-range settings are rejected before LibRaw runs, not clamped silently.
     imaging::ImportOptions outside;
     outside.raw.kelvin = imaging::kRawKelvinMax + 1;

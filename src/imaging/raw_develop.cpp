@@ -10,6 +10,9 @@
 
 namespace compositor::imaging {
 namespace {
+// Noise reduction 0..100 maps to LibRaw's wavelet threshold 0..2500. Chosen by measuring the
+// mean pixel change on a sample DNG (x5 was barely visible); not calibrated against a reference.
+constexpr double kRawNoiseThresholdScale = 25.0;
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<Vec3, 3>;
 
@@ -169,7 +172,7 @@ RawDevelopment developRaw(const std::filesystem::path& path, const ImportOptions
     params.no_auto_bright = 1; // keeps brightness fixed so exposure is the only tonal shift
     params.output_bps = 16;
     params.user_flip = options.applyExifOrientation ? -1 : 0;
-    params.threshold = static_cast<float>(settings.noiseReduction.value_or(0.0) * 5.0);
+    params.threshold = static_cast<float>(settings.noiseReduction.value_or(0.0) * kRawNoiseThresholdScale);
     params.use_camera_wb = adjustsWhiteBalance ? 0 : 1;
     params.use_auto_wb = 0;
     if (adjustsWhiteBalance) {
