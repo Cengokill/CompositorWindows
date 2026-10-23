@@ -117,7 +117,7 @@ void MainWindow::setupRetouchActions() {
 void MainWindow::refreshRetouchControls() {
     if(!retouchBar_)return;
     const bool clone=tool_==Tool::CloneStamp,heal=tool_==Tool::SpotHealing,smear=tool_==Tool::Blur;
-    retouchBar_->setVisible(clone||heal||smear);
+    retouchBar_->setVisible(!canvasOnly_&&(clone||heal||smear));
     const bool enabled=!retouch_&&!stroke_&&current()&&current()->document&&!current()->projectBusy&&!current()->importing;
     for(auto* item:retouchBar_->actions()) {
         if(item->objectName()=="retouchClone")item->setChecked(clone);

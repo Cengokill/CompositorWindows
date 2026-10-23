@@ -121,6 +121,7 @@ private:
     bool warp_,dragging_{},rightDragging_{},panning_{},tabletActive_{};
     double backingScale_{1};
     bool followsFit_{true};
+    bool blackSurround_{};
     QPointF last_;
     QString error_;
     void createDevice();
@@ -162,6 +163,10 @@ public:
     static constexpr double rulerThickness=24;
     bool showRulers{};
     void setRulersVisible(bool visible);
+    // Canvas-only full screen paints the area outside the document black.
+    void setBlackSurround(bool black);
+    // Mouse or tablet ownership of a canvas gesture. Window-level mode changes wait for it to end.
+    bool pointerHeld() const{return dragging_||rightDragging_||tabletActive_||panning_||navigating_;}
     QRectF contentRect() const;
     struct GuidePreview { bool horizontal{}; double position{}; int index{-1}; };
     std::optional<GuidePreview> guidePreview() const;

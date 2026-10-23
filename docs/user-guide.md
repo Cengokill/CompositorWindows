@@ -12,6 +12,8 @@ Use **File > Open Project** or the welcome **Open project** button for a saved `
 
 Windows title bars and system controls are the default. Turn on **View > Appearance > Mac-style title bar** for colored controls on the left; turn it off to restore the native Windows title bar. The choice applies immediately to the editor and dialogs and is remembered between launches. It changes only the window chrome; the editor's visual design stays the same.
 
+**View > Canvas-Only Full Screen** (F11) fills the screen with the canvas on black and hides the menu bar, project tabs, toolbars, panels, and status bar. Press F11 or Escape to leave. The window returns to its previous normal or maximized state, and the panels, focus, and active project are restored. Entering and leaving do not change the document, selection, or undo history. Escape leaves this mode before it reaches the canvas, so a pending crop, gradient, or transform preview stays in place for Apply or Cancel. Menu shortcuts such as Ctrl+Z still work in this mode. The mode cannot be entered or left while a canvas drag is held.
+
 ## Navigate and arrange layers
 
 Use **Ctrl+0** to fit the canvas and **Ctrl+1** for actual pixels. Hold **Space** and drag to pan. The mouse wheel pans, including with Ctrl. Alt and roll the wheel forward to zoom in, or backward to zoom out, around the pointer. One notch multiplies or divides the zoom by 1.25. Pixel Grid is available in the View menu and appears at high zoom. When zoom or pan leaves part of the image off-screen, a navigator appears at the bottom-right of the canvas. It shows the whole document and a rectangle for the visible area. Click or drag inside it to move the view. The picture updates shortly after editing pauses, including after a brush stroke finishes, rather than on every step of the stroke.
@@ -64,6 +66,7 @@ Shortcuts apply to the editor when a text field or dialog is not using the keys.
 | Undo / Redo | Ctrl+Z / Ctrl+Shift+Z |
 | Cut / Copy / Paste | Ctrl+X / Ctrl+C / Ctrl+V |
 | Fit / Actual pixels | Ctrl+0 / Ctrl+1 |
+| Canvas-only full screen (enter / leave) | F11 / F11 or Escape |
 | Move / Hand | V / H |
 | Marquee / Lasso / Wand | M / L / W |
 | Brush / Eraser | B / E |
