@@ -21,6 +21,9 @@ class QTimer;
 namespace compositor::ui {
 class TrackSlider;
 
+// Settings accepted per file. A file without an entry imports as shot.
+using RawSettings = std::map<std::filesystem::path, imaging::RawAdjustments>;
+
 // Reviews RAW development before any document change. Previews run on a worker through the
 // same developRaw path used by the final import; results from superseded settings are discarded.
 class RawImportDialog final : public QDialog {
@@ -75,6 +78,6 @@ private:
 // Reviews each RAW file in order and records accepted settings. Cancelling any review
 // returns false, so the caller can stop before the document changes.
 bool reviewRawImports(QWidget* parent, const std::vector<std::filesystem::path>& files,
-                      std::map<std::filesystem::path, imaging::RawAdjustments>& settings,
+                      RawSettings& settings,
                       RawImportDialog::Developer developer = imaging::developRaw);
 }

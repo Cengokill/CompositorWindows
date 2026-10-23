@@ -257,7 +257,7 @@ void MainWindow::receiveDropPaths(const QStringList& paths,NativeCanvas* destina
     ui::WorkspaceDropRequest request;request.paths=paths;request.destination=destination;request.hasDestination=destination!=nullptr;request.point=point;
     ensureWorkspaceDropQueue()->enqueue(std::move(request));
 }
-void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point){
+void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings){
     if(paths.isEmpty())return;
     QStringList images;
     for(const auto& path:paths){
@@ -267,8 +267,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     }
     if(images.isEmpty())return;
     ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
-    // RAW review runs before any document change, so cancelling it leaves the project and its drafts untouched.
-    if(!ui::reviewRawImports(this,batch.files,batch.rawAdjustments))return;
+    batch.rawAdjustments=rawSettings;
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -439,8 +438,11 @@ void MainWindow::openPath(const QString&path){
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const auto extension=QFileInfo(path).suffix().toLower();
     if(extension=="psd"||extension=="psb"){importPhotoshop(path);return;}
+    // The RAW review runs before a tab is created, so cancelling it leaves no empty project behind.
+    ui::RawSettings rawSettings;
+    if(!ui::reviewRawImports(this,{nativePath(path)},rawSettings))return;
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
-    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{});
+    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings);
 }
 QString MainWindow::userDownloadsDirectory(){
     PWSTR known=nullptr;
@@ -471,7 +473,12 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
             if(importPhotoshop(path)&&!destination)target=current();
         }else images.append(path);
     }
-    if(!images.isEmpty())queueImageImports(images,target,{});
+    if(images.isEmpty())return;
+    std::vector<std::filesystem::path> files;
+    for(const auto& path:images)files.push_back(nativePath(path));
+    ui::RawSettings rawSettings;
+    if(!ui::reviewRawImports(this,files,rawSettings))return;
+    queueImageImports(images,target,{},rawSettings);
 }
 namespace {
 void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObject> destination,bool pinned){
