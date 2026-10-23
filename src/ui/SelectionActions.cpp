@@ -189,6 +189,12 @@ void MainWindow::stepSelectionAutoscroll(){
     updateSelection({pixel.x(),pixel.y()},selectionModifiers_,false);
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event){
+    // Escape leaves canvas-only mode before the canvas or text handlers can cancel a crop, gradient, transform, or text draft.
+    // A held canvas gesture keeps Escape, which cancels that gesture as usual.
+    if(canvasOnly_&&event->type()==QEvent::KeyPress&&static_cast<QKeyEvent*>(event)->key()==Qt::Key_Escape){
+        auto* widget=qobject_cast<QWidget*>(watched);
+        if(widget&&widget->window()==this&&!(canvas()&&canvas()->pointerHeld())){setCanvasOnly(false);return true;}
+    }
     if(textSession_&&event->type()==QEvent::ShortcutOverride){
         auto* focus=QApplication::focusWidget();
         if(!qobject_cast<QLineEdit*>(focus)&&!qobject_cast<QAbstractSpinBox*>(focus)&&!qobject_cast<QComboBox*>(focus)){

@@ -83,6 +83,16 @@ class MainWindow final:public QMainWindow {
     ui::WorkspaceDropQueue* workspaceDrops_{};
     ui::CommandRegistry* commands_{};
     bool closingWindow_{};
+    // Snapshot of the window placement and the chrome hidden by canvas-only full screen.
+    struct CanvasOnlyState {
+        bool maximized{};
+        QRect normalGeometry;
+        QPointer<QWidget> focus;
+        std::vector<QPointer<QWidget>> restoreVisible;
+        // Menu actions whose shortcuts the window holds while the hidden menu bar is out of view.
+        std::vector<QPointer<QAction>> borrowedActions;
+    };
+    std::optional<CanvasOnlyState> canvasOnly_;
     int nextProjectNumber_{2};
     QColor foreground_{Qt::black};
     using Tool=ProjectTool;
@@ -402,6 +412,7 @@ class MainWindow final:public QMainWindow {
     bool beginDrawing(Point,Qt::KeyboardModifiers);
     bool updateDrawing(Point,Qt::KeyboardModifiers,bool finish);
     void applyCrop();
+    void setCanvasOnly(bool enabled);
 protected:
     void closeEvent(QCloseEvent*)override;
     void keyPressEvent(QKeyEvent*)override;
