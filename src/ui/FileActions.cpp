@@ -232,6 +232,7 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     host.canAdvance=[this]{return !QApplication::activeModalWidget()&&(!importQueue_||importQueue_->idle());};
     host.managing=[this](bool active){managingProjectOpen_=active;refresh(false,false);};
     host.project=[this](const QString& path){loadProjectDirectory(path);};
+    host.review=[this](const QString& path,ui::RawSettings& settings){return ui::reviewRawImports(this,{nativePath(path)},settings);};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
         QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);
         auto* target=hasDestination?project(captured):&addEmptyProject();
@@ -239,13 +240,11 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==target){tabs_->setCurrentIndex(int(i));break;}
         return target->canvas;
     };
-    host.image=[this,project](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime){
+    host.image=[this,project](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
         auto ext=QFileInfo(path).suffix().toLower();
         if(ext=="psd"||ext=="psb"){importPhotoshop(path);if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,false);return;}
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
-        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);
-        // RAW review precedes every document-changing step; cancelling it stops the drop without importing.
-        if(!ui::reviewRawImports(this,batch.files,batch.rawAdjustments)){if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,true);return;}
+        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
@@ -435,12 +434,18 @@ void MainWindow::openPath(const QString&path){
         QScopedValueRollback<bool> managing(managingProjectOpen_,true);refresh(false,false);
         loadProjectDirectory(path);return;
     }
-    applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const auto extension=QFileInfo(path).suffix().toLower();
-    if(extension=="psd"||extension=="psb"){importPhotoshop(path);return;}
-    // The RAW review runs before a tab is created, so cancelling it leaves no empty project behind.
+    const bool photoshop=extension=="psd"||extension=="psb";
+    // The RAW review precedes pending-edit commits and tab creation, so cancelling it changes nothing.
     ui::RawSettings rawSettings;
-    if(!ui::reviewRawImports(this,{nativePath(path)},rawSettings))return;
+    if(!photoshop){
+        // The modal review disables commands while it is open, so refresh them before returning on cancel.
+        const bool accepted=ui::reviewRawImports(this,{nativePath(path)},rawSettings);
+        refresh(false,false);
+        if(!accepted)return;
+    }
+    applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
+    if(photoshop){importPhotoshop(path);return;}
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings);
 }
@@ -466,18 +471,18 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
             return;
         }
     }
-    QStringList images;
+    QStringList images,photoshop;
     for(const auto& path:paths){
         auto ext=QFileInfo(path).suffix().toLower();
-        if(ext=="psd"||ext=="psb"){
-            if(importPhotoshop(path)&&!destination)target=current();
-        }else images.append(path);
+        if(ext=="psd"||ext=="psb")photoshop.append(path);else images.append(path);
     }
-    if(images.isEmpty())return;
     std::vector<std::filesystem::path> files;
     for(const auto& path:images)files.push_back(nativePath(path));
+    // The RAW review precedes every PSD import, so cancelling it leaves the whole batch unimported.
     ui::RawSettings rawSettings;
     if(!ui::reviewRawImports(this,files,rawSettings))return;
+    for(const auto& path:photoshop){if(importPhotoshop(path)&&!destination)target=current();}
+    if(images.isEmpty())return;
     queueImageImports(images,target,{},rawSettings);
 }
 namespace {

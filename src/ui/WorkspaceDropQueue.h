@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Document.h"
+#include "ui/RawImportDialog.h"
 #include <QObject>
 #include <QPointer>
 #include <QStringList>
@@ -26,8 +27,10 @@ public:
         std::function<bool()> canAdvance;
         std::function<void(bool)> managing;
         std::function<void(const QString&)> project;
+        // Runs before imageTarget so a cancelled review does not create a destination tab.
+        std::function<bool(const QString&,RawSettings&)> review;
         std::function<QObject*(QObject*,bool)> imageTarget;
-        std::function<void(QObject*,const QString&,std::optional<Point>,std::shared_ptr<void>)> image;
+        std::function<void(QObject*,const QString&,std::optional<Point>,std::shared_ptr<void>,const RawSettings&)> image;
         std::function<void(QObject*)> cancelImage;
         std::function<void(const QString&,const QString&)> error;
     };

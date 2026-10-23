@@ -11,7 +11,7 @@ struct WorkspaceDropQueue::Impl {
     QTimer retry;
 };
 WorkspaceDropQueue::WorkspaceDropQueue(Host host,QObject* parent):QObject(parent),impl_(std::make_unique<Impl>()){
-    if(!host.canBegin||!host.canAdvance||!host.managing||!host.project||!host.imageTarget||!host.image||!host.cancelImage||!host.error)throw std::invalid_argument("Incomplete workspace drop host");
+    if(!host.canBegin||!host.canAdvance||!host.managing||!host.project||!host.review||!host.imageTarget||!host.image||!host.cancelImage||!host.error)throw std::invalid_argument("Incomplete workspace drop host");
     setObjectName("workspaceDropQueue");impl_->host=std::move(host);impl_->retry.setSingleShot(true);impl_->retry.setInterval(30);
     connect(&impl_->retry,&QTimer::timeout,this,[this]{drain();});
 }
@@ -58,9 +58,11 @@ void WorkspaceDropQueue::drain(){
         const auto path=p.running->paths[p.index++];
         try{
             if(QFileInfo(path).suffix().compare("comp",Qt::CaseInsensitive)==0){p.host.project(path);continue;}
+            RawSettings settings;
+            if(!p.host.review(path,settings)){p.cancelled=true;continue;}
             auto* target=p.host.imageTarget(p.running->destination,p.running->hasDestination);if(!target)continue;
             p.waiting=target;p.waitingActive=true;
-            p.host.image(target,path,p.running->point,p.running->lifetime);
+            p.host.image(target,path,p.running->point,p.running->lifetime,settings);
             p.retry.start();return;
         }catch(const std::exception& error){p.waiting=nullptr;p.waitingActive=false;p.host.error(path,QString::fromUtf8(error.what()));}
     }
