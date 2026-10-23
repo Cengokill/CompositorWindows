@@ -16,7 +16,7 @@ namespace compositor::ui {
 imaging::DecodedImage decodeImportImage(const std::filesystem::path& path,const imaging::ImportOptions& options){
     auto extension=QString::fromStdWString(path.extension().wstring()).toLower();
     if(extension==".svg")return imaging::rasterizeSvg(path,options);
-    if(extension==".cr2"||extension==".nef"||extension==".arw"||extension==".dng"||extension==".raw"||extension==".rw2")return imaging::decodeRaw(path,{},options);
+    if(imaging::isRawFileExtension(path))return imaging::decodeRaw(path,options);
     QFile file(QString::fromStdWString(path.wstring()));
     if(!file.open(QIODevice::ReadOnly))throw std::runtime_error("Cannot open image");
     const auto signature=file.read(16);file.close();
@@ -41,6 +41,8 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
                 used+=pixels;
             }
             options.remainingPixels=budget-used;
+            const auto adjustments=batch.rawAdjustments.find(path);
+            options.raw=adjustments==batch.rawAdjustments.end()?imaging::RawAdjustments{}:adjustments->second;
             auto decoded=decode(path,options);imaging::checkCancelled(options);
             imaging::checkedBytes(decoded.image.width,decoded.image.height,4,options);imaging::validate(decoded.image);
             auto raster=Raster::fromRgba(int(decoded.image.width),int(decoded.image.height),decoded.image.pixels.data(),decoded.image.stride);

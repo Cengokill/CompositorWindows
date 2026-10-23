@@ -7,6 +7,7 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 
 namespace compositor::ui {
@@ -20,6 +21,8 @@ struct ImportBatch {
     std::optional<Point> point;
     // Keeps copied clipboard/promised image data alive until the queued request finishes.
     std::shared_ptr<void> lifetime;
+    // RAW development accepted in the review dialog. Files without an entry use as-shot settings.
+    std::map<std::filesystem::path, imaging::RawAdjustments> rawAdjustments;
     // Explicit File>Import has already passed its command/picker gates. Source
     // importImages waits only for project access; deferred drops retain their
     // stricter workspace guard before they can begin.

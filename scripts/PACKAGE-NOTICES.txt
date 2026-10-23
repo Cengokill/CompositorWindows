@@ -5,6 +5,17 @@ Compositor-MIT.txt. The offline foreground replacement uses MIT-licensed
 BiRefNet_lite weights, pinned to the revision recorded in its model card.
 ONNX Runtime license and third party notices accompany its binary.
 
+LibRaw 0.22.2 is statically linked into Compositor.exe under CDDL-1.0; the
+LGPL-2.1 alternative offered by LibRaw is not used. Its license texts are in
+dependencies/imaging/notices/LibRaw-LICENSE.CDDL.txt and
+LibRaw-LICENSE.LGPL.txt. The corresponding LibRaw source is the pinned tag
+recorded in dependencies/imaging/lock.json, retained by bootstrap as
+dependencies/imaging/LibRaw-0.22.2-source.tar, and is not modified. The
+scripts/libraw/CMakeLists.txt wrapper only lists its sources for the static
+build. Optional LibRaw dependencies (LCMS, OpenMP, DNG SDK, RawSpeed, GoPro)
+are not compiled and add no notices. Distribution must include the CDDL text
+and the LibRaw source (or a written offer for it), as the notice above states.
+
 Qt 6.8.3 is dynamically linked. Qt license texts and the upstream supplied
 SPDX software inventory are in Qt and Qt-SBOM. This package uses Qt under
 LGPL-3.0 where that license applies, with component-specific notices in SPDX.
