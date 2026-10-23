@@ -113,4 +113,67 @@ void image_rotated_hidden(){auto d=document(64,32);auto& layer=d.layers[0];layer
 void flip_canvas(){auto d=twoColor();select(d,{0,0,20,20});auto source=d.layers[0].raster;auto flipped=flipCanvas(d,true);REQUIRE(flipped.layers[0].raster==source&&rendered(flipped,5,5)==Pixel{0,0,255,255}&&rendered(flipped,95,5)==Pixel{255,0,0,255});REQUIRE(flipped.selection->outline&&flipped.selection->coverage->pixel(90,5)==255&&flipped.selection->coverage->pixel(5,5)==0);auto twice=flipCanvas(flipped,true);REQUIRE(twice.layers==d.layers&&twice.selection->coverage->pixels==d.selection->coverage->pixels);}
 void flip_layer_masks(){auto d=twoColor();auto gray=std::make_shared<GrayRaster>();gray->width=100;gray->height=40;gray->pixels.resize(4000,255);auto& layer=d.layers[0];layer.mask=Mask{gray,true,false,{}};auto old=layer.transform;std::vector<std::string> ids{layer.id};auto flipped=flipLayers(d,ids,true);REQUIRE(flipped.layers[0].transform.flipX&&flipped.layers[0].mask->placement==old&&flipped.layers[0].mask->raster==gray);layer.mask->linked=true;flipped=flipLayers(d,ids,true);REQUIRE(!flipped.layers[0].mask->placement);layer.mask->placement=Transform{10,5,60,20,30};flipped=flipLayers(d,ids,true);auto placed=*flipped.layers[0].mask->placement;for(auto p:{Point{0,0},Point{1,0},Point{0,1}}){auto before=layer.mask->placement->fromUnit(p),after=placed.fromUnit(p);REQUIRE(std::abs(after.x-(100-before.x))<1e-8&&std::abs(after.y-before.y)<1e-8);}}
 void flip_group(){auto d=document();d.layers.clear();Layer group;group.id=newId();group.group=true;d.layers.push_back(group);for(int x:{0,60,90}){Layer layer;layer.id=newId();layer.parentId=group.id;layer.raster=Raster::filled(20,20,{255,0,0,255});layer.transform={double(x),0,20,20};layer.visible=x!=90;d.layers.push_back(layer);}std::vector<std::string> ids{group.id};auto flipped=flipLayers(d,ids,true);REQUIRE(flipped.layers[0]==d.layers[0]&&flipped.layers[1].transform.x==60&&flipped.layers[2].transform.x==0&&flipped.layers[3]==d.layers[3]);}
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"transformed_outline",transformed_outline},{"drag_box",drag_box},{"geometry_combine",geometry_combine},{"coverage_aa",coverage_aa},{"empty_move_inverse",empty_move_inverse},{"mapping_transforms",mapping_transforms},{"fill_clear_crop",fill_clear_crop},{"fill_growth_mask",fill_growth_mask},{"selected_immutable_invert",selected_immutable_invert},{"uniform_mask_fill_invert",uniform_mask_fill_invert},{"copy_current_merged",copy_current_merged},{"copy_lasso",copy_lasso},{"selection_history",selection_history},{"invalid_inputs",invalid_inputs},{"scaled_selection_clear",scaled_selection_clear},{"gradient_linear",gradient_linear},{"gradient_radial",gradient_radial},{"gradient_reverse_transparent",gradient_reverse_transparent},{"gradient_mask_preview",gradient_mask_preview},{"bitmap_outline",bitmap_outline},{"expand_contract",expand_contract},{"shape_rectangle_ellipse",shape_rectangle_ellipse},{"shape_rounded_style",shape_rounded_style},{"shape_redraw_mask",shape_redraw_mask},{"shape_preview",shape_preview},{"canvas_anchors",canvas_anchors},{"canvas_units",canvas_units},{"canvas_extension",canvas_extension},{"canvas_allocation_free",canvas_allocation_free},{"crop_geometry",crop_geometry},{"crop_snapping",crop_snapping},{"crop_commit",crop_commit},{"image_resize",image_resize},{"image_resolution_only",image_resolution_only},{"image_rotated_hidden",image_rotated_hidden},{"flip_canvas",flip_canvas},{"flip_layer_masks",flip_layer_masks},{"flip_group",flip_group}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify one editing test case");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<(argc>1?argv[1]:"arguments")<<": "<<error.what()<<"\n";return 1;}}
+Document coordinateCanvas(int w,int h){Document d=document(w,h);std::vector<uint8_t> bytes(size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){size_t i=(size_t(y)*w+x)*4;bytes[i]=uint8_t(x);bytes[i+1]=uint8_t(y);bytes[i+3]=255;}d.layers[0].raster=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);return d;}
+bool closeTo(double a,double b){return std::abs(a-b)<1e-9;}
+void rotate_canvas_pixels(){
+    // Each raster pixel encodes its own source coordinates, so any axis or direction error changes the expected color.
+    auto d=coordinateCanvas(100,40);
+    auto cw=rotateCanvas(d,true);REQUIRE(cw.width==40&&cw.height==100);
+    for(int y=0;y<cw.height;y+=7)for(int x=0;x<cw.width;x+=3)REQUIRE(rendered(cw,x,y)==(Pixel{uint8_t(y),uint8_t(d.height-1-x),0,255}));
+    auto ccw=rotateCanvas(d,false);REQUIRE(ccw.width==40&&ccw.height==100);
+    for(int y=0;y<ccw.height;y+=7)for(int x=0;x<ccw.width;x+=3)REQUIRE(rendered(ccw,x,y)==(Pixel{uint8_t(d.width-1-y),uint8_t(x),0,255}));
+    auto back=rotateCanvas(cw,false);REQUIRE(back.width==100&&back.height==40&&back.layers==d.layers);
+}
+void rotate_canvas_layers(){
+    auto d=document(100,40);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=1;gray->pixels={255};
+    // Append the extra layers before taking a reference to layers[0]: push_back may reallocate and invalidate it.
+    Layer unplaced;unplaced.id=newId();unplaced.raster=Raster::filled(10,10,{0,255,0,255});unplaced.transform={0,0,10,10};unplaced.mask=Mask{gray,true,true,{}};d.layers.push_back(unplaced);
+    // An unlinked mask without a placement follows its layer, so it must rotate with the layer and stay unplaced.
+    Layer floating;floating.id=newId();floating.raster=Raster::filled(10,10,{0,0,255,255});floating.transform={30,5,12,8,15};floating.mask=Mask{gray,true,false,{}};d.layers.push_back(floating);
+    auto& layer=d.layers[0];layer.transform={12.5,-3,30,20,25,true,false};
+    layer.mask=Mask{gray,true,false,Transform{5,6,20,10,-40,false,true}};
+    layer.effects.specified=true;layer.effects.dropShadow.enabled=true;layer.effects.dropShadow.angle=120;layer.effects.innerShadow.angle=-30;
+    for(bool clockwise:{true,false}){
+        auto rotated=rotateCanvas(d,clockwise);
+        auto map=[&](Point p){return clockwise?Point{d.height-p.y,p.x}:Point{p.y,d.width-p.x};};
+        for(Point u:{Point{0,0},Point{1,0},Point{0,1},Point{.3,.8}}){
+            auto expected=map(layer.transform.fromUnit(u)),actual=rotated.layers[0].transform.fromUnit(u);REQUIRE(closeTo(actual.x,expected.x)&&closeTo(actual.y,expected.y));
+            expected=map(layer.mask->placement->fromUnit(u));actual=rotated.layers[0].mask->placement->fromUnit(u);REQUIRE(closeTo(actual.x,expected.x)&&closeTo(actual.y,expected.y));
+        }
+        REQUIRE(rotated.layers[0].transform.flipX&&rotated.layers[0].transform.width==30&&rotated.layers[0].transform.height==20);
+        REQUIRE(rotated.layers[0].transform.rotation==(clockwise?115:-65));
+        REQUIRE(rotated.layers[0].effects.dropShadow.angle==(clockwise?-150:30)&&rotated.layers[0].effects.innerShadow.angle==(clockwise?60:-120));
+        REQUIRE(!rotated.layers[1].mask->placement&&rotated.layers[1].raster==unplaced.raster);
+        REQUIRE(!rotated.layers[2].mask->placement&&!rotated.layers[2].mask->linked);
+        for(Point u:{Point{0,0},Point{1,0},Point{0,1}}){
+            auto expected=map(floating.transform.fromUnit(u)),actual=rotated.layers[2].transform.fromUnit(u);REQUIRE(closeTo(actual.x,expected.x)&&closeTo(actual.y,expected.y));
+        }
+    }
+    auto twice=rotateCanvas(rotateCanvas(d,true),false);REQUIRE(twice.layers==d.layers);
+}
+void rotate_canvas_guides(){
+    auto d=document(100,40);d.guides={{newId(),true,12},{newId(),false,30}};
+    auto cw=rotateCanvas(d,true);REQUIRE(!cw.guides[0].horizontal&&cw.guides[0].position==28&&cw.guides[1].horizontal&&cw.guides[1].position==30);
+    auto ccw=rotateCanvas(d,false);REQUIRE(!ccw.guides[0].horizontal&&ccw.guides[0].position==12&&ccw.guides[1].horizontal&&ccw.guides[1].position==70);
+    REQUIRE(rotateCanvas(cw,false).guides==d.guides);
+}
+void rotate_canvas_selection(){
+    // Soft bitmap coverage keeps its values; a vector outline rotates with it.
+    auto d=document(100,40);auto gray=std::make_shared<GrayRaster>();gray->width=100;gray->height=40;gray->pixels.assign(4000,0);gray->pixels[size_t(5)*100+10]=128;gray->pixels[size_t(30)*100+80]=255;d.selection=Selection{gray};
+    auto cw=rotateCanvas(d,true);REQUIRE(cw.selection->coverage->width==40&&cw.selection->coverage->height==100&&!cw.selection->outline);
+    REQUIRE(cw.selection->coverage->pixel(34,10)==128&&cw.selection->coverage->pixel(9,80)==255&&cw.selection->coverage->pixel(10,5)==0);
+    REQUIRE(rotateCanvas(cw,false).selection->coverage->pixels==gray->pixels);
+    auto outlined=document(100,40);select(outlined,{10,5,20,10});auto rotated=rotateCanvas(outlined,true);
+    REQUIRE(rotated.selection->outline->bounds()==Rect{25,10,10,20}&&rotated.selection->coverage->pixel(30,15)==255&&rotated.selection->coverage->pixel(5,5)==0);
+    REQUIRE(rotateCanvas(rotated,false).selection->coverage->pixels==outlined.selection->coverage->pixels);
+}
+void rotate_canvas_sparse_selection(){
+    // 20000x10000 exceeds the dense coverage budget; the vector selection must stay lazy through rotation.
+    auto d=document(20000,10000);select(d,{100,200,50,30});REQUIRE(d.selection->coverage->source&&d.selection->coverage->pixels.empty());
+    auto cw=rotateCanvas(d,true);REQUIRE(cw.width==10000&&cw.height==20000&&cw.selection->coverage->source&&cw.selection->coverage->pixels.empty());
+    REQUIRE(cw.selection->coverage->pixel(9780,120)==255&&cw.selection->coverage->pixel(9700,120)==0&&cw.selection->outline->bounds()==Rect{9770,100,30,50});
+    auto back=rotateCanvas(cw,false);REQUIRE(back.selection->coverage->pixel(120,210)==255&&back.selection->coverage->pixel(160,210)==0&&back.selection->coverage->pixels.empty());
+}
+void rotate_canvas_history(){auto d=coordinateCanvas(100,40);std::optional<Document> snapshot=d;History history;history.begin("Rotate 90° Clockwise",snapshot,d.layers[0].id);snapshot=rotateCanvas(*snapshot,true);history.end(snapshot,d.layers[0].id);REQUIRE(history.undoCount()==1&&history.undoName()=="Rotate 90° Clockwise");auto undo=history.undo();REQUIRE(undo&&*undo->document==d);auto redo=history.redo();REQUIRE(redo&&redo->document->width==40&&redo->document->height==100&&redo->document->layers[0].transform.rotation==90);}
+void rotate_canvas_bounds(){auto d=document(100,40);d.layers[0].transform.x=999990;rejects([&]{rotateCanvas(d,true);});d=document(100,40);d.layers[0].transform.rotation=std::numeric_limits<double>::quiet_NaN();rejects([&]{rotateCanvas(d,false);});}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"transformed_outline",transformed_outline},{"drag_box",drag_box},{"geometry_combine",geometry_combine},{"coverage_aa",coverage_aa},{"empty_move_inverse",empty_move_inverse},{"mapping_transforms",mapping_transforms},{"fill_clear_crop",fill_clear_crop},{"fill_growth_mask",fill_growth_mask},{"selected_immutable_invert",selected_immutable_invert},{"uniform_mask_fill_invert",uniform_mask_fill_invert},{"copy_current_merged",copy_current_merged},{"copy_lasso",copy_lasso},{"selection_history",selection_history},{"invalid_inputs",invalid_inputs},{"scaled_selection_clear",scaled_selection_clear},{"gradient_linear",gradient_linear},{"gradient_radial",gradient_radial},{"gradient_reverse_transparent",gradient_reverse_transparent},{"gradient_mask_preview",gradient_mask_preview},{"bitmap_outline",bitmap_outline},{"expand_contract",expand_contract},{"shape_rectangle_ellipse",shape_rectangle_ellipse},{"shape_rounded_style",shape_rounded_style},{"shape_redraw_mask",shape_redraw_mask},{"shape_preview",shape_preview},{"canvas_anchors",canvas_anchors},{"canvas_units",canvas_units},{"canvas_extension",canvas_extension},{"canvas_allocation_free",canvas_allocation_free},{"crop_geometry",crop_geometry},{"crop_snapping",crop_snapping},{"crop_commit",crop_commit},{"image_resize",image_resize},{"image_resolution_only",image_resolution_only},{"image_rotated_hidden",image_rotated_hidden},{"flip_canvas",flip_canvas},{"flip_layer_masks",flip_layer_masks},{"flip_group",flip_group},{"rotate_canvas_pixels",rotate_canvas_pixels},{"rotate_canvas_layers",rotate_canvas_layers},{"rotate_canvas_guides",rotate_canvas_guides},{"rotate_canvas_selection",rotate_canvas_selection},{"rotate_canvas_sparse_selection",rotate_canvas_sparse_selection},{"rotate_canvas_history",rotate_canvas_history},{"rotate_canvas_bounds",rotate_canvas_bounds}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify one editing test case");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<(argc>1?argv[1]:"arguments")<<": "<<error.what()<<"\n";return 1;}}

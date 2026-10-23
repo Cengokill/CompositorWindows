@@ -113,6 +113,8 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("pixels.fill","Image","Fill…","",C::Pixels,G::Paint,P::FinishAppearance,"Compositor/Document/SelectionEdits.swift:35");
         add("pixels.invert","Image","Invert","Ctrl+I",C::Pixels,G::Invert,P::CommitTransformAndGradient,"Compositor/Document/SelectionEdits.swift:77");
         add("image.trim","Image","Trim","",C::Document,G::DocumentOperation,P::FinishAppearance,"Compositor/Document/Canvas.swift");
+        add("image.rotate_clockwise","Image","Rotate 90° Clockwise","",C::Document,G::DocumentOperation,P::FinishAppearance,"Windows canvas rotation (issue #20)");
+        add("image.rotate_counterclockwise","Image","Rotate 90° Counterclockwise","",C::Document,G::DocumentOperation,P::FinishAppearance,"Windows canvas rotation (issue #20)");
         add("selection.feather","Select","Feather…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift");
         add("selection.color_range","Select","Color Range…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift");
         add("view.guides","View","Guides","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
