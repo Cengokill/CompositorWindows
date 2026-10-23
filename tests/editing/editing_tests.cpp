@@ -125,11 +125,14 @@ void rotate_canvas_pixels(){
     auto back=rotateCanvas(cw,false);REQUIRE(back.width==100&&back.height==40&&back.layers==d.layers);
 }
 void rotate_canvas_layers(){
-    auto d=document(100,40);auto& layer=d.layers[0];layer.transform={12.5,-3,30,20,25,true,false};
-    auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=1;gray->pixels={255};
+    auto d=document(100,40);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=1;gray->pixels={255};
+    // Append the extra layers before taking a reference to layers[0]: push_back may reallocate and invalidate it.
+    Layer unplaced;unplaced.id=newId();unplaced.raster=Raster::filled(10,10,{0,255,0,255});unplaced.transform={0,0,10,10};unplaced.mask=Mask{gray,true,true,{}};d.layers.push_back(unplaced);
+    // An unlinked mask without a placement follows its layer, so it must rotate with the layer and stay unplaced.
+    Layer floating;floating.id=newId();floating.raster=Raster::filled(10,10,{0,0,255,255});floating.transform={30,5,12,8,15};floating.mask=Mask{gray,true,false,{}};d.layers.push_back(floating);
+    auto& layer=d.layers[0];layer.transform={12.5,-3,30,20,25,true,false};
     layer.mask=Mask{gray,true,false,Transform{5,6,20,10,-40,false,true}};
     layer.effects.specified=true;layer.effects.dropShadow.enabled=true;layer.effects.dropShadow.angle=120;layer.effects.innerShadow.angle=-30;
-    Layer unplaced;unplaced.id=newId();unplaced.raster=Raster::filled(10,10,{0,255,0,255});unplaced.transform={0,0,10,10};unplaced.mask=Mask{gray,true,true,{}};d.layers.push_back(unplaced);
     for(bool clockwise:{true,false}){
         auto rotated=rotateCanvas(d,clockwise);
         auto map=[&](Point p){return clockwise?Point{d.height-p.y,p.x}:Point{p.y,d.width-p.x};};
@@ -141,6 +144,10 @@ void rotate_canvas_layers(){
         REQUIRE(rotated.layers[0].transform.rotation==(clockwise?115:-65));
         REQUIRE(rotated.layers[0].effects.dropShadow.angle==(clockwise?-150:30)&&rotated.layers[0].effects.innerShadow.angle==(clockwise?60:-120));
         REQUIRE(!rotated.layers[1].mask->placement&&rotated.layers[1].raster==unplaced.raster);
+        REQUIRE(!rotated.layers[2].mask->placement&&!rotated.layers[2].mask->linked);
+        for(Point u:{Point{0,0},Point{1,0},Point{0,1}}){
+            auto expected=map(floating.transform.fromUnit(u)),actual=rotated.layers[2].transform.fromUnit(u);REQUIRE(closeTo(actual.x,expected.x)&&closeTo(actual.y,expected.y));
+        }
     }
     auto twice=rotateCanvas(rotateCanvas(d,true),false);REQUIRE(twice.layers==d.layers);
 }
