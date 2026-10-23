@@ -35,6 +35,8 @@ Document imageResize(const Document&,const ImageSizeOptions&);
 Transform mirroredTransform(const Transform&,bool horizontally,double axis);
 Document flipCanvas(const Document&,bool horizontally);
 Document flipLayers(const Document&,std::span<const std::string> selectedIDs,bool horizontally);
+// Rotates the whole document by 90 degrees; canvas width and height swap.
+Document rotateCanvas(const Document&,bool clockwise);
 Rect snappedCrop(Rect);
 bool validCrop(Rect);
 Rect createCrop(Point start,Point end,std::optional<double> ratio = {},bool symmetric = false);

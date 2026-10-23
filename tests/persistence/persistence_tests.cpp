@@ -1,4 +1,6 @@
 #include "persistence/ProjectStore.h"
+#include "editing/DocumentGeometry.h"
+#include "graphics/StackRenderer.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonArray>
@@ -47,6 +49,14 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
  else if(test=="hostile_journal"){store.save(p,d,id(2));auto before=read(p/L"manifest.json");journal(p,id(700),"prepared",true);auto f=suffix(p,".compositor-save.json");auto j=json(f);j["stage"]="../unrelated";json(f,j);rejects([&]{store.recover(p);});check(read(p/L"manifest.json")==before&&fs::exists(f),"Unsafe journal mutated project");}
  else if(test=="reparse_rejection"){store.save(p,d,id(2));auto link=root/L"Link.comp";if(!CreateSymbolicLinkW(link.c_str(),p.c_str(),SYMBOLIC_LINK_FLAG_DIRECTORY|0x2)&&!junction(link,p)){std::cout<<"SKIP: symbolic link and junction creation unavailable\n";return 77;}rejects([&]{store.load(link);});fs::remove(link);}
  else if(test=="real_png_exchange"){ProjectStore actual(makeWicProjectCodec());d.layers[0].raster=Raster::filled(17,13,{16,32,48,64});auto gray=std::make_shared<GrayRaster>(GrayRaster{3,2,{0,64,128,192,254,255}});d.layers[0].mask=Mask{gray,false,false,d.layers[0].transform};actual.save(p,d,id(2));auto result=actual.load(p);check(result.document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"WIC project pixels changed");check(result.document.layers[0].mask->raster->pixels==gray->pixels,"WIC mask coverage changed");auto encoded=read(p/L"images"/fs::path(id(2)+".mask.png"));check(encoded.size()>33&&encoded[24]==8&&encoded[25]==0,"Mask PNG is not gray8");}
+ else if(test=="rotated_roundtrip"){
+    // A rotated project must reopen with the same placement, guides, and shadow angle, and render the same pixels.
+    std::vector<uint8_t> pattern(17*13*4);for(int y=0;y<13;++y)for(int x=0;x<17;++x){size_t i=(size_t(y)*17+x)*4;pattern[i]=uint8_t(x*15);pattern[i+1]=uint8_t(y*19);pattern[i+2]=64;pattern[i+3]=255;}
+    d.layers[0].raster=Raster::fromRgba(17,13,pattern.data(),17*4);d.guides={{id(9),true,5.5},{id(10),false,4}};d.layers[0].effects.specified=true;d.layers[0].effects.dropShadow.enabled=true;d.layers[0].effects.dropShadow.angle=120;
+    auto rotated=editing::rotateCanvas(d,true);store.save(p,rotated,id(2));auto loaded=store.load(p).document;
+    check(loaded.width==rotated.width&&loaded.height==rotated.height&&loaded.width==17&&loaded.height==19,"Rotated canvas size lost");check(loaded.guides==rotated.guides,"Rotated guides changed");check(loaded.layers[0].transform==rotated.layers[0].transform,"Rotated transform changed");check(loaded.layers[0].effects.dropShadow.angle==rotated.layers[0].effects.dropShadow.angle,"Rotated shadow angle changed");
+    check(graphics::StackRenderer().render(loaded,0,0,loaded.width,loaded.height)->rgba()==graphics::StackRenderer().render(rotated,0,0,rotated.width,rotated.height)->rgba(),"Rendered rotated project changed after reopen");
+ }
  else if(test=="guides_roundtrip"){d.guides.push_back({id(9),true,12.5});d.guides.push_back({id(10),false,4});store.save(p,d,id(2));auto loaded=store.load(p);check(loaded.readVersion==8&&loaded.document.guides.size()==2,"Guide save did not round-trip");check(loaded.document.guides[0]==Guide{id(9),true,12.5}&&loaded.document.guides[1]==Guide{id(10),false,4},"Guide orientation or position changed");auto manifest=json(p/L"manifest.json");auto guides=manifest["guides"].toArray();check(manifest["version"]==8&&guides.size()==2&&guides[0].toObject()["orientation"]=="horizontal"&&guides[1].toObject()["orientation"]=="vertical","Guide manifest shape changed");}
  else throw std::runtime_error("Unknown test");std::cout<<"PASS "<<test<<"\n";return 0;
  }catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";return 1;}}

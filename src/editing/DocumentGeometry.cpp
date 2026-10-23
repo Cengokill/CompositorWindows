@@ -22,6 +22,14 @@ Transform placing(const Transform& original,Point origin,Point right,Point botto
 }
 Transform following(const Transform& placement,const Transform& old,const Transform& next){auto map=[&](Point p){return next.fromUnit(old.toUnit(placement.fromUnit(p)));};return placing(placement,map({0,0}),map({1,0}),map({0,1}));}
 bool samePlacement(Transform a,const Transform& b){a.sampling=b.sampling;return a==b;}
+// Screen clockwise maps old (x,y) to (height-y,x); counterclockwise to (y,width-x).
+Point rotatedPoint(Point p,int width,int height,bool clockwise){return clockwise?Point{height-p.y,p.x}:Point{p.y,width-p.x};}
+double turnDegrees(bool clockwise){return clockwise?90:-90;}
+// A placement keeps its size and flips; only its center and angle follow the canvas.
+Transform rotatedTransform(const Transform& t,int width,int height,bool clockwise){auto center=rotatedPoint({t.x+t.width/2,t.y+t.height/2},width,height,clockwise);auto result=t;result.x=center.x-t.width/2;result.y=center.y-t.height/2;result.rotation=std::remainder(t.rotation+turnDegrees(clockwise),360.);if(!result.valid())throw std::runtime_error("Rotated transform exceeds project limits");return result;}
+GrayBounds rotatedBounds(GrayBounds b,int width,int height,bool clockwise){return clockwise?GrayBounds{height-(b.y+b.height),b.x,b.height,b.width}:GrayBounds{b.y,width-(b.x+b.width),b.height,b.width};}
+// Destination pixel (x,y) of the rotated canvas reads this pixel of the original canvas.
+std::pair<int,int> sourcePixel(int x,int y,int width,int height,bool clockwise){return clockwise?std::pair{y,height-1-x}:std::pair{width-1-y,x};}
 }
 CanvasSizeDraft::CanvasSizeDraft(int w,int h,double dpi):originalWidth(w),originalHeight(h),resolution(dpi),width(w),height(h){if(w<1||h<1||!std::isfinite(dpi)||dpi<=0)throw std::runtime_error("Invalid original canvas dimensions");}
 bool CanvasSizeDraft::valid()const{return std::isfinite(width)&&std::isfinite(height)&&std::round(width)>=1&&std::round(width)<=30000&&std::round(height)>=1&&std::round(height)<=30000;}
@@ -75,6 +83,38 @@ Document flipLayers(const Document& doc,std::span<const std::string> selected,bo
     if(!group){const auto* layer=index.at(*ids.begin());if(visible(*layer,index))members.push_back(layer);}else for(const auto& layer:doc.layers){if(layer.group||!layer.raster||!visible(layer,index))continue;const Layer* current=&layer;for(size_t depth=0;depth<64;++depth){if(ids.contains(current->id)){members.push_back(&layer);break;}if(current->parentId.empty())break;current=index.at(current->parentId);}}
     if(members.empty())return doc;double left=INFINITY,top=INFINITY,right=-INFINITY,bottom=-INFINITY;for(auto* layer:members){auto box=transformBounds(layer->transform);left=std::min(left,box.x);top=std::min(top,box.y);right=std::max(right,box.x+box.width);bottom=std::max(bottom,box.y+box.height);}double axis=horizontal?(left+right)/2:(top+bottom)/2;
     std::unordered_set<std::string> moving;for(auto* layer:members)moving.insert(layer->id);auto result=doc;for(auto& layer:result.layers)if(moving.contains(layer.id)){auto old=layer.transform,next=mirroredTransform(old,horizontal,axis);if(layer.mask){auto& mask=*layer.mask;if(mask.raster->width==1&&mask.raster->height==1)mask.placement.reset();else if(mask.linked){if(mask.placement)mask.placement=following(*mask.placement,old,next);}else if(!mask.placement)mask.placement=old;if(mask.placement&&samePlacement(*mask.placement,next))mask.placement.reset();}layer.transform=next;}validateDocument(result);return result;
+}
+Document rotateCanvas(const Document& doc,bool clockwise){
+    validateDocument(doc);const int width=doc.width,height=doc.height;auto result=doc;result.width=height;result.height=width;
+    // Guides swap orientation. A horizontal guide at y becomes x=height-y clockwise, or x=y counterclockwise; vertical guides mirror that rule.
+    for(auto& guide:result.guides){guide.position=clockwise?(guide.horizontal?height-guide.position:guide.position):(guide.horizontal?guide.position:width-guide.position);guide.horizontal=!guide.horizontal;}
+    for(auto& layer:result.layers){
+        layer.transform=rotatedTransform(layer.transform,width,height,clockwise);
+        if(layer.mask&&layer.mask->placement)layer.mask->placement=rotatedTransform(*layer.mask->placement,width,height,clockwise);
+        // Shadow angles are document-space directions, so they turn with the canvas. Unspecified effects are not persisted and stay untouched.
+        if(layer.effects.specified)for(auto* shadow:{&layer.effects.dropShadow,&layer.effects.innerShadow})shadow->angle=std::remainder(shadow->angle+turnDegrees(clockwise),360.);
+    }
+    if(doc.selection){
+        if(!doc.selection->coverage)throw std::runtime_error("Present selection has no coverage");
+        const auto& coverage=*doc.selection->coverage;
+        const std::array<double,6> matrix=clockwise?std::array<double,6>{0,1,-1,0,double(height),0}:std::array<double,6>{0,-1,1,0,0,double(width)};
+        std::shared_ptr<const SelectionOutline> outline=doc.selection->outline;
+        if(!outline&&coverage.source)outline=coverage.source->vectorOutline();
+        if(outline)outline=std::make_shared<SelectionOutline>(outline->affineMapped(matrix));
+        Selection next;
+        if(coverage.source){
+            // Sparse coverage stays lazy, so a large vector selection never gains a full-canvas buffer.
+            auto source=doc.selection->coverage;
+            next.coverage=GrayRaster::sampled(height,width,rotatedBounds(source->nonzeroBounds(),width,height,clockwise),[source,width,height,clockwise](int x,int y){auto [sx,sy]=sourcePixel(x,y,width,height,clockwise);return source->pixel(sx,sy);},source->retainedBytes(),outline);
+        }else{
+            // Dense coverage keeps its exact soft values under the same mapping.
+            auto gray=std::make_shared<GrayRaster>();gray->width=height;gray->height=width;gray->pixels.resize(size_t(height)*width);
+            for(int y=0;y<gray->height;++y)for(int x=0;x<gray->width;++x){auto [sx,sy]=sourcePixel(x,y,width,height,clockwise);gray->pixels[size_t(y)*gray->width+x]=coverage.pixel(sx,sy);}
+            next.coverage=gray;
+        }
+        next.outline=outline;result.selection=std::move(next);
+    }
+    validateDocument(result);return result;
 }
 Rect snappedCrop(Rect r){finitePoint({r.x,r.y});finitePoint({r.x+r.width,r.y+r.height});if(r.width<0){r.x+=r.width;r.width=-r.width;}if(r.height<0){r.y+=r.height;r.height=-r.height;}double x=std::round(r.x),y=std::round(r.y);return {x,y,std::max(1.,std::round(r.x+r.width)-x),std::max(1.,std::round(r.y+r.height)-y)};}
 bool validCrop(Rect r){return std::isfinite(r.x)&&std::isfinite(r.y)&&std::isfinite(r.width)&&std::isfinite(r.height)&&r.width>=1&&r.width<=30000&&r.height>=1&&r.height<=30000&&std::abs(r.x)<=1000000&&std::abs(r.y)<=1000000;}
