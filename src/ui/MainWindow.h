@@ -17,6 +17,7 @@
 #include <QCheckBox>
 #include "PaletteDialog.h"
 #include "PropertyControls.h"
+#include "RawImportDialog.h"
 #include "EditPanelSession.h"
 #include "ProjectToolState.h"
 #include "CommandPalette.h"
@@ -237,7 +238,7 @@ class MainWindow final:public QMainWindow {
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
-    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point> = {});
+    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&);
     bool importPhotoshop(const QString& path);
     void refresh(bool render=true,bool rebuildLayers=true);
     void edit(const char* name,const std::function<void(Document&)>& operation,bool rebuildLayers=true);

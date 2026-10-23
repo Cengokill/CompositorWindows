@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -12,11 +13,26 @@ namespace compositor::imaging {
 struct RgbaImage { std::uint32_t width{}, height{}; std::size_t stride{}; std::vector<std::uint8_t> pixels; };
 // Coverage only. No alpha channel or color transform is applied to masks.
 struct GrayMask { std::uint32_t width{}, height{}; std::size_t stride{}; std::vector<std::uint8_t> pixels; };
+// RAW development requested for one file. An unset value keeps the file's as-shot setting.
+struct RawAdjustments {
+    std::optional<double> exposure; // EV
+    std::optional<std::uint32_t> kelvin;
+    std::optional<double> tint;
+    std::optional<double> noiseReduction;
+    bool operator==(const RawAdjustments&) const = default;
+};
+// What the file's RAW decoder can change, and the bounds it reports for Kelvin.
+struct RawCapabilities {
+    bool temperature{}, tint{};
+    std::uint32_t minKelvin{}, maxKelvin{};
+};
+struct RawAsShot { double tint{}; std::uint32_t kelvin{}; };
 struct ImportOptions {
     std::uint32_t maxSide{30000};
     std::uint64_t remainingPixels{100000000};
     std::uint64_t maxWorkingBytes{1200000000};
     bool applyExifOrientation{true};
+    RawAdjustments raw;
     // Must be thread-safe and non-throwing; native inference polls on a worker thread.
     std::function<bool()> cancelled;
 };
@@ -50,6 +66,8 @@ struct ImageMetadata {
     std::string decoder;
 };
 struct DecodedImage { RgbaImage image; ImageMetadata metadata; };
+// A RAW frame developed with the requested settings, plus what the decoder can change.
+struct RawDevelopment { DecodedImage image; RawCapabilities capabilities; RawAsShot asShot; };
 // Pdf is written only by the streaming document export (encodePdfAtomic); WicCodec has no PDF encoder.
 enum class ImageFormat { Png, Jpeg, Tiff, Pdf };
 struct ExportOptions {

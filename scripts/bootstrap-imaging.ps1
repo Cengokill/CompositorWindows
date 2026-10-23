@@ -35,14 +35,16 @@ foreach($repository in $lock.repositories){
 $cmake=Join-Path $VsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
 $ninja=Join-Path $VsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
 $prefix=Join-Path $dependency 'install'
-function Configure-Build([string]$Name,[string[]]$Options){
-    $source=Join-Path $dependency $Name;$build=Join-Path $dependency ($Name+'-ninja')
+function Configure-Build([string]$Name,[string[]]$Options,[string]$Source=''){
+    $source=if($Source){$Source}else{Join-Path $dependency $Name};$build=Join-Path $dependency ($Name+'-ninja')
     & $cmake -S $source -B $build -G Ninja "-DCMAKE_MAKE_PROGRAM=$ninja" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=$prefix" "-DCMAKE_PREFIX_PATH=$prefix" -DBUILD_SHARED_LIBS=ON @Options
     if($LASTEXITCODE){throw "$Name configuration failed"}
     & $cmake --build $build --parallel 8;if($LASTEXITCODE){throw "$Name build failed"}
     & $cmake --install $build;if($LASTEXITCODE){throw "$Name install failed"}
 }
 Configure-Build 'libde265' @('-DENABLE_DECODER=OFF','-DENABLE_ENCODER=OFF','-DENABLE_SDL=OFF')
+# LibRaw is linked statically under CDDL-1.0; scripts/libraw lists the sources of the pinned checkout.
+Configure-Build 'LibRaw' @("-DLIBRAW_SOURCE=$(Join-Path $dependency 'LibRaw')") (Join-Path $root 'scripts/libraw')
 Configure-Build 'libheif' @('-DENABLE_PLUGIN_LOADING=OFF','-DWITH_LIBDE265=ON','-DWITH_LIBDE265_PLUGIN=OFF','-DWITH_X265=OFF','-DWITH_X264=OFF','-DWITH_OpenH264_DECODER=OFF','-DWITH_AOM_DECODER=OFF','-DWITH_AOM_ENCODER=OFF','-DWITH_LIBSHARPYUV=OFF','-DWITH_GDK_PIXBUF=OFF','-DWITH_EXAMPLES=OFF','-DBUILD_TESTING=OFF','-DBUILD_DOCUMENTATION=OFF')
 if(-not $SkipModel){
     Expand-Archive (Join-Path $dependency 'onnxruntime-win-x64-1.30.0.zip') -DestinationPath $dependency -Force

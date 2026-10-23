@@ -41,6 +41,10 @@ static int versionOf(const std::filesystem::path& path) {
 }
 static Document base() { Document d; d.id = newId(); d.width = 8; d.height = 8; d.resolution = 72; return d; }
 static Layer pixelLayer() { Layer l; l.id = newId(); l.name = "Paint"; l.transform = {0, 0, 4, 4}; l.raster = Raster::filled(4, 4, {255, 0, 0, 255}); return l; }
+// LibRaw failure classes reported by raw_develop.cpp for a file it cannot open or decode.
+static bool isRawRejection(const std::string& message) {
+    return message.find("Unsupported RAW file") != std::string::npos || message.find("Malformed RAW file") != std::string::npos || message.find("Cannot read RAW file") != std::string::npos;
+}
 static void format_contract() {
     QTemporaryDir dir; check(dir.isValid(), "temp directory");
     ProjectStore store(makeWicProjectCodec());
@@ -92,7 +96,7 @@ static void behavior_contract() {
     auto grouped = base(); Layer folder; folder.id = newId(); folder.name = "Folder"; folder.group = true; folder.transform = {0, 0, 8, 8}; auto child = pixelLayer(); child.parentId = folder.id; grouped.layers = {folder, child};
     auto ungrouped = layers::ungroup(grouped, {{folder.id}, folder.id}); check(ungrouped.document.layers.size() == 1 && ungrouped.document.layers[0].parentId.empty(), "ungroup left the folder");
     QTemporaryDir rawDir; auto rawPath = std::filesystem::path(rawDir.filePath("missing.cr2").toStdWString()); QFile raw(rawDir.filePath("missing.cr2")); check(raw.open(QIODevice::WriteOnly), "raw fixture"); raw.write("not raw"); raw.close();
-    bool rawRejected = false; try { imaging::decodeRaw(rawPath, {}); } catch (const std::exception& error) { rawRejected = std::string(error.what()).find("No RAW codec") != std::string::npos; } check(rawRejected, "missing RAW codec was not reported");
+    bool rawRejected = false; try { imaging::decodeRaw(rawPath, {}); } catch (const std::exception& error) { rawRejected = isRawRejection(error.what()); } check(rawRejected, "malformed RAW was not reported");
 }
 static void psd_contract() {
     const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -551,12 +555,101 @@ static void deep_contract() {
     try { imaging::WicCodec::decodeProjectDeepPng(animatedPath); } catch (const std::exception& error) { animatedReason = error.what(); }
     check(animatedReason.find("Animated") != std::string::npos, "Animated 16-bit project PNG was not rejected");
 }
+// Returns the exception text, or an empty string when the call succeeds.
+template <typename Call>
+static std::string errorOf(Call&& call) {
+    try { call(); } catch (const std::exception& error) { return error.what(); }
+    return {};
+}
+static double meanLuma(const imaging::RgbaImage& image) {
+    double sum = 0;
+    for (std::uint32_t y = 0; y < image.height; ++y) for (std::uint32_t x = 0; x < image.width; ++x) {
+        const auto* p = &image.pixels[y * image.stride + x * 4];
+        sum += 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+    }
+    return sum / (double(image.width) * image.height);
+}
+static void raw_development_contract() {
+    QTemporaryDir directory;
+    // Every RAW rejection names the LibRaw failure class; a silent as-shot fallback would not match.
+    check(directory.isValid(), "RAW temporary directory");
+    const auto garbage = std::filesystem::path(directory.filePath("garbage.dng").toStdWString());
+    QFile garbageFile(directory.filePath("garbage.dng"));
+    check(garbageFile.open(QIODevice::WriteOnly) && garbageFile.write("not raw") == 7, "RAW garbage fixture");
+    garbageFile.close();
+    // Settings are validated before any codec work, so these hold on every host.
+    imaging::ImportOptions options;
+    options.raw.exposure = std::numeric_limits<double>::quiet_NaN();
+    check(errorOf([&] { imaging::developRaw(garbage, options); }).find("Invalid RAW development settings") != std::string::npos, "non-finite exposure was not rejected");
+    options.raw.exposure = 6.0;
+    check(errorOf([&] { imaging::developRaw(garbage, options); }).find("Invalid RAW development settings") != std::string::npos, "exposure beyond 5 EV was not rejected");
+    options = {};
+    options.cancelled = [] { return true; };
+    check(errorOf([&] { imaging::developRaw(garbage, options); }).find("cancelled") != std::string::npos, "cancelled RAW development was not reported");
+    check(imaging::isRawFileExtension("IMG_0001.CR2") && imaging::isRawFileExtension("a.dng") && !imaging::isRawFileExtension("a.png"), "RAW extension routing");
+    // A corrupt file must report a rejection, never a silent as-shot import.
+    const auto malformed = errorOf([&] { imaging::decodeRaw(garbage, {}); });
+    check(isRawRejection(malformed), "corrupt RAW error is not distinct");
+
+    // Codec-dependent checks run only with a real RAW file; see docs/user-guide.md for the fixture provenance.
+    const char* fixture = std::getenv("COMPOSITOR_RAW_FIXTURE");
+    if (!fixture) { std::cout << "SKIP raw_development codec checks: COMPOSITOR_RAW_FIXTURE is not set\n"; return; }
+    const auto raw = std::filesystem::path(QString::fromUtf8(fixture).toStdWString());
+    const auto asShot = imaging::developRaw(raw, {});
+    const auto& caps = asShot.capabilities;
+    std::cout << "RAW caps temperature=" << caps.temperature << " tint=" << caps.tint << " kelvin=" << caps.minKelvin << ".." << caps.maxKelvin
+              << " asShot K=" << asShot.asShot.kelvin << " tint=" << asShot.asShot.tint << '\n';
+    check(caps.minKelvin == imaging::kRawKelvinMin && caps.maxKelvin == imaging::kRawKelvinMax, "RAW capabilities");
+
+    // Preview is a downscale of the same development result, never a separate pipeline.
+    const auto preview = imaging::developRaw(raw, {}, 256);
+    const double fullRatio = double(asShot.image.image.width) / asShot.image.image.height;
+    const double previewRatio = double(preview.image.image.width) / preview.image.image.height;
+    check(std::max(preview.image.image.width, preview.image.image.height) <= 256 && std::abs(previewRatio - fullRatio) / fullRatio < 0.01, "preview bound or aspect ratio");
+    // Exposure 0 EV is the identity: explicit settings must not change the default development.
+    imaging::ImportOptions zeroEv;
+    zeroEv.raw.exposure = 0.0;
+    check(imaging::developRaw(raw, zeroEv).image.image.pixels == asShot.image.image.pixels, "0 EV changed the pixels");
+    // Exposure is applied to the linear output before the sRGB encoding: +1 EV brightens the frame.
+    imaging::ImportOptions brighter;
+    brighter.raw.exposure = 1.0;
+    check(meanLuma(imaging::developRaw(raw, brighter).image.image) > meanLuma(asShot.image.image) + 1.0, "+1 EV did not brighten the developed frame");
+    // Noise reduction must change the developed pixels; the slider cannot be a no-op.
+    imaging::ImportOptions denoised;
+    denoised.raw.noiseReduction = 100.0;
+    const auto strongNr = imaging::developRaw(raw, denoised).image.image;
+    check(strongNr.pixels != asShot.image.image.pixels, "noise reduction 100 left the pixels unchanged");
+    // Out-of-range settings are rejected before LibRaw runs, not clamped silently.
+    imaging::ImportOptions outside;
+    outside.raw.kelvin = imaging::kRawKelvinMax + 1;
+    check(errorOf([&] { imaging::developRaw(raw, outside); }).find("Invalid RAW development settings") != std::string::npos, "out-of-range temperature was not rejected");
+    // Export and reopen: the 8-bit pixels written to PNG are read back within rounding.
+    const auto exported = std::filesystem::path(directory.filePath("developed.png").toStdWString());
+    imaging::ExportOptions png;
+    png.format = imaging::ImageFormat::Png;
+    imaging::WicCodec::encode(exported, asShot.image.image, png);
+    const auto reopened = imaging::WicCodec::decode(exported).image;
+    check(reopened.width == asShot.image.image.width && reopened.height == asShot.image.image.height, "exported RAW dimensions");
+    int worst = 0;
+    for (std::size_t i = 0; i < reopened.pixels.size(); ++i) worst = std::max(worst, std::abs(int(reopened.pixels[i]) - int(asShot.image.image.pixels[i])));
+    check(worst <= 2, "exported RAW pixels differ beyond rounding");
+    // A truncated RAW reports an explicit error instead of a partial image.
+    const auto truncated = std::filesystem::path(directory.filePath("truncated.dng").toStdWString());
+    QFile source(QString::fromStdWString(raw.wstring()));
+    check(source.open(QIODevice::ReadOnly), "RAW fixture read");
+    const auto head = source.read(4096);
+    source.close();
+    QFile truncatedFile(QString::fromStdWString(truncated.wstring()));
+    check(truncatedFile.open(QIODevice::WriteOnly) && truncatedFile.write(head) == head.size(), "truncated RAW fixture");
+    truncatedFile.close();
+    check(!errorOf([&] { imaging::developRaw(truncated, {}); }).empty(), "truncated RAW was accepted");
+}
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "psd-folder") {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

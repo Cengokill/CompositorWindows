@@ -47,8 +47,8 @@ int main(int argc,char** argv){
         require(args.size()==3,"Provide source root and evidence directory");
         QDir().mkpath(args[2]);QTemporaryDir directory(args[2]+"/decoder-corpus-XXXXXX");require(directory.isValid(),"Cannot create corpus directory");directory.setAutoRemove(false);
         const auto root=args[1];std::vector<Case> cases;
-        auto add=[&](QString id,const QByteArray& bytes,QString expectation="bounded",bool tiny=false,bool cancel=false){
-            auto path=directory.filePath(id+".payload");write(path,bytes);cases.push_back({id,path,expectation,tiny,cancel});
+        auto add=[&](QString id,const QByteArray& bytes,QString expectation="bounded",bool tiny=false,bool cancel=false,QString extension=".payload"){
+            auto path=directory.filePath(id+extension);write(path,bytes);cases.push_back({id,path,expectation,tiny,cancel});
         };
         imaging::RgbaImage source{31,23,31*4,std::vector<uint8_t>(31*23*4)};
         quint32 state=0xc011ab1eU;auto random=[&]{state=state*1664525U+1013904223U;return state;};
@@ -71,6 +71,11 @@ int main(int argc,char** argv){
             auto changed=png;bigEndian(changed,16,dimensions.first);bigEndian(changed,20,dimensions.second);bigEndian(changed,29,crc32(changed.mid(12,17)));
             add(QString("png-dimensions-%1-%2").arg(dimensions.first).arg(dimensions.second),changed,"rejected");
         }
+        // Camera RAW files take the LibRaw route (chosen by extension), so hostile containers under RAW names are checked too.
+        add("raw-tiff-header-without-directory",QByteArray("II*\0\x08\0\0\0",8),"rejected",false,false,".dng");
+        add("raw-random-header",QByteArray(1024,char(-1)),"rejected",false,false,".arw");
+        add("raw-pixel-budget",QByteArray("II*\0\x08\0\0\0",8),"rejected",true,false,".cr2");
+        add("raw-cancelled-before-open",QByteArray("II*\0\x08\0\0\0",8),"rejected",false,true,".nef");
         add("unsupported-gif",QByteArray::fromHex("47494638396101000100800000000000ffffff2c00000000010001000002024401003b"),"rejected");
         add("oversized-heif-box",QByteArray::fromHex("ffffffff66747970686569630000000068656963"),"rejected");
         add("random-header",QByteArray(1024,char(-1)),"rejected");

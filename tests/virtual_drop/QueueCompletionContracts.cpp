@@ -21,7 +21,8 @@ struct Fixture {
     Fixture(){ui::WorkspaceDropQueue::Host host;
         host.canBegin=[this]{return allowed;};host.canAdvance=[this]{return advance;};host.managing=[this](bool value){managed=value;};
         host.project=[this](const QString& path){order.append(path);};host.imageTarget=[this](QObject* value,bool captured){return captured?value:&target;};
-        host.image=[this](QObject*,const QString& path,std::optional<Point>,std::shared_ptr<void>){order.append(path);};
+        host.review=[](const QString&,ui::RawSettings&){return true;};
+        host.image=[this](QObject*,const QString& path,std::optional<Point>,std::shared_ptr<void>,const ui::RawSettings&){order.append(path);};
         host.cancelImage=[this](QObject*){++cancelCalls;};host.error=[](const QString&,const QString&){throw std::runtime_error("Unexpected host error");};
         queue=std::make_unique<ui::WorkspaceDropQueue>(std::move(host),&owner);
     }
