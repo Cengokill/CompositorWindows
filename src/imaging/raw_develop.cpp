@@ -216,17 +216,12 @@ RawDevelopment developRaw(const std::filesystem::path& path, const ImportOptions
     decoded.metadata.decoder = "LibRaw";
 
     RawDevelopment developed;
-    developed.capabilities.developable = true;
-    developed.capabilities.exposure = true;
     developed.capabilities.temperature = whiteBalance.usable;
     developed.capabilities.tint = whiteBalance.usable;
-    developed.capabilities.noiseReduction = true;
     developed.capabilities.minKelvin = kRawKelvinMin;
     developed.capabilities.maxKelvin = kRawKelvinMax;
-    developed.asShot.exposure = 0;
     developed.asShot.kelvin = whiteBalance.asShotKelvin;
     developed.asShot.tint = whiteBalance.asShotTint;
-    developed.asShot.noiseReduction = 0;
     developed.image = previewMaxSide ? DecodedImage{downsample(decoded.image, previewMaxSide), decoded.metadata} : std::move(decoded);
     return developed;
 }

@@ -23,11 +23,10 @@ struct RawAdjustments {
 };
 // What the file's RAW decoder can change, and the bounds it reports for Kelvin.
 struct RawCapabilities {
-    bool developable{};
-    bool exposure{}, temperature{}, tint{}, noiseReduction{};
+    bool temperature{}, tint{};
     std::uint32_t minKelvin{}, maxKelvin{};
 };
-struct RawAsShot { double exposure{}, tint{}, noiseReduction{}; std::uint32_t kelvin{}; };
+struct RawAsShot { double tint{}; std::uint32_t kelvin{}; };
 struct ImportOptions {
     std::uint32_t maxSide{30000};
     std::uint64_t remainingPixels{100000000};

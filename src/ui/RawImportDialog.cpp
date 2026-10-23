@@ -193,31 +193,27 @@ void RawImportDialog::initializeControls(const imaging::RawDevelopment& develope
         slider->setValue(value);
         slider->setDefaultValue(value);
     };
-    setup(exposure_, caps.exposure, int(std::lround(asShot.exposure * 100)));
+    // Exposure and noise reduction start at zero: the decoders report no as-shot value for them.
+    setup(exposure_, true, 0);
     {
         QSignalBlocker blocked(kelvin_);
         kelvin_->setRange(int(caps.minKelvin), int(caps.maxKelvin));
     }
     setup(kelvin_, caps.temperature, int(asShot.kelvin));
     setup(tint_, caps.tint, int(std::lround(asShot.tint)));
-    setup(noise_, caps.noiseReduction, int(std::lround(asShot.noiseReduction)));
+    setup(noise_, true, 0);
     // Unset adjustments keep the as-shot values; only a slider edit records a setting.
-    exposureValue_->setText(QString::number(asShot.exposure, 'f', 2) + " EV");
+    exposureValue_->setText("0.00 EV");
     kelvinValue_->setText(QString::number(asShot.kelvin) + " K");
     tintValue_->setText(QString::number(std::lround(asShot.tint)));
-    noiseValue_->setText(QString::number(std::lround(asShot.noiseReduction)));
+    noiseValue_->setText("0");
     showExplanation(caps);
 }
 
 void RawImportDialog::showExplanation(const imaging::RawCapabilities& caps) {
     QStringList reasons;
-    if (!caps.developable) reasons << "This RAW decoder cannot develop this file. It will be imported as shot.";
-    else {
-        if (!caps.exposure) reasons << "Exposure is read-only for this decoder.";
-        if (!caps.temperature) reasons << "Temperature is read-only for this decoder.";
-        if (!caps.tint) reasons << "Tint is read-only for this decoder.";
-        if (!caps.noiseReduction) reasons << "Noise reduction is read-only for this decoder.";
-    }
+    if (!caps.temperature) reasons << "Temperature is read-only for this decoder.";
+    if (!caps.tint) reasons << "Tint is read-only for this decoder.";
     reasons << "Lens correction is unavailable: the LibRaw decoder used here applies no lens profile.";
     explanation_->setText(reasons.join("\n"));
 }

@@ -145,8 +145,8 @@ bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,s
         imaging::RawDevelopment developed;
         developed.image.image={2,2,8,std::vector<std::uint8_t>(16,255)};
         developed.image.metadata.decoder="stub";
-        developed.capabilities={true,true,true,true,true,2000,12000};
-        developed.asShot={0.0,0.0,0.0,5000};
+        developed.capabilities={true,true,2000,12000};
+        developed.asShot={0.0,5000};
         return developed;
     };
     bool timedOut=false;

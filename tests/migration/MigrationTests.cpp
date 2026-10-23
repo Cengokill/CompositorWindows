@@ -599,7 +599,7 @@ static void raw_development_contract() {
     const auto& caps = asShot.capabilities;
     std::cout << "RAW caps temperature=" << caps.temperature << " tint=" << caps.tint << " kelvin=" << caps.minKelvin << ".." << caps.maxKelvin
               << " asShot K=" << asShot.asShot.kelvin << " tint=" << asShot.asShot.tint << '\n';
-    check(caps.developable && caps.minKelvin == imaging::kRawKelvinMin && caps.maxKelvin == imaging::kRawKelvinMax, "RAW capabilities");
+    check(caps.minKelvin == imaging::kRawKelvinMin && caps.maxKelvin == imaging::kRawKelvinMax, "RAW capabilities");
 
     // Preview is a downscale of the same development result, never a separate pipeline.
     const auto preview = imaging::developRaw(raw, {}, 256);
