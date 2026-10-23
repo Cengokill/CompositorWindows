@@ -312,12 +312,12 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         require(save&&saveAs,"File > Save Project commands missing");
         window.setProperty("testNativeSavePath",dest);
         saveAs->trigger();
-        QApplication::processEvents();
+        until([&]{return project.saveJob.isNull();});
         require(QFileInfo(project.path)==QFileInfo(dest)&&QDir(dest).exists(),"Save As did not write the chosen .comp directory");
         require(window.findChildren<QFileDialog*>().isEmpty(),"Save Project As used a Qt file dialog");
         window.setProperty("testNativeSavePath",temporary.filePath("saved-again.comp"));
         save->trigger();
-        QApplication::processEvents();
+        until([&]{return project.saveJob.isNull();});
         require(QFileInfo(project.path)==QFileInfo(dest),"Repeat Save reopened a picker after a path was chosen");
     });
     test("save_as_reports_busy_native_picker",[&]{
