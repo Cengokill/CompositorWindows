@@ -134,7 +134,7 @@ void MainWindow::exerciseNativeUi(const QString&dir){
     }
     selectTool(Tool::Move);
     auto rendered=SoftwareRenderer().render(*current()->document,0,0,current()->document->width,current()->document->height)->rgba();
-    current()->path=dir+"/Project 実証 test.comp";require(saveProject()&&waitForProjectSave(*current()),"Native save failed");auto path=current()->path;
+    current()->path=dir+"/Project 実証 test.comp";require(saveProject(),"Native save failed");auto path=current()->path;
     ProjectStore store(makeWicProjectCodec());const auto persisted=store.load(std::filesystem::path(path.toStdWString()));
     auto reopened=SoftwareRenderer().render(persisted.document,0,0,persisted.document.width,persisted.document.height)->rgba();
     require(rendered==reopened&&persisted.activeLayer==current()->active&&!current()->history.modified(),"Persisted project changed rendered pixels, active layer or dirty state");

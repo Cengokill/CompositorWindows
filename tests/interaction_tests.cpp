@@ -7,15 +7,6 @@
 #include "persistence/ProjectStore.h"
 #include <filesystem>
 #include <functional>
-#include <atomic>
-#include <deque>
-#include <memory>
-#include <QFileInfo>
-#include <QMessageBox>
-#include <QStatusBar>
-#include <QStringList>
-#include <QThread>
-#include <QTimer>
 #include <iostream>
 #include <stdexcept>
 using namespace compositor;
@@ -26,35 +17,6 @@ void action(MainWindow&w,const QString&text){for(auto*a:w.findChildren<QAction*>
 Document example(){Document d;d.id=newId();d.width=128;d.height=96;Layer l;l.id=newId();l.name="Layer";l.transform={0,0,128,96};l.raster=Raster::filled(128,96,{80,110,130,255});d.layers.push_back(l);return d;}
 void drag(EditorProject&p,Point a,Point b){p.canvas->pointerDown({a.x,a.y},{});p.canvas->pointerMove({b.x,b.y},{});p.canvas->pointerUp({b.x,b.y},{});}
 void showRulers(MainWindow&w){auto* rulers=w.findChild<QAction*>("viewRulers");require(rulers&&!rulers->isChecked()&&w.canvas()&&!w.canvas()->showRulers,"Rulers command missing");rulers->trigger();require(rulers->isChecked()&&w.canvas()->showRulers,"Showing rulers failed");}
-// Save runs on a worker; tests that inspect the written package or path wait for its completion.
-void awaitSave(EditorProject&p){for(int i=0;i<20000&&!p.saveJob.isNull();++i)QTest::qWait(1);require(p.saveJob.isNull(),"Background save did not finish");}
-// Holds the next background write on the worker until open(). The wait is capped so a failed test cannot hang.
-struct WriteGate{
-    std::shared_ptr<std::atomic_bool> entered=std::make_shared<std::atomic_bool>(false);
-    std::shared_ptr<std::atomic_bool> release=std::make_shared<std::atomic_bool>(false);
-    std::function<void()> hook()const{auto e=entered,r=release;return [e,r]{e->store(true);for(int i=0;i<10000&&!r->load();++i)QThread::msleep(1);};}
-    void open()const{release->store(true);}
-};
-QAction* commandAction(MainWindow&w,const char* id){for(auto*a:w.findChildren<QAction*>())if(a->property("commandId").toString()==id)return a;throw std::runtime_error("Missing command");}
-// Answers modal message boxes in order while a nested loop runs, and records their text.
-struct MessageAnswers{
-    QTimer timer;
-    std::deque<QMessageBox::StandardButton> answers;
-    QStringList texts;
-    MessageAnswers(MainWindow& window,std::deque<QMessageBox::StandardButton> queued):answers(std::move(queued)){
-        timer.setInterval(5);
-        QObject::connect(&timer,&QTimer::timeout,&window,[this,&window]{
-            for(auto* box:window.findChildren<QMessageBox*>()){
-                if(!box->isVisible()||answers.empty())continue;
-                texts.append(box->text());
-                auto* button=box->button(answers.front());answers.pop_front();
-                if(button)button->click();else box->accept();
-            }
-        });
-        timer.start();
-    }
-};
-void stroke(EditorProject&p){p.canvas->pointerDown({30,30},{});p.canvas->pointerMove({60,50},{});p.canvas->pointerUp({60,50},{});}
 }
 int main(int argc,char**argv){QApplication app(argc,argv);std::cout<<std::unitbuf;int passed=0,failed=0;
 auto test=[&](const char*name,const std::function<void()>&fn){if(argc>1&&std::string(argv[1])!=name)return;std::cout<<"START "<<name<<'\n';try{fn();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}};
@@ -101,7 +63,7 @@ test("gradient_save_keeps_preview_out_of_package_and_history",[]{
  MainWindow w(true);auto&p=w.addProject(example());action(w,"Gradient (G)");const auto original=p.document;
  drag(p,{10,30},{110,30});require(p.document==original&&p.gradientPreview,"Gradient preview entered document");
  const auto preview=p.gradientPreview;QTemporaryDir directory;require(directory.isValid(),"Temporary save directory unavailable");p.path=directory.filePath("Pending.comp");
- action(w,"&Save Project");awaitSave(p);ProjectStore store(makeWicProjectCodec());auto loaded=store.load(std::filesystem::path(p.path.toStdWString()));
+ action(w,"&Save Project");ProjectStore store(makeWicProjectCodec());auto loaded=store.load(std::filesystem::path(p.path.toStdWString()));
  require(loaded.document.layers.size()==original->layers.size(),"Saved layer count changed");
  for(size_t i=0;i<loaded.document.layers.size();++i){auto& layer=loaded.document.layers[i];const auto& source=original->layers[i];require(layer.raster&&source.raster&&layer.raster->rgba()==source.raster->rgba(),"Saved pixels include pending gradient");layer.raster=source.raster;}
  require(loaded.document==*original,"Saved metadata changed");
@@ -195,7 +157,7 @@ test("saved_guides_reopen_on_the_canvas",[]{
  send(QEvent::MouseButtonRelease,drop,Qt::LeftButton,Qt::NoButton);
  require(p.document->guides.size()==1&&canvas->showGuides,"Guide was not committed");
  const double position=p.document->guides.front().position;const auto id=p.document->guides.front().id;
- p.path=path;action(w,"&Save Project");awaitSave(p);require(!p.history.modified(),"Save left the project modified");
+ p.path=path;action(w,"&Save Project");require(!p.history.modified(),"Save left the project modified");
  action(w,"Close Project");
  w.openPath(path);
  auto* reopened=w.canvas();
@@ -221,80 +183,6 @@ test("brush_outside_existing_source_grows_without_moving_original_pixels",[]{
  MainWindow w(true);auto d=example();d.layers.front().transform={40,30,32,32};d.layers.front().raster=Raster::filled(32,32,{180,80,20,255});auto&p=w.addProject(d);action(w,"Brush (B)");
  auto before=SoftwareRenderer().render(d,0,0,128,96);drag(p,{20,45},{22,45});const auto&layer=p.document->layers.front();require(layer.transform.x<40&&layer.raster->width>32,"Brush was clipped to source extent");
  auto after=SoftwareRenderer().render(*p.document,0,0,128,96);require(after->pixel(60,45)==before->pixel(60,45)&&after->pixel(20,45).a>0,"Growth moved original or omitted new pixels");
-});
-test("save_runs_off_thread_and_later_edit_stays_dirty",[]{
- MainWindow w(true);auto&p=w.addProject(example());QTemporaryDir dir;require(dir.isValid(),"temporary directory");
- p.path=dir.filePath("Slow.comp");WriteGate gate;w.setProjectSaveBeforeWriteForTesting(gate.hook());
- const auto snapshot=*p.document;
- commandAction(w,"file.save")->trigger();
- require(!p.saveJob.isNull(),"Save did not start a background write");
- for(int i=0;i<2000&&!gate.entered->load();++i)QTest::qWait(1);
- require(gate.entered->load(),"Worker never reached the write");
- // The write is held, so this only passes if the event loop and editing stayed live.
- action(w,"Brush (B)");stroke(p);
- require(p.history.undoCount()==1&&!p.saveJob.isNull(),"Editing was blocked while the write was pending");
- gate.open();awaitSave(p);
- require(p.saveError.isEmpty(),"Background write failed");
- require(p.history.modified(),"Edit made after the snapshot was marked saved");
- ProjectStore store(makeWicProjectCodec());auto loaded=store.load(std::filesystem::path(p.path.toStdWString()));
- require(loaded.document.layers[0].raster->rgba()==snapshot.layers[0].raster->rgba(),"Package differs from the captured snapshot");
- commandAction(w,"edit.undo")->trigger();
- require(!p.history.modified(),"Undo to the saved revision left the project dirty");
- commandAction(w,"edit.redo")->trigger();
- require(p.history.modified(),"Redo past the saved revision did not mark the project dirty");
-});
-test("second_save_rejected_and_save_as_updates_path_after_completion",[]{
- MainWindow w(true);auto&p=w.addProject(example());QTemporaryDir dir;require(dir.isValid(),"temporary directory");
- p.path=dir.filePath("First.comp");WriteGate gate;w.setProjectSaveBeforeWriteForTesting(gate.hook());
- commandAction(w,"file.save")->trigger();
- const auto* job=p.saveJob.data();require(job,"Save did not start");
- commandAction(w,"file.save")->trigger();
- require(p.saveJob.data()==job&&w.statusBar()->currentMessage().contains("already in progress"),"Second Save started a concurrent write");
- w.setProperty("testNativeSavePath",dir.filePath("Ignored.comp"));
- commandAction(w,"file.save_as")->trigger();
- require(p.saveJob.data()==job&&p.path==dir.filePath("First.comp")&&!QFileInfo::exists(dir.filePath("Ignored.comp")),"Save As started while a write was pending");
- gate.open();awaitSave(p);
- require(p.path==dir.filePath("First.comp")&&!p.history.modified(),"Completed write did not update the saved state");
- w.setProperty("testNativeSavePath",dir.filePath("Second.comp"));
- commandAction(w,"file.save_as")->trigger();awaitSave(p);
- require(p.path==dir.filePath("Second.comp")&&QFileInfo::exists(dir.filePath("Second.comp")+"/manifest.json"),"Save As did not update the project path");
-});
-test("close_waits_for_pending_save_then_prompts_for_later_edits",[]{
- MainWindow w(true);auto&p=w.addProject(example());QTemporaryDir dir;require(dir.isValid(),"temporary directory");
- p.path=dir.filePath("Closing.comp");WriteGate gate;w.setProjectSaveBeforeWriteForTesting(gate.hook());
- const auto snapshot=*p.document;
- commandAction(w,"file.save")->trigger();
- action(w,"Brush (B)");stroke(p);
- const auto edited=*p.document;
- // The close decision waits for the held write, then asks about the edit made after its snapshot. Cancel keeps the project open.
- QTimer release;release.setSingleShot(true);release.setInterval(10);QObject::connect(&release,&QTimer::timeout,&w,[&]{gate.open();});release.start();
- {
-    MessageAnswers answers(w,{QMessageBox::Cancel});
-    action(w,"Close Project");
-    require(answers.texts.size()==1&&p.saveJob.isNull()&&p.history.modified()&&w.findChild<QTabWidget*>()->count()==1,"Close did not wait for the write and prompt for later edits");
- }
- {
-    ProjectStore store(makeWicProjectCodec());auto loaded=store.load(std::filesystem::path(p.path.toStdWString()));
-    require(loaded.document.layers[0].raster->rgba()==snapshot.layers[0].raster->rgba(),"Write during close differs from the snapshot");
- }
- // Save from the prompt writes the newer state before the project closes.
- {
-    MessageAnswers answers(w,{QMessageBox::Save});
-    action(w,"Close Project");
-    require(answers.texts.size()==1,"Second close did not prompt");
- }
- ProjectStore store(makeWicProjectCodec());auto loaded=store.load(std::filesystem::path(dir.filePath("Closing.comp").toStdWString()));
- require(loaded.document.layers[0].raster->rgba()==edited.layers[0].raster->rgba(),"Save from close prompt dropped the later edit");
-});
-test("failed_save_reports_error_and_keeps_document_dirty",[]{
- MainWindow w(true);auto&p=w.addProject(example());QTemporaryDir dir;require(dir.isValid(),"temporary directory");
- p.path=dir.filePath("Good.comp");action(w,"Brush (B)");stroke(p);
- const auto before=*p.document;const auto undoCount=p.history.undoCount();
- w.setProperty("testNativeSavePath",dir.filePath("missing/Bad.comp"));
- MessageAnswers answers(w,{QMessageBox::Ok});
- commandAction(w,"file.save_as")->trigger();awaitSave(p);
- require(answers.texts.size()==1&&!p.saveError.isEmpty(),"Failed write was not reported");
- require(p.path==dir.filePath("Good.comp")&&p.history.modified()&&p.history.undoCount()==undoCount&&p.document==before,"Failed write changed the project path, dirty state or document");
 });
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false}\n";return failed?1:0;
 }

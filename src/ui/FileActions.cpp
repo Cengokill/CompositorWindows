@@ -555,44 +555,7 @@ bool MainWindow::importPhotoshop(const QString& path){
     }
 }
 void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
-bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;if(!p->saveJob.isNull()){statusBar()->showMessage("A save is already in progress",5000);return false;}auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}startProjectSave(*p,path);return true;}
-void MainWindow::startProjectSave(EditorProject& project,const QString& path){
-    // The snapshot is the document value and revision captured here on the UI thread. The
-    // worker never reads the live project, and edits after this point stay unsaved.
-    const auto revision=project.history.revision();
-    const QPointer<NativeCanvas> identity(project.canvas);
-    project.saveError.clear();
-    ui::ProjectSaveJob::Host host;
-    host.beforeWrite=projectSaveBeforeWrite_;
-    host.completed=[this,identity,path,revision](const QString& error){
-        EditorProject* owner=nullptr;
-        if(identity)for(auto& candidate:projects_)if(candidate->canvas==identity.data()){owner=candidate.get();break;}
-        if(!owner){
-            if(!error.isEmpty())QMessageBox::critical(this,"Save Project",error);
-            return;
-        }
-        owner->saveJob=nullptr;
-        if(error.isEmpty()){
-            owner->path=path;
-            owner->history.markSavedIfCurrent(revision);
-        }
-        owner->saveError=error;
-        refresh(false,false);
-        if(!error.isEmpty())QMessageBox::critical(this,"Save Project",error);
-    };
-    project.saveJob=new ui::ProjectSaveJob(*project.document,project.active,path,std::move(host),this);
-    refresh(false,false);
-}
-bool MainWindow::waitForProjectSave(EditorProject& project){
-    if(project.saveJob.isNull())return project.saveError.isEmpty();
-    // The progress dialog is application-modal, so nothing can edit or close the project while the close decision waits.
-    QProgressDialog progress("Saving project…",QString(),0,0,this);
-    progress.setObjectName("projectSaveWait");progress.setWindowTitle("Save Project");progress.setWindowModality(Qt::ApplicationModal);progress.setCancelButton(nullptr);progress.setMinimumDuration(0);progress.show();
-    QEventLoop loop;
-    connect(project.saveJob.data(),&QObject::destroyed,&loop,&QEventLoop::quit);
-    loop.exec();
-    return project.saveError.isEmpty();
-}
+bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}ProjectStore store(makeWicProjectCodec());store.save(nativePath(path),*p->document,p->active);p->path=path;p->history.markSaved();refresh(false);return true;}
 void MainWindow::exportImage(){
     auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;
     imaging::validateExportExtent(uint32_t(p->document->width),uint32_t(p->document->height));

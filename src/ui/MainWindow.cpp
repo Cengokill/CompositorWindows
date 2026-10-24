@@ -204,15 +204,11 @@ bool MainWindow::closeProject(int i){
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();finishVisibilitySwipe();
     finishOpacityEdit();if(textSession_&&textSession_->owner==projects_[i].get())finishText();applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
     auto&p=*projects_[i];
-    // A write in flight must finish before deciding. Edits made after its snapshot still prompt again.
-    for(;;){
-        if(!p.saveJob.isNull()&&!waitForProjectSave(p))return false;
-        if(!p.history.modified())break;
+    if(p.history.modified()){
         tabs_->setCurrentIndex(i);
         auto answer=QMessageBox::warning(this,"Unsaved Changes","Save changes before closing this project?",QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel,QMessageBox::Save);
         if(answer==QMessageBox::Cancel)return false;
-        if(answer==QMessageBox::Discard)break;
-        try{if(!saveProject())return false;}catch(const std::exception&e){QMessageBox::critical(this,"Save Project",e.what());return false;}
+        if(answer==QMessageBox::Save){try{if(!saveProject())return false;}catch(const std::exception&e){QMessageBox::critical(this,"Save Project",e.what());return false;}}
     }
     beginPreviewGesture(p.canvas);invalidateViewportComposite();auto*widget=p.page;p.canvas->viewportProvider={};p.canvas->pointerDown={};p.canvas->pointerDoubleClick={};p.canvas->pointerMove={};p.canvas->pointerUp={};p.canvas->pointerCancel={};p.canvas->pointerInterrupted={};p.canvas->pointerHover={};p.canvas->pointerLeave={};p.canvas->rightPointerDown={};p.canvas->rightPointerMove={};p.canvas->navigationAllowed={};p.canvas->navigatorProvider={};if(activeProject_==&p)activeProject_=nullptr;projects_.erase(projects_.begin()+i);tabs_->removeTab(i);widget->deleteLater();if(projects_.empty()&&!closingWindow_)addEmptyProject(false);else switchProject();refresh(false);return true;
 }
