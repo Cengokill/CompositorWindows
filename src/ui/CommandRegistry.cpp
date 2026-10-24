@@ -306,10 +306,11 @@ QString shortcutProblem(const QKeySequence& key){
     if(code==Qt::Key_unknown||code==Qt::Key_Control||code==Qt::Key_Shift||code==Qt::Key_Alt||code==Qt::Key_Meta||code==Qt::Key_AltGr)return "Add a key to the modifiers.";
     const auto mods=combination.keyboardModifiers()&~Qt::KeypadModifier;
     const bool plain=(mods&~Qt::ShiftModifier)==Qt::NoModifier;
-    // Keys the canvas keeps for its own gestures: Escape, Tab, Enter, Space pan, digit opacity, bracket brush size, arrow nudges, and Delete/Backspace.
+    // Keys the canvas keeps for its own gestures: Escape, Tab, Enter, Space pan, digit opacity, bracket brush size, arrow nudges,
+    // and Delete/Backspace with or without Alt/Ctrl/Shift (delete, fills). Shift+Delete stays assignable: it is Content-Aware Fill's shipped command key.
     const bool canvasKey=code==Qt::Key_Escape||code==Qt::Key_Tab||code==Qt::Key_Backtab||code==Qt::Key_Return||code==Qt::Key_Enter||code==Qt::Key_Space||(code>=Qt::Key_0&&code<=Qt::Key_9)||code==Qt::Key_BracketLeft||code==Qt::Key_BracketRight||code==Qt::Key_BraceLeft||code==Qt::Key_BraceRight;
     const bool arrow=code==Qt::Key_Left||code==Qt::Key_Right||code==Qt::Key_Up||code==Qt::Key_Down;
-    if(arrow||(plain&&canvasKey)||(mods==Qt::NoModifier&&(code==Qt::Key_Delete||code==Qt::Key_Backspace)))return portable(key)+" is reserved for canvas editing.";
+    if(arrow||(plain&&canvasKey)||((code==Qt::Key_Delete||code==Qt::Key_Backspace)&&!(code==Qt::Key_Delete&&mods==Qt::ShiftModifier)))return portable(key)+" is reserved for canvas editing.";
     return {};
 }
 std::vector<ShortcutConflict> findShortcutConflicts(const ShortcutMap& shortcuts){

@@ -136,6 +136,9 @@ void shortcut_conflicts(){
     const auto before=f.registry.shortcuts();QString error;
     check(!f.registry.applyShortcuts({{"tool.move",keys({"Ctrl+Y"})}},&error)&&error.contains("edit.redo"),"conflict with Redo's second binding rejected");
     check(f.registry.shortcuts()==before&&move->shortcuts()==keys({"V"})&&redo->shortcuts()==keys({"Ctrl+Shift+Z","Ctrl+Y"}),"conflict leaves actions unchanged");
+    for(auto* key:{"Delete","Backspace","Ctrl+Backspace","Alt+Backspace","Ctrl+Delete","Alt+Delete","Shift+Backspace"})check(!shortcutProblem(QKeySequence(key)).isEmpty(),"canvas Delete/Backspace gestures are reserved");
+    check(shortcutProblem(QKeySequence("Shift+Delete")).isEmpty(),"Content-Aware Fill keeps its shipped Shift+Delete");
+    check(!f.registry.applyShortcuts({{"layer.new",keys({"Ctrl+Backspace"})}},&error)&&error.contains("reserved")&&f.registry.shortcuts()["layer.new"]==keys({"Ctrl+Shift+N"}),"Ctrl+Backspace fill gesture cannot be taken");
     check(f.registry.applyShortcuts({{"tool.move",keys({"Ctrl+Y"})},{"edit.redo",keys({"Ctrl+Shift+Z"})}}),"moving a key resolves the conflict");
 }
 void shortcut_persistence(){
