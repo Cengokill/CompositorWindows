@@ -11,6 +11,7 @@
 #include <QDoubleSpinBox>
 #include <QImage>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QTest>
 #include <filesystem>
@@ -65,8 +66,8 @@ test("copy_layer_to_empty_project_and_undo_to_welcome",[]{
 test("new_canvas_presets_units_and_resolution_keep_pixels",[]{
  MainWindow w(true);auto&p=w.addEmptyProject();auto*tabs=w.findChild<QTabWidget*>();
  auto*preset=control<QComboBox>(p.welcome,"newCanvasPreset");auto*unit=control<QComboBox>(p.welcome,"newCanvasUnit");auto*dpi=control<QSpinBox>(p.welcome,"newCanvasResolution");auto*width=control<QDoubleSpinBox>(p.welcome,"newCanvasWidth");auto*height=control<QDoubleSpinBox>(p.welcome,"newCanvasHeight");auto*create=control<QPushButton>(p.welcome,"createCanvas");
- check(width->value()==1920&&height->value()==1080&&preset->currentData().toSize()==QSize(1920,1080)&&dpi->value()==72,"Default is 1920 × 1080 px at 72 DPI");
- preset->setCurrentIndex(preset->findData(QSize(3840,2160)));check(width->value()==3840&&height->value()==2160,"Preset sets the pixel size");
+ check(width->value()==1920&&height->value()==1080&&preset->currentText()=="Full HD · 1920 × 1080"&&dpi->value()==72,"Default is 1920 × 1080 px at 72 DPI");
+ preset->setCurrentIndex(preset->findText("4K UHD · 3840 × 2160"));check(width->value()==3840&&height->value()==2160,"Preset sets the pixel size");
  width->setValue(1000);check(preset->currentIndex()==0,"Editing a dimension selects Custom");
  for(int index:{1,2,3,0,1,0})unit->setCurrentIndex(index);check(width->value()==1000&&height->value()==2160,"Repeated unit switches keep the pixel size");
  unit->setCurrentIndex(1);dpi->setValue(20000);check(dpi->value()==9600,"Resolution is limited to 9600 DPI");
@@ -78,6 +79,20 @@ test("new_canvas_presets_units_and_resolution_keep_pixels",[]{
  action(w,"Undo New Canvas");check(!p.document&&p.page->currentWidget()==p.welcome,"Undo returns to the welcome card");
  action(w,"Redo New Canvas");check(p.document&&p.document->width==2550&&p.document->resolution==300&&p.active==id&&p.selected==std::vector<std::string>{id},"Redo restores the same document and selection");
 });
+test("new_canvas_category_presets_set_units_and_resolution",[]{
+ MainWindow w(true);auto&p=w.addEmptyProject();
+ auto*preset=control<QComboBox>(p.welcome,"newCanvasPreset");auto*unit=control<QComboBox>(p.welcome,"newCanvasUnit");auto*dpi=control<QSpinBox>(p.welcome,"newCanvasResolution");auto*width=control<QDoubleSpinBox>(p.welcome,"newCanvasWidth");auto*height=control<QDoubleSpinBox>(p.welcome,"newCanvasHeight");auto*create=control<QPushButton>(p.welcome,"createCanvas");
+ auto* model=static_cast<QStandardItemModel*>(preset->model());check(model&&!model->item(preset->findText("Photo"))->isEnabled()&&!model->item(preset->findText("Web"))->isEnabled(),"Category headings are not selectable");
+ preset->setCurrentIndex(preset->findText("5 × 7 in · portrait"));
+ check(unit->currentData().toInt()==int(compositor::editing::PrintUnit::Inches)&&dpi->value()==300&&width->value()==5&&height->value()==7,"Photo preset sets inches at 300 DPI");
+ create->click();check(p.document&&p.document->width==1500&&p.document->height==2100&&p.document->resolution==300,"5 × 7 in at 300 DPI is 1500 × 2100 px");
+ auto&q=w.addEmptyProject(false);auto*preset2=control<QComboBox>(q.welcome,"newCanvasPreset");auto*unit2=control<QComboBox>(q.welcome,"newCanvasUnit");auto*dpi2=control<QSpinBox>(q.welcome,"newCanvasResolution");auto*width2=control<QDoubleSpinBox>(q.welcome,"newCanvasWidth");auto*height2=control<QDoubleSpinBox>(q.welcome,"newCanvasHeight");auto*create2=control<QPushButton>(q.welcome,"createCanvas");
+ preset2->setCurrentIndex(preset2->findText("A4 · 210 × 297 mm"));
+ check(unit2->currentData().toInt()==int(compositor::editing::PrintUnit::Millimeters)&&dpi2->value()==300&&width2->value()==210&&height2->value()==297,"A4 preset sets millimeters at 300 DPI");
+ create2->click();check(q.document&&q.document->width==2480&&q.document->height==3508,"A4 at 300 DPI is 2480 × 3508 px");
+ auto&r=w.addEmptyProject(false);auto*preset3=control<QComboBox>(r.welcome,"newCanvasPreset");auto*dpi3=control<QSpinBox>(r.welcome,"newCanvasResolution");auto*width3=control<QDoubleSpinBox>(r.welcome,"newCanvasWidth");
+ preset3->setCurrentIndex(preset3->findText("Web · 1366 × 768"));check(dpi3->value()==72&&width3->value()==1366,"Web preset uses pixels at 72 DPI");
+});
 test("new_canvas_solid_background_color_and_budget",[]{
  MainWindow w(true);auto&p=w.addEmptyProject();
  auto*unit=control<QComboBox>(p.welcome,"newCanvasUnit");auto*dpi=control<QSpinBox>(p.welcome,"newCanvasResolution");auto*width=control<QDoubleSpinBox>(p.welcome,"newCanvasWidth");auto*height=control<QDoubleSpinBox>(p.welcome,"newCanvasHeight");auto*background=control<QComboBox>(p.welcome,"newCanvasBackground");auto*create=control<QPushButton>(p.welcome,"createCanvas");auto*preset=control<QComboBox>(p.welcome,"newCanvasPreset");
@@ -86,7 +101,7 @@ test("new_canvas_solid_background_color_and_budget",[]{
  check(p.document&&p.document->width==2480&&p.document->height==3508&&p.document->layers.size()==1,"210 × 297 mm at 300 DPI rounds to 2480 × 3508 px");
  const auto& black=p.document->layers[0];check(black.name=="Background"&&black.transform==Transform{0,0,2480,3508}&&black.raster&&black.raster->pixel(0,0)==Pixel{0,0,0,255}&&black.raster->pixel(2479,3507)==Pixel{0,0,0,255}&&black.raster->pixel(1240,1754)==Pixel{0,0,0,255},"Black background is opaque across the full canvas");
  auto&q=w.addEmptyProject(false);auto*preset2=control<QComboBox>(q.welcome,"newCanvasPreset");auto*background2=control<QComboBox>(q.welcome,"newCanvasBackground");auto*create2=control<QPushButton>(q.welcome,"createCanvas");
- preset2->setCurrentIndex(preset2->findData(QSize(1280,720)));background2->setCurrentIndex(1);create2->click();
+ preset2->setCurrentIndex(preset2->findText("HD · 1280 × 720"));background2->setCurrentIndex(1);create2->click();
  check(q.document&&q.document->width==1280&&q.document->height==720&&q.document->layers[0].raster&&q.document->layers[0].raster->pixel(1279,719)==Pixel{255,255,255,255},"White preset is opaque");
  auto&r=w.addEmptyProject(false);auto*width3=control<QDoubleSpinBox>(r.welcome,"newCanvasWidth");auto*height3=control<QDoubleSpinBox>(r.welcome,"newCanvasHeight");auto*background3=control<QComboBox>(r.welcome,"newCanvasBackground");auto*create3=control<QPushButton>(r.welcome,"createCanvas");
  width3->setValue(0);check(width3->value()==1,"Zero width is clamped to one pixel");width3->setValue(30000);height3->setValue(30000);background3->setCurrentIndex(1);

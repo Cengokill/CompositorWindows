@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <string_view>
 #include "ImportActions.h"
 #include "WorkspaceDropQueue.h"
 #include "ProjectLayerCopyJob.h"
@@ -14,6 +16,7 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -34,11 +37,33 @@
 
 namespace compositor {
 namespace {
-struct NewCanvasPreset { const char* label; int width; int height; };
-// Custom has no size; choosing it leaves the current pixel dimensions unchanged.
-constexpr NewCanvasPreset newCanvasPresets[]{{"Custom",0,0},{"HD · 1280 × 720",1280,720},{"Full HD · 1920 × 1080",1920,1080},{"4K UHD · 3840 × 2160",3840,2160},{"Square · 1080 × 1080",1080,1080},{"Vertical HD · 1080 × 1920",1080,1920}};
+struct NewCanvasPreset { const char* category; const char* label; editing::PrintUnit unit; double width; double height; double dpi; };
+// Entries are grouped by category; each category appears as a disabled heading. Custom is not listed and keeps the current size.
+constexpr NewCanvasPreset newCanvasPresets[]{
+    {"Photo","4 × 6 in · paysage",editing::PrintUnit::Inches,6,4,300},
+    {"Photo","4 × 6 in · portrait",editing::PrintUnit::Inches,4,6,300},
+    {"Photo","5 × 7 in · paysage",editing::PrintUnit::Inches,7,5,300},
+    {"Photo","5 × 7 in · portrait",editing::PrintUnit::Inches,5,7,300},
+    {"Photo","8 × 10 in · paysage",editing::PrintUnit::Inches,10,8,300},
+    {"Photo","8 × 10 in · portrait",editing::PrintUnit::Inches,8,10,300},
+    {"Impression","Letter · 8,5 × 11 in",editing::PrintUnit::Inches,8.5,11,300},
+    {"Impression","Legal · 8,5 × 14 in",editing::PrintUnit::Inches,8.5,14,300},
+    {"Impression","Tabloid · 11 × 17 in",editing::PrintUnit::Inches,11,17,300},
+    {"Impression","A4 · 210 × 297 mm",editing::PrintUnit::Millimeters,210,297,300},
+    {"Impression","A3 · 297 × 420 mm",editing::PrintUnit::Millimeters,297,420,300},
+    {"Art et illustration","Poster · 18 × 24 in",editing::PrintUnit::Inches,18,24,300},
+    {"Art et illustration","Postcard · 4 × 6 in",editing::PrintUnit::Inches,4,6,300},
+    {"Web","Web · 1366 × 768",editing::PrintUnit::Pixels,1366,768,72},
+    {"Web","Web · 1440 × 900",editing::PrintUnit::Pixels,1440,900,72},
+    {"Web","Full HD · 1920 × 1080",editing::PrintUnit::Pixels,1920,1080,72},
+    {"Web","Square · 1080 × 1080",editing::PrintUnit::Pixels,1080,1080,72},
+    {"Web","Vertical HD · 1080 × 1920",editing::PrintUnit::Pixels,1080,1920,72},
+    {"Film et vidéo","HD · 1280 × 720",editing::PrintUnit::Pixels,1280,720,72},
+    {"Film et vidéo","4K UHD · 3840 × 2160",editing::PrintUnit::Pixels,3840,2160,72},
+};
 // Whole pixels are the source of truth. Units and DPI only change how that count is displayed or converted when typed.
-struct NewCanvasDraft { int width{1920},height{1080}; editing::PrintUnit unit{editing::PrintUnit::Pixels}; double dpi{72}; };
+// preset is the table entry that produced the current pixels, or -1 after a manual size edit.
+struct NewCanvasDraft { int width{1920},height{1080}; editing::PrintUnit unit{editing::PrintUnit::Pixels}; double dpi{72}; int preset{-1}; };
 // Raster::filled enforces this budget for an opaque background; a transparent canvas allocates no pixels.
 constexpr uint64_t solidCanvasPixelBudget=100000000;
 // Qt shortens the tab bar for the corner widget, so its bottom edge stops at the
@@ -204,8 +229,15 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     auto*heading=new QLabel("New canvas");heading->setObjectName("newCanvasHeading");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
     auto draft=std::make_shared<NewCanvasDraft>();
     auto*preset=new QComboBox;preset->setObjectName("newCanvasPreset");preset->setAccessibleName("Canvas preset");
-    for(const auto& item:newCanvasPresets)preset->addItem(item.label,QSize(item.width,item.height));
-    preset->setCurrentIndex(preset->findData(QSize(1920,1080)));
+    preset->addItem("Custom",-1);
+    std::string_view category;int defaultPreset=0;
+    for(int entry=0;entry<int(std::size(newCanvasPresets));++entry){
+        const auto& item=newCanvasPresets[entry];
+        if(item.category!=category){category=item.category;preset->addItem(QString::fromUtf8(item.category));static_cast<QStandardItemModel*>(preset->model())->item(preset->count()-1)->setEnabled(false);}
+        preset->addItem(item.label,entry);
+        if(item.unit==editing::PrintUnit::Pixels&&item.width==1920&&item.height==1080)defaultPreset=preset->count()-1;
+    }
+    preset->setCurrentIndex(defaultPreset);
     auto*unit=new QComboBox;unit->setObjectName("newCanvasUnit");unit->setAccessibleName("Canvas units");
     unit->addItem("Pixels",int(editing::PrintUnit::Pixels));unit->addItem("Inches",int(editing::PrintUnit::Inches));unit->addItem("Centimeters",int(editing::PrintUnit::Centimeters));unit->addItem("Millimeters",int(editing::PrintUnit::Millimeters));
     auto*resolution=new QSpinBox;resolution->setObjectName("newCanvasResolution");resolution->setAccessibleName("Resolution");resolution->setRange(1,9600);resolution->setValue(72);resolution->setSuffix(" DPI");
@@ -222,19 +254,28 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
         const bool pixelMode=draft->unit==editing::PrintUnit::Pixels;
         const auto shown=[draft](int pixels){return std::round(editing::creationDisplayed(pixels,draft->unit,draft->dpi)*10000)/10000;};
         const char* suffix=pixelMode?" px":draft->unit==editing::PrintUnit::Inches?" in":draft->unit==editing::PrintUnit::Centimeters?" cm":" mm";
-        const auto sync=[&](QDoubleSpinBox* box,int pixels){const QSignalBlocker blocker(box);box->setDecimals(pixelMode?0:4);box->setRange(shown(1),shown(30000));box->setSuffix(suffix);box->setValue(shown(pixels));};
-        if(rewriteSizes){sync(width,draft->width);sync(height,draft->height);}
+        // A preset shows its own print size while its unit and resolution remain selected, because 2480 px is 209.9733 mm at 300 DPI.
+        const bool presetSize=draft->preset>=0&&newCanvasPresets[draft->preset].unit==draft->unit&&newCanvasPresets[draft->preset].dpi==draft->dpi;
+        const auto sync=[&](QDoubleSpinBox* box,int pixels,double nominal){const QSignalBlocker blocker(box);box->setDecimals(pixelMode?0:4);box->setRange(shown(1),shown(30000));box->setSuffix(suffix);box->setValue(presetSize?nominal:shown(pixels));};
+        if(rewriteSizes){sync(width,draft->width,presetSize?newCanvasPresets[draft->preset].width:0);sync(height,draft->height,presetSize?newCanvasPresets[draft->preset].height:0);}
         const bool solid=background->currentData().value<QColor>().alpha()>0;
         const bool fits=!solid||uint64_t(draft->width)*uint64_t(draft->height)<=solidCanvasPixelBudget;
         create->setEnabled(fits);
         summary->setText(!fits?QStringLiteral("Solid backgrounds are limited to 100 megapixels"):pixelMode?QStringLiteral("sRGB"):QString("%1 × %2 px · sRGB").arg(draft->width).arg(draft->height));
     };
     syncNewCanvas(true);
-    connect(preset,&QComboBox::currentIndexChanged,[draft,preset,syncNewCanvas](int index){const auto size=preset->itemData(index).toSize();if(size.isEmpty())return;draft->width=size.width();draft->height=size.height();syncNewCanvas(true);});
+    connect(preset,&QComboBox::currentIndexChanged,[draft,preset,unit,resolution,syncNewCanvas](int index){
+        const QVariant data=preset->itemData(index);if(!data.isValid()||data.toInt()<0)return;
+        const auto& item=newCanvasPresets[data.toInt()];
+        draft->unit=item.unit;draft->dpi=item.dpi;draft->preset=data.toInt();
+        {const QSignalBlocker blockUnit(unit),blockResolution(resolution);unit->setCurrentIndex(unit->findData(int(item.unit)));resolution->setValue(int(item.dpi));}
+        draft->width=editing::creationPixels(item.width,item.unit,item.dpi).value();draft->height=editing::creationPixels(item.height,item.unit,item.dpi).value();
+        syncNewCanvas(true);
+    });
     connect(unit,&QComboBox::currentIndexChanged,[draft,unit,syncNewCanvas](int index){draft->unit=editing::PrintUnit(unit->itemData(index).toInt());syncNewCanvas(true);});
     connect(resolution,&QSpinBox::valueChanged,[draft,syncNewCanvas](int dpi){draft->dpi=dpi;syncNewCanvas(true);});
-    connect(width,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->width=*pixels;preset->setCurrentIndex(0);}syncNewCanvas(false);});
-    connect(height,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->height=*pixels;preset->setCurrentIndex(0);}syncNewCanvas(false);});
+    connect(width,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->width=*pixels;draft->preset=-1;preset->setCurrentIndex(0);}syncNewCanvas(false);});
+    connect(height,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->height=*pixels;draft->preset=-1;preset->setCurrentIndex(0);}syncNewCanvas(false);});
     connect(background,&QComboBox::currentIndexChanged,[syncNewCanvas](int){syncNewCanvas(false);});
     connect(create,&QPushButton::clicked,this,[this,raw,draft,background]{
         if(raw!=current()||raw->document||raw->importing||raw->projectBusy)return;
