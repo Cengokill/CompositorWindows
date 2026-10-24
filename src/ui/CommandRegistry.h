@@ -119,5 +119,6 @@ private:
     ShortcutMap defaults_,shortcuts_;
     std::vector<QString> order_;
     bool invokeEntry(size_t);
+    void refreshShortcutHints();
 };
 }

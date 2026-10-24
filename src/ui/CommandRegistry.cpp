@@ -194,6 +194,12 @@ const std::vector<CommandSpec>& commandCatalog(){
 }
 namespace {
 QString normalized(QString value){return value.remove('&').trimmed();}
+QString portable(const QKeySequence& key){return key.toString(QKeySequence::PortableText);}
+// Labels such as "Type (T)" carry the shipped key; replace that suffix with the effective key, or drop it when cleared.
+QString hinted(const QString& text,const QList<QKeySequence>& defaults,const QList<QKeySequence>& keys){
+    if(defaults.isEmpty())return text;const auto suffix=" ("+portable(defaults.front())+")";if(!text.endsWith(suffix))return text;
+    return text.chopped(suffix.size())+(keys.isEmpty()?QString{}:" ("+keys.front().toString(QKeySequence::NativeText)+")");
+}
 QString displayShortcut(const QAction& action){
     const auto keys=action.shortcuts();
     return keys.isEmpty()?QString{}:keys.front().toString(QKeySequence::PortableText);
@@ -281,7 +287,7 @@ std::vector<CommandListItem> CommandRegistry::listCommands()const{
     std::set<QString> seen;
     for(const auto&e:entries_){
         if(!e.action||!seen.insert(e.spec.id).second)continue;
-        result.push_back({e.spec.id,e.spec.menu,normalized(e.spec.label),displayShortcut(*e.action),e.action->isEnabled(),e.action->isChecked()});
+        result.push_back({e.spec.id,e.spec.menu,hinted(normalized(e.spec.label),defaults_.at(e.spec.id),shortcuts_.at(e.spec.id)),displayShortcut(*e.action),e.action->isEnabled(),e.action->isChecked()});
     }
     return result;
 }
@@ -291,7 +297,6 @@ bool CommandRegistry::eventFilter(QObject*object,QEvent*event){
     return QObject::eventFilter(object,event);
 }
 namespace {
-QString portable(const QKeySequence& key){return key.toString(QKeySequence::PortableText);}
 QList<QKeySequence> unique(const QList<QKeySequence>& keys){QList<QKeySequence> result;for(const auto& key:keys)if(!key.isEmpty()&&!result.contains(key))result.push_back(key);return result;}
 }
 QString shortcutProblem(const QKeySequence& key){
@@ -325,6 +330,7 @@ bool CommandRegistry::applyShortcuts(const ShortcutMap& changes,QString* error){
     if(const auto conflicts=findShortcutConflicts(merged);!conflicts.empty())return fail(portable(conflicts.front().key)+" is assigned to more than one command: "+conflicts.front().ids.join(", ")+".");
     shortcuts_=std::move(merged);
     for(const auto& e:entries_)if(e.action&&e.carriesShortcut)e.action->setShortcuts(shortcuts_[e.spec.id]);
+    refreshShortcutHints();
     refresh();
     return true;
 }
@@ -353,6 +359,22 @@ bool CommandRegistry::restoreShortcuts(QSettings& settings){
     }
     settings.endGroup();
     return overrides.empty()||applyShortcuts(overrides);
+}
+void CommandRegistry::refreshShortcutHints(){
+    struct Hint {QObject* object;const char* name;std::function<QString()> get;std::function<void(const QString&)> set;};
+    for(const auto& e:entries_){
+        if(!e.action)continue;
+        auto* action=e.action.data();
+        std::vector<Hint> hints{{action,"shortcutHintText",[action]{return action->text();},[action](const QString& text){action->setText(text);}},
+            {action,"shortcutHintTip",[action]{return action->toolTip();},[action](const QString& text){action->setToolTip(text);}}};
+        for(auto* object:action->associatedObjects())if(auto* widget=qobject_cast<QWidget*>(object)){
+            hints.push_back({widget,"shortcutHintTip",[widget]{return widget->toolTip();},[widget](const QString& text){widget->setToolTip(text);}});
+            hints.push_back({widget,"shortcutHintName",[widget]{return widget->accessibleName();},[widget](const QString& text){widget->setAccessibleName(text);}});
+        }
+        // Remember every shipped text before changing any of them: an action change also resyncs its tool buttons.
+        for(const auto& hint:hints)if(!hint.object->property(hint.name).isValid())hint.object->setProperty(hint.name,hint.get());
+        for(const auto& hint:hints){const auto text=hinted(hint.object->property(hint.name).toString(),defaults_[e.spec.id],shortcuts_[e.spec.id]);if(text!=hint.get())hint.set(text);}
+    }
 }
 bool CommandRegistry::invokeShortcut(const QKeySequence& key){
     if(key.isEmpty())return false;

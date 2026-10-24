@@ -6,6 +6,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QAction>
 #include <QApplication>
@@ -188,5 +189,16 @@ void shortcut_dialog(){
     dialog->findChild<QPushButton*>("shortcutRestoreDefaults")->click();
     check(dialog->draft()==f.registry.defaultShortcuts()&&shortcutRow(list,"tool.move")->text(2)=="V"&&move->shortcuts()==keys({"K"}),"Restore Defaults updates the draft only");
     delete dialog;
+}void shortcut_hints(){
+    Fixture f;auto*type=f.bind("tool.type");type->setToolTip("Type (T)");auto*swap=f.bind("palette.swap");swap->setToolTip("Swap foreground and background (X)");
+    QToolButton button(f.body);button.setDefaultAction(swap);button.setToolTip("Swap foreground and background (X)");button.setAccessibleName("Swap (X)");
+    auto*polygon=f.bind("tool.polygon");
+    auto listed=[&](const char*id){for(const auto&item:f.registry.listCommands())if(item.id==id)return item.label;return QString{};};
+    check(f.registry.applyShortcuts({{"tool.type",keys({"Y"})},{"palette.swap",{}}}),"remap and clear apply");
+    check(type->text()=="Type (Y)"&&type->toolTip()=="Type (Y)"&&listed("tool.type")=="Type (Y)","remapped hint shown on text, tooltip and palette label");
+    check(swap->text()=="Swap"&&swap->toolTip()=="Swap foreground and background"&&button.toolTip()=="Swap foreground and background"&&button.accessibleName()=="Swap","cleared shortcut drops the key hint");
+    check(polygon->text()=="Polygon","labels without a key hint stay unchanged");
+    check(f.registry.applyShortcuts({{"tool.type",keys({"Ctrl+Shift+K"})}})&&type->toolTip()==QString("Type (%1)").arg(QKeySequence("Ctrl+Shift+K").toString(QKeySequence::NativeText)),"second remap does not stack suffixes");
+    check(f.registry.applyShortcuts(f.registry.defaultShortcuts()),"defaults apply");check(type->text()=="Type (T)"&&type->toolTip()=="Type (T)"&&swap->text()=="Swap (X)"&&button.toolTip()=="Swap foreground and background (X)"&&button.accessibleName()=="Swap (X)","defaults restore shipped hints");
 }}
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="source_predicates")source_predicates();else if(name=="layer_eligibility")layer_eligibility();else if(name=="pending_preparation")pending_preparation();else if(name=="stale_activation")stale_activation();else if(name=="text_shortcuts")text_shortcuts();else if(name=="text_menu_routes")text_menu_routes();else if(name=="catalog_manifest")catalog_manifest();else if(name=="registration")registration();else if(name=="preparation_error")preparation_error();else if(name=="palette_filter")palette_filter();else if(name=="palette_keyboard")palette_keyboard();else if(name=="palette_enabled")palette_enabled();else if(name=="palette_invoke")palette_invoke();else if(name=="shortcut_assign_clear")shortcut_assign_clear();else if(name=="shortcut_conflicts")shortcut_conflicts();else if(name=="shortcut_persistence")shortcut_persistence();else if(name=="shortcut_dialog")shortcut_dialog();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="source_predicates")source_predicates();else if(name=="layer_eligibility")layer_eligibility();else if(name=="pending_preparation")pending_preparation();else if(name=="stale_activation")stale_activation();else if(name=="text_shortcuts")text_shortcuts();else if(name=="text_menu_routes")text_menu_routes();else if(name=="catalog_manifest")catalog_manifest();else if(name=="registration")registration();else if(name=="preparation_error")preparation_error();else if(name=="palette_filter")palette_filter();else if(name=="palette_keyboard")palette_keyboard();else if(name=="palette_enabled")palette_enabled();else if(name=="palette_invoke")palette_invoke();else if(name=="shortcut_assign_clear")shortcut_assign_clear();else if(name=="shortcut_conflicts")shortcut_conflicts();else if(name=="shortcut_persistence")shortcut_persistence();else if(name=="shortcut_dialog")shortcut_dialog();else if(name=="shortcut_hints")shortcut_hints();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
