@@ -33,6 +33,15 @@
       "cacheVariables": {
         "COMPOSITOR_ASAN": "ON"
       }
+    },
+    {
+      "name": "windows-x64-ci",
+      "inherits": "windows-x64-release",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "COMPOSITOR_SKIP_IMAGING_HASH_CHECK": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -49,6 +58,11 @@
     {
       "name": "windows-x64-asan",
       "configurePreset": "windows-x64-asan",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-x64-ci",
+      "configurePreset": "windows-x64-ci",
       "configuration": "Release"
     }
   ],
@@ -102,6 +116,16 @@
       "configurePreset": "windows-x64-asan",
       "environment": {
         "ASAN_OPTIONS": "halt_on_error=1:windows_hook_rtl_allocators=true"
+      }
+    },
+    {
+      "name": "windows-x64-ci",
+      "inherits": "windows-x64-release",
+      "configurePreset": "windows-x64-ci",
+      "filter": {
+        "exclude": {
+          "label": "interactive|known_failure|external_fixture"
+        }
       }
     }
   ]

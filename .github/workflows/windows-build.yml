@@ -1,0 +1,204 @@
+name: Windows Build and Test
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/downloads
+            dependencies/qt
+            dependencies/imaging/install
+            dependencies/imaging/onnxruntime-win-x64-1.30.0
+            dependencies/imaging/onnxruntime-win-x64-1.30.0.zip
+            dependencies/imaging/model/birefnet-lite.onnx
+            evidence/imaging
+          key: compositor-deps-v3-${{ hashFiles('dependencies.lock.json', 'dependencies/imaging/lock.json') }}
+
+      - name: Bootstrap dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:VCToolsVersion -or -not $env:VSINSTALLDIR) {
+            throw 'MSVC environment not configured.'
+          }
+          Write-Host "Using MSVC $env:VCToolsVersion from $env:VCINSTALLDIR"
+
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            $vsInstall = $env:VSINSTALLDIR.TrimEnd('\')
+            $cmakePath = "$vsInstall\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
+            if (Test-Path $cmakePath) { $env:PATH = "$cmakePath;$env:PATH" }
+          }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { throw 'CMake is unavailable.' }
+
+          $taskRoot = $PWD
+          $taskLock = Get-Content (Join-Path $taskRoot 'dependencies.lock.json') -Raw | ConvertFrom-Json
+          $taskArchive = Join-Path $taskRoot 'dependencies\downloads\qtbase.7z'
+          $taskQt = Join-Path $taskRoot 'dependencies\qt'
+
+          if (-not (Test-Path $taskArchive)) {
+            New-Item -ItemType Directory -Force (Split-Path $taskArchive) | Out-Null
+            Invoke-WebRequest -Uri $taskLock.qt.url -OutFile $taskArchive
+          }
+          if ((Get-FileHash $taskArchive -Algorithm SHA256).Hash -ine $taskLock.qt.sha256) {
+            throw 'Qt archive SHA256 mismatch.'
+          }
+          if (-not (Test-Path (Join-Path $taskQt 'lib\cmake\Qt6\Qt6Config.cmake'))) {
+            New-Item -ItemType Directory -Force $taskQt | Out-Null
+            Push-Location $taskQt
+            try {
+              & cmake -E tar xf $taskArchive
+              if ($LASTEXITCODE) { throw 'Qt extraction failed.' }
+            } finally { Pop-Location }
+          }
+
+          $taskImaging = Join-Path $taskRoot 'dependencies\imaging'
+          $imagingLock = Get-Content (Join-Path $taskImaging 'lock.json') -Raw | ConvertFrom-Json
+          $taskRequired = @('install\bin\heif.dll','install\bin\libde265.dll','install\lib\heif.lib','install\lib\de265.lib','install\include\libheif\heif.h','onnxruntime-win-x64-1.30.0\lib\onnxruntime.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime_providers_shared.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime.lib','onnxruntime-win-x64-1.30.0\include\onnxruntime_cxx_api.h')
+          $taskMissing = @($taskRequired | Where-Object { -not (Test-Path -LiteralPath (Join-Path $taskImaging $_)) })
+          foreach ($image in @('astronaut.png','chelsea.png','AdobeCompat-v2.icc')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $taskRoot 'evidence/imaging' $image))) {
+              $taskMissing += $image
+            }
+          }
+          if ($taskMissing.Count) {
+            # Convert-on-runner is nondeterministic; the application requires the
+            # pinned model's exact bytes. Still build the codecs from locked source.
+            & (Join-Path $taskRoot 'scripts\bootstrap-imaging.ps1') -VsRoot $env:VSINSTALLDIR.TrimEnd('\') -Python (Get-Command python).Path -SkipModel
+            foreach ($dep in $taskRequired) {
+              if (-not (Test-Path -LiteralPath (Join-Path $taskImaging $dep))) {
+                throw "Imaging dependency missing after bootstrap: $dep"
+              }
+            }
+            foreach ($image in @('astronaut.png','chelsea.png','AdobeCompat-v2.icc')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $taskRoot 'evidence/imaging' $image))) {
+                throw "Imaging fixture missing after bootstrap: $image"
+              }
+            }
+          }
+
+          foreach ($binary in $imagingLock.binaries) {
+            # Source-built codec DLLs differ between compiler versions; the
+            # release-pinned ONNX Runtime binaries must match exactly.
+            if ($binary.path -match '^install/bin/(heif|libde265)\.dll$') { continue }
+            $binaryPath = Join-Path $taskImaging $binary.path
+            if ((Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash -ine $binary.sha256) {
+              throw "Locked imaging runtime SHA256 mismatch: $($binary.path)"
+            }
+          }
+
+          foreach ($fixture in $imagingLock.assets | Where-Object { $_.path -in @('evidence/imaging/astronaut.png','evidence/imaging/chelsea.png','evidence/imaging/AdobeCompat-v2.icc') }) {
+            $fixturePath = Join-Path $taskRoot $fixture.path
+            if ((Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash -ine $fixture.sha256) {
+              throw "Pinned imaging fixture SHA256 mismatch: $($fixture.path)"
+            }
+          }
+
+          $modelPath = Join-Path $taskImaging 'model\birefnet-lite.onnx'
+          if (-not (Test-Path $modelPath) -or (Get-FileHash $modelPath -Algorithm SHA256).Hash -ine $imagingLock.model.onnx_sha256) {
+            # The published portable release carries the exact model pinned in
+            # imaging/lock.json. Verify its hash even when restored from cache.
+            $releaseArchive = Join-Path $taskRoot 'dependencies\downloads\CompositorWindows-0.1.8-portable.zip'
+            if (-not (Test-Path $releaseArchive)) {
+              Invoke-WebRequest -Uri 'https://github.com/Cengokill/CompositorWindows/releases/download/v0.1.8/CompositorWindows-0.1.8-portable.zip' -OutFile $releaseArchive
+            }
+            Add-Type -AssemblyName System.IO.Compression
+            $zip = [IO.Compression.ZipFile]::OpenRead($releaseArchive)
+            try {
+              $entries = @($zip.Entries | Where-Object { $_.FullName.Replace('\','/') -match '(^|/)models/birefnet-lite\.onnx$' })
+              if ($entries.Count -ne 1) { throw 'Expected exactly one release model entry.' }
+              New-Item -ItemType Directory -Force (Split-Path $modelPath) | Out-Null
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $modelPath, $true)
+            } finally { $zip.Dispose() }
+          }
+          if ((Get-FileHash -LiteralPath $modelPath -Algorithm SHA256).Hash -ine $imagingLock.model.onnx_sha256) {
+            throw 'Pinned foreground model SHA256 mismatch.'
+          }
+
+          & cmake --version
+          if ($LASTEXITCODE) { throw 'CMake version check failed.' }
+          Write-Host "Ready: Qt $($taskLock.qt.version), MSVC $env:VCToolsVersion, SDK $env:WindowsSDKVersion"
+
+      - name: Generate import fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The original bootstrap creates these during model conversion; CI
+          # skips conversion but must still exercise the EXIF/ICC import path.
+          $pillow = @(Get-Content dependencies/imaging/model-requirements.hashes.txt | Where-Object { $_ -match '^pillow==' })
+          if ($pillow.Count -ne 1) { throw 'Expected one pinned Pillow requirement.' }
+          $requirements = Join-Path $env:RUNNER_TEMP 'ci-import-fixtures-requirements.txt'
+          Set-Content -LiteralPath $requirements -Value $pillow[0] -Encoding utf8
+          & python -m pip install --no-deps --require-hashes -r $requirements
+          if ($LASTEXITCODE) { throw 'Pinned Pillow installation failed.' }
+          & python tests/imaging/make_fixtures.py
+          if ($LASTEXITCODE) { throw 'Import fixture generation failed.' }
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake --preset windows-x64-ci
+          if ($LASTEXITCODE) { throw 'CMake configuration failed.' }
+
+      - name: Build Compositor
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-x64-ci --target Compositor --parallel 4
+          if ($LASTEXITCODE) { throw 'Compositor build failed.' }
+
+      - name: Build all tests
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-x64-ci --parallel 4
+          if ($LASTEXITCODE) { throw 'Test build failed.' }
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          Write-Host 'Running CI tests (excluding interactive, known_failure, and external_fixture labels).'
+          ctest --preset windows-x64-ci --output-on-failure
+          if ($LASTEXITCODE) { throw 'CI tests failed.' }
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            build/ci/Testing/Temporary/LastTest.log
+            build/ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/ci/**/*.log
+          if-no-files-found: ignore
