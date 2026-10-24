@@ -148,7 +148,9 @@ private:
         if (busy_ || (install && !available_)) return;
         available_ = false; installed_ = false; retained_->clear();
         try {
-            configuration_ = configuration(directory_); information_->setText(configuration_.information);
+            configuration_ = configuration(directory_);
+            // An unconfigured build explains itself in the status line alone; showing it in both labels repeated the text.
+            information_->setText(configuration_.configured ? configuration_.information : QString{}); information_->setVisible(configuration_.configured);
             versions_->setText(configuration_.root.empty() ? QString{} : "Running version: " + configuration_.runningVersion);
             if (!configuration_.configured) { status_->setText(configuration_.information); setProperty("updateState", "unconfigured"); controls(); return; }
             progress_ = std::make_shared<Progress>(); busy_ = true; installing_ = install;

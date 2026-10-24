@@ -163,6 +163,7 @@ int main(int argc,char** argv){
         settled(panel);const QString initial=state(panel);result["initial_state"]=initial;
         if(key=="portable_unconfigured"||key=="missing_configuration"||key=="preview_ignores_test_feed"){
             require(initial=="unconfigured","unconfigured build attempted update");require(!button(panel,"updateInstall")->isEnabled(),"unconfigured install enabled");require(text(panel,"updateStatus").contains("not configured"),"unconfigured explanation absent");
+            require(text(panel,"updateSourceInformation").isEmpty()&&!panel->findChild<QLabel*>("updateSourceInformation")->isVisible(),"unconfigured explanation shown twice");
             if(key=="preview_ignores_test_feed")require(current(root)=="0.1.0"&&text(panel,"updateStatus").contains("preview"),"preview accepted development update configuration");
         }else if(key=="missing_optin"||key=="invalid_configuration"||key=="invalid_state"){
             require(initial=="error","invalid configuration/state was accepted");require(!button(panel,"updateInstall")->isEnabled(),"failed configuration permits install");require(!button(panel,"updateRestart")->isVisible(),"failed configuration permits restart");
