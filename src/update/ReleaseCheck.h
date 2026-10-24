@@ -22,6 +22,8 @@ std::optional<ReleaseInfo> parseLatestRelease(const QByteArray& json);
 // tests; Release builds ignore it and never read the development update feed.
 QString releaseCheckUrl();
 // Blocking HTTPS GET with the system proxy, bounded time and size. Worker threads only.
+// cancelled is also polled from a helper thread; once it returns true the request
+// handle is closed, which aborts the pending WinHTTP call.
 QByteArray fetchReleaseMetadata(const QString& url,const std::function<bool()>& cancelled);
 // Settings are untrusted: unknown values fall back to the defaults.
 bool automaticChecksEnabled(QSettings&);

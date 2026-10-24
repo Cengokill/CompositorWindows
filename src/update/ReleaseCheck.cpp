@@ -6,8 +6,12 @@
 #include <QUrl>
 #include <Windows.h>
 #include <winhttp.h>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace compositor::update {
@@ -24,6 +28,27 @@ struct Internet {
     Internet(const Internet&)=delete;Internet& operator=(const Internet&)=delete;
 };
 void call(BOOL result,const char* operation){if(!result)fail(QString::fromUtf8(operation)+" failed (Windows error "+QString::number(GetLastError())+")");}
+// Closing a request handle is the documented way to abort a blocking WinHTTP
+// call, so the watchdog closes it as soon as the caller cancels.
+class CancelWatchdog {
+public:
+    CancelWatchdog(Internet& request,const std::function<bool()>& cancelled){
+        if(cancelled)thread_=std::thread([this,&request,&cancelled]{
+            std::unique_lock lock(mutex_);
+            while(!done_){
+                if(cancelled()){WinHttpCloseHandle(request.value);request.value=nullptr;return;}
+                wake_.wait_for(lock,std::chrono::milliseconds(50));
+            }
+        });
+    }
+    ~CancelWatchdog(){
+        {std::lock_guard lock(mutex_);done_=true;}
+        wake_.notify_all();if(thread_.joinable())thread_.join();
+    }
+    CancelWatchdog(const CancelWatchdog&)=delete;CancelWatchdog& operator=(const CancelWatchdog&)=delete;
+private:
+    std::mutex mutex_;std::condition_variable wake_;bool done_{};std::thread thread_;
+};
 std::optional<Version> version(const QString& text){
     try{return Version::parse(text);}catch(const std::exception&){return std::nullopt;}
 }
@@ -67,20 +92,26 @@ QByteArray fetchReleaseMetadata(const QString& address,const std::function<bool(
     call(WinHttpSetOption(request.value,WINHTTP_OPTION_REDIRECT_POLICY,&redirects,sizeof(redirects)),"WinHTTP redirect policy");
     const wchar_t headers[]=L"Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28\r\n";
     check();
-    call(WinHttpSendRequest(request.value,headers,DWORD(-1L),WINHTTP_NO_REQUEST_DATA,0,0,0),"Release check request");
-    call(WinHttpReceiveResponse(request.value,nullptr),"Release check response");
+    // The watchdog may close the request at any time, so the worker uses this copy
+    // and never reads the field the watchdog clears.
+    const HINTERNET handle=request.value;
+    CancelWatchdog watchdog(request,cancelled);
+    try{
+    call(WinHttpSendRequest(handle,headers,DWORD(-1L),WINHTTP_NO_REQUEST_DATA,0,0,0),"Release check request");
+    call(WinHttpReceiveResponse(handle,nullptr),"Release check response");
     DWORD status=0,size=sizeof(status);
-    call(WinHttpQueryHeaders(request.value,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,&status,&size,WINHTTP_NO_HEADER_INDEX),"Release check status");
+    call(WinHttpQueryHeaders(handle,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,&status,&size,WINHTTP_NO_HEADER_INDEX),"Release check status");
     if(status!=200)fail("Release check returned HTTP "+QString::number(status));
     QByteArray body;std::vector<char> buffer(16384);
     for(;;){
         check();DWORD read=0;
-        call(WinHttpReadData(request.value,buffer.data(),DWORD(buffer.size()),&read),"Release check read");
+        call(WinHttpReadData(handle,buffer.data(),DWORD(buffer.size()),&read),"Release check read");
         if(!read)break;
         require(body.size()+qsizetype(read)<=releaseResponseLimit,"Release response is too large");
         body.append(buffer.data(),qsizetype(read));
     }
     return body;
+    }catch(const std::exception&){check();throw;} // A failure caused by cancelling reports the cancellation.
 }
 bool automaticChecksEnabled(QSettings& settings){
     const auto value=settings.value(automaticKey);
