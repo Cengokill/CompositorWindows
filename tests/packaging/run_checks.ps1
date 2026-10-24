@@ -27,7 +27,7 @@ if($manifest.schema -eq 2){
  $policy=Get-Content -LiteralPath (Join-Path $portable 'release-policy.json') -Raw | ConvertFrom-Json
  $developmentFiles=@('CompositorLauncher.exe','CompositorUpdater.exe','install.json','state','update-source.json','update-receipt.json')
  $unexpected=@($developmentFiles | Where-Object {Test-Path -LiteralPath (Join-Path $portable $_)})
- Record 'preview_manual_update_distribution' ($policy.automaticUpdates -eq $false -and $manifest.automaticUpdates -eq $false -and $unexpected.Count -eq 0) @{unexpected=$unexpected;policy=$policy}
+ Record 'stable_manual_update_distribution' ($policy.channel -eq 'stable' -and $manifest.channel -eq 'stable' -and $policy.automaticUpdates -eq $false -and $manifest.automaticUpdates -eq $false -and $unexpected.Count -eq 0) @{unexpected=$unexpected;policy=$policy}
  $sourceArchive=Join-Path $package $manifest.sourceSnapshot
  Record 'matching_application_source' ((Get-FileHash -LiteralPath $sourceArchive).Hash -ieq $manifest.sourceSha256 -and (Get-FileHash -LiteralPath (Join-Path $portable 'sources\CompositorWindows-source.zip')).Hash -ieq $manifest.sourceSha256) @{sha256=$manifest.sourceSha256}
  $health=RunApp $application @('--update-health-check') 'portable-health'
@@ -43,7 +43,7 @@ if($manifest.schema -eq 2){
  if($Install){
   $verb='HKCU:\Software\Classes\Directory\shell\CompositorWindowsPreview'
   $registration='HKCU:\Software\CompositorWindows\CommunityPreview'
-  if((Test-Path -LiteralPath $verb) -or (Test-Path -LiteralPath $registration)){throw 'An existing community preview installation is registered; refusing to change it for testing'}
+  if((Test-Path -LiteralPath $verb) -or (Test-Path -LiteralPath $registration)){throw 'An existing Compositor Windows installation is registered; refusing to change it for testing'}
   $installRoot=Join-Path $run 'standard-user-install'
   $setup=Join-Path $package "CompositorWindows-$($manifest.version)-x64.msi"
   $installedMsi=$null

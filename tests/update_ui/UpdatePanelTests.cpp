@@ -174,15 +174,15 @@ int main(int argc,char** argv){    QApplication application(argc,argv);
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,root+"/settings");QSettings::setPath(QSettings::IniFormat,QSettings::SystemScope,root+"/settings");
     QJsonObject result{{"case",key}};bool passed=false;
     try{
-        application.setProperty("manualUpdatesOnly", key=="preview_ignores_test_feed");
+        application.setProperty("manualUpdatesOnly", key=="manual_ignores_test_feed");
         QWidget owner;owner.resize(300,200);owner.show();
         int restarts=0;ui::UpdatePanelHost host;host.restart=[&](const auto& seen){require(seen==std::filesystem::path(root.toStdWString()),"restart root changed");++restarts;return false;};
         QPointer<QDialog> panel=ui::openUpdatePanel(&owner,host,key=="portable_unconfigured"?root+"/portable":root+"/versions/0.1.0");
         settled(panel);const QString initial=state(panel);result["initial_state"]=initial;
-        if(key=="portable_unconfigured"||key=="missing_configuration"||key=="preview_ignores_test_feed"){
+        if(key=="portable_unconfigured"||key=="missing_configuration"||key=="manual_ignores_test_feed"){
             require(initial=="unconfigured","unconfigured build attempted update");require(!button(panel,"updateInstall")->isEnabled(),"unconfigured install enabled");require(text(panel,"updateStatus").contains("not configured"),"unconfigured explanation absent");
             require(text(panel,"updateSourceInformation").isEmpty()&&!panel->findChild<QLabel*>("updateSourceInformation")->isVisible(),"unconfigured explanation shown twice");
-            if(key=="preview_ignores_test_feed")require(current(root)=="0.1.0"&&text(panel,"updateStatus").contains("preview"),"preview accepted development update configuration");
+            if(key=="manual_ignores_test_feed")require(current(root)=="0.1.0"&&text(panel,"updateStatus").contains("new stable releases")&&!text(panel,"updateStatus").contains("preview"),"manual-update build accepted development update configuration");
         }else if(key=="missing_optin"||key=="invalid_configuration"||key=="invalid_state"){
             require(initial=="error","invalid configuration/state was accepted");require(!button(panel,"updateInstall")->isEnabled(),"failed configuration permits install");require(!button(panel,"updateRestart")->isVisible(),"failed configuration permits restart");
             if(key=="invalid_state")require(text(panel,"updateVersions").contains("unavailable")&&!text(panel,"updateVersions").contains("0.0.0"),"unknown state fabricated a version");
