@@ -3,7 +3,6 @@
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <filesystem>
-#include <stdexcept>
 
 namespace compositor::ui {
 struct ProjectSaveJob::Impl {
@@ -13,7 +12,6 @@ struct ProjectSaveJob::Impl {
 
 ProjectSaveJob::ProjectSaveJob(Document document,std::string activeLayer,QString path,Host host,QObject* parent)
     :QObject(parent),impl_(std::make_unique<Impl>()){
-    if(!host.completed)throw std::invalid_argument("Incomplete save host");
     setObjectName("projectSaveJob");
     impl_->host=std::move(host);
     connect(&impl_->watcher,&QFutureWatcher<QString>::finished,this,[this]{

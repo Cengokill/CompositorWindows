@@ -259,6 +259,18 @@ test("second_save_rejected_and_save_as_updates_path_after_completion",[]{
  commandAction(w,"file.save_as")->trigger();awaitSave(p);
  require(p.path==dir.filePath("Second.comp")&&QFileInfo::exists(dir.filePath("Second.comp")+"/manifest.json"),"Save As did not update the project path");
 });
+test("save_as_rejects_destination_pending_in_another_project",[]{
+ MainWindow w(true);auto&first=w.addProject(example());QTemporaryDir dir;require(dir.isValid(),"temporary directory");
+ first.path=dir.filePath("Shared.comp");WriteGate gate;w.setProjectSaveBeforeWriteForTesting(gate.hook());
+ commandAction(w,"file.save")->trigger();
+ const auto* job=first.saveJob.data();require(job,"Save did not start");
+ auto&second=w.addProject(example());
+ w.setProperty("testNativeSavePath",dir.filePath("Shared.comp"));
+ commandAction(w,"file.save_as")->trigger();
+ require(second.saveJob.isNull()&&first.saveJob.data()==job&&w.statusBar()->currentMessage().contains("already saving"),"Second project started a write to a destination pending in another project");
+ gate.open();awaitSave(first);
+ require(first.path==dir.filePath("Shared.comp")&&!first.history.modified(),"Pending write did not complete after the rejected Save As");
+});
 test("close_waits_for_pending_save_then_prompts_for_later_edits",[]{
  MainWindow w(true);auto&p=w.addProject(example());QTemporaryDir dir;require(dir.isValid(),"temporary directory");
  p.path=dir.filePath("Closing.comp");WriteGate gate;w.setProjectSaveBeforeWriteForTesting(gate.hook());

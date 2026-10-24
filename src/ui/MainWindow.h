@@ -67,6 +67,8 @@ struct EditorProject {
     // Save activity is separate from projectBusy: edits remain allowed while the snapshot is written.
     QPointer<ui::ProjectSaveJob> saveJob;
     QString saveError;
+    // Destination of the pending write; no other open project may save there until it completes.
+    QString savePath;
     QStackedWidget* page{};
     QWidget* welcome{};
     NativeCanvas* canvas{};
