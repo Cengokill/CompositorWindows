@@ -66,6 +66,9 @@ std::optional<ReleaseInfo> parseLatestRelease(const QByteArray& json){
     const auto match=pattern.match(tag.toString());require(match.hasMatch(),"Release tag is not vX.Y or vX.Y.Z");
     const auto parsed=version(match.captured(1)+(match.hasCaptured(2)?match.captured(2):QStringLiteral(".0")));require(parsed.has_value(),"Release tag is not vX.Y or vX.Y.Z");
     const QUrl url(page.toString(),QUrl::StrictMode);
+    // Browsers resolve dot segments (also percent-encoded ones), so they could leave the repository prefix.
+    const auto segments=url.path(QUrl::FullyDecoded).split(QLatin1Char('/'));
+    require(!segments.contains(QStringLiteral("."))&&!segments.contains(QStringLiteral("..")),"Release page is not a CompositorWindows GitHub release");
     require(url.isValid()&&url.scheme()=="https"&&url.host()=="github.com"&&url.port()==-1&&url.userInfo().isEmpty()&&!url.hasQuery()&&!url.hasFragment()&&url.path().startsWith(QString::fromLatin1(releasePagePrefix)),"Release page is not a CompositorWindows GitHub release");
     return ReleaseInfo{*parsed,tag.toString(),url.toString()};
 }
