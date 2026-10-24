@@ -50,6 +50,7 @@ int main(int argc,char**argv){
     }else{
         QStringList paths;for(int i=1;i<args.size();++i)if(!args[i].startsWith("--"))paths.append(args[i]);
         QTimer::singleShot(0,&window,[&window,paths]{window.receiveDropPaths(paths);});
+        window.startAutomaticUpdateChecks();
     }
     return app.exec();
 }

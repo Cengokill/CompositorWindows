@@ -1,4 +1,5 @@
 #include "UpdatePanel.h"
+#include "update/ReleaseCheck.h"
 #include "update/Updater.h"
 #include <QCoreApplication>
 #include <QDialog>
@@ -9,9 +10,11 @@
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QCheckBox>
 #include <QLabel>
 #include <QPointer>
 #include <QProgressBar>
+#include <QSettings>
 #include <QPushButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -102,7 +105,15 @@ public:
         status_ = new QLabel("Preparing update check…"); status_->setObjectName("updateStatus"); status_->setAccessibleName("Update status"); status_->setWordWrap(true); layout->addWidget(status_);
         progressBar_ = new QProgressBar; progressBar_->setObjectName("updateProgress"); progressBar_->setAccessibleName("Update progress"); layout->addWidget(progressBar_); progressBar_->hide();
         retained_ = new QLabel; retained_->setObjectName("updateRetainedVersion"); retained_->setWordWrap(true); layout->addWidget(retained_);
+        automatic_ = new QCheckBox("Check for new stable releases automatically"); automatic_->setObjectName("updateAutomatic");
+        { QSettings settings; automatic_->setChecked(update::automaticChecksEnabled(settings)); }
+        automatic_->setToolTip("Once a day, Compositor asks GitHub for the latest stable release. Installation stays manual.");
+        connect(automatic_, &QCheckBox::toggled, this, [](bool enabled) { QSettings settings; update::setAutomaticChecksEnabled(settings, enabled); });
+        layout->addWidget(automatic_);
+        releaseStatus_ = new QLabel; releaseStatus_->setObjectName("updateReleaseStatus"); releaseStatus_->setAccessibleName("Release check status"); releaseStatus_->setWordWrap(true); layout->addWidget(releaseStatus_);
         auto* row = new QHBoxLayout; layout->addLayout(row);
+        releaseCheck_ = button(row, "Check for New Release", "updateReleaseCheck"); releaseCheck_->setVisible(bool(host_.checkRelease));
+        connect(releaseCheck_, &QPushButton::clicked, this, [this] { checkRelease(); });
         check_ = button(row, "Check again", "updateCheck"); install_ = button(row, "Install Update", "updateInstall");
         cancel_ = button(row, "Cancel", "updateCancel"); restart_ = button(row, "Restart Compositor", "updateRestart");
         row->addStretch(); close_ = button(row, "Close", "updateClose");
@@ -137,7 +148,9 @@ private:
         if (busy_ || (install && !available_)) return;
         available_ = false; installed_ = false; retained_->clear();
         try {
-            configuration_ = configuration(directory_); information_->setText(configuration_.information);
+            configuration_ = configuration(directory_);
+            // An unconfigured build explains itself in the status line alone; showing it in both labels repeated the text.
+            information_->setText(configuration_.configured ? configuration_.information : QString{}); information_->setVisible(configuration_.configured);
             versions_->setText(configuration_.root.empty() ? QString{} : "Running version: " + configuration_.runningVersion);
             if (!configuration_.configured) { status_->setText(configuration_.information); setProperty("updateState", "unconfigured"); controls(); return; }
             progress_ = std::make_shared<Progress>(); busy_ = true; installing_ = install;
@@ -165,6 +178,15 @@ private:
             busy_ = false; timer_.stop(); progressBar_->hide(); status_->setText(QString::fromUtf8(error.what()));
             setProperty("updateState", "error"); controls();
         }
+    }
+    void checkRelease() {
+        if (!host_.checkRelease || !releaseCheck_->isEnabled()) return;
+        releaseCheck_->setEnabled(false); releaseStatus_->setText("Checking for a new stable release…");
+        QPointer<UpdatePanel> alive(this);
+        host_.checkRelease([alive](const QString& status) {
+            if (!alive) return;
+            alive->releaseStatus_->setText(status); alive->releaseCheck_->setEnabled(true);
+        });
     }
     void requestCancel() {
         if (!busy_) return;
@@ -217,7 +239,9 @@ private:
     std::shared_ptr<Progress> progress_{std::make_shared<Progress>()};
     QFutureWatcher<Result> watcher_;
     QTimer timer_;
-    QLabel *information_{}, *versions_{}, *status_{}, *retained_{};
+    QLabel *information_{}, *versions_{}, *status_{}, *retained_{}, *releaseStatus_{};
+    QCheckBox* automatic_{};
+    QPushButton* releaseCheck_{};
     QProgressBar* progressBar_{};
     QPushButton *check_{}, *install_{}, *cancel_{}, *restart_{}, *close_{};
     bool busy_{}, installing_{}, available_{}, installed_{}, closeWhenSettled_{};
