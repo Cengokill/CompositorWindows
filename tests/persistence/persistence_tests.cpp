@@ -1,5 +1,6 @@
 #include "persistence/ProjectStore.h"
 #include "editing/DocumentGeometry.h"
+#include "editing/Shapes.h"
 #include "graphics/StackRenderer.h"
 #include <QCoreApplication>
 #include <QFile>
@@ -58,5 +59,6 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
     check(graphics::StackRenderer().render(loaded,0,0,loaded.width,loaded.height)->rgba()==graphics::StackRenderer().render(rotated,0,0,rotated.width,rotated.height)->rgba(),"Rendered rotated project changed after reopen");
  }
  else if(test=="guides_roundtrip"){d.guides.push_back({id(9),true,12.5});d.guides.push_back({id(10),false,4});store.save(p,d,id(2));auto loaded=store.load(p);check(loaded.readVersion==8&&loaded.document.guides.size()==2,"Guide save did not round-trip");check(loaded.document.guides[0]==Guide{id(9),true,12.5}&&loaded.document.guides[1]==Guide{id(10),false,4},"Guide orientation or position changed");auto manifest=json(p/L"manifest.json");auto guides=manifest["guides"].toArray();check(manifest["version"]==8&&guides.size()==2&&guides[0].toObject()["orientation"]=="horizontal"&&guides[1].toObject()["orientation"]=="vertical","Guide manifest shape changed");}
- else throw std::runtime_error("Unknown test");std::cout<<"PASS "<<test<<"\n";return 0;
+  else if(test=="shape_stroke_roundtrip"){editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,1,0};style.strokeEnabled=true;style.strokeWidth=3;style.strokeRed=1;style.strokeBlue=.5;Document shaped;shaped.id=id(1);shaped.width=20;shaped.height=20;shaped.resolution=72;auto layer=*editing::createShapeLayer({0,0,8,6},style,"Stroke");layer.id=id(2);shaped.layers.push_back(layer);store.save(p,shaped,id(2));auto loaded=store.load(p);check(loaded.readVersion==14&&loaded.document.layers.size()==1&&editing::decodeShapeStyle(loaded.document.layers[0].shapeJson)==style,"Stroked shape did not round-trip as format v14");auto manifest=json(p/L"manifest.json");check(manifest["version"]==14,"Stroked shape did not write format v14");manifest["version"]=13;json(p/L"manifest.json",manifest);rejects([&]{store.load(p);});}
+  else throw std::runtime_error("Unknown test");std::cout<<"PASS "<<test<<"\n";return 0;
  }catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";return 1;}}

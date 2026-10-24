@@ -3,8 +3,10 @@
 #include "ui/RawImportDialog.h"
 #include "ui/PropertyControls.h"
 #include "ui/MainWindow.h"
+#include "editing/Shapes.h"
 #include "imaging/psd/PsdDocument.h"
 #include "imaging/wic_codec.h"
+#include "persistence/ProjectStore.h"
 #include <QAction>
 #include <QApplication>
 #include <QDragEnterEvent>
@@ -34,6 +36,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <vector>
@@ -62,7 +65,8 @@ bool drop(MainWindow&w,const QMimeData& mime,QPoint point){QDragEnterEvent enter
 void finish(MainWindow&w){auto*q=ui::ImportQueue::find(&w);require(q,"Missing actual UI import queue");until([&]{auto*d=ui::WorkspaceDropQueue::find(&w);return q->idle()&&(!d||d->idle());});for(auto*m:w.findChildren<QMessageBox*>())m->accept();QApplication::processEvents();}
 QPoint canvasPoint(MainWindow&w,Point p){auto*c=w.canvas();const auto view=c->viewMapping().toView(p);return c->mapTo(&w,QPoint(int(std::round(view.x)),int(std::round(view.y))));}
 enum class PsdFixtureCompression { Raw, PackBits, Zip, ZipPrediction, ZipFixedHuffman, Unsupported };
-struct PsdFixtureLayer { int top{},left{},bottom{},right{}; std::array<std::vector<uint8_t>,3> channels; std::array<uint8_t,3> solidChannels{}; bool generatedSolid{}; PsdFixtureCompression compression{PsdFixtureCompression::Raw}; std::string name{"Fixture"}; };
+using PsdFixtureBlocks=std::vector<std::pair<std::string,std::vector<uint8_t>>>;
+struct PsdFixtureLayer { int top{},left{},bottom{},right{}; std::array<std::vector<uint8_t>,3> channels; std::array<uint8_t,3> solidChannels{}; bool generatedSolid{}; PsdFixtureCompression compression{PsdFixtureCompression::Raw}; std::string name{"Fixture"}; uint8_t opacity{255}; bool hidden{}; PsdFixtureBlocks blocks; };
 void psdU16(std::vector<uint8_t>& out,uint16_t value){out.push_back(uint8_t(value>>8));out.push_back(uint8_t(value));}
 void psdU32(std::vector<uint8_t>& out,uint32_t value){for(int shift=24;shift>=0;shift-=8)out.push_back(uint8_t(value>>shift));}
 void psdU64(std::vector<uint8_t>& out,uint64_t value){for(int shift=56;shift>=0;shift-=8)out.push_back(uint8_t(value>>shift));}
@@ -126,8 +130,10 @@ std::vector<uint8_t> psdFixture(int documentWidth,int documentHeight,const std::
     for(const auto& layer:layers){const size_t width=size_t(int64_t(layer.right)-layer.left),height=size_t(int64_t(layer.bottom)-layer.top);std::vector<uint8_t> record;
         psdU32(record,uint32_t(layer.top));psdU32(record,uint32_t(layer.left));psdU32(record,uint32_t(layer.bottom));psdU32(record,uint32_t(layer.right));psdU16(record,3);
         for(int channel=0;channel<3;++channel){auto packed=psdChannelData(layer,size_t(channel),width,height,psb);psdU16(record,uint16_t(channel));if(psb)psdU64(record,uint64_t(packed.size()));else psdU32(record,uint32_t(packed.size()));channelData.push_back(std::move(packed));}
-        record.insert(record.end(),{'8','B','I','M','n','o','r','m'});record.push_back(255);record.push_back(0);record.push_back(0);record.push_back(0);
-        std::vector<uint8_t> extra;psdU32(extra,0);psdU32(extra,0);extra.push_back(uint8_t(layer.name.size()));extra.insert(extra.end(),layer.name.begin(),layer.name.end());while(extra.size()%4)extra.push_back(0);psdU32(record,uint32_t(extra.size()));record.insert(record.end(),extra.begin(),extra.end());records.push_back(std::move(record));
+        record.insert(record.end(),{'8','B','I','M','n','o','r','m'});record.push_back(layer.opacity);record.push_back(0);record.push_back(layer.hidden?0x02:0);record.push_back(0);
+        std::vector<uint8_t> extra;psdU32(extra,0);psdU32(extra,0);extra.push_back(uint8_t(layer.name.size()));extra.insert(extra.end(),layer.name.begin(),layer.name.end());while(extra.size()%4)extra.push_back(0);
+        for(const auto& [key,data]:layer.blocks){extra.insert(extra.end(),{'8','B','I','M'});extra.insert(extra.end(),key.begin(),key.end());psdU32(extra,uint32_t(data.size()));extra.insert(extra.end(),data.begin(),data.end());if(data.size()%2)extra.push_back(0);}
+        psdU32(record,uint32_t(extra.size()));record.insert(record.end(),extra.begin(),extra.end());records.push_back(std::move(record));
     }
     std::vector<uint8_t> layerInfo;psdU16(layerInfo,uint16_t(layers.size()));for(const auto& record:records)layerInfo.insert(layerInfo.end(),record.begin(),record.end());for(const auto& data:channelData)layerInfo.insert(layerInfo.end(),data.begin(),data.end());
     std::vector<uint8_t> section;if(psb)psdU64(section,uint64_t(layerInfo.size()));else psdU32(section,uint32_t(layerInfo.size()));section.insert(section.end(),layerInfo.begin(),layerInfo.end());psdU32(section,0);
@@ -168,6 +174,75 @@ bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,s
     poll.stop();watchdog.stop();
     require(!timedOut,"RAW review dialog never became ready");
     return accepted;
+}
+// Photoshop vector blocks, built in the descriptor layout the reader searches by key. Path points are
+// y-then-x 8.24 fixed-point fractions of the canvas, as in the PSD specification.
+namespace {
+using Knot=std::array<double,6>; // in.x, in.y, anchor.x, anchor.y, out.x, out.y
+void putTag(std::vector<uint8_t>& out,const char* tag){out.insert(out.end(),tag,tag+4);}
+void putKey(std::vector<uint8_t>& out,const char* key){const size_t length=std::strlen(key);psdU32(out,uint32_t(length));out.insert(out.end(),key,key+length);}
+void putBits(std::vector<uint8_t>& out,double value){uint64_t bits;std::memcpy(&bits,&value,sizeof bits);psdU64(out,bits);}
+void putUnit(std::vector<uint8_t>& out,const char* key,double value){putKey(out,key);putTag(out,"UntF");putTag(out,"#Pxl");putBits(out,value);}
+void putDouble(std::vector<uint8_t>& out,const char* key,double value){putKey(out,key);putTag(out,"doub");putBits(out,value);}
+void putLong(std::vector<uint8_t>& out,const char* key,uint32_t value){putKey(out,key);putTag(out,"long");psdU32(out,value);}
+void putBool(std::vector<uint8_t>& out,const char* key,bool value){putKey(out,key);putTag(out,"bool");out.push_back(value?1:0);}
+Knot sharp(double x,double y){return {x,y,x,y,x,y};}
+std::vector<Knot> rectangleKnots(double l,double t,double r,double b){return {sharp(l,t),sharp(r,t),sharp(r,b),sharp(l,b)};}
+std::vector<Knot> roundedKnots(double l,double t,double r,double b,double radius){return {sharp(l+radius,t),sharp(r-radius,t),sharp(r,t+radius),sharp(r,b-radius),sharp(r-radius,b),sharp(l+radius,b),sharp(l,b-radius),sharp(l,t+radius)};}
+std::vector<Knot> ellipseKnots(double l,double t,double r,double b){const double cx=(l+r)/2,cy=(t+b)/2,kx=(r-l)/2*0.5523,ky=(b-t)/2*0.5523;return {{cx-kx,t,cx,t,cx+kx,t},{r,cy-ky,r,cy,r,cy+ky},{cx+kx,b,cx,b,cx-kx,b},{l,cy+ky,l,cy,l,cy-ky}};}
+// `vogk`: keyOriginType 1 = rectangle, 2 = rounded rectangle, 5 = ellipse.
+std::vector<uint8_t> origination(uint32_t type,double top,double left,double bottom,double right,std::array<double,4> radii={}){
+    std::vector<uint8_t> out;putLong(out,"keyOriginType",type);putKey(out,"keyOriginShapeBBox");
+    putUnit(out,"Top ",top);putUnit(out,"Left",left);putUnit(out,"Btom",bottom);putUnit(out,"Rght",right);
+    if(type==2){putKey(out,"keyOriginRRectRadii");const char* corners[]={"topLeft","topRight","bottomRight","bottomLeft"};for(size_t i=0;i<4;++i)putUnit(out,corners[i],radii[i]);}
+    return out;
+}
+void putPoint(std::vector<uint8_t>& out,double x,double y,double width,double height){psdU32(out,uint32_t(int32_t(std::llround(y/height*16777216.0))));psdU32(out,uint32_t(int32_t(std::llround(x/width*16777216.0))));}
+// Each subpath record is type 0 (closed) followed by its knot count; each knot is a type 1 record.
+std::vector<uint8_t> vectorPath(const std::vector<std::vector<Knot>>& subpaths,double width,double height){
+    std::vector<uint8_t> out(8,0);
+    for(const auto& subpath:subpaths){
+        psdU16(out,0);psdU16(out,uint16_t(subpath.size()));out.insert(out.end(),22,0);
+        for(const auto& knot:subpath){psdU16(out,1);for(size_t i=0;i<6;i+=2)putPoint(out,knot[i],knot[i+1],width,height);}
+    }
+    return out;
+}
+std::vector<uint8_t> solidFill(double red,double green,double blue){std::vector<uint8_t> out;putTag(out,"SoCo");psdU32(out,16);putDouble(out,"Rd  ",red);putDouble(out,"Grn ",green);putDouble(out,"Bl  ",blue);return out;}
+std::vector<uint8_t> gradientFill(){std::vector<uint8_t> out;putTag(out,"GdFl");psdU32(out,16);putDouble(out,"Rd  ",0);putDouble(out,"Grn ",0);putDouble(out,"Bl  ",0);return out;}
+std::vector<uint8_t> strokeState(bool stroke,bool fill){std::vector<uint8_t> out;putBool(out,"strokeEnabled",stroke);putBool(out,"fillEnabled",fill);return out;}
+// A solid stroke with a width in pixels, an opacity percentage, and an optional alignment name or dash list.
+std::vector<uint8_t> strokeDescriptor(double width,double red,double green,double blue,const char* alignment=nullptr,bool dashed=false,double opacity=100){
+    std::vector<uint8_t> out;putBool(out,"strokeEnabled",true);putBool(out,"fillEnabled",true);putUnit(out,"strokeStyleLineWidth",width);putDouble(out,"strokeStyleOpacity",opacity);
+    putKey(out,"strokeStyleContent");putKey(out,"solidColorLayer");putDouble(out,"Rd  ",red);putDouble(out,"Grn ",green);putDouble(out,"Bl  ",blue);
+    if(alignment)putKey(out,alignment);
+    putKey(out,"strokeStyleLineDashSet");putTag(out,"VlLs");psdU32(out,dashed?1:0);
+    return out;
+}
+PsdFixtureBlocks shapeBlocks(std::vector<uint8_t> originationBlock,std::vector<uint8_t> path,std::vector<uint8_t> fill,std::vector<uint8_t> stroke={}){
+    PsdFixtureBlocks blocks{{"vsms",std::move(path)},{"vscg",std::move(fill)}};
+    if(!originationBlock.empty())blocks.push_back({"vogk",std::move(originationBlock)});
+    if(!stroke.empty())blocks.push_back({"vstk",std::move(stroke)});
+    return blocks;
+}
+PsdFixtureLayer shapeLayer(int left,int top,int right,int bottom,PsdFixtureBlocks blocks,std::string name="Shape"){
+    PsdFixtureLayer layer;layer.left=left;layer.top=top;layer.right=right;layer.bottom=bottom;layer.name=std::move(name);layer.blocks=std::move(blocks);return layer;
+}
+imaging::PsdImport importPsd(const std::vector<PsdFixtureLayer>& layers,int width=64,int height=48,bool psb=false){
+    const auto bytes=psdFixture(width,height,layers,psb);return imaging::readPsd(bytes.data(),bytes.size());
+}
+// A plain pixel layer keeps the file importable when the shape layer under test is dropped.
+PsdFixtureLayer plainLayer(){auto layer=solidPsdLayer(0,0,2,2,9,9,9);layer.name="Plain";return layer;}
+bool hasWarning(const imaging::PsdImport& imported,const char* fragment){for(const auto& warning:imported.warnings)if(warning.find(fragment)!=std::string::npos)return true;return false;}
+// Answers the PSD warning dialog with the named button while the import is running.
+bool answerPsdWarnings(const char* button,const std::function<void()>& action){
+    QTimer poll;poll.setInterval(10);bool seen=false;
+    QObject::connect(&poll,&QTimer::timeout,[&]{
+        auto* dialog=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if(!dialog||dialog->objectName()!="psdImportWarnings")return;
+        seen=true;dialog->findChild<QPushButton*>(button)->click();
+    });
+    poll.start();action();poll.stop();return seen;
+}
 }
 int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;auto test=[&](const char* name,const std::function<void()>&run){try{run();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}};
     QTemporaryDir temporary;require(temporary.isValid(),"Missing temporary fixture directory");const auto first=image(temporary.path(),QString::fromUtf8("first-画像.png")),second=image(temporary.path(),"second.png"),missing=temporary.path()+"/missing.png";
@@ -371,6 +446,146 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         const auto png=std::filesystem::path(temporary.filePath("plain.png").toStdWString());
         require(ui::reviewRawImports(nullptr,{png},settings,imaging::developRaw),"Non-RAW file was blocked by the RAW review");
         require(settings.empty(),"Non-RAW file recorded RAW settings");
+    });
+    test("psd_rectangle_shape_replaces_cached_pixels_and_keeps_layer_properties",[&]{
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);layer.name="Rect";layer.opacity=128;layer.hidden=true;
+        layer.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),solidFill(200,100,50),strokeState(false,true));
+        const auto imported=importPsd({layer});
+        require(imported.document.layers.size()==1&&imported.warnings.empty(),"Editable rectangle reported a warning or was dropped");
+        const auto& result=imported.document.layers[0];
+        require(result.name=="Rect"&&result.transform.x==10&&result.transform.y==12&&result.transform.width==20&&result.transform.height==16,"Rectangle placement or size changed");
+        require(!result.visible&&std::abs(result.opacity-128/255.)<1e-6,"Rectangle lost visibility or opacity");
+        const auto style=editing::decodeShapeStyle(result.shapeJson);
+        require(style.kind==editing::ShapeKind::Rectangle&&style.cornerRadius==0&&std::abs(style.red-200/255.)<1e-9,"Rectangle style was not decoded from the fill");
+        require(result.raster&&result.raster->width==20&&result.raster->height==16&&result.raster->pixel(5,5)==Pixel{200,100,50,255},"Shape raster kept the cached blue pixels");
+    });
+    test("psd_rounded_ellipse_and_uncached_shapes_become_editable",[&]{
+        auto rounded=shapeLayer(0,0,20,10,shapeBlocks(origination(2,0,0,10,20,{4,4,4,4}),vectorPath({roundedKnots(0,0,20,10,4)},64,48),solidFill(10,20,30)),"Rounded");
+        auto ellipse=shapeLayer(30,5,50,15,shapeBlocks(origination(5,5,30,15,50),vectorPath({ellipseKnots(30,5,50,15)},64,48),solidFill(0,255,0)),"Ellipse");
+        const auto imported=importPsd({rounded,ellipse});
+        require(imported.warnings.empty()&&imported.document.layers.size()==2,"Uncached rounded or elliptical shape was not imported");
+        const auto& r=imported.document.layers[0];const auto& e=imported.document.layers[1];
+        require(editing::decodeShapeStyle(r.shapeJson).cornerRadius==4&&r.raster->pixel(10,5)==Pixel{10,20,30,255}&&r.raster->pixel(0,0)==Pixel{0,0,0,0},"Rounded rectangle lost its radius or coverage");
+        require(editing::decodeShapeStyle(e.shapeJson).kind==editing::ShapeKind::Ellipse&&e.raster->pixel(10,5)==Pixel{0,255,0,255}&&e.raster->pixel(0,0)==Pixel{0,0,0,0},"Ellipse coverage is wrong");
+    });
+    test("psb_and_fractional_rectangle_round_raster_size_once",[&]{
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);
+        layer.blocks=shapeBlocks(origination(1,12.4,10.6,28.2,30.9),vectorPath({rectangleKnots(10.6,12.4,30.9,28.2)},64,48),solidFill(200,100,50));
+        const auto imported=importPsd({layer},64,48,true);
+        require(imported.warnings.empty()&&imported.document.layers.size()==1,"PSB fractional rectangle reported a warning or was dropped");
+        const auto& result=imported.document.layers[0];
+        require(std::abs(result.transform.x-10.6)<1e-9&&result.transform.width==20&&result.transform.height==16&&result.raster->width==20&&result.raster->height==16,"Fractional PSB rectangle did not round its raster once");
+        require(result.raster->pixel(5,5)==Pixel{200,100,50,255},"PSB shape raster has the wrong fill");
+    });
+    test("psd_unsupported_vector_shapes_keep_pixels_with_warning",[&]{
+        const auto cached=[](PsdFixtureBlocks blocks,const char* name){auto layer=solidPsdLayer(10,12,30,28,0,0,255);layer.name=name;layer.blocks=std::move(blocks);return layer;};
+        const auto rect=vectorPath({rectangleKnots(10,12,30,28)},64,48);
+        auto truncated=vectorPath({rectangleKnots(10,12,30,28)},64,48);truncated.resize(truncated.size()-26);
+        struct Case { const char* fragment; PsdFixtureLayer layer; };
+        const std::vector<Case> cases{
+            {"gradient fills",cached(shapeBlocks(origination(1,12,10,28,30),rect,gradientFill()),"Gradient")},
+            {"dashed strokes",cached(shapeBlocks(origination(1,12,10,28,30),rect,solidFill(200,100,50),strokeDescriptor(4,0,0,255,nullptr,true)),"Dashed")},
+            {"semi-transparent strokes",cached(shapeBlocks(origination(1,12,10,28,30),rect,solidFill(200,100,50),strokeDescriptor(4,0,0,255,nullptr,false,50)),"Translucent")},
+            {"could not be read",cached(shapeBlocks(origination(1,12,10,28,30),rect,solidFill(200,100,50),strokeState(true,true)),"Stroke")},
+            {"does not match",cached(shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(13,12,33,28)},64,48),solidFill(200,100,50)),"Offset")},
+            {"unequal corner radii",cached(shapeBlocks(origination(2,12,10,28,30,{4,4,4,8}),vectorPath({roundedKnots(10,12,30,28,4)},64,48),solidFill(200,100,50)),"Unequal")},
+            {"compound",cached(shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28),rectangleKnots(10,12,30,28)},64,48),solidFill(200,100,50)),"Compound")},
+            {"truncated",cached(shapeBlocks(origination(1,12,10,28,30),truncated,solidFill(200,100,50)),"Truncated")},
+            {"only rectangle and ellipse",cached(shapeBlocks(origination(7,12,10,28,30),rect,solidFill(200,100,50)),"Type")},
+            {"bounds could not be read",cached(shapeBlocks(origination(1,std::nan(""),10,28,30),rect,solidFill(200,100,50)),"NaN")},
+            {"not an axis-aligned rectangle",cached(shapeBlocks({},vectorPath({{sharp(20,12),sharp(30,24),sharp(20,36),sharp(10,24)}},64,48),solidFill(200,100,50)),"Diamond")},
+        };
+        for(const auto& item:cases){
+            const auto imported=importPsd({item.layer,plainLayer()});
+            require(imported.document.layers.size()==2,"Unsupported shape layer was dropped instead of kept as pixels");
+            const Layer* shape=nullptr;for(const auto& layer:imported.document.layers)if(layer.name==item.layer.name)shape=&layer;
+            require(shape&&shape->shapeJson.empty()&&shape->raster&&shape->raster->pixel(5,5)==Pixel{0,0,255,255},"Unsupported shape became editable or lost its cached pixels");
+            require(hasWarning(imported,item.fragment),"Unsupported shape reported no conversion warning");
+        }
+    });
+    test("psd_shape_solid_fill_in_soco_block_becomes_editable",[&]{
+        // Photoshop stores this fill in a SoCo block without the class prefix that the vscg form carries.
+        const auto fill=solidFill(200,100,50);
+        auto blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),{});
+        blocks.push_back({"SoCo",std::vector<uint8_t>(fill.begin()+4,fill.end())});
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);layer.blocks=std::move(blocks);
+        const auto imported=importPsd({layer});
+        require(imported.warnings.empty()&&imported.document.layers.size()==1,"SoCo fill shape reported a warning or was dropped");
+        const auto& result=imported.document.layers[0];
+        require(editing::decodeShapeStyle(result.shapeJson).kind==editing::ShapeKind::Rectangle&&result.raster->pixel(5,5)==Pixel{200,100,50,255},"SoCo fill was not used for the editable rectangle");
+    });
+    test("psd_centred_stroke_becomes_editable_stroke_inside_bounds",[&]{
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);layer.name="Stroked";
+        layer.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),solidFill(200,100,50),strokeDescriptor(4,0,0,255));
+        const auto imported=importPsd({layer});
+        require(imported.warnings.empty()&&imported.document.layers.size()==1,"Editable stroke reported a warning or was dropped");
+        const auto& result=imported.document.layers[0];
+        // The 4 px centred stroke grows the 20 x 16 path by 2 px on each side, so the band fills the first 4 px of the raster.
+        require(result.transform.x==8&&result.transform.y==10&&result.transform.width==24&&result.transform.height==20,"Centred stroke did not grow the shape bounds");
+        const auto style=editing::decodeShapeStyle(result.shapeJson);
+        require(style.strokeEnabled&&style.strokeWidth==4&&style.strokeBlue==1&&style.red==200/255.,"Stroke colour or width was not decoded");
+        require(result.raster->pixel(0,10)==Pixel{0,0,255,255}&&result.raster->pixel(3,10)==Pixel{0,0,255,255},"Stroke band is not blue at the outer edge");
+        require(result.raster->pixel(4,10)==Pixel{200,100,50,255}&&result.raster->pixel(12,10)==Pixel{200,100,50,255},"Fill is not inside the stroke band");
+    });
+    test("psd_path_without_origination_is_not_inferred_from_bounds",[&]{
+        const auto diamond=vectorPath({{sharp(20,12),sharp(30,24),sharp(20,36),sharp(10,24)}},64,48);
+        const auto imported=importPsd({shapeLayer(10,12,30,36,shapeBlocks({},diamond,solidFill(200,100,50)),"Diamond"),plainLayer()});
+        require(imported.document.layers.size()==1&&imported.document.layers[0].name=="Plain","Undecidable path was imported as a layer");
+        require(hasWarning(imported,"could not be imported"),"Dropped path did not report its omission");
+        const auto rect=vectorPath({rectangleKnots(10,12,30,28)},64,48);
+        const auto axis=importPsd({shapeLayer(10,12,30,28,shapeBlocks({},rect,solidFill(200,100,50)),"Axis")});
+        require(axis.warnings.empty()&&axis.document.layers.size()==1&&!axis.document.layers[0].shapeJson.empty(),"Sharp axis-aligned rectangle without origination was not editable");
+    });
+    test("psd_oversized_shape_is_reported_not_truncated",[&]{
+        auto layer=shapeLayer(-20000,0,20000,1,shapeBlocks(origination(1,0,-20000,1,20000),vectorPath({rectangleKnots(-20000,0,20000,1)},30000,1),solidFill(200,100,50)),"Huge");
+        const auto imported=importPsd({layer,plainLayer()},30000,1);
+        require(hasWarning(imported,"too large"),"Oversized shape reported no limit");
+        require(imported.document.layers.size()==1&&imported.document.layers[0].name=="Plain","Oversized shape was partially installed");
+    });
+    test("psd_shape_edit_save_reopen_keeps_editable_shape",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);
+        layer.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),solidFill(200,100,50));
+        auto imported=importPsd({layer});
+        auto shape=imported.document.layers[0];
+        auto style=editing::decodeShapeStyle(shape.shapeJson);style.red=0.25;
+        shape=editing::restyleShape(shape,style);
+        require(shape.raster->pixel(5,5)==Pixel{64,100,50,255},"Restyling an imported shape did not redraw its fill");
+        shape.transform.width=24;shape=editing::redrawShape(shape);
+        require(shape.raster->width==24&&shape.raster->pixel(5,5)==Pixel{64,100,50,255},"Resizing an imported shape did not redraw it");
+        auto edited=imported.document;edited.layers[0]=shape;
+        const auto project=path(temporary.filePath("shape.comp"));
+        ProjectStore(makeWicProjectCodec()).save(project,edited,edited.layers[0].id);
+        auto reopened=ProjectStore(makeWicProjectCodec()).load(project);
+        const auto& result=reopened.document.layers[0];
+        require(result.shapeJson==shape.shapeJson&&result.transform.width==24&&result.transform.height==16,"Reopened shape lost its editable metadata or placement");
+        require(result.raster&&result.raster->pixel(5,5)==Pixel{64,100,50,255},"Reopened shape lost its redrawn pixels");
+    });
+    test("psd_warning_dialog_cancel_leaves_workspace_unchanged",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        auto unsupported=solidPsdLayer(10,12,30,28,0,0,255);unsupported.name="Gradient";unsupported.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),gradientFill());
+        const auto bytes=psdFixture(64,48,{unsupported,plainLayer()});
+        const QString file=temporary.filePath("warnings.psd");QFile out(file);require(out.open(QIODevice::WriteOnly)&&out.write(QByteArray(reinterpret_cast<const char*>(bytes.data()),qsizetype(bytes.size())))==qint64(bytes.size()),"PSD fixture write failed");out.close();
+        MainWindow w(true);auto& p=w.addProject(document());w.show();QApplication::processEvents();
+        auto* tabs=w.findChild<QTabWidget*>();require(tabs,"Tab widget absent");const int before=tabs->count();const auto original=p.document;
+        require(answerPsdWarnings("psdCancelButton",[&]{w.openPath(file);}),"PSD warning dialog did not appear");
+        QApplication::processEvents();
+        require(tabs->count()==before&&p.document==original&&p.history.undoCount()==0,"Cancelled PSD import changed tabs or history");
+    });
+    test("psd_warning_dialog_continue_imports_pixels_and_warning_layer",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        auto unsupported=solidPsdLayer(10,12,30,28,0,0,255);unsupported.name="Gradient";unsupported.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),gradientFill());
+        const auto bytes=psdFixture(64,48,{unsupported,plainLayer()});
+        const QString file=temporary.filePath("continue.psd");QFile out(file);require(out.open(QIODevice::WriteOnly)&&out.write(QByteArray(reinterpret_cast<const char*>(bytes.data()),qsizetype(bytes.size())))==qint64(bytes.size()),"PSD fixture write failed");out.close();
+        MainWindow w(true);w.addProject(document());w.show();QApplication::processEvents();
+        auto* tabs=w.findChild<QTabWidget*>();require(tabs,"Tab widget absent");const int before=tabs->count();
+        require(answerPsdWarnings("psdContinueButton",[&]{w.openPath(file);}),"PSD warning dialog did not appear");
+        QApplication::processEvents();
+        require(tabs->count()==before+1,"Continue did not open the imported PSD");
+        require(tabs->tabText(tabs->currentIndex())=="continue.psd","Continue did not select the imported PSD tab");
+        auto* layers=w.findChild<QTreeWidget*>();require(layers,"Layer tree absent");
+        QStringList names;for(QTreeWidgetItemIterator it(layers);*it;++it)names<<(*it)->text(0);
+        require(names.join("|").contains("Gradient")&&names.join("|").contains("Plain"),"Continued PSD import did not show both layers");
     });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }
