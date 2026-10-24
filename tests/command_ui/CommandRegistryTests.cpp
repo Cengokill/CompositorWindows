@@ -159,7 +159,9 @@ void shortcut_persistence(){
         Fixture f;auto*move=f.bind("tool.move");auto*redo=f.bind("edit.redo");f.bind("layer.new");const auto before=f.registry.shortcuts();
         f.registry.restoreShortcuts(settings);check(f.registry.shortcuts()==before&&move->shortcuts()==keys({"V"})&&redo->shortcuts().size()==2,"malformed and stale values ignored");
         settings.remove(shortcutSettingsGroup);settings.setValue(QString(shortcutSettingsGroup)+"/tool.move","Ctrl+Y");settings.sync();
-        check(!f.registry.restoreShortcuts(settings)&&f.registry.shortcuts()==before,"conflicting stored values ignored");}
+        check(!f.registry.restoreShortcuts(settings)&&f.registry.shortcuts()==before,"conflicting stored values ignored");
+        settings.setValue(QString(shortcutSettingsGroup)+"/layer.new","F9");settings.sync();
+        check(!f.registry.restoreShortcuts(settings)&&f.registry.shortcuts()["layer.new"]==keys({"F9"})&&move->shortcuts()==keys({"V"})&&redo->shortcuts().size()==2,"one conflicting override does not discard the valid ones");}
     {Fixture f;auto*move=f.bind("tool.move");f.bind("edit.redo");f.bind("layer.new");
         QSettings settings(path,QSettings::IniFormat);settings.clear();settings.sync();
         QFile::setPermissions(path,QFileDevice::ReadOwner|QFileDevice::ReadUser);

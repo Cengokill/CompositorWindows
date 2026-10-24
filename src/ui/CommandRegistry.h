@@ -100,7 +100,8 @@ public:
     bool applyShortcuts(const ShortcutMap&,QString* error=nullptr);
     // Writes overrides to settings and applies them; settings and actions stay unchanged on failure.
     bool saveShortcuts(const ShortcutMap&,QSettings&,QString* error=nullptr);
-    // Applies valid stored overrides; malformed, stale, or conflicting values are ignored.
+    // Applies valid stored overrides. Malformed, stale, or conflicting entries are skipped individually;
+    // returns false when any entry was skipped.
     bool restoreShortcuts(QSettings&);
     // Direct keyboard path for keys that reach the window without a QAction shortcut.
     bool invokeShortcut(const QKeySequence&);

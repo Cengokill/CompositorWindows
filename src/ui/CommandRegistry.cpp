@@ -359,7 +359,16 @@ bool CommandRegistry::restoreShortcuts(QSettings& settings){
         if(valid)overrides[id]=keys;
     }
     settings.endGroup();
-    return overrides.empty()||applyShortcuts(overrides);
+    // Drop only the overrides involved in a conflict so the remaining customizations survive.
+    bool dropped=false;
+    for(;;){
+        auto merged=shortcuts_;for(const auto&[id,keys]:overrides)merged[id]=keys;
+        bool removed=false;
+        for(const auto& conflict:findShortcutConflicts(merged))for(const auto& id:conflict.ids)removed|=overrides.erase(id)>0;
+        if(!removed)break;
+        dropped=true;
+    }
+    return (overrides.empty()||applyShortcuts(overrides))&&!dropped;
 }
 void CommandRegistry::refreshShortcutHints(){
     struct Hint {QObject* object;const char* name;std::function<QString()> get;std::function<void(const QString&)> set;};
