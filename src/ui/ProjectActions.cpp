@@ -40,26 +40,26 @@ namespace {
 struct NewCanvasPreset { const char* category; const char* label; editing::PrintUnit unit; double width; double height; double dpi; };
 // Entries are grouped by category; each category appears as a disabled heading. Custom is not listed and keeps the current size.
 constexpr NewCanvasPreset newCanvasPresets[]{
-    {"Photo","4 × 6 in · paysage",editing::PrintUnit::Inches,6,4,300},
+    {"Photo","4 × 6 in · landscape",editing::PrintUnit::Inches,6,4,300},
     {"Photo","4 × 6 in · portrait",editing::PrintUnit::Inches,4,6,300},
-    {"Photo","5 × 7 in · paysage",editing::PrintUnit::Inches,7,5,300},
+    {"Photo","5 × 7 in · landscape",editing::PrintUnit::Inches,7,5,300},
     {"Photo","5 × 7 in · portrait",editing::PrintUnit::Inches,5,7,300},
-    {"Photo","8 × 10 in · paysage",editing::PrintUnit::Inches,10,8,300},
+    {"Photo","8 × 10 in · landscape",editing::PrintUnit::Inches,10,8,300},
     {"Photo","8 × 10 in · portrait",editing::PrintUnit::Inches,8,10,300},
-    {"Impression","Letter · 8,5 × 11 in",editing::PrintUnit::Inches,8.5,11,300},
-    {"Impression","Legal · 8,5 × 14 in",editing::PrintUnit::Inches,8.5,14,300},
-    {"Impression","Tabloid · 11 × 17 in",editing::PrintUnit::Inches,11,17,300},
-    {"Impression","A4 · 210 × 297 mm",editing::PrintUnit::Millimeters,210,297,300},
-    {"Impression","A3 · 297 × 420 mm",editing::PrintUnit::Millimeters,297,420,300},
-    {"Art et illustration","Poster · 18 × 24 in",editing::PrintUnit::Inches,18,24,300},
-    {"Art et illustration","Postcard · 4 × 6 in",editing::PrintUnit::Inches,4,6,300},
+    {"Print","Letter · 8.5 × 11 in",editing::PrintUnit::Inches,8.5,11,300},
+    {"Print","Legal · 8.5 × 14 in",editing::PrintUnit::Inches,8.5,14,300},
+    {"Print","Tabloid · 11 × 17 in",editing::PrintUnit::Inches,11,17,300},
+    {"Print","A4 · 210 × 297 mm",editing::PrintUnit::Millimeters,210,297,300},
+    {"Print","A3 · 297 × 420 mm",editing::PrintUnit::Millimeters,297,420,300},
+    {"Art & Illustration","Poster · 18 × 24 in",editing::PrintUnit::Inches,18,24,300},
+    {"Art & Illustration","Postcard · 4 × 6 in",editing::PrintUnit::Inches,4,6,300},
     {"Web","Web · 1366 × 768",editing::PrintUnit::Pixels,1366,768,72},
     {"Web","Web · 1440 × 900",editing::PrintUnit::Pixels,1440,900,72},
     {"Web","Full HD · 1920 × 1080",editing::PrintUnit::Pixels,1920,1080,72},
     {"Web","Square · 1080 × 1080",editing::PrintUnit::Pixels,1080,1080,72},
     {"Web","Vertical HD · 1080 × 1920",editing::PrintUnit::Pixels,1080,1920,72},
-    {"Film et vidéo","HD · 1280 × 720",editing::PrintUnit::Pixels,1280,720,72},
-    {"Film et vidéo","4K UHD · 3840 × 2160",editing::PrintUnit::Pixels,3840,2160,72},
+    {"Film & Video","HD · 1280 × 720",editing::PrintUnit::Pixels,1280,720,72},
+    {"Film & Video","4K UHD · 3840 × 2160",editing::PrintUnit::Pixels,3840,2160,72},
 };
 // Whole pixels are the source of truth. Units and DPI only change how that count is displayed or converted when typed.
 // preset is the table entry that produced the current pixels, or -1 after a manual size edit.
