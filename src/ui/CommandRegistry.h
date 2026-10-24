@@ -118,7 +118,6 @@ private:
     std::vector<Entry> entries_;
     bool refreshing_{};
     ShortcutMap defaults_,shortcuts_;
-    std::vector<QString> order_;
     bool invokeEntry(size_t);
     void refreshShortcutHints();
 };
