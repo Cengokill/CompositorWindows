@@ -35,9 +35,13 @@
 #include <QSlider>
 #include <QAction>
 #include <QColor>
+#include <functional>
 #include <memory>
+#include <vector>
 #include <unordered_set>
 class QMimeData;
+class QTimer;
+class QUrl;
 class QInputMethodEvent;
 
 namespace compositor {
@@ -74,6 +78,10 @@ struct EditorProject {
     NativeCanvas* canvas{};
 };
 class MainWindow final:public QMainWindow {
+public:
+    // Runs on a worker thread; must not touch the window.
+    using ReleaseFetcher=std::function<QByteArray(const std::function<bool()>& cancelled)>;
+private:
     bool warp_,refreshing_{};
     bool managingProjectOpen_{},selectingProjectForOpen_{};
     QTabWidget* tabs_{};
@@ -260,6 +268,14 @@ class MainWindow final:public QMainWindow {
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);
     void newDialog();
     void checkForUpdates();
+    void runReleaseCheck(bool manual);
+    void finishReleaseCheck(const QByteArray& response,const QString& error);
+    void showUpdateNotice(const QString& version,const QString& running,const QString& pageUrl);
+    ReleaseFetcher releaseFetcher_;
+    std::function<void(const QUrl&)> urlOpener_;
+    QTimer* releaseTimer_{};
+    bool releaseCheckRunning_{},releaseCheckManual_{};
+    std::vector<std::function<void(const QString&)>> releaseReports_;
     void importImage();
     void importWelcomeImage();
     void exportImage();
@@ -469,5 +485,11 @@ public:
     void exerciseNativeUi(const QString& evidenceDirectory);
     // Test seam: holds the next background save on the worker before it writes.
     void setProjectSaveBeforeWriteForTesting(std::function<void()> hook){projectSaveBeforeWrite_=std::move(hook);}
+    // Daily stable-release check: first after initialDelayMs, then re-evaluated every intervalMs.
+    void startAutomaticUpdateChecks(int initialDelayMs=10000,int intervalMs=60*60*1000);
+    // Manual check from Help > Check for Updates; ignores the 24 h spacing and skipped version.
+    void checkForRelease(std::function<void(const QString&)> report);
+    void setReleaseFetcherForTesting(ReleaseFetcher fetcher){releaseFetcher_=std::move(fetcher);}
+    void setUrlOpenerForTesting(std::function<void(const QUrl&)> opener){urlOpener_=std::move(opener);}
 };
 }

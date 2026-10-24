@@ -1,5 +1,8 @@
 #include "ui/UpdatePanel.h"
+#include "update/ReleaseCheck.h"
 #include "update/Updater.h"
+#include <QCheckBox>
+#include <QTemporaryDir>
 #include <QApplication>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -11,6 +14,8 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QTest>
+#include <QDateTime>
+#include <map>
 #include <iostream>
 #include <stdexcept>
 using namespace compositor;
@@ -23,9 +28,73 @@ void waitState(QDialog* panel,const QString& wanted){waitFor([&]{return state(pa
 void settled(QDialog* panel){waitFor([&]{auto s=state(panel);return !s.isEmpty()&&s!="checking"&&s!="installing";},"update panel did not settle");}
 QString current(const QString& root){return update::Updater(std::filesystem::path(root.toStdWString())).state().current.text();}
 QString text(QDialog* panel,const char* name){auto* label=panel->findChild<QLabel*>(name);require(label,"missing update label");return label->text();}
+QByteArray release(const char* tag,bool draft=false,bool prerelease=false,const char* page="https://github.com/Cengokill/CompositorWindows/releases/tag/v0.2.0"){
+    return QJsonDocument(QJsonObject{{"tag_name",tag},{"draft",draft},{"prerelease",prerelease},{"html_url",page},{"body","notes"}}).toJson();
 }
+template<class Action>bool throws(Action action){try{action();}catch(const std::exception&){return true;}return false;}
+void release_parse(){
+    const auto stable=update::parseLatestRelease(release("v0.2.0"));
+    require(stable&&stable->version==update::Version{0,2,0}&&stable->pageUrl=="https://github.com/Cengokill/CompositorWindows/releases/tag/v0.2.0","stable vX.Y.Z release accepted");
+    require(update::parseLatestRelease(release("1.4.5"))->version==update::Version{1,4,5},"tag without v accepted");
+    require(!update::parseLatestRelease(release("v0.3.0",true))&&!update::parseLatestRelease(release("v0.3.0",false,true)),"drafts and prereleases ignored");
+    for(const char* tag:{"v1.2","v01.2.3","v1.2.3-beta","latest","v1.2.3.4",""})require(throws([&]{update::parseLatestRelease(release(tag));}),"malformed tag rejected");
+    for(const char* page:{"http://github.com/Cengokill/CompositorWindows/releases/tag/v0.2.0","https://github.com/other/CompositorWindows/releases/tag/v0.2.0","https://evil.example/Cengokill/CompositorWindows/releases/x","https://github.com/Cengokill/CompositorWindows/releases/x?download=1","https://user@github.com/Cengokill/CompositorWindows/releases/x"})
+        require(throws([&]{update::parseLatestRelease(release("v0.2.0",false,false,page));}),"foreign or unsafe release page rejected");
+    require(throws([]{update::parseLatestRelease("[]");})&&throws([]{update::parseLatestRelease("{");})&&throws([]{update::parseLatestRelease(R"({"tag_name":"v0.2.0","draft":"no","prerelease":false,"html_url":"x"})");}),"non-object, truncated and mistyped JSON rejected");
+    QByteArray oversized=release("v0.2.0");oversized.append(QByteArray(update::releaseResponseLimit,' '));
+    require(throws([&]{update::parseLatestRelease(oversized);}),"oversized response rejected");
+}
+void release_settings(){
+    QSettings settings;settings.clear();const auto now=QDateTime::currentDateTimeUtc();
+    require(update::automaticChecksEnabled(settings),"automatic checks enabled by default");
+    settings.setValue("updates/automatic","false");require(!update::automaticChecksEnabled(settings),"stored false honored");
+    settings.setValue("updates/automatic","maybe");require(update::automaticChecksEnabled(settings),"invalid preference falls back to default");
+    update::setAutomaticChecksEnabled(settings,false);require(!update::automaticChecksEnabled(settings),"preference written");
+    require(update::releaseCheckDue(settings,now),"never checked means due");
+    update::recordReleaseCheck(settings,now);require(!update::releaseCheckDue(settings,now.addSecs(23*3600)),"checked within a day is not due");
+    require(update::releaseCheckDue(settings,now.addSecs(24*3600)),"due after 24 hours");
+    require(update::releaseCheckDue(settings,now.addSecs(-3600)),"future timestamp (clock moved back) is due");
+    settings.setValue("updates/lastCheck","yesterday");require(update::releaseCheckDue(settings,now),"malformed timestamp is due");
+    settings.setValue("updates/skippedVersion","0.2");require(!update::skippedRelease(settings),"malformed skipped version ignored");
+    update::skipRelease(settings,{0,2,0});require(update::skippedRelease(settings)==update::Version{0,2,0},"skipped version stored");
+}
+void release_url(){
+    qputenv("COMPOSITOR_RELEASE_CHECK_URL","http://127.0.0.1:1/latest.json");
+#ifdef NDEBUG
+    require(update::releaseCheckUrl()==QString::fromLatin1(update::stableReleaseUrl),"Release build ignores the URL override");
+#else
+    require(update::releaseCheckUrl()=="http://127.0.0.1:1/latest.json","Debug build honors the URL override");
+#endif
+    qunsetenv("COMPOSITOR_RELEASE_CHECK_URL");require(update::releaseCheckUrl()==QString::fromLatin1(update::stableReleaseUrl),"stable GitHub release URL by default");
+    for(const char* url:{"http://example.com/latest","file:///C:/latest.json","ftp://127.0.0.1/latest","https://user:pw@example.com/x"})
+        require(throws([&]{update::fetchReleaseMetadata(url,{});}),"non-HTTPS, non-loopback or credentialed URL rejected before any request");
+    require(throws([]{update::fetchReleaseMetadata(QString::fromLatin1(update::stableReleaseUrl),[]{return true;});}),"cancelled fetch stops before sending");
+}
+void panel_release_check(){
+    QTemporaryDir root;require(root.isValid(),"panel root");QSettings().clear();
+    QWidget owner;owner.show();std::function<void(const QString&)> pending;int calls=0;
+    ui::UpdatePanelHost host;host.checkRelease=[&](std::function<void(const QString&)> report){++calls;pending=std::move(report);};
+    QPointer<QDialog> panel=ui::openUpdatePanel(&owner,host,root.path());settled(panel);
+    auto* automatic=panel->findChild<QCheckBox*>("updateAutomatic");require(automatic&&automatic->isChecked(),"automatic preference shown enabled by default");
+    automatic->setChecked(false);{QSettings settings;require(!update::automaticChecksEnabled(settings),"unticking disables automatic checks");}
+    auto* check=button(panel,"updateReleaseCheck");require(check->isVisible()&&check->isEnabled(),"release check button available");
+    check->click();require(calls==1&&!check->isEnabled()&&text(panel,"updateReleaseStatus").contains("Checking"),"release check started once and shows progress");
+    check->click();require(calls==1,"no second request while one is pending");
+    pending("Compositor 0.2.0 is available.");require(text(panel,"updateReleaseStatus")=="Compositor 0.2.0 is available."&&check->isEnabled(),"result shown and button re-enabled");
+    check->click();panel->reject();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);require(panel.isNull(),"panel closed");
+    pending("late");// Must not touch the destroyed panel.
+    QPointer<QDialog> plain=ui::openUpdatePanel(&owner,{},root.path());settled(plain);require(!button(plain,"updateReleaseCheck")->isVisible(),"no release button without a host");
+}}
 int main(int argc,char** argv){
-    QApplication application(argc,argv);if(argc!=4)return 2;
+    QApplication application(argc,argv);
+    if(argc==2){
+        QTemporaryDir settingsRoot;QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("ReleaseCheck");
+        QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsRoot.path());
+        const std::map<std::string,void(*)()> cases{{"release_parse",release_parse},{"release_settings",release_settings},{"release_url",release_url},{"panel_release_check",panel_release_check}};
+        try{if(!cases.contains(argv[1]))throw std::runtime_error("unknown release case");cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}
+        catch(const std::exception& error){std::cerr<<"FAIL "<<argv[1]<<": "<<error.what()<<'\n';return 1;}
+    }
+    if(argc!=4)return 2;
     const QString key=QString::fromLocal8Bit(argv[1]),root=QString::fromLocal8Bit(argv[2]),output=QString::fromLocal8Bit(argv[3]);
     QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("UpdatePanel");
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,root+"/settings");QSettings::setPath(QSettings::IniFormat,QSettings::SystemScope,root+"/settings");
