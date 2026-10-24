@@ -11,7 +11,8 @@ inline constexpr auto recentProjectsKey="recentProjects";
 QStringList recentProjects(QSettings&);
 // Moves the project folder to the top of the list.
 void recordRecentProject(QSettings&,const QString& path);
-// Removes folders that no longer exist from settings and returns the rest.
+// Removes folders on local fixed drives that no longer exist and returns the rest.
+// Network, removable and absent-drive entries are kept without touching them.
 QStringList pruneRecentProjects(QSettings&);
 void clearRecentProjects(QSettings&);
 // Menu text: the folder name, with the parent folder added when two names match.

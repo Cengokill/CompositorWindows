@@ -2,6 +2,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSettings>
+#include <Windows.h>
 
 namespace compositor::ui {
 namespace {
@@ -12,6 +13,14 @@ QString normalizedPath(const QString& path){
 bool contains(const QStringList& paths,const QString& path){
     for(const auto& item:paths)if(item.compare(path,Qt::CaseInsensitive)==0)return true;
     return false;
+}
+// Menu-show checks run on the UI thread. Only local fixed drives answer quickly and
+// reliably; UNC, mapped, removable and absent drives may stall or be briefly offline,
+// so those entries are kept and only fail, with an error, when chosen.
+bool canCheckWithoutBlocking(const QString& path){
+    if(path.size()<3||!path[0].isLetter()||path[1]!=':'||path[2]!='/')return false;
+    const wchar_t root[]{wchar_t(path[0].unicode()),L':',L'\\',L'\0'};
+    return GetDriveTypeW(root)==DRIVE_FIXED;
 }
 void store(QSettings& settings,const QStringList& paths){
     if(paths.isEmpty())settings.remove(recentProjectsKey);else settings.setValue(recentProjectsKey,paths);
@@ -42,7 +51,7 @@ void recordRecentProject(QSettings& settings,const QString& path){
 QStringList pruneRecentProjects(QSettings& settings){
     const auto stored=recentProjects(settings);
     QStringList existing;
-    for(const auto& path:stored)if(QFileInfo(path).isDir())existing.push_back(path);
+    for(const auto& path:stored)if(!canCheckWithoutBlocking(path)||QFileInfo(path).isDir())existing.push_back(path);
     if(existing!=stored||settings.value(recentProjectsKey).toStringList()!=stored)store(settings,existing);
     return existing;
 }
