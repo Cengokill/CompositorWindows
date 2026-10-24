@@ -4,11 +4,7 @@ A picture is a stack of decisions. Where the subject sits. What stays sharp. Wha
 
 Compositor is the image editor [Robbie Tilton](https://robbietilton.com/compositor) built for the Mac. This is the Windows 11 version of that editor: layers, masks, selections, paint, adjustments, filters, and background removal that runs on your machine.
 
-<img width="1279" height="849" alt="The Compositor editor on Windows, with the canvas, layers, and tool rail" src="https://github.com/user-attachments/assets/21092e76-284d-43a5-ae85-b0eaf495ca52" />
-
-<img width="672" height="552" alt="image" src="https://github.com/user-attachments/assets/f6c6cbd4-a085-423f-9f2b-c466897edaa6" />
-
-Hello,
+<img width="1024" alt="The Compositor editor on Windows, with the canvas, layers, and tool rail" src="docs/images/editor.png" />
 
 We wanted the same compositing workflow on Windows, with the window, the file dialogs, and the shortcuts you already use. The canvas, the layer stack, and the project you save should still feel like Compositor.
 
@@ -16,19 +12,31 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 ## Open it and make something
 
-**[Download the Windows preview](https://github.com/IAmTheBlurr/CompositorWindows/releases)** · **[User guide](docs/user-guide.md)** · **[Try the demo](demo/README.md)** · **[Report an issue](https://github.com/IAmTheBlurr/CompositorWindows/issues)**
+**[Download the latest release](https://github.com/Cengokill/CompositorWindows/releases)** · **[User guide](docs/user-guide.md)** · **[Try the demo](demo/README.md)** · **[Report an issue](https://github.com/Cengokill/CompositorWindows/issues)**
 
 **What you get**
 
 - An **x64 MSI**, or a **portable ZIP**. In the ZIP, run `Compositor.exe`.
 - Windows 11 x64. The runtime libraries and the foreground-removal model are already in the package. There is no account, and there is no model download on first launch.
-- Preview builds. They are unsigned, and you install the next one yourself.
+- Unsigned builds. Windows can show an unknown-publisher warning. Compositor checks GitHub once a day for a newer stable release and links to its page, and you install the update yourself. You can turn the check off in **Help → Check for Updates…**.
 
-A project is a `.comp` folder. Copy or back up the whole folder. **File > Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer. **File > Open Project** and the welcome **Open project** button open the Windows folder picker in Downloads, and you can select one or more `.comp` folders. Export a flattened PNG, JPEG or one-page PDF when another application needs a single image.
+<img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-<img width="1264" height="740" alt="Opening and saving projects from the Windows editor" src="https://github.com/user-attachments/assets/f3e120d0-9b1e-4a72-8535-2345bacf6c2d" />
+## What's new in 1.1.0
 
-This preview has [known limitations](KNOWN-ISSUES.md). A large soft brush can pause. Hair, fur, and transparent subjects can need a pass with the mask tools. Exchanging a project with the Mac app, and matching the Mac app pixel for pixel, are still unverified. Keep a copy of the complete `.comp` folder when you try that.
+Version 1.1.0 is the first build that reports its release number, and it moves the packages to the stable channel. The [release notes](docs/release-notes.md) list everything. The main additions:
+
+- **Start and navigate.** New canvas presets with print units and backgrounds, **File → Open Recent**, a command palette (**Ctrl+Shift+P**), a navigator mini-map, rulers and guides, a layout grid with snap targets, and canvas-only full screen (**F11**).
+- **Customize.** A keyboard shortcut editor in **Help → Keyboard Shortcuts**, and a daily check for new stable releases.
+- **Edit.** 90° canvas rotation, **Filters → Last Filter** (**Ctrl+Alt+F**), Color Balance and Black & White controls, restyled Camera Raw sliders with double-click reset, and RAW development before import.
+- **Photoshop files.** Editable PSD shapes, 16-bit RGB layers kept at 16 bits, and cropping of oversized or off-canvas layers.
+- **Save and export.** Background project saving, and one-page PDF export at the document's print size, next to PNG and JPEG.
+
+<img width="1024" alt="After the wind: a layered composition exported from Compositor" src="demo/After%20the%20wind.png" />
+
+A project is a `.comp` folder. Copy or back up the whole folder. **File → Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer. **File → Open Project** and the welcome **Open project** button open the Windows folder picker in Downloads, and you can select one or more `.comp` folders. Export a flattened PNG, JPEG or one-page PDF when another application needs a single image.
+
+This build has [known limitations](KNOWN-ISSUES.md). A large soft brush can pause. Hair, fur, and transparent subjects can need a pass with the mask tools. Exchanging a project with the Mac app, and matching the Mac app pixel for pixel, are still unverified. Keep a copy of the complete `.comp` folder when you try that.
 
 ## Robbie made Compositor
 
@@ -38,17 +46,15 @@ The editing ideas, the design, and the original application came from Robbie. Th
 
 The Windows effort was started and directed by **[IAmTheBlurr](https://github.com/IAmTheBlurr)**, and most of the implementation was done with agentic AI using Codex. We maintain it independently. Robbie has not endorsed this port. The original copyright and MIT notices stay in the tree.
 
-This Windows port was developed from Robbie Tilton's original Mac source, as its own project.
-
 ## Staying with the original
 
 We want this editor to stay in step with Robbie's Compositor: the core tools, the editing behavior, the design, and the project format. A Windows improvement is welcome when it fits that foundation.
 
-The dependency pin is Mac Compositor **1.0.4**, at [`a19db90`](https://github.com/robbietilton/Compositor/tree/a19db9011282399785dc18efcfded904627bdcc2). The preview follows the observable behavior from that baseline through 1.4.5 where it applies on Windows, including later blend modes, folder opacity, guides, finishing adjustments and filters, CPU layer effects, DirectWrite text, line shapes, and PSD, SVG, and RAW import. The pin stays at `a19db90` until a project written by the Mac 1.4.5 tree has been read here. Windows preview numbers use `0.1.x`. Shared version numbers and automatic updates are future work.
+The dependency pin is Mac Compositor **1.0.4**, at [`a19db90`](https://github.com/robbietilton/Compositor/tree/a19db9011282399785dc18efcfded904627bdcc2). The port follows the observable behavior from that baseline through 1.4.5 where it applies on Windows, including later blend modes, folder opacity, guides, finishing adjustments and filters, CPU layer effects, DirectWrite text, line shapes, and PSD, SVG, and RAW import. The pin stays at `a19db90` until a project written by the Mac 1.4.5 tree has been read here. Windows version numbers are independent of the Mac app's.
 
 ## Have at it
 
-Fork it. Fix the thing that annoyed you. Make something beautiful. Try the weird idea. Spend the token budget and see what the canvas does.
+Fork it. Fix the thing that annoyed you. Make something beautiful. Try the weird idea.
 
 Small fixes and large experiments both belong here. Open an issue, send a PR, or take a fork somewhere we did not expect. Tell us what changed and how you checked it. **PRs are welcome. Merging depends on fit.** The changes we are happiest to take are the ones that keep the core and make the Windows editor better. A useful discovery may also belong in the original project.
 
@@ -70,4 +76,4 @@ The [build instructions](docs/source-package.md) cover runtime assets and tests.
 
 Application source is [MIT licensed](LICENSE), retaining **Copyright (c) 2026 Wonder Assembly LLC**. Qt, the image codecs, ONNX Runtime, the model weights, and the Inter font have their own licenses and notices in `dependencies/` and `assets/`. Downloads include the applicable notices and the corresponding sources. Demo artwork and photography have [separate credits](demo/README.md#image-permissions).
 
-We will keep reading what you find. If a brush, a mask, or a project file does something you did not expect, [tell us](https://github.com/IAmTheBlurr/CompositorWindows/issues), with the preview version and the steps.
+If a brush, a mask, or a project file does something you did not expect, [tell us](https://github.com/Cengokill/CompositorWindows/issues), with the version and the steps.
