@@ -42,11 +42,11 @@ void MainWindow::setupDrawingActions(){
     auto*style=new QComboBox;style->setObjectName("gradientStyle");style->addItems({"Foreground to Background","Foreground to Transparent"});style->setCurrentIndex(1);bar->addWidget(style);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();});
     auto*reverse=new QCheckBox("Reverse");reverse->setObjectName("gradientReverse");bar->addWidget(reverse);connect(reverse,&QCheckBox::toggled,this,[this](bool v){gradientSettings_.reversed=v;refreshGradient();});auto*opacity=new ui::PropertyNumber;opacity->releaseFocus=[this]{if(canvas())canvas()->setFocus();};opacity->setRange(1,100);opacity->setValue(100);opacity->setSuffix("%");opacity->setAccessibleName("Gradient opacity");bar->addWidget(opacity);connect(opacity,&QDoubleSpinBox::valueChanged,this,[this](double v){gradientSettings_.opacity=v/100;refreshGradient();});
     auto*cancel=bar->addAction("Cancel Gradient");cancel->setObjectName("cancelGradient");bindCommand(cancel,"Drawing Options","Cancel Gradient",[this]{cancelGradient();});cancel->setShortcut({});auto*apply=bar->addAction("Apply Gradient");apply->setObjectName("applyGradient");bindCommand(apply,"Drawing Options","Apply Gradient",[this]{applyGradient();});apply->setShortcut({});
-    auto*shape=bar->addAction("Shape (U)");bindCommand(shape,"Tools","Shape (U)",[this]{selectTool(Tool::Shape);refresh(false);});shape->setShortcut({});auto*kind=new QComboBox;kind->setObjectName("shapeKind");kind->addItems({"Rectangle","Ellipse","Line"});bar->addWidget(kind);connect(kind,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;cancelShape();shapeStyle_.kind=editing::ShapeKind(i);refresh(false,false);});
-    auto*radius=new ui::PropertyNumber;radius->releaseFocus=[this]{if(canvas())canvas()->setFocus();};radius->setObjectName("shapeCornerRadius");radius->setRange(0,5000);radius->setDecimals(0);radius->setAccessibleName("Corner radius");radius->setSuffix(" px radius");bar->addWidget(radius);connect(radius,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.cornerRadius=v;});
-    auto*stroke=new QCheckBox("Stroke");stroke->setObjectName("shapeStroke");bar->addWidget(stroke);connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;refresh(false,false);});
-    auto*strokeWidth=new ui::PropertyNumber;strokeWidth->releaseFocus=[this]{if(canvas())canvas()->setFocus();};strokeWidth->setObjectName("shapeStrokeWidth");strokeWidth->setRange(.1,500);strokeWidth->setDecimals(1);strokeWidth->setAccessibleName("Stroke width");strokeWidth->setSuffix(" px");bar->addWidget(strokeWidth);connect(strokeWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.strokeWidth=v;});
-    auto*strokeColor=new QPushButton("Stroke Color…");strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");bar->addWidget(strokeColor);connect(strokeColor,&QPushButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();}});
+    auto*shape=bar->addAction("Shape (U)");bindCommand(shape,"Tools","Shape (U)",[this]{selectTool(Tool::Shape);refresh(false);});shape->setShortcut({});auto*kind=new QComboBox;kind->setObjectName("shapeKind");kind->addItems({"Rectangle","Ellipse","Line"});bar->addWidget(kind);connect(kind,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;cancelShape();shapeStyle_.kind=editing::ShapeKind(i);applyShapeStyleToSelection();refresh(false,false);});
+    auto*radius=new ui::PropertyNumber;radius->releaseFocus=[this]{if(canvas())canvas()->setFocus();};radius->setObjectName("shapeCornerRadius");radius->setRange(0,5000);radius->setDecimals(0);radius->setAccessibleName("Corner radius");radius->setSuffix(" px radius");bar->addWidget(radius);connect(radius,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.cornerRadius=v;applyShapeStyleToSelection();});
+    auto*stroke=new QCheckBox("Stroke");stroke->setObjectName("shapeStroke");bar->addWidget(stroke);connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();refresh(false,false);});
+    auto*strokeWidth=new ui::PropertyNumber;strokeWidth->releaseFocus=[this]{if(canvas())canvas()->setFocus();};strokeWidth->setObjectName("shapeStrokeWidth");strokeWidth->setRange(.1,500);strokeWidth->setDecimals(1);strokeWidth->setAccessibleName("Stroke width");strokeWidth->setSuffix(" px");bar->addWidget(strokeWidth);connect(strokeWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.strokeWidth=v;applyShapeStyleToSelection();});
+    auto*strokeColor=new QPushButton("Stroke Color…");strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");bar->addWidget(strokeColor);connect(strokeColor,&QPushButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();}});
     auto*restyle=bar->addAction("Update Shape Style");bindCommand(restyle,"Drawing Options","Update Shape Style",[this]{if(!active()||active()->shapeJson.empty())return;edit("Shape Style",[&](Document&){auto style=shapeStyle_;if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;style.red=foreground_.redF();style.green=foreground_.greenF();style.blue=foreground_.blueF();*active()=editing::restyleShape(*active(),style);});});
     auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");cropRatioControl->addItems({"Free","Original","1:1","4:3","3:4","16:9","9:16"});bar->addWidget(cropRatioControl);
     connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){if(refreshing_)return;cropRatioChoice_=value;changeCropRatio();});
@@ -111,14 +111,14 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
 }
 void MainWindow::cancelShape(){shapeDraftId_.clear();shapeDraftRect_.reset();if(canvas()){canvas()->setShapeDraft({});canvas()->setSnapGuides();}}
 void MainWindow::refreshShapeControls(){
-    if(tool_==Tool::Shape){
-        const auto* layer=active();
-        if(layer&&!layer->shapeJson.empty()){if(layer->id!=shapeStyleLayer_){shapeStyle_=editing::decodeShapeStyle(layer->shapeJson);shapeStyleLayer_=layer->id;}}
-        else shapeStyleLayer_.clear();
-    }
-    if(auto* kind=findChild<QComboBox*>("shapeKind")){const QSignalBlocker block(kind);kind->setCurrentIndex(int(shapeStyle_.kind));kind->setVisible(tool_==Tool::Shape);}
-    if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);radius->setVisible(tool_==Tool::Shape&&shapeStyle_.kind==editing::ShapeKind::Rectangle);}
-    const bool strokable=tool_==Tool::Shape&&shapeStyle_.kind!=editing::ShapeKind::Line;
+    const auto* layer=active();
+    const bool shapeLayer=layer&&!layer->shapeJson.empty();
+    if(shapeLayer){if(layer->id!=shapeStyleLayer_){shapeStyle_=editing::decodeShapeStyle(layer->shapeJson);shapeStyleLayer_=layer->id;}}
+    else shapeStyleLayer_.clear();
+    const bool controls=tool_==Tool::Shape||shapeLayer;
+    if(auto* kind=findChild<QComboBox*>("shapeKind")){const QSignalBlocker block(kind);kind->setCurrentIndex(int(shapeStyle_.kind));kind->setVisible(controls);}
+    if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);radius->setVisible(controls&&shapeStyle_.kind==editing::ShapeKind::Rectangle);}
+    const bool strokable=controls&&shapeStyle_.kind!=editing::ShapeKind::Line;
     if(auto* stroke=findChild<QCheckBox*>("shapeStroke")){const QSignalBlocker block(stroke);stroke->setChecked(shapeStyle_.strokeEnabled);stroke->setVisible(strokable);}
     if(auto* width=findChild<QDoubleSpinBox*>("shapeStrokeWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.strokeWidth);width->setVisible(strokable&&shapeStyle_.strokeEnabled);}
     if(auto* color=findChild<QPushButton*>("shapeStrokeColor"))color->setVisible(strokable&&shapeStyle_.strokeEnabled);
@@ -126,6 +126,15 @@ void MainWindow::refreshShapeControls(){
     if(tool_==Tool::Shape&&!shapeDraftId_.empty()&&shapeDraftRect_&&shapeDraftRect_->width>0&&shapeDraftRect_->height>0)
         overlay=NativeCanvas::ShapeDraftOverlay{*shapeDraftRect_,shapeDraftStyle_.kind,shapeDraftStyle_.cornerRadius,{uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue()),255},shapeDraftStyle_.lineWidth};
     canvas()->setShapeDraft(std::move(overlay));
+}
+// Controls edit a selected shape layer directly; its own fill colour is kept, unlike Update Shape Style.
+void MainWindow::applyShapeStyleToSelection(){
+    if(!shapeDraftId_.empty()||!active()||active()->shapeJson.empty()||!canEditLayers())return;
+    const auto current=editing::decodeShapeStyle(active()->shapeJson);
+    auto style=shapeStyle_;style.red=current.red;style.green=current.green;style.blue=current.blue;
+    if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;
+    if(style==current)return;
+    edit("Shape Style",[&](Document&){*active()=editing::restyleShape(*active(),style);});
 }
 std::optional<double> MainWindow::cropRatio() {
     if(cropRatioChoice_=="Original"){auto* p=current();if(p&&p->document)return double(p->document->width)/p->document->height;}

@@ -282,7 +282,7 @@ foreach(case transform_typing opacity_track_history opacity_double_click_history
 endforeach()
 add_executable(shape_ui_tests tests/shape_ui/ShapeUiTests.cpp)
 target_link_libraries(shape_ui_tests PRIVATE compositor_ui)
-foreach(case shape_insert_sibling shape_insert_folder shape_insert_nested_child shape_fractional_anchor shape_center_square shape_kind_change_cancels shape_radius_limit shape_radius_frozen shape_draft_immutable shape_click_noop shape_history_selection shape_stroke_draw shape_style_loads_from_selected_layer)
+foreach(case shape_insert_sibling shape_insert_folder shape_insert_nested_child shape_fractional_anchor shape_center_square shape_kind_change_cancels shape_radius_limit shape_radius_frozen shape_draft_immutable shape_click_noop shape_history_selection shape_stroke_draw shape_style_loads_from_selected_layer shape_controls_edit_selected_layer)
   add_test(NAME shape.ui.${case} COMMAND shape_ui_tests ${case})
   set_tests_properties(shape.ui.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

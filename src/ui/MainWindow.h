@@ -277,6 +277,7 @@ class MainWindow final:public QMainWindow {
     void changeCropRatio();
     void cancelShape();
     void refreshShapeControls();
+    void applyShapeStyleToSelection();
     void cancelCrop();
     void refreshCropControls();
     void resizeSelection(bool expand,double amount);
