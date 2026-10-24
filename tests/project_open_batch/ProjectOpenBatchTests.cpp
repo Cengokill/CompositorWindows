@@ -12,6 +12,9 @@
 #include <QElapsedTimer>
 #include <QSpinBox>
 #include <QTest>
+#include <QMenu>
+#include <QSettings>
+#include "ui/RecentProjects.h"
 
 namespace {
 void batch_empty(){Fixture f;auto* initial=f.tabs()->currentWidget();require(!f.window.openProjectPaths({}),"empty selection returns false");require(f.tabs()->count()==1&&f.tabs()->currentWidget()==initial&&command(f.window,"file.open")->isEnabled(),"empty selection preserves welcome and releases command eligibility");}
@@ -51,5 +54,51 @@ thread_local MultiProbe* multiProbe{};
 void CALLBACK multiNative(HWND,UINT,UINT_PTR,DWORD){auto* probe=multiProbe;if(!probe)return;if(++probe->ticks>100)return;EnumWindows([](HWND window,LPARAM value)->BOOL{auto* p=reinterpret_cast<MultiProbe*>(value);DWORD process{};GetWindowThreadProcessId(window,&process);if(process!=GetCurrentProcessId())return TRUE;wchar_t title[256]{},className[128]{};GetWindowTextW(window,title,256);GetClassNameW(window,className,128);if(std::wstring_view(title)!=L"Open Compositor Projects"||std::wstring_view(className)!=L"#32770"||!IsWindowVisible(window))return TRUE;if(!p->dialogSeen){p->dialogSeen=true;p->dialogOwned=GetWindow(window,GW_OWNER)==p->owner;}if(!p->submitted){struct Controls{HWND edit{},button{};};Controls controls;EnumChildWindows(window,[](HWND child,LPARAM val)->BOOL{if(GetDlgCtrlID(child)==1152&&IsWindowVisible(child))reinterpret_cast<Controls*>(val)->edit=child;if(GetDlgCtrlID(child)==IDOK&&IsWindowVisible(child))reinterpret_cast<Controls*>(val)->button=child;return TRUE;},reinterpret_cast<LPARAM>(&controls));if(controls.edit&&controls.button){QStringList quoted;for(const auto& path:p->compPaths)quoted.append('"'+QDir::toNativeSeparators(path)+'"');const auto text=quoted.join(' ').toStdWString();SendMessageW(controls.edit,WM_SETTEXT,0,reinterpret_cast<LPARAM>(text.c_str()));p->submitted=true;PostMessageW(controls.button,BM_CLICK,0,0);}}return TRUE;},reinterpret_cast<LPARAM>(probe));}
 void native_dialog_multi_selection(){Fixture f;f.window.show();QApplication::processEvents();auto* initial=f.tabs()->currentWidget();MultiProbe probe{reinterpret_cast<HWND>(f.window.winId()),{f.b,f.a}};multiProbe=&probe;const auto timer=SetTimer(nullptr,0,50,multiNative);require(timer!=0,"owned dialog multi-selection timer");command(f.window,"file.open")->trigger();KillTimer(nullptr,timer);multiProbe=nullptr;std::cout<<"dialog_seen="<<probe.dialogSeen<<" dialog_owned="<<probe.dialogOwned<<" submitted="<<probe.submitted<<" ticks="<<probe.ticks<<'\n';require(probe.dialogSeen&&probe.dialogOwned&&probe.submitted&&f.tabs()->count()==2&&f.tabs()->currentWidget()!=initial&&f.tabs()->tabText(0).contains("B.comp")&&f.tabs()->tabText(1).contains("A.comp")&&command(f.window,"file.open")->isEnabled(),"multi-selection returns both projects in order and releases guard");}
 
+QStringList storedRecent(){QSettings settings;return ui::recentProjects(settings);}
+bool samePaths(const QStringList& actual,const QStringList& expected){if(actual.size()!=expected.size())return false;for(qsizetype i=0;i<actual.size();++i)if(QDir::cleanPath(actual[i]).compare(QDir::cleanPath(expected[i]),Qt::CaseInsensitive)!=0)return false;return true;}
+void resetRecent(){QSettings settings;ui::clearRecentProjects(settings);}
+QMenu* recentMenu(MainWindow& window){auto* menu=window.findChild<QMenu*>("openRecentMenu");require(menu,"File > Open Recent submenu");return menu;}
+QList<QAction*> recentEntries(QMenu* menu){QList<QAction*> entries;for(auto* action:menu->actions())if(action->objectName()=="recentProject")entries.push_back(action);return entries;}
+void waitForSave(EditorProject& project){QElapsedTimer timer;timer.start();while(!project.saveJob.isNull()&&timer.elapsed()<10000)QTest::qWait(10);require(project.saveJob.isNull(),"save job finished");}
+void recent_store(){
+    resetRecent();QTemporaryDir root;require(root.isValid(),"recent root");QSettings settings;
+    const auto a=root.filePath("One/Art.comp"),b=root.filePath("Two/Art.comp"),c=root.filePath("Logo & Co.comp");
+    ui::recordRecentProject(settings,a);ui::recordRecentProject(settings,b);ui::recordRecentProject(settings,a.toUpper());ui::recordRecentProject(settings,"relative.comp");ui::recordRecentProject(settings,"");
+    require(samePaths(ui::recentProjects(settings),{a,b}),"most recent first, case-insensitive duplicate moved to top, invalid paths ignored");
+    for(int i=0;i<12;++i)ui::recordRecentProject(settings,root.filePath(QString("P%1.comp").arg(i)));
+    const auto capped=ui::recentProjects(settings);require(capped.size()==ui::recentProjectLimit&&capped.front().endsWith("P11.comp"),"list capped to ten newest entries");
+    settings.setValue(ui::recentProjectsKey,QStringList{"",QStringLiteral("rel/x.comp"),a,a.toLower(),b});require(samePaths(ui::recentProjects(settings),{a,b}),"stored values validated and deduplicated on read");
+    settings.setValue(ui::recentProjectsKey,a);require(samePaths(ui::recentProjects(settings),{a}),"single string value accepted");
+    settings.setValue(ui::recentProjectsKey,42);require(ui::recentProjects(settings).isEmpty(),"non-list value ignored");
+    const auto labels=ui::recentProjectLabels({a,b,c});require(labels.size()==3&&labels[0].startsWith("Art.comp ")&&labels[0].contains("One")&&labels[1].contains("Two")&&labels[2]=="Logo && Co.comp","duplicate names gain parent context and ampersands are escaped");
+    require(QDir().mkpath(a),"existing recent folder");settings.setValue(ui::recentProjectsKey,QStringList{b,a});require(samePaths(ui::pruneRecentProjects(settings),{a})&&samePaths(settings.value(ui::recentProjectsKey).toStringList(),{a}),"missing folders pruned from settings");
+    ui::clearRecentProjects(settings);require(!settings.contains(ui::recentProjectsKey)&&ui::recentProjects(settings).isEmpty(),"clear removes stored list");
 }
-int main(int argc,char** argv){QApplication app(argc,argv);std::cout<<std::unitbuf;QDir().mkpath(QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("fixtures"));const std::map<std::string,void(*)()> cases{{"drop_order",drop_order},{"drop_mixed_failure",drop_mixed_failure},{"drop_existing",drop_existing},{"drop_pending_guard",drop_pending_guard},{"batch_empty",batch_empty},{"batch_order",batch_order},{"batch_existing",batch_existing},{"batch_mixed_failure",batch_mixed_failure},{"batch_all_fail",batch_all_fail},{"batch_pending_guard",batch_pending_guard},{"batch_busy_guard",batch_busy_guard},{"batch_error_reentrancy",batch_error_reentrancy},{"welcome_fresh_session",welcome_fresh_session},{"welcome_failure_preserves_session",welcome_failure_preserves_session},{"welcome_project_then_image_skipped",welcome_project_then_image_skipped},{"package_policy",package_policy},{"native_options",native_options},{"native_dialog_cancel",native_dialog_cancel},{"native_dialog_reject_ordinary_folder",native_dialog_reject_ordinary_folder},{"native_dialog_multi_selection",native_dialog_multi_selection}};try{require(argc==2&&cases.contains(argv[1]),"provide named batch case");std::cout<<"START "<<argv[1]<<'\n';cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+void recent_open_record(){
+    resetRecent();Fixture f;require(f.window.openProjectPaths({f.b,f.a}),"batch opens");require(samePaths(storedRecent(),{f.a,f.b}),"successful opens recorded most recent first");
+    command(f.window,"pixels.invert")->trigger();auto* current=f.tabs()->currentWidget();
+    require(f.window.openProjectPaths({f.b}),"existing project reselected");require(f.tabs()->count()==2&&samePaths(storedRecent(),{f.b,f.a}),"reselecting an open project moves it to the top without a new tab");
+    f.tabs()->setCurrentWidget(current);require(command(f.window,"edit.undo")->isEnabled(),"existing session history untouched");
+    require(!f.window.openProjectPaths({f.broken})&&f.errors==1&&samePaths(storedRecent(),{f.b,f.a}),"failed open adds nothing");
+    command(f.window,"tool.gradient")->trigger();auto* canvas=f.window.canvas();canvas->pointerDown({4,10},{});canvas->pointerMove({25,10},{});canvas->pointerUp({25,10},{});require(command(f.window,"gradient.apply")->isEnabled(),"pending gradient fixture");
+    require(!f.window.openProjectPaths({f.b})&&samePaths(storedRecent(),{f.b,f.a}),"blocked switch adds nothing");
+}
+void recent_menu(){
+    resetRecent();Fixture f;{QSettings settings;ui::recordRecentProject(settings,f.b);ui::recordRecentProject(settings,f.directory.filePath("Gone.comp"));ui::recordRecentProject(settings,f.a);}
+    auto* menu=recentMenu(f.window);auto* clear=command(f.window,"file.clear_recent");require(clear->text()=="Clear Menu"&&menu->title().remove('&')=="Open Recent","upstream labels");
+    emit menu->aboutToShow();auto entries=recentEntries(menu);
+    require(entries.size()==2&&entries[0]->text()=="A.comp"&&entries[1]->text()=="B.comp"&&entries.back()!=menu->actions().back()&&menu->actions().back()==clear&&clear->isEnabled(),"menu lists existing projects in order above an enabled Clear Menu");
+    require(samePaths(storedRecent(),{f.a,f.b}),"missing folder pruned from settings when the menu is shown");
+    entries[1]->trigger();require(f.tabs()->count()==1&&f.tabs()->tabText(0).contains("B.comp")&&samePaths(storedRecent(),{f.b,f.a}),"entry opens through the normal route and moves to the top");
+    emit menu->aboutToShow();require(recentEntries(menu).size()==2,"rebuild replaces entries instead of appending");
+    clear->trigger();require(storedRecent().isEmpty(),"Clear Menu empties the list");
+    emit menu->aboutToShow();require(recentEntries(menu).isEmpty()&&!clear->isEnabled(),"empty menu disables Clear Menu");
+}
+void recent_save_record(){
+    resetRecent();Fixture f;auto& project=f.window.addProject(sample(32),"Saved");
+    f.window.setProjectSaveBeforeWriteForTesting([]{throw std::runtime_error("synthetic write failure");});f.window.setProperty("testNativeSavePath",f.directory.filePath("Failed.comp"));command(f.window,"file.save_as")->trigger();waitForSave(project);QTest::qWait(50);
+    require(storedRecent().isEmpty(),"failed save adds nothing");
+    f.window.setProjectSaveBeforeWriteForTesting({});const auto saved=f.directory.filePath("Saved.comp");f.window.setProperty("testNativeSavePath",saved);command(f.window,"file.save_as")->trigger();waitForSave(project);
+    require(QDir(saved).exists()&&samePaths(storedRecent(),{saved}),"successful Save As recorded");
+}}
+int main(int argc,char** argv){QApplication app(argc,argv);QApplication::setOrganizationName("CompositorTests");QApplication::setApplicationName("ProjectOpenBatchTests");QTemporaryDir settingsRoot;QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsRoot.path());std::cout<<std::unitbuf;QDir().mkpath(QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("fixtures"));const std::map<std::string,void(*)()> cases{{"drop_order",drop_order},{"drop_mixed_failure",drop_mixed_failure},{"drop_existing",drop_existing},{"drop_pending_guard",drop_pending_guard},{"batch_empty",batch_empty},{"batch_order",batch_order},{"batch_existing",batch_existing},{"batch_mixed_failure",batch_mixed_failure},{"batch_all_fail",batch_all_fail},{"batch_pending_guard",batch_pending_guard},{"batch_busy_guard",batch_busy_guard},{"batch_error_reentrancy",batch_error_reentrancy},{"welcome_fresh_session",welcome_fresh_session},{"welcome_failure_preserves_session",welcome_failure_preserves_session},{"welcome_project_then_image_skipped",welcome_project_then_image_skipped},{"package_policy",package_policy},{"native_options",native_options},{"native_dialog_cancel",native_dialog_cancel},{"native_dialog_reject_ordinary_folder",native_dialog_reject_ordinary_folder},{"native_dialog_multi_selection",native_dialog_multi_selection},{"recent_store",recent_store},{"recent_open_record",recent_open_record},{"recent_menu",recent_menu},{"recent_save_record",recent_save_record}};try{require(argc==2&&cases.contains(argv[1]),"provide named batch case");std::cout<<"START "<<argv[1]<<'\n';cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

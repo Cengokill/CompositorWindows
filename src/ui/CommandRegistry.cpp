@@ -90,6 +90,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         auto add=[&](const char*id,const char*menu,const char*label,const char*key,C category,G gate,P preparation,const char*source,T text=T::None){list.push_back({QString::fromUtf8(id),QString::fromUtf8(menu),QString::fromUtf8(label),QString::fromUtf8(key),category,gate,preparation,text,QString::fromUtf8(source)});};
         add("file.new","File","New Canvas…","Ctrl+N",C::Workspace,G::WorkspaceSwitch,P::ProjectOperation,"Compositor/Document/ProjectWorkspace.swift:53");
         add("file.open","File","Open Project…","Ctrl+O",C::Workspace,G::WorkspaceSwitch,P::ProjectOperation,"Compositor/Document/ProjectWorkspace.swift:59");
+        add("file.clear_recent","Open Recent","Clear Menu","",C::Application,G::Always,P::None,"Compositor/CompositorApp.swift (73dc0f4)");
         add("file.import","File","Import Image…","",C::Document,G::Import,P::None,"Compositor/CompositorApp.swift:58");
         add("file.export","File","Export Image…","Ctrl+Shift+E",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:68");
         add("file.save","File","Save Project","Ctrl+S",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:62");

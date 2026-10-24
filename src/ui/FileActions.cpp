@@ -12,6 +12,7 @@
 #include "ImportCommit.h"
 #include "RawImportDialog.h"
 #include "ProjectOpenDialog.h"
+#include "RecentProjects.h"
 #include "WorkspaceDropQueue.h"
 #include "VirtualImageDrop.h"
 #include "ProjectLayerDrag.h"
@@ -46,6 +47,7 @@
 #include <QScopeGuard>
 #include <QTabBar>
 #include <QMenuBar>
+#include <QMenu>
 #include <QThread>
 #include <QEventLoop>
 #include <commdlg.h>
@@ -383,6 +385,30 @@ void MainWindow::dropEvent(QDropEvent*event){
         event->acceptProposedAction();
     }catch(const std::exception&e){QMessageBox::critical(this,"Import Images",e.what());}
 }
+void MainWindow::setupRecentProjectsMenu(QMenu* file){
+    auto* menu=file->addMenu("Open &Recent");menu->setObjectName("openRecentMenu");
+    auto* clear=new QAction("Clear Menu",menu);clear->setObjectName("clearRecentProjects");
+    const auto* spec=ui::commandSpec("Open Recent","Clear Menu");
+    if(!spec)throw std::logic_error("Clear Menu is not in the command catalog");
+    commands_->bind(clear,*spec,[this]{QSettings settings;ui::clearRecentProjects(settings);},[](const ui::CommandState&){QSettings settings;return !ui::recentProjects(settings).isEmpty();});
+    // Rebuilt on every show so moved or deleted folders drop out and the order matches settings.
+    connect(menu,&QMenu::aboutToShow,this,[this,menu,clear]{
+        for(auto* action:menu->actions())if(action!=clear)delete action;
+        QSettings settings;const auto paths=ui::pruneRecentProjects(settings);const auto labels=ui::recentProjectLabels(paths);
+        const bool available=canSwitchProjects();
+        for(qsizetype index=0;index<paths.size();++index){
+            auto* item=new QAction(labels[index],menu);item->setObjectName("recentProject");item->setData(paths[index]);
+            item->setStatusTip(QDir::toNativeSeparators(paths[index]));item->setEnabled(available);
+            connect(item,&QAction::triggered,this,[this,path=paths[index]]{openProjectPaths({path});});
+            menu->insertAction(clear,item);
+        }
+        if(!paths.isEmpty())menu->insertSeparator(clear);
+        if(!clear->parent()||!menu->actions().contains(clear))menu->addAction(clear);
+        commands_->refresh();
+    });
+    menu->addAction(clear);
+}
+void MainWindow::noteRecentProject(const QString& path){QSettings settings;ui::recordRecentProject(settings,path);}
 void MainWindow::openProjectDialog(){
     if(!canSwitchProjects())return;
     if(property("nativePickerInProgress").toBool()){
@@ -416,14 +442,14 @@ bool MainWindow::loadProjectDirectory(const QString& path){
             std::error_code error;
             if(std::filesystem::equivalent(supplied,nativePath(project->path),error)&&!error){
                 QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);
-                tabs_->setCurrentIndex(int(index));return true;
+                tabs_->setCurrentIndex(int(index));noteRecentProject(path);return true;
             }
         }
         if(transformSession_&&transformSession_->persistent)applyTransformSession();
         ProjectStore store(makeWicProjectCodec());auto opened=store.load(supplied);
         EditorProject* project{};
         {QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);project=&addProject(std::move(opened.document),QFileInfo(path).fileName(),false);}
-        project->path=path;project->active=opened.activeLayer;project->selected={opened.activeLayer};project->history.reset();refresh(false);return true;
+        project->path=path;project->active=opened.activeLayer;project->selected={opened.activeLayer};project->history.reset();noteRecentProject(path);refresh(false);return true;
 }
 void MainWindow::openPath(const QString&path){
     if(QFileInfo(path).isDir()){
@@ -590,6 +616,7 @@ void MainWindow::startProjectSave(EditorProject& project,const QString& path){
         if(error.isEmpty()){
             owner->path=path;
             owner->history.markSavedIfCurrent(revision);
+            noteRecentProject(path);
         }
         owner->saveError=error;
         refresh(false,false);
