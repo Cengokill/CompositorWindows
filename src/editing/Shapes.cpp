@@ -17,7 +17,7 @@ Layer drawLayer(const Layer& source,const ShapeStyle& style,bool force){
     if(!source.raster||source.shapeJson.empty())throw std::runtime_error("Layer is no longer a live shape");if(!source.transform.valid())throw std::runtime_error("Invalid shape transform");
     int width=std::max(1,int(std::round(source.transform.width))),height=std::max(1,int(std::round(source.transform.height)));
     if(!force&&width==source.raster->width&&height==source.raster->height)return source;
-    auto result=source;result.raster=shapeRaster(style,width,height);result.deep.reset();result.shapeJson=encodeShapeStyle(style);if(result.mask&&!result.mask->placement)result.mask->placement=source.transform;    return result;
+    auto result=source;result.raster=shapeRaster(style,width,height);result.deep.reset();result.shapeJson=encodeShapeStyle(style);if(result.mask&&!result.mask->placement)result.mask->placement=source.transform;return result;
 }
 // Premultiplied pixel with the stroke composited over the fill. Both coverages are 0-255.
 Pixel strokedPixel(const ShapeStyle& style,int fillAlpha,int strokeAlpha){

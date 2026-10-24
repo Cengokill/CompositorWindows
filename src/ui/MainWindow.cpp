@@ -202,7 +202,7 @@ bool MainWindow::closeProject(int i){
     }
     if(!canSwitchProjects()||projects_[i]->importing||projects_[i]->projectBusy)return false;
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();finishVisibilitySwipe();
-    finishOpacityEdit();if(textSession_&&textSession_->owner==projects_[i].get())finishText();applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
+    finishOpacityEdit();finishShapeStyleEdit();if(textSession_&&textSession_->owner==projects_[i].get())finishText();applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
     auto&p=*projects_[i];
     // A write in flight must finish before deciding. Edits made after its snapshot still prompt again.
     for(;;){

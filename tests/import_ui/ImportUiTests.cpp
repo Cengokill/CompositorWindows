@@ -527,6 +527,27 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         require(result.raster->pixel(0,10)==Pixel{0,0,255,255}&&result.raster->pixel(3,10)==Pixel{0,0,255,255},"Stroke band is not blue at the outer edge");
         require(result.raster->pixel(4,10)==Pixel{200,100,50,255}&&result.raster->pixel(12,10)==Pixel{200,100,50,255},"Fill is not inside the stroke band");
     });
+    test("psd_inside_stroke_keeps_shape_bounds",[&]{
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);layer.name="Inside";
+        layer.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),solidFill(200,100,50),strokeDescriptor(4,0,0,255,"strokeStyleAlignInside"));
+        const auto imported=importPsd({layer});
+        require(imported.warnings.empty()&&imported.document.layers.size()==1,"Inside stroke reported a warning or was dropped");
+        const auto& result=imported.document.layers[0];
+        require(result.transform.x==10&&result.transform.y==12&&result.transform.width==20&&result.transform.height==16,"Inside stroke changed the shape bounds");
+        require(result.raster->pixel(0,10)==Pixel{0,0,255,255}&&result.raster->pixel(3,10)==Pixel{0,0,255,255},"Inside stroke band is not at the outer edge");
+        require(result.raster->pixel(4,10)==Pixel{200,100,50,255},"Fill is not inside the inside-aligned stroke band");
+    });
+    test("psd_outside_stroke_grows_shape_bounds_by_full_width",[&]{
+        auto layer=solidPsdLayer(10,12,30,28,0,0,255);layer.name="Outside";
+        layer.blocks=shapeBlocks(origination(1,12,10,28,30),vectorPath({rectangleKnots(10,12,30,28)},64,48),solidFill(200,100,50),strokeDescriptor(4,0,0,255,"strokeStyleAlignOutside"));
+        const auto imported=importPsd({layer});
+        require(imported.warnings.empty()&&imported.document.layers.size()==1,"Outside stroke reported a warning or was dropped");
+        const auto& result=imported.document.layers[0];
+        // The 4 px outside stroke adds its full width to each side of the 20 x 16 path.
+        require(result.transform.x==6&&result.transform.y==8&&result.transform.width==28&&result.transform.height==24,"Outside stroke did not grow the shape bounds by its full width");
+        require(result.raster->pixel(0,10)==Pixel{0,0,255,255}&&result.raster->pixel(3,10)==Pixel{0,0,255,255},"Outside stroke band is not at the outer edge");
+        require(result.raster->pixel(4,10)==Pixel{200,100,50,255}&&result.raster->pixel(23,10)==Pixel{200,100,50,255},"Fill is not inside the outside-aligned stroke band");
+    });
     test("psd_path_without_origination_is_not_inferred_from_bounds",[&]{
         const auto diamond=vectorPath({{sharp(20,12),sharp(30,24),sharp(20,36),sharp(10,24)}},64,48);
         const auto imported=importPsd({shapeLayer(10,12,30,36,shapeBlocks({},diamond,solidFill(200,100,50)),"Diamond"),plainLayer()});
