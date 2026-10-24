@@ -12,6 +12,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPlainTextEdit>
+#include <QSettings>
 #include <QTextEdit>
 #include <QWidget>
 #include <algorithm>
@@ -254,6 +255,9 @@ void CommandRegistry::bind(QAction*action,const CommandSpec&spec,std::function<v
     action->setProperty("commandId",spec.id);action->setProperty("commandSource",spec.source);if(action->objectName().isEmpty())action->setObjectName("command."+spec.id);
     if(!spec.windowsShortcut.isEmpty())action->setShortcut(QKeySequence(spec.windowsShortcut));
     if(spec.id=="edit.redo")action->setShortcuts({QKeySequence("Ctrl+Shift+Z"),QKeySequence("Ctrl+Y")});
+    if(defaults_[spec.id].isEmpty())defaults_[spec.id]=action->shortcuts();
+    if(!shortcuts_.count(spec.id)||shortcuts_[spec.id].isEmpty())shortcuts_[spec.id]=defaults_[spec.id];
+    action->setShortcuts(shortcuts_[spec.id]);
     action->setShortcutContext(Qt::WindowShortcut);
     const auto index=entries_.size();entries_.push_back({action,spec,std::move(invoke),std::move(extra)});connect(action,&QAction::triggered,this,[this,index]{invokeEntry(index);});
     if(auto*menu=qobject_cast<QMenu*>(action->parent()))connect(menu,&QMenu::aboutToShow,this,[this]{refresh();});refresh();
@@ -285,5 +289,79 @@ QJsonArray CommandRegistry::manifest()const{QJsonArray result;for(const auto&e:e
 bool CommandRegistry::eventFilter(QObject*object,QEvent*event){
     if(owner_&&event->type()==QEvent::ShortcutOverride){auto*widget=qobject_cast<QWidget*>(object);auto*focus=QApplication::focusWidget();if(widget&&focus&&(focus==owner_||owner_->isAncestorOf(focus))&&isTextEditingWidget(focus)&&reservesTextShortcut(*static_cast<QKeyEvent*>(event))){event->accept();return true;}}
     return QObject::eventFilter(object,event);
+}
+namespace {
+QString portable(const QKeySequence& key){return key.toString(QKeySequence::PortableText);}
+QList<QKeySequence> unique(const QList<QKeySequence>& keys){QList<QKeySequence> result;for(const auto& key:keys)if(!key.isEmpty()&&!result.contains(key))result.push_back(key);return result;}
+}
+QString shortcutProblem(const QKeySequence& key){
+    if(key.isEmpty())return "The shortcut is empty.";
+    if(key.count()!=1)return portable(key)+" has more than one key combination; use a single combination.";
+    const auto combination=key[0];const int code=combination.key();
+    if(code==Qt::Key_unknown||code==Qt::Key_Control||code==Qt::Key_Shift||code==Qt::Key_Alt||code==Qt::Key_Meta||code==Qt::Key_AltGr)return "Add a key to the modifiers.";
+    const auto mods=combination.keyboardModifiers()&~Qt::KeypadModifier;
+    const bool plain=(mods&~Qt::ShiftModifier)==Qt::NoModifier;
+    // Keys the canvas keeps for its own gestures: Escape, Tab, Enter, Space pan, digit opacity, bracket brush size, arrow nudges, and Delete/Backspace.
+    const bool canvasKey=code==Qt::Key_Escape||code==Qt::Key_Tab||code==Qt::Key_Backtab||code==Qt::Key_Return||code==Qt::Key_Enter||code==Qt::Key_Space||(code>=Qt::Key_0&&code<=Qt::Key_9)||code==Qt::Key_BracketLeft||code==Qt::Key_BracketRight||code==Qt::Key_BraceLeft||code==Qt::Key_BraceRight;
+    const bool arrow=code==Qt::Key_Left||code==Qt::Key_Right||code==Qt::Key_Up||code==Qt::Key_Down;
+    if(arrow||(plain&&canvasKey)||(mods==Qt::NoModifier&&(code==Qt::Key_Delete||code==Qt::Key_Backspace)))return portable(key)+" is reserved for canvas editing.";
+    return {};
+}
+std::vector<ShortcutConflict> findShortcutConflicts(const ShortcutMap& shortcuts){
+    std::map<QString,ShortcutConflict> owners;
+    for(const auto&[id,keys]:shortcuts)for(const auto& key:unique(keys)){auto& owner=owners[portable(key)];owner.key=key;owner.ids.push_back(id);}
+    std::vector<ShortcutConflict> result;
+    for(auto&[text,owner]:owners)if(owner.ids.size()>1)result.push_back(owner);
+    return result;
+}
+bool CommandRegistry::applyShortcuts(const ShortcutMap& changes,QString* error){
+    auto fail=[&](const QString& message){if(error)*error=message;return false;};
+    auto merged=shortcuts_;
+    for(const auto&[id,keys]:changes){
+        if(!defaults_.count(id))return fail("Unknown command "+id+".");
+        for(const auto& key:keys)if(const auto problem=shortcutProblem(key);!problem.isEmpty())return fail(problem);
+        merged[id]=unique(keys);
+    }
+    if(const auto conflicts=findShortcutConflicts(merged);!conflicts.empty())return fail(portable(conflicts.front().key)+" is assigned to more than one command: "+conflicts.front().ids.join(", ")+".");
+    shortcuts_=std::move(merged);
+    for(const auto& e:entries_)if(e.action&&e.carriesShortcut)e.action->setShortcuts(shortcuts_[e.spec.id]);
+    refresh();
+    return true;
+}
+bool CommandRegistry::saveShortcuts(const ShortcutMap& changes,QSettings& settings,QString* error){
+    const auto previous=shortcuts_;
+    if(!applyShortcuts(changes,error))return false;
+    std::map<QString,QVariant> stored;
+    settings.beginGroup(shortcutSettingsGroup);for(const auto& key:settings.childKeys())stored[key]=settings.value(key);settings.endGroup();
+    auto write=[&](const std::function<void()>& body){settings.remove(shortcutSettingsGroup);settings.beginGroup(shortcutSettingsGroup);body();settings.endGroup();settings.sync();return settings.status()==QSettings::NoError;};
+    const bool saved=write([&]{for(const auto&[id,keys]:shortcuts_)if(keys!=defaults_[id]){QStringList text;for(const auto& key:keys)text.push_back(portable(key));settings.setValue(id,text.join('\t'));}});
+    if(saved)return true;
+    write([&]{for(const auto&[key,value]:stored)settings.setValue(key,value);});
+    applyShortcuts(previous);
+    if(error)*error="The shortcut settings could not be written. Your previous shortcuts are still active.";
+    return false;
+}
+bool CommandRegistry::restoreShortcuts(QSettings& settings){
+    ShortcutMap overrides;
+    settings.beginGroup(shortcutSettingsGroup);
+    for(const auto& id:settings.childKeys()){
+        const auto value=settings.value(id);
+        if(!defaults_.count(id)||value.typeId()!=QMetaType::QString)continue;
+        QList<QKeySequence> keys;bool valid=true;
+        for(const auto& text:value.toString().split('\t',Qt::SkipEmptyParts)){const auto key=QKeySequence::fromString(text,QKeySequence::PortableText);if(portable(key)!=text||!shortcutProblem(key).isEmpty()){valid=false;break;}keys.push_back(key);}
+        if(valid)overrides[id]=keys;
+    }
+    settings.endGroup();
+    return overrides.empty()||applyShortcuts(overrides);
+}
+bool CommandRegistry::invokeShortcut(const QKeySequence& key){
+    if(key.isEmpty())return false;
+    for(bool carrying:{true,false})for(size_t i=0;i<entries_.size();++i){const auto& e=entries_[i];if(e.action&&e.carriesShortcut==carrying&&shortcuts_[e.spec.id].contains(key))return invokeEntry(i);}
+    return false;
+}
+void CommandRegistry::releaseShortcut(QAction* action){
+    if(!action)return;
+    for(auto& e:entries_)if(e.action==action)e.carriesShortcut=false;
+    action->setShortcuts({});
 }
 }

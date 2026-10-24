@@ -55,7 +55,7 @@ void MainWindow::setupRetouchActions() {
     auto addTool=[&](const QString& label,const char* objectName,const QKeySequence& shortcut,Tool tool) {
         auto* item=retouchBar_->addAction(label);
         item->setObjectName(objectName);item->setProperty("retouchShortcut",shortcut.toString());item->setCheckable(true);
-        bindCommand(item,"Tools",tool==Tool::CloneStamp?"Clone (S)":tool==Tool::SpotHealing?"Heal (J)":"Retouch (R)",[this,tool]{selectTool(tool);});item->setShortcut({});item->setVisible(false);
+        bindCommand(item,"Tools",tool==Tool::CloneStamp?"Clone (S)":tool==Tool::SpotHealing?"Heal (J)":"Retouch (R)",[this,tool]{selectTool(tool);});commands_->releaseShortcut(item);item->setVisible(false);
     };
     addTool("Clone Stamp (S)","retouchClone",QKeySequence(Qt::Key_S),Tool::CloneStamp);
     addTool("Spot Healing (J)","retouchHeal",QKeySequence(Qt::Key_J),Tool::SpotHealing);

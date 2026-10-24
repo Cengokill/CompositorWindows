@@ -4,12 +4,16 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QList>
+#include <QStringList>
 #include <functional>
+#include <map>
 #include <optional>
 #include <vector>
 class QAction;
 class QWidget;
 class QKeyEvent;
+class QSettings;
 
 namespace compositor::ui {
 // State values describe the current session before a command resolves any edit.
@@ -65,6 +69,15 @@ std::vector<CommandListItem> filterCommands(const std::vector<CommandListItem>&,
 bool isTextEditingWidget(QWidget*);
 bool reservesTextShortcut(const QKeyEvent&);
 
+// Shortcut preferences are application settings keyed by stable command id.
+// They never enter document history or .comp data.
+using ShortcutMap=std::map<QString,QList<QKeySequence>>;
+struct ShortcutConflict {QKeySequence key;QStringList ids;};
+std::vector<ShortcutConflict> findShortcutConflicts(const ShortcutMap&);
+// Returns an explanation when a key cannot be assigned (multi-chord, modifier only, or a key the canvas reserves).
+QString shortcutProblem(const QKeySequence&);
+inline constexpr auto shortcutSettingsGroup="keyboardShortcuts";
+
 class CommandRegistry final:public QObject {
 public:
     using StateProvider=std::function<CommandState()>;
@@ -80,16 +93,31 @@ public:
     bool invoke(const QString& id);
     std::vector<CommandListItem> listCommands()const;
     QJsonArray manifest()const;
+    // Shipped and effective shortcuts for every bound command id.
+    ShortcutMap defaultShortcuts()const{return defaults_;}
+    ShortcutMap shortcuts()const{return shortcuts_;}
+    // Validates the complete map, then applies it to the bound actions; on failure nothing changes.
+    bool applyShortcuts(const ShortcutMap&,QString* error=nullptr);
+    // Writes overrides to settings and applies them; settings and actions stay unchanged on failure.
+    bool saveShortcuts(const ShortcutMap&,QSettings&,QString* error=nullptr);
+    // Applies valid stored overrides; malformed, stale, or conflicting values are ignored.
+    bool restoreShortcuts(QSettings&);
+    // Direct keyboard path for keys that reach the window without a QAction shortcut.
+    bool invokeShortcut(const QKeySequence&);
+    // Keeps a secondary action registered without carrying the command's shortcut.
+    void releaseShortcut(QAction*);
 protected:
     bool eventFilter(QObject*,QEvent*)override;
 private:
-    struct Entry {QPointer<QAction> action;CommandSpec spec;std::function<void()> invoke;Enabled extra;};
+    struct Entry {QPointer<QAction> action;CommandSpec spec;std::function<void()> invoke;Enabled extra;bool carriesShortcut{true};};
     QPointer<QWidget> owner_;
     StateProvider state_;
     Prepare prepare_;
     std::function<void(const QString&)> error_;
     std::vector<Entry> entries_;
     bool refreshing_{};
+    ShortcutMap defaults_,shortcuts_;
+    std::vector<QString> order_;
     bool invokeEntry(size_t);
 };
 }

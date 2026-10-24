@@ -57,10 +57,10 @@ void MainWindow::setupSelectionActions(){
     action(clipboard,"Layer via Copy",QKeySequence("Ctrl+J"),[this]{copySelection(false,false,true);});
     action(clipboard,"Clear",{},[this]{pixelEdit(int(editing::PixelEdit::Clear));});
     auto*bar=addToolBar("Selection Options");bar->setObjectName("selectionOptions");
-    auto*marquee=bar->addAction("Marquee (M)");bindCommand(marquee,"Tools","Marquee (M)",[this]{selectTool(Tool::Marquee);});marquee->setShortcut({});
+    auto*marquee=bar->addAction("Marquee (M)");bindCommand(marquee,"Tools","Marquee (M)",[this]{selectTool(Tool::Marquee);});commands_->releaseShortcut(marquee);
     auto*shape=new QComboBox;shape->addItems({"Rectangle","Ellipse"});shape->setAccessibleName("Marquee shape");bar->addWidget(shape);connect(shape,&QComboBox::currentIndexChanged,this,[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);});
-    auto*lasso=bar->addAction("Lasso (L)");bindCommand(lasso,"Tools","Lasso (L)",[this]{selectTool(Tool::Lasso);});lasso->setShortcut({});
-    auto*polygon=bar->addAction("Polygonal Lasso");bindCommand(polygon,"Tools","Polygon",[this]{selectTool(Tool::Polygon);});polygon->setShortcut({});
+    auto*lasso=bar->addAction("Lasso (L)");bindCommand(lasso,"Tools","Lasso (L)",[this]{selectTool(Tool::Lasso);});commands_->releaseShortcut(lasso);
+    auto*polygon=bar->addAction("Polygonal Lasso");bindCommand(polygon,"Tools","Polygon",[this]{selectTool(Tool::Polygon);});commands_->releaseShortcut(polygon);
     auto*lassoKind=new QComboBox;lassoKind->setObjectName("lassoKind");lassoKind->setAccessibleName("Lasso kind");lassoKind->addItems({"Freehand","Polygonal"});bar->addWidget(lassoKind);
     connect(lassoKind,&QComboBox::currentIndexChanged,this,[this](int index){if(selectionGesture_.active())pointerCancel();lassoKind_=index?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;selectTool(Tool::Lasso);});
     for(bool expand:{true,false}){

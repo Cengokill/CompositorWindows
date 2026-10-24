@@ -129,14 +129,13 @@ void MainWindow::keyPressEvent(QKeyEvent*e){
         if(tool_==Tool::CloneStamp)cloneSettings_.opacity=value;else if(tool_==Tool::Blur)blurSettings_.opacity=value;else if(brushTool)brushSettings_.opacity=value;else if(tool_==Tool::Gradient){gradientSettings_.opacity=value;refreshGradient();}else{auto selected=layerSelection().ids;finishOpacityEdit();edit("Layer Opacity",[&](Document&d){for(auto&layer:d.layers)if(!layer.group&&std::find(selected.begin(),selected.end(),layer.id)!=selected.end())layer.opacity=value;});}refresh(false,false);return;
     }
     if(e->modifiers()==Qt::NoModifier){switch(e->key()){
-        case Qt::Key_W:selectTool(Tool::Wand);return;case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;case Qt::Key_M:selectTool(Tool::Marquee);return;case Qt::Key_L:selectTool(Tool::Lasso);return;
+        case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;
         case Qt::Key_Return:case Qt::Key_Enter:if(drawingOriginal_)applyGradient();else if(transformSession_)applyTransformSession();else if(tool_==Tool::Crop)applyCrop();else finishPolygon();return;
-        case Qt::Key_G:selectTool(Tool::Gradient);refresh(false);return;case Qt::Key_U:selectTool(Tool::Shape);refresh(false);return;case Qt::Key_C:selectTool(Tool::Crop);refresh(false);return;
-        case Qt::Key_X:swapPalette();return;case Qt::Key_D:resetPalette();return;case Qt::Key_I:selectTool(Tool::Eyedropper);return;case Qt::Key_Z:selectTool(Tool::Zoom);return;
-        case Qt::Key_B:selectTool(Tool::Brush);return;case Qt::Key_E:selectTool(Tool::Eraser);return;
-        case Qt::Key_V:selectTool(Tool::Move);return;case Qt::Key_H:selectTool(Tool::Hand);return;case Qt::Key_T:selectTool(Tool::Text);return;
         case Qt::Key_Escape:pointerCancel();return;default:break;
     }}
+    // Unmodified tool keys can reach the window without a QAction shortcut; dispatch them through the same remappable registry commands.
+    const auto modifiers=e->modifiers()&~Qt::KeypadModifier;
+    if(commands_&&(modifiers&~Qt::ShiftModifier)==Qt::NoModifier&&commands_->invokeShortcut(QKeySequence(QKeyCombination(modifiers,Qt::Key(e->key()))))){e->accept();return;}
     QMainWindow::keyPressEvent(e);
 }
 }

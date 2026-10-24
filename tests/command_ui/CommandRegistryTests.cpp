@@ -1,5 +1,12 @@
 #include "ui/CommandPalette.h"
 #include "ui/CommandRegistry.h"
+#include "ui/KeyboardShortcutDialog.h"
+#include <QKeySequenceEdit>
+#include <QLabel>
+#include <QPushButton>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QTreeWidget>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
@@ -104,5 +111,82 @@ void palette_invoke(){
     QTest::keyClicks(search,"New Layer");QTest::keyClick(search,Qt::Key_Return);QApplication::processEvents();
     check(f.calls==1&&f.line->hasFocus(),"invoke restores prior focus");
 }
+QList<QKeySequence> keys(std::initializer_list<const char*> values){QList<QKeySequence> result;for(auto* value:values)result.push_back(QKeySequence(value));return result;}
+void shortcut_assign_clear(){
+    Fixture f;auto*move=f.bind("tool.move");auto*redo=f.bind("edit.redo");auto*layer=f.bind("layer.new");
+    auto*secondary=new QAction("Move copy",&f.window);f.registry.bind(secondary,spec("tool.move"),[&]{++f.calls;});f.registry.releaseShortcut(secondary);
+    check(redo->shortcuts()==keys({"Ctrl+Shift+Z","Ctrl+Y"})&&f.registry.defaultShortcuts()["edit.redo"]==keys({"Ctrl+Shift+Z","Ctrl+Y"}),"Redo ships with both bindings");
+    check(move->shortcuts()==keys({"V"})&&secondary->shortcuts().isEmpty(),"released secondary action carries no shortcut");
+    check(f.registry.applyShortcuts({{"tool.move",keys({"K"})},{"layer.new",{}},{"edit.redo",keys({"Ctrl+Y"})}}),"valid assignment applies");
+    check(move->shortcuts()==keys({"K"})&&secondary->shortcuts().isEmpty()&&layer->shortcuts().isEmpty()&&redo->shortcuts()==keys({"Ctrl+Y"}),"actions follow assigned and cleared shortcuts");
+    check(f.registry.invokeShortcut(QKeySequence("K"))&&f.calls==1,"direct dispatch uses the new key");
+    check(!f.registry.invokeShortcut(QKeySequence("V"))&&!f.registry.invokeShortcut(QKeySequence("Ctrl+Shift+N"))&&f.calls==1,"old and cleared keys no longer dispatch");
+    const auto before=f.registry.shortcuts();QString error;
+    check(!f.registry.applyShortcuts({{"tool.move",keys({"Escape"})}},&error)&&!error.isEmpty(),"reserved canvas key rejected");
+    check(!f.registry.applyShortcuts({{"tool.move",{QKeySequence("Ctrl+K, Ctrl+L")}}},&error),"multi-chord key rejected");
+    check(!f.registry.applyShortcuts({{"no.such",keys({"F9"})}},&error),"unknown command rejected");
+    check(f.registry.shortcuts()==before&&move->shortcuts()==keys({"K"}),"invalid input leaves mappings unchanged");
+    check(shortcutProblem(QKeySequence("Shift+Delete")).isEmpty()&&shortcutProblem(QKeySequence("F11")).isEmpty(),"shipped special keys remain assignable");
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="source_predicates")source_predicates();else if(name=="layer_eligibility")layer_eligibility();else if(name=="pending_preparation")pending_preparation();else if(name=="stale_activation")stale_activation();else if(name=="text_shortcuts")text_shortcuts();else if(name=="text_menu_routes")text_menu_routes();else if(name=="catalog_manifest")catalog_manifest();else if(name=="registration")registration();else if(name=="preparation_error")preparation_error();else if(name=="palette_filter")palette_filter();else if(name=="palette_keyboard")palette_keyboard();else if(name=="palette_enabled")palette_enabled();else if(name=="palette_invoke")palette_invoke();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+void shortcut_conflicts(){
+    Fixture f;auto*move=f.bind("tool.move");auto*redo=f.bind("edit.redo");f.bind("layer.new");
+    auto conflicts=findShortcutConflicts({{"a",keys({"K"})},{"b",keys({"Ctrl+K","K"})},{"c",keys({"Ctrl+Y","Ctrl+Y"})}});
+    check(conflicts.size()==1&&conflicts[0].key==QKeySequence("K")&&conflicts[0].ids==QStringList({"a","b"}),"duplicate across commands reported once; repeats within a command are not conflicts");
+    const auto before=f.registry.shortcuts();QString error;
+    check(!f.registry.applyShortcuts({{"tool.move",keys({"Ctrl+Y"})}},&error)&&error.contains("edit.redo"),"conflict with Redo's second binding rejected");
+    check(f.registry.shortcuts()==before&&move->shortcuts()==keys({"V"})&&redo->shortcuts()==keys({"Ctrl+Shift+Z","Ctrl+Y"}),"conflict leaves actions unchanged");
+    check(f.registry.applyShortcuts({{"tool.move",keys({"Ctrl+Y"})},{"edit.redo",keys({"Ctrl+Shift+Z"})}}),"moving a key resolves the conflict");
+}
+void shortcut_persistence(){
+    QTemporaryDir dir;check(dir.isValid(),"temporary settings directory");const auto path=dir.filePath("shortcuts.ini");
+    const ShortcutMap changes{{"tool.move",keys({"K"})},{"layer.new",{}},{"edit.redo",keys({"Ctrl+Y"})}};
+    {Fixture f;f.bind("tool.move");f.bind("edit.redo");f.bind("layer.new");QSettings settings(path,QSettings::IniFormat);
+        check(f.registry.saveShortcuts(changes,settings),"save succeeds");
+        settings.beginGroup(shortcutSettingsGroup);check(settings.childKeys().size()==3&&settings.value("tool.move").toString()=="K"&&settings.value("layer.new").toString().isEmpty(),"only overrides stored, cleared as empty");settings.endGroup();
+        QString error;check(!f.registry.saveShortcuts({{"tool.move",keys({"Ctrl+Y"})}},settings,&error)&&!error.isEmpty(),"conflicting save fails");
+        settings.beginGroup(shortcutSettingsGroup);check(settings.value("tool.move").toString()=="K","failed save leaves stored settings");settings.endGroup();}
+    {Fixture f;auto*move=f.bind("tool.move");auto*redo=f.bind("edit.redo");auto*layer=f.bind("layer.new");QSettings settings(path,QSettings::IniFormat);
+        check(f.registry.restoreShortcuts(settings),"fresh registry restores");
+        check(move->shortcuts()==keys({"K"})&&layer->shortcuts().isEmpty()&&redo->shortcuts()==keys({"Ctrl+Y"}),"fresh instance restores overrides");
+        check(f.registry.saveShortcuts(f.registry.defaultShortcuts(),settings),"restore defaults saves");
+        check(move->shortcuts()==keys({"V"})&&redo->shortcuts()==keys({"Ctrl+Shift+Z","Ctrl+Y"})&&layer->shortcuts()==keys({"Ctrl+Shift+N"}),"defaults restored including both Redo bindings");
+        settings.beginGroup(shortcutSettingsGroup);check(settings.childKeys().isEmpty(),"defaults leave no overrides");settings.endGroup();}
+    {QSettings settings(path,QSettings::IniFormat);settings.beginGroup(shortcutSettingsGroup);settings.setValue("no.such","F9");settings.setValue("tool.move","Ctrl+K, Ctrl+L");settings.setValue("layer.new","Escape");settings.setValue("edit.redo",42);settings.endGroup();settings.sync();
+        Fixture f;auto*move=f.bind("tool.move");auto*redo=f.bind("edit.redo");f.bind("layer.new");const auto before=f.registry.shortcuts();
+        f.registry.restoreShortcuts(settings);check(f.registry.shortcuts()==before&&move->shortcuts()==keys({"V"})&&redo->shortcuts().size()==2,"malformed and stale values ignored");
+        settings.remove(shortcutSettingsGroup);settings.setValue(QString(shortcutSettingsGroup)+"/tool.move","Ctrl+Y");settings.sync();
+        check(!f.registry.restoreShortcuts(settings)&&f.registry.shortcuts()==before,"conflicting stored values ignored");}
+    {Fixture f;auto*move=f.bind("tool.move");f.bind("edit.redo");f.bind("layer.new");
+        QSettings settings(path,QSettings::IniFormat);settings.clear();settings.sync();
+        QFile::setPermissions(path,QFileDevice::ReadOwner|QFileDevice::ReadUser);
+        QString error;const bool saved=f.registry.saveShortcuts({{"tool.move",keys({"K"})}},settings,&error);
+        QFile::setPermissions(path,QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ReadUser|QFileDevice::WriteUser);
+        check(!saved&&!error.isEmpty()&&move->shortcuts()==keys({"V"})&&f.registry.shortcuts()["tool.move"]==keys({"V"}),"unwritable settings keep active shortcuts");}
+}
+QTreeWidgetItem* shortcutRow(QTreeWidget* list,const QString& id){for(int i=0;i<list->topLevelItemCount();++i)if(list->topLevelItem(i)->data(0,Qt::UserRole).toString()==id)return list->topLevelItem(i);throw std::runtime_error("shortcut row missing");}
+void shortcut_dialog(){
+    Fixture f;auto*move=f.bind("tool.move");f.bind("edit.redo");f.bind("layer.new");int commits=0;bool accept=false;
+    auto open=[&]{return new KeyboardShortcutDialog(&f.window,f.registry,[&](const ShortcutMap& draft,QString* error){++commits;return accept?f.registry.applyShortcuts(draft,error):false;});};
+    auto* dialog=open();dialog->show();QApplication::processEvents();
+    auto* list=dialog->findChild<QTreeWidget*>("shortcutList");auto* primary=dialog->findChild<QKeySequenceEdit*>("shortcutPrimary");auto* save=dialog->findChild<QPushButton*>("shortcutSave");auto* status=dialog->findChild<QLabel*>("shortcutStatus");
+    check(list&&primary&&save&&status,"dialog controls");
+    check(shortcutRow(list,"edit.redo")->text(2).contains("Ctrl+Y")&&shortcutRow(list,"edit.redo")->text(2).contains("Ctrl+Shift+Z"),"Redo row shows both bindings");
+    list->setCurrentItem(shortcutRow(list,"tool.move"));check(primary->keySequence()==QKeySequence("V"),"selection loads current key");
+    primary->setFocus();QTest::keyClick(primary,Qt::Key_Y,Qt::ControlModifier);QApplication::processEvents();
+    check(!save->isEnabled()&&status->text().contains("Save is unavailable")&&status->text().contains("Redo"),"conflict explained and Save blocked");
+    save->click();check(commits==0&&move->shortcuts()==keys({"V"}),"blocked Save does not commit");
+    dialog->findChild<QPushButton*>("shortcutClear")->click();check(save->isEnabled()&&shortcutRow(list,"tool.move")->text(2).isEmpty()&&dialog->draft().at("tool.move").isEmpty(),"Clear resolves the conflict");
+    primary->setFocus();QTest::keyClick(primary,Qt::Key_K);QApplication::processEvents();check(dialog->draft().at("tool.move")==keys({"K"}),"assignment recorded in draft");
+    save->click();QApplication::processEvents();check(commits==1&&dialog->isVisible()&&move->shortcuts()==keys({"V"})&&!status->text().isEmpty(),"failed commit keeps dialog and active shortcuts");
+    dialog->findChild<QPushButton*>("shortcutCancel")->click();check(dialog->result()==QDialog::Rejected&&move->shortcuts()==keys({"V"})&&f.registry.shortcuts()["tool.move"]==keys({"V"}),"Cancel discards the draft");
+    delete dialog;accept=true;dialog=open();dialog->show();QApplication::processEvents();
+    list=dialog->findChild<QTreeWidget*>("shortcutList");primary=dialog->findChild<QKeySequenceEdit*>("shortcutPrimary");
+    list->setCurrentItem(shortcutRow(list,"tool.move"));primary->setFocus();QTest::keyClick(primary,Qt::Key_K);QApplication::processEvents();
+    dialog->findChild<QPushButton*>("shortcutSave")->click();check(dialog->result()==QDialog::Accepted&&move->shortcuts()==keys({"K"}),"Save applies the draft");
+    delete dialog;dialog=open();list=dialog->findChild<QTreeWidget*>("shortcutList");
+    check(shortcutRow(list,"tool.move")->text(2)=="K","dialog reflects active shortcuts");
+    dialog->findChild<QPushButton*>("shortcutRestoreDefaults")->click();
+    check(dialog->draft()==f.registry.defaultShortcuts()&&shortcutRow(list,"tool.move")->text(2)=="V"&&move->shortcuts()==keys({"K"}),"Restore Defaults updates the draft only");
+    delete dialog;
+}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="source_predicates")source_predicates();else if(name=="layer_eligibility")layer_eligibility();else if(name=="pending_preparation")pending_preparation();else if(name=="stale_activation")stale_activation();else if(name=="text_shortcuts")text_shortcuts();else if(name=="text_menu_routes")text_menu_routes();else if(name=="catalog_manifest")catalog_manifest();else if(name=="registration")registration();else if(name=="preparation_error")preparation_error();else if(name=="palette_filter")palette_filter();else if(name=="palette_keyboard")palette_keyboard();else if(name=="palette_enabled")palette_enabled();else if(name=="palette_invoke")palette_invoke();else if(name=="shortcut_assign_clear")shortcut_assign_clear();else if(name=="shortcut_conflicts")shortcut_conflicts();else if(name=="shortcut_persistence")shortcut_persistence();else if(name=="shortcut_dialog")shortcut_dialog();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
