@@ -137,6 +137,8 @@ class MainWindow final:public QMainWindow {
     QColor background_{Qt::white};
     editing::GradientSettings gradientSettings_;
     editing::ShapeStyle shapeStyle_;
+    // The layer whose style shapeStyle_ last loaded; a new shape layer reloads the Drawing Options bar once.
+    std::string shapeStyleLayer_;
     std::optional<Layer> drawingOriginal_;
     EditorProject* gradientOwner_{};
     Point gradientStart_,gradientEnd_;

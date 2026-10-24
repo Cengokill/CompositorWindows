@@ -102,6 +102,7 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     const auto insertion=at==next.layers.end()?next.layers.size():size_t(at-next.layers.begin())+1;
     if(at!=next.layers.end())layer->parentId=at->group?at->id:at->parentId;
     auto selected=std::vector<std::string>{layer->id};auto activeId=layer->id;
+    shapeStyleLayer_=activeId;// shapeStyle_ already holds this layer's style; the refresh inside edit() must keep the toolbar as drawn.
     next.layers.insert(next.layers.begin()+insertion,std::move(*layer));validateDocument(next);
     auto previousSelected=p->selected;const bool previousMask=p->maskSelected;finishOpacityEdit();
     try{edit(style.kind==editing::ShapeKind::Rectangle?"Rectangle":"Ellipse",[&](Document& document){document=std::move(next);p->active=std::move(activeId);p->selected=std::move(selected);p->maskSelected=false;});}
@@ -110,6 +111,11 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
 }
 void MainWindow::cancelShape(){shapeDraftId_.clear();shapeDraftRect_.reset();if(canvas()){canvas()->setShapeDraft({});canvas()->setSnapGuides();}}
 void MainWindow::refreshShapeControls(){
+    if(tool_==Tool::Shape){
+        const auto* layer=active();
+        if(layer&&!layer->shapeJson.empty()){if(layer->id!=shapeStyleLayer_){shapeStyle_=editing::decodeShapeStyle(layer->shapeJson);shapeStyleLayer_=layer->id;}}
+        else shapeStyleLayer_.clear();
+    }
     if(auto* kind=findChild<QComboBox*>("shapeKind")){const QSignalBlocker block(kind);kind->setCurrentIndex(int(shapeStyle_.kind));kind->setVisible(tool_==Tool::Shape);}
     if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);radius->setVisible(tool_==Tool::Shape&&shapeStyle_.kind==editing::ShapeKind::Rectangle);}
     const bool strokable=tool_==Tool::Shape&&shapeStyle_.kind!=editing::ShapeKind::Line;
