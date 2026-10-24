@@ -90,6 +90,14 @@ int main(){
         auto tooFar=t::previewDrag(drag,{9.5,0},false,{},targets,4);near(tooFar.transform.x,10,"Zoom must shrink document tolerance");
         drag.mode={t::ModeKind::Resize,4};drag.start={100,50};auto resized=t::previewDrag(drag,{109.5,50},false,{},targets,1);require(!resized.snap.x,"Resize should not move snap");
     });
+    test("grid_snap_and_shift_axis_lock_contracts",[]{
+        t::Drag drag{value(0,3,100,50,0),{0,0},{t::ModeKind::Move},{}};
+        // Grid lines are 25 apart. Without Shift, y=3 would snap to 0; Shift's x move must leave y unchanged.
+        t::SnapTargets grid{{},{},25,25};
+        auto free=t::previewDrag(drag,{24,0},false,{},grid,1);near(free.transform.x,25,"Grid snaps move edge to nearest grid line");
+        auto locked=t::previewDrag(drag,{20,-6},false,{false,false,false,false},grid,1);near(locked.transform.y,0,"Unshifted y should snap to the grid");
+        auto shifted=t::previewDrag(drag,{20,-6},false,{true,false,false,false},grid,1);near(shifted.transform.y,3,"Shift must keep the locked axis");require(!shifted.snap.y,"Shift reported a locked-axis snap");near(shifted.transform.x,25,"Shift keeps the free-axis grid snap");
+    });
     test("visible_hierarchy_snap_bounds_exclusion_and_displayed_draft",[]{
         Document doc;doc.width=400;doc.height=300;auto raster=Raster::filled(1,1);
         Layer hidden;hidden.id="hidden";hidden.group=true;hidden.visible=false;
@@ -99,7 +107,7 @@ int main(){
         Layer last;last.id="last";last.raster=raster;last.transform=value(10,10,10,10,0);
         doc.layers={child,hidden,nested,group,last};auto layers=t::visiblePlacements(doc);
         require(layers.size()==2&&layers[0].id=="nested"&&layers[1].id=="last","Visible hierarchy/source order");
-        const std::array<std::string,1> excluded{"last"};auto targets=t::collectSnapTargets({400,300},layers,excluded);
+        const std::array<std::string,1> excluded{"last"};auto targets=t::collectSnapTargets({400,300},layers,excluded,{},editing::SnapPolicy{},editing::LayoutGrid{});
         require(targets.xs==std::vector<double>{0,200,400,120,150,180},"Rotated snap upright xbounds");require(targets.ys==std::vector<double>{0,150,300,100,150,200},"Rotated snap upright ybounds");
         auto draft=t::visiblePlacements(doc,[](const Layer& layer){auto transformed=layer.transform;transformed.x+=20;return transformed;});near(draft[0].transform.x,120,"Displayed transform callback");
     });

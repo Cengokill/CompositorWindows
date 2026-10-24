@@ -2,6 +2,7 @@
 #include "core/Document.h"
 #include "editing/SelectionGesture.h"
 #include "editing/Shapes.h"
+#include "editing/Snapping.h"
 #include "editing_transform/TransformGeometry.h"
 #include "graphics/CanvasViewport.h"
 #include "platform/DisplayProfile.h"
@@ -80,6 +81,7 @@ private:
     void drawTextOverlay();
     std::optional<editing::Rect> cropOverlay_;
     std::optional<double> snapGuideX_,snapGuideY_;
+    editing::LayoutGrid layoutGrid_;
     std::optional<editing::LassoDraft> selectionDraft_;
     struct BrushCursor {Point center;double diameter;std::optional<double> hardness;std::optional<Point> marker;std::shared_ptr<const Raster> preview;double opacity{1};};
     std::optional<BrushCursor> brushCursor_;
@@ -140,6 +142,7 @@ private:
     void cancelGuideDrag();
     void drawRulers();
     void drawGuideOverlay();
+    void drawLayoutGrid();
     void draw(bool present=true);
     void drawSelection();
     void updateSelectionAnimation();
@@ -157,6 +160,9 @@ public:
     QPointF pan; // Logical view pixels (DIPs).
     bool showPixelGrid{};
     bool showGuides{};
+    // Layout grid lines are overlay-only; they never reach the composite raster or exports.
+    const editing::LayoutGrid& layoutGrid() const{return layoutGrid_;}
+    void setLayoutGrid(const editing::LayoutGrid& value){layoutGrid_=value;update();}
     std::vector<std::pair<bool,double>> guides;
     // Screen-space bands around the canvas. Tick marks use the same mapping as
     // documentPoint, so a labeled pixel stays under its tick while zooming or panning.

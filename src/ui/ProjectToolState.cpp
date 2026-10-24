@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QJsonDocument>
@@ -60,8 +61,8 @@ void MainWindow::captureToolState(EditorProject& project) const {
     state.selectionExpandAmount=selectionExpandAmount_;state.selectionContractAmount=selectionContractAmount_;
     state.wandTolerance=wandTolerance_;state.wandSampleRadius=wandSampleRadius_;state.wandContiguous=wandContiguous_;state.wandAllLayers=wandAllLayers_;
     state.maskPaintWhite=maskPaintWhite_;state.showSampleRing=showSampleRing_;
-    if(project.canvas)state.showPixelGrid=project.canvas->showPixelGrid;
-    state.lockRatio=lockRatio_;state.autoSelectLayers=autoSelectLayers_;state.transformControls=transformControls_;state.snapping=snapping_;
+    if(project.canvas){state.showPixelGrid=project.canvas->showPixelGrid;state.layoutGrid=project.canvas->layoutGrid();}
+    state.lockRatio=lockRatio_;state.autoSelectLayers=autoSelectLayers_;state.transformControls=transformControls_;state.snapPolicy=snapPolicy_;
     state.lastBrushPoint=lastBrushPoint_;state.lastBrushLayer=lastBrushLayer_;state.lastBrushMask=lastBrushMask_;
 }
 void MainWindow::restoreToolState(const EditorProject& project) {
@@ -75,8 +76,8 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     selectionExpandAmount_=state.selectionExpandAmount;selectionContractAmount_=state.selectionContractAmount;
     wandTolerance_=state.wandTolerance;wandSampleRadius_=state.wandSampleRadius;wandContiguous_=state.wandContiguous;wandAllLayers_=state.wandAllLayers;
     maskPaintWhite_=state.maskPaintWhite;showSampleRing_=state.showSampleRing;
-    if(project.canvas)project.canvas->showPixelGrid=state.showPixelGrid;
-    lockRatio_=state.lockRatio;autoSelectLayers_=state.autoSelectLayers;transformControls_=state.transformControls;snapping_=state.snapping;
+    if(project.canvas){project.canvas->showPixelGrid=state.showPixelGrid;project.canvas->setLayoutGrid(state.layoutGrid);}
+    lockRatio_=state.lockRatio;autoSelectLayers_=state.autoSelectLayers;transformControls_=state.transformControls;snapPolicy_=state.snapPolicy;
     lastBrushPoint_=state.lastBrushPoint;lastBrushLayer_=state.lastBrushLayer;lastBrushMask_=state.lastBrushMask;
 
     combo(this,"gradientShape","",int(gradientSettings_.shape));
@@ -98,10 +99,30 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     check(this,"transformLockRatio","transformOptions","Lock aspect ratio",lockRatio_);
     check(this,"transformAutoSelect","transformOptions","Auto-select layer",autoSelectLayers_);
     check(this,"transformShowControls","transformOptions","Show controls",transformControls_);
-    check(this,"transformSnapping","transformOptions","Snap to edges and centers",snapping_);
+    check(this,"transformSnapping","transformOptions","Snap to edges and centers",snapPolicy_.enabled);
     for(auto* item:findChildren<QAction*>())if(item->objectName()=="pixelGrid"||item->text()=="Pixel Grid"){const QSignalBlocker blocker(item);item->setChecked(state.showPixelGrid);}
     // These existing refreshers block signals and read the newly selected project
     // for clone source/alignment and layer eligibility.
-    refreshBrushControls();refreshRetouchControls();
+    refreshBrushControls();refreshRetouchControls();refreshSnapControls();
+}
+void applyRememberedSnapAndGrid(editing::SnapPolicy& policy,editing::LayoutGrid& grid){
+    QSettings settings;
+    policy.enabled=settings.value("snap/enabled",true).toBool();policy.grid=settings.value("snap/grid",false).toBool();policy.guides=settings.value("snap/guides",true).toBool();
+    policy.layerEdges=settings.value("snap/layerEdges",true).toBool();policy.layerCenters=settings.value("snap/layerCenters",true).toBool();
+    policy.documentEdges=settings.value("snap/documentEdges",true).toBool();policy.documentCenter=settings.value("snap/documentCenter",true).toBool();
+    editing::LayoutGrid remembered=grid;remembered.spacing=settings.value("layoutGrid/spacing",grid.spacing).toDouble();remembered.subdivisions=settings.value("layoutGrid/subdivisions",grid.subdivisions).toInt();
+    remembered.color={uint8_t(settings.value("layoutGrid/red",grid.color[0]).toInt()),uint8_t(settings.value("layoutGrid/green",grid.color[1]).toInt()),uint8_t(settings.value("layoutGrid/blue",grid.color[2]).toInt())};
+    remembered.opacity=settings.value("layoutGrid/opacity",grid.opacity).toDouble();
+    // Invalid stored values are ignored; the grid keeps its built-in defaults.
+    if(remembered.valid())grid=remembered;
+}
+void rememberSnapAndGrid(const editing::SnapPolicy& policy,const editing::LayoutGrid& grid){
+    QSettings settings;
+    settings.setValue("snap/enabled",policy.enabled);settings.setValue("snap/grid",policy.grid);settings.setValue("snap/guides",policy.guides);
+    settings.setValue("snap/layerEdges",policy.layerEdges);settings.setValue("snap/layerCenters",policy.layerCenters);
+    settings.setValue("snap/documentEdges",policy.documentEdges);settings.setValue("snap/documentCenter",policy.documentCenter);
+    settings.setValue("layoutGrid/spacing",grid.spacing);settings.setValue("layoutGrid/subdivisions",grid.subdivisions);
+    settings.setValue("layoutGrid/red",int(grid.color[0]));settings.setValue("layoutGrid/green",int(grid.color[1]));settings.setValue("layoutGrid/blue",int(grid.color[2]));
+    settings.setValue("layoutGrid/opacity",grid.opacity);
 }
 }

@@ -154,17 +154,22 @@ bool usableCorners(const Corners& c){
 }
 SnapResult snapOffset(Rect box,const SnapTargets& targets,double tolerance){
     SnapResult result;if(!std::isfinite(tolerance)||tolerance<0)return result;
-    const auto axis=[tolerance](std::array<double,3> guides,const std::vector<double>& values,double& offset,std::optional<double>& matched){
-        for(double guide:guides)for(double target:values){const double move=target-guide;if(!std::isfinite(move)||std::abs(move)>tolerance)continue;if(matched&&std::abs(offset)<=std::abs(move))continue;offset=move;matched=target;}
+    const auto axis=[tolerance](std::array<double,3> guides,const std::vector<double>& values,double step,double& offset,std::optional<double>& matched){
+        for(double guide:guides){const auto target=editing::nearestSnapLine(guide,values,step,tolerance);if(!target)continue;const double move=*target-guide;if(matched&&std::abs(offset)<=std::abs(move))continue;offset=move;matched=target;}
     };
-    axis({box.x,box.x+box.width/2,box.x+box.width},targets.xs,result.offset.x,result.x);
-    axis({box.y,box.y+box.height/2,box.y+box.height},targets.ys,result.offset.y,result.y);return result;
+    axis({box.x,box.x+box.width/2,box.x+box.width},targets.xs,targets.gridX,result.offset.x,result.x);
+    axis({box.y,box.y+box.height/2,box.y+box.height},targets.ys,targets.gridY,result.offset.y,result.y);return result;
 }
 Preview previewDrag(const Drag& drag,Point point,bool ratio,Modifiers flags,const SnapTargets& targets,double zoom){
     Preview out{drag.original,{}, {}};
     if(auto c=drag.movedCorners(point,flags.shift)){if(usableCorners(*c))out.distortion=c;else out.accepted=false;return out;}
     out.transform=roundedTransform(drag.updated(point,ratio,flags));
-    if(drag.mode.kind==ModeKind::Move&&!flags.control){out.snap=snapOffset(bounds(out.transform),targets,10/std::max(safeZoom(zoom),.0001));auto t=out.transform;t.x+=out.snap.offset.x;t.y+=out.snap.offset.y;if(t.valid())out.transform=t;else out.snap={};}
+    if(drag.mode.kind==ModeKind::Move&&!flags.control){
+        out.snap=snapOffset(bounds(out.transform),targets,10/std::max(safeZoom(zoom),.0001));
+        // Shift keeps the move on its dominant axis; snapping must not reintroduce motion on the locked axis.
+        if(flags.shift){const auto d=subtract(point,drag.start);if(std::abs(d.x)>=std::abs(d.y)){out.snap.offset.y=0;out.snap.y.reset();}else{out.snap.offset.x=0;out.snap.x.reset();}}
+        auto t=out.transform;t.x+=out.snap.offset.x;t.y+=out.snap.offset.y;if(t.valid())out.transform=t;else out.snap={};
+    }
     return out;
 }
 std::vector<Placement> visiblePlacements(const Document& doc,DisplayedTransform displayed){
@@ -178,11 +183,11 @@ std::vector<Placement> visiblePlacements(const Document& doc,DisplayedTransform 
             if(layer->group)self(self,layer->id,depth+1);else if(layer->raster)result.push_back({layer->id,displayed?displayed(*layer):layer->transform});}
     };visit(visit,"",0);return result;
 }
-SnapTargets collectSnapTargets(Point size,std::span<const Placement> layers,std::span<const std::string> excluded){
-    SnapTargets targets{{0,size.x/2,size.x},{0,size.y/2,size.y}};
+SnapTargets collectSnapTargets(Point size,std::span<const Placement> layers,std::span<const std::string> excluded,
+                               std::span<const Guide> guides,const editing::SnapPolicy& policy,const editing::LayoutGrid& grid){
+    auto targets=editing::documentSnapLines(size,guides,policy,grid);
     for(const auto& layer:layers){if(std::find(excluded.begin(),excluded.end(),layer.id)!=excluded.end())continue;const auto b=bounds(layer.transform);
-        for(double x:{b.x,b.x+b.width/2,b.x+b.width})targets.xs.push_back(std::round(x));
-        for(double y:{b.y,b.y+b.height/2,b.y+b.height})targets.ys.push_back(std::round(y));}
+        editing::addBoxSnapLines(targets,b.x,b.y,b.width,b.height,policy);}
     return targets;
 }
 std::optional<PressIntent> resolvePress(const PressContext& c,Point viewPoint,const ViewMapping& view,const std::optional<OverlayGeometry>& overlay,Modifiers flags){

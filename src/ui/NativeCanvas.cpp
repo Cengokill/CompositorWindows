@@ -226,6 +226,44 @@ void NativeCanvas::drawGuideOverlay(){
     if(showGuides){ComPtr<ID2D1SolidColorBrush> guide;check(context_->CreateSolidColorBrush(D2D1::ColorF(.2f,.75f,.95f,.85f),&guide),"Guide brush");for(auto [horizontal,position]:guides)drawLine(horizontal,position,guide.Get(),true);}
     if(preview){ComPtr<ID2D1SolidColorBrush> live;check(context_->CreateSolidColorBrush(D2D1::ColorF(1.f,.86f,.25f),&live),"Guide preview");drawLine(guideDrag_->horizontal,guideDrag_->position,live.Get(),false);}
 }
+void NativeCanvas::drawLayoutGrid(){
+    if(!context_||!layoutGrid_.visible||!layoutGrid_.valid()||documentWidth_<=0||documentHeight_<=0||layoutGrid_.opacity<=0)return;
+    const auto mapping=viewMapping();
+    const double scale=mapping.pointsPerPixel;
+    if(!(scale>0))return;
+    // Lines closer than 6 DIP read as noise. Hide minor lines first, then all lines; snapping still uses the full step.
+    const double majorGap=layoutGrid_.spacing*scale,minorGap=layoutGrid_.step()*scale;
+    if(majorGap<6)return;
+    const bool minorVisible=minorGap>=6;
+    const auto frame=contentRect();
+    const auto documentRect=D2D1::RectF(float(mapping.origin.x),float(mapping.origin.y),float(mapping.origin.x+documentWidth_*scale),float(mapping.origin.y+documentHeight_*scale));
+    const auto content=D2D1::RectF(float(frame.left()),float(frame.top()),float(frame.right()),float(frame.bottom()));
+    const auto clip=D2D1::RectF(std::max(content.left,documentRect.left),std::max(content.top,documentRect.top),std::min(content.right,documentRect.right),std::min(content.bottom,documentRect.bottom));
+    if(clip.right<=clip.left||clip.bottom<=clip.top)return;
+    const auto [red,green,blue]=layoutGrid_.color;
+    const float alpha=float(layoutGrid_.opacity);
+    ComPtr<ID2D1SolidColorBrush> major,minor;
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(red/255.f,green/255.f,blue/255.f,alpha),&major),"Layout grid brush");
+    check(context_->CreateSolidColorBrush(D2D1::ColorF(red/255.f,green/255.f,blue/255.f,alpha*.5f),&minor),"Layout grid minor brush");
+    const auto low=mapping.toDocument({double(clip.left),double(clip.top)}),high=mapping.toDocument({double(clip.right),double(clip.bottom)});
+    const double lineStep=minorVisible?layoutGrid_.step():layoutGrid_.spacing;
+    const long long subdivisions=layoutGrid_.subdivisions;
+    context_->PushAxisAlignedClip(clip,D2D1_ANTIALIAS_MODE_ALIASED);
+    const auto drawAxis=[&](bool horizontal,double from,double to){
+        const long long first=std::max(0LL,static_cast<long long>(std::ceil(from/lineStep))),last=static_cast<long long>(std::floor(to/lineStep));
+        // Bounded by the visible document span; at most one line per minor gap of view pixels.
+        for(long long index=first;index<=last&&index-first<5000;++index){
+            const bool majorLine=!minorVisible||index%subdivisions==0;
+            const double value=double(index)*lineStep;
+            const float at=float(horizontal?mapping.toView({0,value}).y:mapping.toView({value,0}).x);
+            auto* brush=majorLine?major.Get():minor.Get();
+            if(horizontal)context_->DrawLine(D2D1::Point2F(clip.left,at),D2D1::Point2F(clip.right,at),brush,1);
+            else context_->DrawLine(D2D1::Point2F(at,clip.top),D2D1::Point2F(at,clip.bottom),brush,1);
+        }
+    };
+    drawAxis(true,low.y,high.y);drawAxis(false,low.x,high.x);
+    context_->PopAxisAlignedClip();
+}
 void NativeCanvas::drawRulers(){
     if(!context_||!showRulers||documentWidth_<=0||documentHeight_<=0)return;
     const auto frame=contentRect();
@@ -306,6 +344,7 @@ if(showPixelGrid&&zoom>=8){
     }
 }
 context_->PopAxisAlignedClip();}
+drawLayoutGrid();
 drawGuideOverlay();
 drawSelection();
 if(selectionDraft_&&!selectionDraft_->points.empty()&&documentWidth_>0&&documentHeight_>0){

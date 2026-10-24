@@ -1,5 +1,6 @@
 #pragma once
 #include "Selection.h"
+#include "Snapping.h"
 #include <string>
 
 namespace compositor::editing {
@@ -51,7 +52,8 @@ struct CropDrag {
 struct CropSnap {
     std::vector<double> xs,ys;
     double tolerance{};
+    double gridX{},gridY{}; // Zero disables grid lines on that axis.
     Rect apply(Rect,const CropDrag&,Point,std::optional<double> ratio = {},bool symmetric = false) const;
 };
-CropSnap cropSnapTargets(const Document&,double tolerance);
+CropSnap cropSnapTargets(const Document&,const SnapPolicy&,const LayoutGrid&,double tolerance);
 }

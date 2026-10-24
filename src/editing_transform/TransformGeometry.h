@@ -2,6 +2,7 @@
 // Adapted from Compositor, copyright (c) 2026 Wonder Assembly LLC.
 // Distributed under the MIT license in LICENSE in this directory.
 #include "core/Document.h"
+#include "editing/Snapping.h"
 #include <array>
 #include <functional>
 #include <span>
@@ -57,7 +58,7 @@ struct Drag {
     std::optional<Corners> movedCorners(Point,bool shift=false) const;
 };
 bool usableCorners(const Corners&);
-struct SnapTargets { std::vector<double> xs,ys; };
+using SnapTargets=editing::SnapLines;
 struct SnapResult { Point offset; std::optional<double> x,y; };
 SnapResult snapOffset(Rect,const SnapTargets&,double documentTolerance);
 struct Preview {
@@ -72,7 +73,9 @@ Preview previewDrag(const Drag&,Point,bool lockRatio,Modifiers,const SnapTargets
 struct Placement { std::string id; Transform transform; };
 using DisplayedTransform=std::function<Transform(const Layer&)>;
 std::vector<Placement> visiblePlacements(const Document&,DisplayedTransform={});
-SnapTargets collectSnapTargets(Point documentSize,std::span<const Placement>,std::span<const std::string> excluded={});
+// Excluded layers are the moving layers; hidden layers never reach `layers`.
+SnapTargets collectSnapTargets(Point documentSize,std::span<const Placement>,std::span<const std::string> excluded,
+                               std::span<const Guide> guides,const editing::SnapPolicy&,const editing::LayoutGrid&);
 struct PressContext {
     std::string activeId;
     std::optional<Transform> activeTransform,groupBox;
