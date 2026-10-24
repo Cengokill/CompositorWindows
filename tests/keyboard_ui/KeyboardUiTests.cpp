@@ -6,6 +6,8 @@
 #include <QFontComboBox>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QSpinBox>
 #include <QAbstractItemView>
 #include <QTest>
@@ -83,5 +85,31 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         const auto& committed=project.document->layers.back().text;
         require(committed&&committed->fontFamily==family,("Activated font was not committed: "+(committed?committed->fontFamily:std::string{})).c_str());
     });
-    std::cout<<"{\"suite\":\"keyboard_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";if(SUCCEEDED(apartment))CoUninitialize();return failed?1:0;
+    test("keyboard_remapped_shortcuts_restore_and_dispatch",[&]{
+        auto toolChecked=[](MainWindow& window,ProjectTool tool){for(auto* action:window.findChildren<QAction*>())if(action->property("editorTool").isValid()&&action->property("editorTool").toInt()==int(tool)&&action->isChecked())return true;return false;};
+        auto shortcutsOf=[](MainWindow& window,const char* id){for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()==id&&!action->shortcuts().isEmpty())return action->shortcuts();return QList<QKeySequence>{};};
+        QTemporaryDir preferences;require(preferences.isValid(),"Fixture settings directory");QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("KeyboardShortcuts");QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,preferences.path());
+        QSettings settings;settings.remove(ui::shortcutSettingsGroup);settings.beginGroup(ui::shortcutSettingsGroup);settings.setValue("tool.move","K");settings.setValue("tool.marquee","");settings.setValue("tool.type","Y");settings.setValue("palette.swap","");settings.setValue("edit.redo","Ctrl+Y");settings.endGroup();settings.sync();
+        {
+            MainWindow window(true);auto& project=window.addProject(example());const auto history=project.history.undoCount();const auto document=project.document;
+            require(shortcutsOf(window,"tool.move")==QList<QKeySequence>{QKeySequence("K")},"Restored Move shortcut missing from its QAction");
+            require(shortcutsOf(window,"edit.redo")==QList<QKeySequence>{QKeySequence("Ctrl+Y")},"Restored Redo bindings differ");
+            require(shortcutsOf(window,"tool.marquee").isEmpty(),"Cleared Marquee shortcut still on an action");
+            auto typeButtonTip=[&]{for(auto* action:window.findChildren<QAction*>())if(action->property("editorTool").toInt()==int(ProjectTool::Text)&&action->property("editorTool").isValid())for(auto* object:action->associatedObjects())if(auto* button=qobject_cast<QToolButton*>(object))return button->toolTip();return QString{};};
+            require(typeButtonTip()=="Type (Y)",("Type tool button tooltip not remapped: "+typeButtonTip().toStdString()).c_str());
+            for(auto* button:window.findChildren<QToolButton*>())require(!button->toolTip().endsWith("(X)"),"Cleared Swap shortcut still hinted on a button");
+
+            key(window,Qt::Key_B);require(toolChecked(window,ProjectTool::Brush),"Default B did not select the brush");
+            key(window,Qt::Key_K);require(toolChecked(window,ProjectTool::Move),"Remapped K did not select Move through the direct path");
+            key(window,Qt::Key_B);key(window,Qt::Key_V);require(toolChecked(window,ProjectTool::Brush),"Old V still selected Move");
+            key(window,Qt::Key_M);require(!toolChecked(window,ProjectTool::Marquee),"Cleared M still selected Marquee");
+            require(project.history.undoCount()==history&&project.document==document,"Shortcut use changed document history");
+            auto* input=new QLineEdit(&window);window.show();input->show();input->setFocus();QApplication::processEvents();require(QApplication::focusWidget()==input,"Text focus witness unavailable");
+            QTest::keyClick(input,Qt::Key_K);QApplication::processEvents();require(input->text()=="k"&&toolChecked(window,ProjectTool::Brush),"Remapped key escaped the text field");
+        }
+        settings.remove(ui::shortcutSettingsGroup);settings.sync();
+        MainWindow window(true);window.addProject(example());
+        require(shortcutsOf(window,"tool.move")==QList<QKeySequence>{QKeySequence("V")}&&shortcutsOf(window,"edit.redo").size()==2,"Defaults not restored in a fresh window");for(auto* button:window.findChildren<QToolButton*>())if(button->defaultAction()&&button->defaultAction()->property("commandId").toString()=="tool.type")require(button->toolTip()=="Type (T)","Default Type hint missing in a fresh window");
+        key(window,Qt::Key_M);require(toolChecked(window,ProjectTool::Marquee),"Default M did not select Marquee");
+    });    std::cout<<"{\"suite\":\"keyboard_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";if(SUCCEEDED(apartment))CoUninitialize();return failed?1:0;
 }

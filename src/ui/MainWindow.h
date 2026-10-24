@@ -249,6 +249,7 @@ class MainWindow final:public QMainWindow {
     ui::CommandState commandState(EditorProject* owner=nullptr);
     void initializeCommands();
     void openCommandPalette();
+    void openShortcutEditor();
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();

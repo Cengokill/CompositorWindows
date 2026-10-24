@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include "KeyboardShortcutDialog.h"
+#include <QSettings>
 #include "CommandPalette.h"
 #include <QApplication>
 #include <QClipboard>
@@ -66,6 +68,11 @@ void MainWindow::openCommandPalette(){
     commands_->refresh();
     commandPalette_=new ui::CommandPalette(this,*commands_,QApplication::focusWidget());
     commandPalette_->popup();
+}
+void MainWindow::openShortcutEditor(){
+    if(!commands_)return;
+    ui::KeyboardShortcutDialog dialog(this,*commands_,[this](const ui::ShortcutMap& shortcuts,QString* error){QSettings settings;return commands_->saveShortcuts(shortcuts,settings,error);});
+    dialog.exec();
 }
 void MainWindow::initializeCommands(){
     commands_=new ui::CommandRegistry(this,[this]{return commandState();},[this](ui::CommandPreparation preparation,const QString&){
