@@ -15,9 +15,16 @@
 #include <QSettings>
 #include <QTest>
 #include <QDateTime>
+#include <atomic>
+#include <chrono>
+#include <future>
 #include <map>
 #include <iostream>
 #include <stdexcept>
+#include <string>
+#include <thread>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 using namespace compositor;
 namespace {
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
@@ -73,6 +80,52 @@ void release_url(){
         require(throws([&]{update::fetchReleaseMetadata(url,{});}),"non-HTTPS, non-loopback or credentialed URL rejected before any request");
     require(throws([]{update::fetchReleaseMetadata(QString::fromLatin1(update::stableReleaseUrl),[]{return true;});}),"cancelled fetch stops before sending");
 }
+// One-connection loopback HTTP server for the real WinHTTP fetcher. An empty
+// reply means "accept and never answer" until the test finishes.
+class LoopbackServer {
+public:
+    explicit LoopbackServer(std::string reply):reply_(std::move(reply)){
+        WSADATA data{};require(WSAStartup(MAKEWORD(2,2),&data)==0,"winsock start");
+        listener_=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);require(listener_!=INVALID_SOCKET,"loopback socket");
+        sockaddr_in address{};address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        require(bind(listener_,reinterpret_cast<sockaddr*>(&address),sizeof(address))==0&&listen(listener_,1)==0,"loopback listen");
+        int length=sizeof(address);getsockname(listener_,reinterpret_cast<sockaddr*>(&address),&length);port_=ntohs(address.sin_port);
+        thread_=std::thread([this]{
+            const SOCKET client=accept(listener_,nullptr,nullptr);if(client==INVALID_SOCKET)return;
+            std::string request;char buffer[4096];
+            while(request.find("\r\n\r\n")==std::string::npos){const int got=recv(client,buffer,sizeof(buffer),0);if(got<=0)break;request.append(buffer,got);}
+            if(reply_.empty())while(!stop_)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            else for(size_t sent=0;sent<reply_.size();){const int put=send(client,reply_.data()+sent,int(std::min<size_t>(reply_.size()-sent,8192)),0);if(put<=0)break;sent+=size_t(put);}
+            shutdown(client,SD_BOTH);closesocket(client);
+        });
+    }
+    ~LoopbackServer(){stop_=true;closesocket(listener_);thread_.join();WSACleanup();}
+    QString url()const{return QString("http://127.0.0.1:%1/latest.json").arg(port_);}
+private:
+    std::string reply_;SOCKET listener_{INVALID_SOCKET};unsigned short port_{};std::atomic<bool> stop_{};std::thread thread_;
+};
+std::string http(const char* status,const std::string& body,const char* extra=""){
+    return std::string("HTTP/1.1 ")+status+"\r\nContent-Type: application/json\r\nContent-Length: "+std::to_string(body.size())+"\r\n"+extra+"Connection: close\r\n\r\n"+body;
+}
+QString fetchError(const std::string& reply){
+    LoopbackServer server(reply);
+    try{update::fetchReleaseMetadata(server.url(),[]{return false;});}catch(const std::exception& error){return QString::fromUtf8(error.what());}
+    return {};
+}
+void release_fetch(){
+    const auto json=release("v1.0").toStdString();
+    {LoopbackServer server(http("200 OK",json));require(update::fetchReleaseMetadata(server.url(),[]{return false;})==QByteArray::fromStdString(json),"200 body returned whole");}
+    require(fetchError(http("301 Moved Permanently","","Location: https://example.com/latest.json\r\n")).contains("HTTP 301"),"redirect is not followed");
+    require(fetchError(http("500 Internal Server Error","{}")).contains("HTTP 500"),"server error reported");
+    require(fetchError(http("200 OK",std::string(size_t(update::releaseResponseLimit)+1,'x'))).contains("too large"),"oversized body rejected while reading");
+    // A server that never answers would hold WinHTTP for its 10 s timeout; cancelling must abort it promptly.
+    LoopbackServer stalled("");std::atomic<bool> cancel{};
+    auto pending=std::async(std::launch::async,[&]{try{update::fetchReleaseMetadata(stalled.url(),[&]{return cancel.load();});}catch(const std::exception& error){return QString::fromUtf8(error.what());}return QString();});
+    require(pending.wait_for(std::chrono::milliseconds(500))==std::future_status::timeout,"stalled request is still waiting");
+    QElapsedTimer elapsed;elapsed.start();cancel=true;
+    require(pending.wait_for(std::chrono::seconds(3))==std::future_status::ready,"cancel aborts the blocked WinHTTP call");
+    require(pending.get().contains("cancelled")&&elapsed.elapsed()<3000,"cancelled request reports cancellation");
+}
 void panel_release_check(){
     QTemporaryDir root;require(root.isValid(),"panel root");QSettings().clear();
     QWidget owner;owner.show();std::function<void(const QString&)> pending;int calls=0;
@@ -93,7 +146,7 @@ int main(int argc,char** argv){
     if(argc==2){
         QTemporaryDir settingsRoot;QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("ReleaseCheck");
         QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsRoot.path());
-        const std::map<std::string,void(*)()> cases{{"release_parse",release_parse},{"release_settings",release_settings},{"release_url",release_url},{"panel_release_check",panel_release_check}};
+        const std::map<std::string,void(*)()> cases{{"release_parse",release_parse},{"release_settings",release_settings},{"release_url",release_url},{"release_fetch",release_fetch},{"panel_release_check",panel_release_check}};
         try{if(!cases.contains(argv[1]))throw std::runtime_error("unknown release case");cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}
         catch(const std::exception& error){std::cerr<<"FAIL "<<argv[1]<<": "<<error.what()<<'\n';return 1;}
     }
