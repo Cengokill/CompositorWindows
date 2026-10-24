@@ -264,6 +264,8 @@ class MainWindow final:public QMainWindow {
     void importWelcomeImage();
     void exportImage();
     void openProjectDialog();
+    void setupRecentProjectsMenu(QMenu* file);
+    void noteRecentProject(const QString& path);
     bool loadProjectDirectory(const QString&);
     bool saveProject(bool saveAs=false);
     void startProjectSave(EditorProject&,const QString& path);
