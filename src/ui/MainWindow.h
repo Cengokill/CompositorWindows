@@ -191,6 +191,8 @@ class MainWindow final:public QMainWindow {
     QChronoTimer* selectionScrollTimer_{};
     std::optional<Point> selectionScrollPoint_;
     Qt::KeyboardModifiers selectionModifiers_{};
+    // Bounds of the selection when a move began; the snapped move reads them each event.
+    std::optional<editing::Rect> selectionMoveBox_;
     graphics::BrushSessionSettings brushSettings_;
     struct BrushTipDrag {QPointF start;double radius{},hardness{};bool hardnessShown{};};
     std::optional<BrushTipDrag> brushTipDrag_;
@@ -224,7 +226,8 @@ class MainWindow final:public QMainWindow {
     bool autoSelectLayers_{true},transformControls_{true};
     std::optional<Document> transformBefore_;
     std::vector<std::string> transformIds_;
-    bool lockRatio_{true},snapping_{true};
+    bool lockRatio_{true};
+    editing::SnapPolicy snapPolicy_;
     QPointF panOrigin_;
     EditorProject* current();
     Layer* active();
@@ -338,7 +341,7 @@ class MainWindow final:public QMainWindow {
     void setupSelectionActions();
     void runWand(Point,Qt::KeyboardModifiers,std::optional<editing::SelectionMode> modeOverride={});
     int wandTolerance_{32},wandSampleRadius_{};
-    bool wandObjectMode_{},snapToGuides_{true};
+    bool wandObjectMode_{};
     bool wandContiguous_{true},wandAllLayers_{};
     bool beginSelection(Point,Qt::KeyboardModifiers,int clickCount=1);
     bool updateSelection(Point,Qt::KeyboardModifiers,bool finish);
@@ -370,6 +373,15 @@ class MainWindow final:public QMainWindow {
     void layerCommand(int);
     void editLayerEffect(int);
     void setupTransformActions();
+    // View > Layout Grid, Grid Settings, and Snap To. LayoutGridActions.cpp owns these controls.
+    void setupLayoutGridActions(QMenu* view);
+    void refreshSnapControls();
+    void setSnapPolicy(const editing::SnapPolicy& value);
+    void showGridSettings();
+    // Active snap lines for the current document, or nullopt when Snap is off. Excluded layers are moving layers.
+    std::optional<editing::SnapLines> snapLines(const Document& document,std::span<const std::string> excluded={});
+    // Snaps a gesture point and shows guide feedback. Ctrl suppresses snapping, matching transform moves.
+    Point snapGesturePoint(Point point,Qt::KeyboardModifiers modifiers,std::span<const std::string> excluded={});
     bool startTransformSession(bool persistent,bool distort=false);
     void applyTransformSession();
     void cancelTransformSession();

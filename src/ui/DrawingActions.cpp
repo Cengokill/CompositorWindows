@@ -50,7 +50,7 @@ void MainWindow::setupDrawingActions(){
     auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);bar->addAction(cropCancel);bar->addAction(cropApply);
     auto*background=bar->addAction("Background Color");bindCommand(background,"Tools","Background",[this]{openPalette(true);});background->setShortcut({});
 }
-bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers){
+bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers modifiers){
     if(tool_!=Tool::Gradient&&tool_!=Tool::Shape&&tool_!=Tool::Crop)return false;auto*p=current();if(!p||!p->document)return true;press_=point;
     if(tool_==Tool::Crop){
         if(!std::isfinite(point.x)||!std::isfinite(point.y))return true;
@@ -60,11 +60,12 @@ bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers){
         if(hit){drag.mode=editing::CropDrag::Mode::Resize;drag.handle=*hit;}
         else if(cropDraft_&&*cropDraft_!=full&&point.x>=cropDraft_->x&&point.x<cropDraft_->x+cropDraft_->width&&point.y>=cropDraft_->y&&point.y<cropDraft_->y+cropDraft_->height)drag.mode=editing::CropDrag::Mode::Move;
         if(drag.mode==editing::CropDrag::Mode::Create)cropDraft_.reset();
-        cropDrag_=drag;cropSnap_=editing::cropSnapTargets(*p->document,8/std::max(canvas()->pointsPerPixel(),.0001));refresh(false,false);return true;
+        cropDrag_=drag;if(snapPolicy_.enabled)cropSnap_=editing::cropSnapTargets(*p->document,snapPolicy_,canvas()->layoutGrid(),8/std::max(canvas()->pointsPerPixel(),.0001));refresh(false,false);return true;
     }
     if(tool_==Tool::Gradient){beginGradient(point);return true;}
     if(!canEditLayers()||!std::isfinite(point.x)||!std::isfinite(point.y))return true;
-    press_={std::round(point.x),std::round(point.y)};shapeDraftId_=newId();shapeDraftStyle_=shapeStyle_;
+    const auto anchor=snapGesturePoint(point,modifiers);
+    press_={std::round(anchor.x),std::round(anchor.y)};shapeDraftId_=newId();shapeDraftStyle_=shapeStyle_;
     if(shapeDraftStyle_.kind==editing::ShapeKind::Ellipse)shapeDraftStyle_.cornerRadius=0;
     shapeDraftRect_=editing::Rect{press_.x,press_.y,0,0};refresh(false,false);return true;
 }
@@ -82,7 +83,9 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     }
     if(tool_==Tool::Gradient){updateGradient(point,modifiers,finish);return true;}
     if(shapeDraftId_.empty()||!std::isfinite(point.x)||!std::isfinite(point.y))return true;
-    shapeDraftRect_=editing::dragBox(press_,point,modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier));
+    // Snapping runs before dragBox so Shift's square and Alt's centered constraints still hold on the final geometry.
+    const auto corner=snapGesturePoint(point,modifiers);
+    shapeDraftRect_=editing::dragBox(press_,corner,modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier));
     if(!finish){refresh(false,false);return true;}
     const auto rect=*shapeDraftRect_;auto style=shapeDraftStyle_;cancelShape();
     if(!canEditLayers()||rect.width<1||rect.height<1){refresh(false,false);return true;}
@@ -101,7 +104,7 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     catch(...){p->selected=std::move(previousSelected);p->maskSelected=previousMask;throw;}
     return true;
 }
-void MainWindow::cancelShape(){shapeDraftId_.clear();shapeDraftRect_.reset();if(canvas())canvas()->setShapeDraft({});}
+void MainWindow::cancelShape(){shapeDraftId_.clear();shapeDraftRect_.reset();if(canvas()){canvas()->setShapeDraft({});canvas()->setSnapGuides();}}
 void MainWindow::refreshShapeControls(){
     if(auto* kind=findChild<QComboBox*>("shapeKind")){const QSignalBlocker block(kind);kind->setCurrentIndex(int(shapeStyle_.kind));kind->setVisible(tool_==Tool::Shape);}
     if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);radius->setVisible(tool_==Tool::Shape&&shapeStyle_.kind==editing::ShapeKind::Rectangle);}

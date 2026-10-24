@@ -126,12 +126,18 @@ Rect CropDrag::updated(Point point,std::optional<double> ratio,bool symmetric)co
     Rect next{anchor.x-anchorUnit.x*width,anchor.y-anchorUnit.y*height,width,height};return snappedCrop(validCrop(next)?next:original);
 }
 Rect CropSnap::apply(Rect rect,const CropDrag& drag,Point point,std::optional<double> ratio,bool symmetric)const {
-    if(!std::isfinite(tolerance)||tolerance<=0)return rect;auto nearest=[&](double value,const std::vector<double>& targets)->std::optional<double>{std::optional<double> best;for(double target:targets)if(std::abs(target-value)<=tolerance&&(!best||std::abs(*best-value)>std::abs(target-value)))best=target;return best;};
-    if(drag.mode==CropDrag::Mode::Move){auto shift=[&](double a,double b,const std::vector<double>& targets){std::optional<double> best;for(double edge:{a,b})if(auto found=nearest(edge,targets)){double offset=*found-edge;if(!best||std::abs(offset)<std::abs(*best))best=offset;}return best.value_or(0);};return {rect.x+shift(rect.x,rect.x+rect.width,xs),rect.y+shift(rect.y,rect.y+rect.height,ys),rect.width,rect.height};}
+    if(!std::isfinite(tolerance)||tolerance<=0)return rect;auto nearest=[&](double value,const std::vector<double>& targets,double step){return nearestSnapLine(value,targets,step,tolerance);};
+    if(drag.mode==CropDrag::Mode::Move){auto shift=[&](double a,double b,const std::vector<double>& targets,double step){std::optional<double> best;for(double edge:{a,b})if(auto found=nearest(edge,targets,step)){double offset=*found-edge;if(!best||std::abs(offset)<std::abs(*best))best=offset;}return best.value_or(0);};return {rect.x+shift(rect.x,rect.x+rect.width,xs,gridX),rect.y+shift(rect.y,rect.y+rect.height,ys,gridY),rect.width,rect.height};}
     if(ratio)return rect;bool horizontal=true,vertical=true;if(drag.mode==CropDrag::Mode::Resize){if(drag.handle<0||drag.handle>=8)throw std::runtime_error("Invalid crop snap handle");horizontal=handles[drag.handle].x!=.5;vertical=handles[drag.handle].y!=.5;}
-    auto result=rect;if(horizontal){if(std::abs(point.x-result.x)<=std::abs(point.x-result.x-result.width)){if(auto x=nearest(result.x,xs);x&&*x<result.x+result.width){result.width+=result.x-*x;result.x=*x;}}else if(auto x=nearest(result.x+result.width,xs);x&&*x>result.x)result.width=*x-result.x;}
-    if(vertical){if(std::abs(point.y-result.y)<=std::abs(point.y-result.y-result.height)){if(auto y=nearest(result.y,ys);y&&*y<result.y+result.height){result.height+=result.y-*y;result.y=*y;}}else if(auto y=nearest(result.y+result.height,ys);y&&*y>result.y)result.height=*y-result.y;}
+    auto result=rect;    if(horizontal){if(std::abs(point.x-result.x)<=std::abs(point.x-result.x-result.width)){if(auto x=nearest(result.x,xs,gridX);x&&*x<result.x+result.width){result.width+=result.x-*x;result.x=*x;}}else if(auto x=nearest(result.x+result.width,xs,gridX);x&&*x>result.x)result.width=*x-result.x;}
+    if(vertical){if(std::abs(point.y-result.y)<=std::abs(point.y-result.y-result.height)){if(auto y=nearest(result.y,ys,gridY);y&&*y<result.y+result.height){result.height+=result.y-*y;result.y=*y;}}else if(auto y=nearest(result.y+result.height,ys,gridY);y&&*y>result.y)result.height=*y-result.y;}
     if(symmetric){Point center=drag.mode==CropDrag::Mode::Create?drag.start:Point{drag.original.x+drag.original.width/2,drag.original.y+drag.original.height/2};if(horizontal){double half=point.x>=center.x?result.x+result.width-center.x:center.x-result.x;if(half>=.5){result.x=center.x-half;result.width=2*half;}}if(vertical){double half=point.y>=center.y?result.y+result.height-center.y:center.y-result.y;if(half>=.5){result.y=center.y-half;result.height=2*half;}}}return result;
 }
-CropSnap cropSnapTargets(const Document& doc,double tolerance){validateDocument(doc);CropSnap snap{{0,double(doc.width)},{0,double(doc.height)},tolerance};auto index=indexLayers(doc);for(const auto& layer:doc.layers)if(layer.raster&&visible(layer,index)){auto box=transformBounds(layer.transform);snap.xs.push_back(std::round(box.x));snap.xs.push_back(std::round(box.x+box.width));snap.ys.push_back(std::round(box.y));snap.ys.push_back(std::round(box.y+box.height));}return snap;}
+CropSnap cropSnapTargets(const Document& doc,const SnapPolicy& policy,const LayoutGrid& grid,double tolerance){
+    validateDocument(doc);
+    auto lines=documentSnapLines({double(doc.width),double(doc.height)},doc.guides,policy,grid);
+    auto index=indexLayers(doc);
+    for(const auto& layer:doc.layers)if(layer.raster&&visible(layer,index)){auto box=transformBounds(layer.transform);addBoxSnapLines(lines,box.x,box.y,box.width,box.height,policy);}
+    return {std::move(lines.xs),std::move(lines.ys),tolerance,lines.gridX,lines.gridY};
+}
 }

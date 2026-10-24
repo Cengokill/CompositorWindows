@@ -120,6 +120,14 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("view.guides","View","Guides","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
         add("view.mac_title_bar","Appearance","Mac-style title bar","",C::View,G::Always,P::None,"Windows title bar preference");
         add("view.snap","View","Snap","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
+        add("view.layout_grid","View","Layout Grid","",C::View,G::Document,P::None,"Windows layout grid (issue #11)");
+        add("view.grid_settings","View","Grid Settings…","",C::View,G::Document,P::None,"Windows layout grid (issue #11)");
+        add("view.snap_grid","Snap To","Grid","",C::View,G::Always,P::None,"Windows layout grid (issue #11)");
+        add("view.snap_guides","Snap To","Guides","",C::View,G::Always,P::None,"Windows layout grid (issue #11)");
+        add("view.snap_layer_edges","Snap To","Layer Edges","",C::View,G::Always,P::None,"Windows layout grid (issue #11)");
+        add("view.snap_layer_centers","Snap To","Layer Centers","",C::View,G::Always,P::None,"Windows layout grid (issue #11)");
+        add("view.snap_document_edges","Snap To","Document Edges","",C::View,G::Always,P::None,"Windows layout grid (issue #11)");
+        add("view.snap_document_center","Snap To","Document Center","",C::View,G::Always,P::None,"Windows layout grid (issue #11)");
         add("layer.text","Layer","Text Layer…","",C::Layer,G::Layers,P::FinishAppearance,"Compositor/Document/Text.swift");
         add("help.shortcuts","Help","Keyboard Shortcuts…","",C::Application,G::Always,P::None,"Windows shortcut window");
         add("help.command_palette","Help","Command Palette…","Ctrl+Shift+P",C::Application,G::Always,P::None,"Windows command search");

@@ -4,6 +4,7 @@
 #include "editing/PixelEdits.h"
 #include "editing/Shapes.h"
 #include "editing/SelectionGesture.h"
+#include "editing/Snapping.h"
 #include "filters/PixelFilters.h"
 #include "imaging/subject_matte.h"
 #include <QColor>
@@ -49,11 +50,17 @@ struct ProjectToolState {
     int wandTolerance{32},wandSampleRadius{};
     bool wandContiguous{true},wandAllLayers{};
     bool maskPaintWhite{},showSampleRing{true},showPixelGrid{true};
-    bool lockRatio{true},autoSelectLayers{true},transformControls{true},snapping{true};
+    bool lockRatio{true},autoSelectLayers{true},transformControls{true};
+    editing::SnapPolicy snapPolicy;
+    editing::LayoutGrid layoutGrid;
     // Continuity for a future Shift-click, not an in-flight pointer gesture.
     std::optional<Point> lastBrushPoint;
     std::string lastBrushLayer;
     bool lastBrushMask{};
     ProjectBrushMode brushMode{ProjectBrushMode::Paint};
 };
+// Remembered defaults for newly opened projects. Layout grid visibility is
+// deliberately excluded; every project starts with its grid hidden.
+void applyRememberedSnapAndGrid(editing::SnapPolicy&,editing::LayoutGrid&);
+void rememberSnapAndGrid(const editing::SnapPolicy&,const editing::LayoutGrid&);
 }

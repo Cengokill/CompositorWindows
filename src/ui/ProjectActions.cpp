@@ -185,7 +185,7 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
        (!importQueue_||!importQueue_->contains(projects_.front()->canvas)))return *projects_.front();
     const bool first=projects_.empty();auto project=std::make_unique<EditorProject>();auto*raw=project.get();
     raw->defaultTitle=first&&nextProjectNumber_==2?"Untitled":QString("Untitled %1").arg(nextProjectNumber_++);
-    initializeProject(*raw);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
+    initializeProject(*raw);applyRememberedSnapAndGrid(raw->toolState.snapPolicy,raw->toolState.layoutGrid);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
     raw->welcome=new QWidget;raw->welcome->setObjectName("newCanvasWelcome");auto*outer=new QVBoxLayout(raw->welcome);outer->addStretch();
     auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setObjectName("newCanvasCard");panel->setMaximumWidth(440);
     panel->setStyleSheet("QWidget#newCanvasCard { background: #27292e; border: 1px solid #3b3e46; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
