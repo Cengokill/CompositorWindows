@@ -254,10 +254,11 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
         const bool pixelMode=draft->unit==editing::PrintUnit::Pixels;
         const auto shown=[draft](int pixels){return std::round(editing::creationDisplayed(pixels,draft->unit,draft->dpi)*10000)/10000;};
         const char* suffix=pixelMode?" px":draft->unit==editing::PrintUnit::Inches?" in":draft->unit==editing::PrintUnit::Centimeters?" cm":" mm";
+        const char* unitName=pixelMode?"pixels":draft->unit==editing::PrintUnit::Inches?"inches":draft->unit==editing::PrintUnit::Centimeters?"centimeters":"millimeters";
         // A preset shows its own print size while its unit and resolution remain selected, because 2480 px is 209.9733 mm at 300 DPI.
         const bool presetSize=draft->preset>=0&&newCanvasPresets[draft->preset].unit==draft->unit&&newCanvasPresets[draft->preset].dpi==draft->dpi;
         const auto sync=[&](QDoubleSpinBox* box,int pixels,double nominal){const QSignalBlocker blocker(box);box->setDecimals(pixelMode?0:4);box->setRange(shown(1),shown(30000));box->setSuffix(suffix);box->setValue(presetSize?nominal:shown(pixels));};
-        if(rewriteSizes){sync(width,draft->width,presetSize?newCanvasPresets[draft->preset].width:0);sync(height,draft->height,presetSize?newCanvasPresets[draft->preset].height:0);}
+        if(rewriteSizes){width->setAccessibleName(QString("Width in %1").arg(unitName));height->setAccessibleName(QString("Height in %1").arg(unitName));sync(width,draft->width,presetSize?newCanvasPresets[draft->preset].width:0);sync(height,draft->height,presetSize?newCanvasPresets[draft->preset].height:0);}
         const bool solid=background->currentData().value<QColor>().alpha()>0;
         const bool fits=!solid||uint64_t(draft->width)*uint64_t(draft->height)<=solidCanvasPixelBudget;
         create->setEnabled(fits);
@@ -272,8 +273,14 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
         draft->width=editing::creationPixels(item.width,item.unit,item.dpi).value();draft->height=editing::creationPixels(item.height,item.unit,item.dpi).value();
         syncNewCanvas(true);
     });
-    connect(unit,&QComboBox::currentIndexChanged,[draft,unit,syncNewCanvas](int index){draft->unit=editing::PrintUnit(unit->itemData(index).toInt());syncNewCanvas(true);});
-    connect(resolution,&QSpinBox::valueChanged,[draft,syncNewCanvas](int dpi){draft->dpi=dpi;syncNewCanvas(true);});
+    // A preset keeps its label only while its unit and resolution are selected. Otherwise its pixels no longer print at the stated size.
+    auto leavePresetIfChanged=[draft,preset](){
+        if(draft->preset<0)return;
+        const auto& item=newCanvasPresets[draft->preset];
+        if(item.unit!=draft->unit||item.dpi!=draft->dpi){draft->preset=-1;const QSignalBlocker blocker(preset);preset->setCurrentIndex(0);}
+    };
+    connect(unit,&QComboBox::currentIndexChanged,[draft,unit,syncNewCanvas,leavePresetIfChanged](int index){draft->unit=editing::PrintUnit(unit->itemData(index).toInt());leavePresetIfChanged();syncNewCanvas(true);});
+    connect(resolution,&QSpinBox::valueChanged,[draft,syncNewCanvas,leavePresetIfChanged](int dpi){draft->dpi=dpi;leavePresetIfChanged();syncNewCanvas(true);});
     connect(width,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->width=*pixels;draft->preset=-1;preset->setCurrentIndex(0);}syncNewCanvas(false);});
     connect(height,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->height=*pixels;draft->preset=-1;preset->setCurrentIndex(0);}syncNewCanvas(false);});
     connect(background,&QComboBox::currentIndexChanged,[syncNewCanvas](int){syncNewCanvas(false);});

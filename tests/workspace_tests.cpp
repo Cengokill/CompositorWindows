@@ -40,6 +40,16 @@ test("new_tab_clipboard_defaults_and_close_last",[]{
  action(w,"&New Canvas…");auto*tabs=w.findChild<QTabWidget*>();check(tabs->count()==2,"New did not create an empty tab");auto*page=tabs->currentWidget();check(control<QDoubleSpinBox>(page,"newCanvasWidth")->value()==23&&control<QDoubleSpinBox>(page,"newCanvasHeight")->value()==17&&control<QComboBox>(page,"newCanvasPreset")->currentIndex()==0,"New tab omitted clipboard dimensions");
  action(w,"Close Project");action(w,"Close Project");check(tabs->count()==1&&tabs->currentWidget()->findChild<QWidget*>("newCanvasWelcome"),"Closing final tab did not retain empty workspace");
 });
+test("new_canvas_preset_leaves_on_print_change",[]{
+ MainWindow w(true);auto&p=w.addEmptyProject();
+ auto*preset=control<QComboBox>(p.welcome,"newCanvasPreset");auto*unit=control<QComboBox>(p.welcome,"newCanvasUnit");auto*resolution=control<QSpinBox>(p.welcome,"newCanvasResolution");auto*width=control<QDoubleSpinBox>(p.welcome,"newCanvasWidth");
+ preset->setCurrentIndex(preset->findText("Letter",Qt::MatchStartsWith));
+ check(width->value()==8.5&&resolution->value()==300&&width->accessibleName()=="Width in inches","Letter preset did not show its print size");
+ resolution->setValue(150);
+ check(preset->currentIndex()==0&&width->value()==17&&width->accessibleName()=="Width in inches","Resolution change kept the Letter label or the wrong print size");
+ unit->setCurrentIndex(unit->findData(int(editing::PrintUnit::Pixels)));
+ check(width->value()==2550&&width->accessibleName()=="Width in pixels","Unit change did not show pixels");
+});
 test("pending_gradient_prevents_tab_switch",[]{
  MainWindow w(true);Document d;d.id=newId();d.width=80;d.height=60;Layer layer;layer.id=newId();layer.transform={0,0,80,60};layer.raster=Raster::filled(80,60,{80,120,160,255});d.layers.push_back(layer);auto&first=w.addProject(d);w.addEmptyProject(false);auto*tabs=w.findChild<QTabWidget*>();tabs->setCurrentWidget(first.page);action(w,"Gradient (G)");const auto before=first.document;
  first.canvas->pointerDown({10,10},{});first.canvas->pointerMove({60,10},{});first.canvas->pointerUp({60,10},{});tabs->setCurrentIndex(1);check(tabs->currentWidget()==first.page&&first.history.undoCount()==0,"Tab switch resolved or lost pending gradient");
