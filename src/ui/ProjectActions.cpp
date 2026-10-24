@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include <algorithm>
+#include <cmath>
 #include "ImportActions.h"
 #include "WorkspaceDropQueue.h"
 #include "ProjectLayerCopyJob.h"
@@ -9,7 +10,10 @@
 #include "EditorIcons.h"
 #include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -30,6 +34,13 @@
 
 namespace compositor {
 namespace {
+struct NewCanvasPreset { const char* label; int width; int height; };
+// Custom has no size; choosing it leaves the current pixel dimensions unchanged.
+constexpr NewCanvasPreset newCanvasPresets[]{{"Custom",0,0},{"HD · 1280 × 720",1280,720},{"Full HD · 1920 × 1080",1920,1080},{"4K UHD · 3840 × 2160",3840,2160},{"Square · 1080 × 1080",1080,1080},{"Vertical HD · 1080 × 1920",1080,1920}};
+// Whole pixels are the source of truth. Units and DPI only change how that count is displayed or converted when typed.
+struct NewCanvasDraft { int width{1920},height{1080}; editing::PrintUnit unit{editing::PrintUnit::Pixels}; double dpi{72}; };
+// Raster::filled enforces this budget for an opaque background; a transparent canvas allocates no pixels.
+constexpr uint64_t solidCanvasPixelBudget=100000000;
 // Qt shortens the tab bar for the corner widget, so its bottom edge stops at the
 // button while the Layers title border sits on a lower pixel behind it. The
 // corner matches the tab-bar height and one separator runs from the strip's left
@@ -191,15 +202,48 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     panel->setStyleSheet("QWidget#newCanvasCard { background: #27292e; border: 1px solid #3b3e46; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
     auto*form=new QFormLayout(panel);form->setContentsMargins(28,28,28,26);form->setVerticalSpacing(14);form->setHorizontalSpacing(18);
     auto*heading=new QLabel("New canvas");heading->setObjectName("newCanvasHeading");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
-    auto*width=new QSpinBox;auto*height=new QSpinBox;for(auto*spin:{width,height})spin->setRange(1,30000);
-    width->setObjectName("newCanvasWidth");height->setObjectName("newCanvasHeight");width->setAccessibleName("Width in pixels");height->setAccessibleName("Height in pixels");width->setValue(1920);height->setValue(1080);
-    if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){width->setValue(image.width());height->setValue(image.height());}}
-    form->addRow("Width (pixels)",width);form->addRow("Height (pixels)",height);form->addRow(new QLabel("Transparent canvas · sRGB"));
+    auto draft=std::make_shared<NewCanvasDraft>();
+    auto*preset=new QComboBox;preset->setObjectName("newCanvasPreset");preset->setAccessibleName("Canvas preset");
+    for(const auto& item:newCanvasPresets)preset->addItem(item.label,QSize(item.width,item.height));
+    preset->setCurrentIndex(preset->findData(QSize(1920,1080)));
+    auto*unit=new QComboBox;unit->setObjectName("newCanvasUnit");unit->setAccessibleName("Canvas units");
+    unit->addItem("Pixels",int(editing::PrintUnit::Pixels));unit->addItem("Inches",int(editing::PrintUnit::Inches));unit->addItem("Centimeters",int(editing::PrintUnit::Centimeters));unit->addItem("Millimeters",int(editing::PrintUnit::Millimeters));
+    auto*resolution=new QSpinBox;resolution->setObjectName("newCanvasResolution");resolution->setAccessibleName("Resolution");resolution->setRange(1,9600);resolution->setValue(72);resolution->setSuffix(" DPI");
+    auto*width=new QDoubleSpinBox;auto*height=new QDoubleSpinBox;width->setObjectName("newCanvasWidth");height->setObjectName("newCanvasHeight");width->setAccessibleName("Width");height->setAccessibleName("Height");
+    auto*background=new QComboBox;background->setObjectName("newCanvasBackground");background->setAccessibleName("Background");
+    background->addItem("Transparent",QColor(Qt::transparent));background->addItem("White",QColor(Qt::white));background->addItem("Black",QColor(Qt::black));
+    auto*summary=new QLabel;summary->setObjectName("newCanvasSummary");
+    if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){draft->width=image.width();draft->height=image.height();preset->setCurrentIndex(0);}}
+    form->addRow("Preset",preset);form->addRow("Units",unit);form->addRow("Width",width);form->addRow("Height",height);form->addRow("Resolution",resolution);form->addRow("Background",background);form->addRow(summary);
     auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);form->addRow(buttons);
     connect(open,&QPushButton::clicked,this,[this]{openProjectDialog();});connect(import,&QPushButton::clicked,this,[this]{importWelcomeImage();});
-    connect(create,&QPushButton::clicked,this,[this,raw,width,height]{
+    // Shows the draft in every control. Typed spin text is rewritten only when requested, so a value being typed is not moved under the caret.
+    auto syncNewCanvas=[draft,width,height,summary,background,create](bool rewriteSizes){
+        const bool pixelMode=draft->unit==editing::PrintUnit::Pixels;
+        const auto shown=[draft](int pixels){return std::round(editing::creationDisplayed(pixels,draft->unit,draft->dpi)*10000)/10000;};
+        const char* suffix=pixelMode?" px":draft->unit==editing::PrintUnit::Inches?" in":draft->unit==editing::PrintUnit::Centimeters?" cm":" mm";
+        const auto sync=[&](QDoubleSpinBox* box,int pixels){const QSignalBlocker blocker(box);box->setDecimals(pixelMode?0:4);box->setRange(shown(1),shown(30000));box->setSuffix(suffix);box->setValue(shown(pixels));};
+        if(rewriteSizes){sync(width,draft->width);sync(height,draft->height);}
+        const bool solid=background->currentData().value<QColor>().alpha()>0;
+        const bool fits=!solid||uint64_t(draft->width)*uint64_t(draft->height)<=solidCanvasPixelBudget;
+        create->setEnabled(fits);
+        summary->setText(!fits?QStringLiteral("Solid backgrounds are limited to 100 megapixels"):pixelMode?QStringLiteral("sRGB"):QString("%1 × %2 px · sRGB").arg(draft->width).arg(draft->height));
+    };
+    syncNewCanvas(true);
+    connect(preset,&QComboBox::currentIndexChanged,[draft,preset,syncNewCanvas](int index){const auto size=preset->itemData(index).toSize();if(size.isEmpty())return;draft->width=size.width();draft->height=size.height();syncNewCanvas(true);});
+    connect(unit,&QComboBox::currentIndexChanged,[draft,unit,syncNewCanvas](int index){draft->unit=editing::PrintUnit(unit->itemData(index).toInt());syncNewCanvas(true);});
+    connect(resolution,&QSpinBox::valueChanged,[draft,syncNewCanvas](int dpi){draft->dpi=dpi;syncNewCanvas(true);});
+    connect(width,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->width=*pixels;preset->setCurrentIndex(0);}syncNewCanvas(false);});
+    connect(height,&QDoubleSpinBox::valueChanged,[draft,preset,syncNewCanvas](double value){if(auto pixels=editing::creationPixels(value,draft->unit,draft->dpi)){draft->height=*pixels;preset->setCurrentIndex(0);}syncNewCanvas(false);});
+    connect(background,&QComboBox::currentIndexChanged,[syncNewCanvas](int){syncNewCanvas(false);});
+    connect(create,&QPushButton::clicked,this,[this,raw,draft,background]{
         if(raw!=current()||raw->document||raw->importing||raw->projectBusy)return;
-        Document document;document.id=newId();document.width=width->value();document.height=height->value();Layer layer;layer.id=newId();layer.name="Layer 1";layer.transform={0,0,double(document.width),double(document.height)};document.layers.push_back(layer);
+        const QColor color=background->currentData().value<QColor>();const bool solid=color.alpha()>0;
+        if(solid&&uint64_t(draft->width)*uint64_t(draft->height)>solidCanvasPixelBudget)return;
+        Document document;document.id=newId();document.width=draft->width;document.height=draft->height;document.resolution=draft->dpi;
+        Layer layer;layer.id=newId();layer.name=solid?"Background":"Layer 1";layer.transform={0,0,double(document.width),double(document.height)};
+        if(solid)layer.raster=Raster::filled(document.width,document.height,Pixel{uint8_t(color.red()),uint8_t(color.green()),uint8_t(color.blue()),255});
+        document.layers.push_back(layer);
         raw->history.begin("New Canvas",std::nullopt,{});raw->document=std::move(document);raw->active=layer.id;raw->selected={layer.id};raw->history.end(raw->document,raw->active);refresh();raw->canvas->fit();raw->canvas->setFocus();
     });
     row->addWidget(panel);row->addStretch();outer->addLayout(row);outer->addStretch();raw->page->addWidget(raw->welcome);raw->page->addWidget(raw->canvas);
