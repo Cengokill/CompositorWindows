@@ -236,6 +236,7 @@ public:
     const std::optional<editing::Rect>& cropOverlay()const{return cropOverlay_;}
     static std::optional<int> cropResizeHandle(editing::Rect,Point viewPoint,const editing_transform::ViewMapping&);
     void setSnapGuides(std::optional<double> x={},std::optional<double> y={}){snapGuideX_=x;snapGuideY_=y;update();}
+    bool hasSnapGuides() const{return snapGuideX_||snapGuideY_;}
     void setBrushCursor(std::optional<Point> logicalCenter,double logicalDiameter,std::optional<double> hardness={},std::optional<Point> marker={},std::shared_ptr<const Raster> preview={},double opacity=1){if(logicalCenter)brushCursor_=BrushCursor{*logicalCenter,logicalDiameter,hardness,marker,std::move(preview),opacity};else brushCursor_.reset();update();}
     void setSampleRing(std::optional<Point> position,Pixel original={},Pixel sampled={}){if(position)sampleRing_=SampleRing{*position,original,sampled};else sampleRing_.reset();update();}
     editing_transform::ViewMapping viewMapping()const;

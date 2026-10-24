@@ -3,6 +3,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QJsonDocument>
+#include <algorithm>
 #include "effects/Adjustments.h"
 
 namespace compositor {
@@ -110,8 +111,9 @@ void applyRememberedSnapAndGrid(editing::SnapPolicy& policy,editing::LayoutGrid&
     policy.enabled=settings.value("snap/enabled",true).toBool();policy.grid=settings.value("snap/grid",false).toBool();policy.guides=settings.value("snap/guides",true).toBool();
     policy.layerEdges=settings.value("snap/layerEdges",true).toBool();policy.layerCenters=settings.value("snap/layerCenters",true).toBool();
     policy.documentEdges=settings.value("snap/documentEdges",true).toBool();policy.documentCenter=settings.value("snap/documentCenter",true).toBool();
+    const auto channel=[&settings](const char* key,uint8_t fallback){return uint8_t(std::clamp(settings.value(key,int(fallback)).toInt(),0,255));};
     editing::LayoutGrid remembered=grid;remembered.spacing=settings.value("layoutGrid/spacing",grid.spacing).toDouble();remembered.subdivisions=settings.value("layoutGrid/subdivisions",grid.subdivisions).toInt();
-    remembered.color={uint8_t(settings.value("layoutGrid/red",grid.color[0]).toInt()),uint8_t(settings.value("layoutGrid/green",grid.color[1]).toInt()),uint8_t(settings.value("layoutGrid/blue",grid.color[2]).toInt())};
+    remembered.color={channel("layoutGrid/red",grid.color[0]),channel("layoutGrid/green",grid.color[1]),channel("layoutGrid/blue",grid.color[2])};
     remembered.opacity=settings.value("layoutGrid/opacity",grid.opacity).toDouble();
     // Invalid stored values are ignored; the grid keeps its built-in defaults.
     if(remembered.valid())grid=remembered;

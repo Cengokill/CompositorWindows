@@ -669,7 +669,7 @@ foreach(case pixel_family_bundle neutral_commits curves_grain gradient_palette l
   set_tests_properties(remembered_filter.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
 endforeach()
 target_link_libraries(session_state_tests PRIVATE compositor_ui)
-foreach(case source_defaults tab_isolation control_signals continuity_local brush_family_tips snap_grid_sync)
+foreach(case source_defaults tab_isolation control_signals continuity_local brush_family_tips snap_grid_sync selection_guide_clears remembered_snap_grid)
   add_test(NAME session_state.${case} COMMAND session_state_tests ${case})
   set_tests_properties(session_state.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

@@ -110,7 +110,7 @@ void MainWindow::finishSelectionGesture(){
     if(!p||p!=current()||!p->document){cancelSelectionGesture();return;}
     const auto before=outlineOf(p->document->selection);
     auto result=selectionGesture_.finish(before,p->document->width,p->document->height,selectionAntialias_);
-    selectionOwner_=nullptr;pointerOwner_=nullptr;p->canvas->setSelectionDraft({});
+    selectionOwner_=nullptr;pointerOwner_=nullptr;p->canvas->setSelectionDraft({});p->canvas->setSnapGuides();
     if(result&&result->requestsEdit){
         const bool same=(!before&&!result->selection)||(before&&result->selection&&before->geometricallyEquals(*result->selection));
         if(!same){
@@ -132,7 +132,7 @@ bool MainWindow::updateSelection(Point point,Qt::KeyboardModifiers modifiers,boo
                 const auto& box=*selectionMoveBox_;
                 auto snap=editing_transform::snapOffset({box.x+offset.x,box.y+offset.y,box.width,box.height},*lines,8/std::max(p->canvas->pointsPerPixel(),.0001));
                 if(modifiers.testFlag(Qt::ShiftModifier)){if(offset.y==0){snap.offset.y=0;snap.y.reset();}else{snap.offset.x=0;snap.x.reset();}}
-                offset.x=std::round(offset.x+snap.offset.x);offset.y=std::round(offset.y+snap.offset.y);
+                if(snap.x||snap.y){offset.x=std::round(offset.x+snap.offset.x);offset.y=std::round(offset.y+snap.offset.y);}
                 p->canvas->setSnapGuides(snap.x,snap.y);
             }
             if(std::round(offset.x)==0&&std::round(offset.y)==0)p->document->selection=selectionBefore_;
@@ -140,7 +140,7 @@ bool MainWindow::updateSelection(Point point,Qt::KeyboardModifiers modifiers,boo
             updateSelectionAutoscroll(p->canvas->viewMapping().toView(point));refresh(false,false);return true;
         }
         stopSelectionAutoscroll();p->canvas->setSnapGuides();const bool moved=p->document->selection!=selectionBefore_;
-        p->history.end(p->document,p->active);movingSelection_=false;selectionBefore_.reset();selectionOwner_=nullptr;
+        p->history.end(p->document,p->active);movingSelection_=false;selectionBefore_.reset();selectionMoveBox_.reset();selectionOwner_=nullptr;
         if(!moved){if(tool_==Tool::Wand)runWand(press_,modifiers,editing::SelectionMode::Replace);else{p->history.begin("Deselect",p->document,p->active);p->document->selection.reset();p->history.end(p->document,p->active);}}
         refresh(false,false);return true;
     }
@@ -153,7 +153,7 @@ bool MainWindow::updateSelection(Point point,Qt::KeyboardModifiers modifiers,boo
 void MainWindow::finishPolygon(){if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal)finishSelectionGesture();}
 void MainWindow::cancelSelectionGesture(){
     stopSelectionAutoscroll();if(selectionOwner_){selectionOwner_->canvas->setSelectionDraft({});selectionOwner_->canvas->setSnapGuides();}
-    selectionGesture_.cancel();selectionOwner_=nullptr;selectionBefore_.reset();movingSelection_=false;refreshSelectionGesture();if(commands_)commands_->refresh();
+    selectionGesture_.cancel();selectionOwner_=nullptr;selectionBefore_.reset();selectionMoveBox_.reset();movingSelection_=false;refreshSelectionGesture();if(commands_)commands_->refresh();
 }
 void MainWindow::refreshSelectionGesture(){
     auto* p=current();if(p&&p->canvas)p->canvas->setSelectionDraft(selectionOwner_==p?selectionGesture_.draft():std::nullopt);

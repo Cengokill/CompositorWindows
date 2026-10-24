@@ -1,8 +1,10 @@
 #include "ui/MainWindow.h"
 #include <QApplication>
 #include <QFontDatabase>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QTemporaryDir>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -47,4 +49,22 @@ void snap_grid_sync(){Fixture f;f.select(f.a);const auto before=f.a->document;
     f.select(f.b);REQUIRE(!f.b->canvas->layoutGrid().visible&&!f.b->toolState.snapPolicy.grid&&f.b->toolState.snapPolicy.enabled);
     REQUIRE(f.a->document==before&&f.a->history.undoCount()==0&&f.b->history.undoCount()==0);
 }
-int main(int argc,char**argv){QApplication app(argc,argv);QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR")+"/Fonts/segoeui.ttf");QApplication::setFont(QFont("Segoe UI",9));const std::map<std::string,void(*)()> cases{{"source_defaults",source_defaults},{"tab_isolation",tab_isolation},{"control_signals",control_signals},{"continuity_local",continuity_local},{"brush_family_tips",brush_family_tips},{"snap_grid_sync",snap_grid_sync}};try{REQUIRE(argc==2&&cases.contains(argv[1]));cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+void selection_guide_clears(){Fixture f;f.select(f.a);Guide guide;guide.id="guide-x";guide.position=20;f.a->document->guides.push_back(guide);
+    f.tool(ProjectTool::Marquee);
+    // The press and the last move both snap to the guide; release must clear the accent line.
+    f.a->canvas->pointerDown({19,4},{});f.a->canvas->pointerMove({20,12},{});REQUIRE(f.a->canvas->hasSnapGuides());
+    f.a->canvas->pointerUp({20,12},{});REQUIRE(f.a->document->selection);REQUIRE(!f.a->canvas->hasSnapGuides());
+}
+void remembered_snap_grid(){QSettings settings;settings.setValue("snap/grid",true);settings.setValue("snap/guides",false);settings.setValue("layoutGrid/spacing",250);settings.setValue("layoutGrid/subdivisions",5);settings.setValue("layoutGrid/red",300);settings.setValue("layoutGrid/green",-5);settings.setValue("layoutGrid/blue",90);settings.setValue("layoutGrid/opacity",.5);
+    MainWindow window{true};auto& project=window.addProject(document(),"Remembered");
+    // Remembered values reach a new project, clamped to 0-255 for color; the grid stays hidden.
+    REQUIRE(project.toolState.snapPolicy.grid&&!project.toolState.snapPolicy.guides&&project.toolState.snapPolicy.enabled);
+    const auto grid=project.canvas->layoutGrid();
+    REQUIRE(grid.spacing==250&&grid.subdivisions==5&&grid.opacity==.5&&!grid.visible);
+    REQUIRE(grid.color==std::array<uint8_t,3>{255,0,90});
+}
+
+int main(int argc,char**argv){QApplication app(argc,argv);QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR")+"/Fonts/segoeui.ttf");QApplication::setFont(QFont("Segoe UI",9));
+    // Snap and grid preferences are written to QSettings; keep test runs away from the user's real settings.
+    QTemporaryDir preferences;if(!preferences.isValid())return 2;QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("SessionState");QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,preferences.path());QSettings::setPath(QSettings::IniFormat,QSettings::SystemScope,preferences.path());
+    const std::map<std::string,void(*)()> cases{{"source_defaults",source_defaults},{"tab_isolation",tab_isolation},{"control_signals",control_signals},{"continuity_local",continuity_local},{"brush_family_tips",brush_family_tips},{"snap_grid_sync",snap_grid_sync},{"selection_guide_clears",selection_guide_clears},{"remembered_snap_grid",remembered_snap_grid}};try{REQUIRE(argc==2&&cases.contains(argv[1]));cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
