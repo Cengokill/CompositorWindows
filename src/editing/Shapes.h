@@ -8,6 +8,9 @@ struct ShapeStyle {
     ShapeKind kind{ShapeKind::Rectangle};
     double red{},green{},blue{},cornerRadius{};
     double lineWidth{4},startX{},startY{},endX{1},endY{1};
+    // Rectangle and ellipse only. The stroke is drawn inside the layer bounds, so it never extends past the raster.
+    bool strokeEnabled{};
+    double strokeWidth{2},strokeRed{},strokeGreen{},strokeBlue{};
     bool operator==(const ShapeStyle&) const = default;
 };
 ShapeStyle decodeShapeStyle(std::string_view);

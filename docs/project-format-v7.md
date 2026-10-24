@@ -56,9 +56,9 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 13
+## Windows reader through version 14
 
-The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–13 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
+The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–14 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
 | Version | Additional content |
 |---|---|
@@ -68,9 +68,10 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 11 | Text `fontRuns` |
 | 12 | Text paragraph fields: `alignment`, `tracking`, `leading`, `boxSize`, or a non-regular `fontStyle` |
 | 13 | A layer image stored as 16-bit RGBA PNG. Masks stay 8-bit. A lower version that contains a 16-bit PNG is rejected. Documents with only 8-bit images stay on their previous version. |
+| 14 | A rectangle or ellipse shape with a `stroke` object: `width` 0.1–500, and `red`, `green`, `blue` 0–1. The stroke is drawn inside the layer bounds. A lower version that carries a `stroke` is rejected, so an older reader never drops the outline silently. Shapes without a stroke stay on their previous version. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
 
 Blend names keep the original 13, then append `Linear Burn`, `Linear Dodge`, `Soft Light`, `Hard Light`, `Vivid Light`, `Linear Light`, `Pin Light`, `Hard Mix`, `Exclusion`, `Subtract`, and `Divide`. A folder may store opacity 0–1 from version 8 and still has to stay in Normal. Its opacity multiplies descendants.
 
-Additive fields do not raise the version by themselves: `effects`, base `text` without runs, and a line `shape` (`lineWidth`, `start`, `end`). Hidden effects keep their parameters. `colorRuns` and `fontRuns` use UTF-16 code-unit `location` and `length`. A text object without `boxSize` is point text, left aligned, with tracking 0 and leading 0 (automatic, 120% of the font size). `alignment` is `Left`, `Center`, or `Right`. `boxSize` is `{width, height}` in layer pixels, each side from 16 to 30000. `tracking` is −100 to 1000 and `leading` is 0 to 5000. `fontStyle` on the text object or a font run names an installed variant; `Regular` and `Normal` are omitted. These paragraph fields are written only when they differ from those defaults, and only then does the document become version 12. A lower version that still carries them is rejected. Guides are `{id, horizontal, position}` and are separate from the transient transform snap lines. Mac exchange of these fields remains unverified.
+Additive fields do not raise the version by themselves: `effects`, base `text` without runs, and a line `shape` (`lineWidth`, `start`, `end`). A `stroke` on a rectangle or ellipse is version 14, as listed above. Hidden effects keep their parameters. `colorRuns` and `fontRuns` use UTF-16 code-unit `location` and `length`. A text object without `boxSize` is point text, left aligned, with tracking 0 and leading 0 (automatic, 120% of the font size). `alignment` is `Left`, `Center`, or `Right`. `boxSize` is `{width, height}` in layer pixels, each side from 16 to 30000. `tracking` is −100 to 1000 and `leading` is 0 to 5000. `fontStyle` on the text object or a font run names an installed variant; `Regular` and `Normal` are omitted. These paragraph fields are written only when they differ from those defaults, and only then does the document become version 12. A lower version that still carries them is rejected. Guides are `{id, horizontal, position}` and are separate from the transient transform snap lines. Mac exchange of these fields remains unverified.

@@ -542,9 +542,22 @@ void startNativeImport(MainWindow* window,const QString& directory,QObject* dest
 }
 }
 void MainWindow::importWelcomeImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
+namespace {
+// Lists layers whose Photoshop vector content stayed pixels or was omitted. Cancel imports nothing from the file.
+bool confirmPhotoshopWarnings(QWidget* parent,const QString& file,const std::vector<std::string>& warnings){
+    QStringList details;for(const auto& warning:warnings)details<<QString::fromStdString(warning);
+    QMessageBox message(QMessageBox::Warning,"Import PSD",QString("%1 layer(s) in %2 are not fully editable after import.").arg(int(warnings.size())).arg(file),QMessageBox::NoButton,parent);
+    message.setObjectName("psdImportWarnings");message.setDetailedText(details.join("\n"));
+    auto* proceed=message.addButton("Continue",QMessageBox::AcceptRole);proceed->setObjectName("psdContinueButton");
+    auto* cancel=message.addButton("Cancel",QMessageBox::RejectRole);cancel->setObjectName("psdCancelButton");
+    message.setDefaultButton(proceed);message.exec();
+    return message.clickedButton()==proceed;
+}
+}
 bool MainWindow::importPhotoshop(const QString& path){
     try{
         auto imported=imaging::readPsd(nativePath(path));
+        if(!imported.warnings.empty()&&!confirmPhotoshopWarnings(this,QFileInfo(path).fileName(),imported.warnings))return false;
         auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
         if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
         refresh();project.canvas->fit();

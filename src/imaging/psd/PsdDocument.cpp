@@ -2,6 +2,7 @@
 #include "PsdText.h"
 #include "core/DeepImage.h"
 #include "core/Document.h"
+#include "editing/Shapes.h"
 #include "text/TextRaster.h"
 #include <algorithm>
 #include <array>
@@ -400,6 +401,207 @@ std::optional<ShapePaint> rasterizeRoundedRect(const std::vector<uint8_t>& fill,
     paint.transform = {double(x0), double(y0), double(width), double(height)};
     return paint;
 }
+// Shape layers keep origination (`vogk`), path (`vsms`/`vmsk`), and fill (`vscg`) separately.
+// A layer becomes a live shape only when its path agrees with the origination box; anything else stays pixels.
+constexpr double kShapeTolerance = 0.5;
+constexpr double kMaxShapeSide = 30000;
+constexpr double kMaxShapePixels = 100000000;
+
+struct Point2 { double x{}, y{}; };
+struct PathKnot { Point2 in, anchor, out; };
+struct VectorShape { editing::ShapeStyle style; editing::Rect bounds; };
+
+int32_t readI32(const uint8_t* p) { return int32_t(uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3])); }
+
+std::optional<int32_t> descriptorLong(const std::vector<uint8_t>& blob, const char* key) {
+    auto at = descriptorValue(blob, key);
+    if (!at || *at + 8 > blob.size() || std::memcmp(blob.data() + *at, "long", 4) != 0) return {};
+    return readI32(blob.data() + *at + 4);
+}
+
+// Searches from a key so that a repeated short key (for example "Top ") is read from the right descriptor.
+std::vector<uint8_t> tailFrom(const std::vector<uint8_t>& blob, const char* key) {
+    const size_t length = std::strlen(key);
+    for (size_t at = 0; at + length <= blob.size(); ++at)
+        if (std::memcmp(blob.data() + at, key, length) == 0) return {blob.begin() + at, blob.end()};
+    return {};
+}
+
+// Returns the knots of the only subpath, which must be closed and must consume every knot record.
+// Photoshop stores each knot as y then x, as 8.24 fixed-point fractions of the canvas size.
+std::optional<std::vector<PathKnot>> closedSubpath(const std::vector<uint8_t>& data, double width, double height) {
+    if (data.size() < 8) return {};
+    auto point = [&](size_t at) { return Point2{double(readI32(data.data() + at + 4)) / 16777216.0 * width, double(readI32(data.data() + at)) / 16777216.0 * height}; };
+    std::vector<PathKnot> knots;
+    int subpaths = 0, remaining = 0;
+    bool closed = false;
+    for (size_t record = 8; record + 26 <= data.size(); record += 26) {
+        const int type = int16_t(uint16_t(data[record]) << 8 | data[record + 1]);
+        const size_t body = record + 2;
+        if (type == 0 || type == 3) {
+            const int count = int16_t(uint16_t(data[body]) << 8 | data[body + 1]);
+            if (remaining != 0 || ++subpaths > 1 || count < 0) return {};
+            remaining = count;
+            closed = type == 0;
+        } else if (type == 1 || type == 2 || type == 4 || type == 5) {
+            if (remaining <= 0) return {};
+            --remaining;
+            knots.push_back({point(body), point(body + 8), point(body + 16)});
+        }
+    }
+    if (remaining != 0 || subpaths != 1 || !closed || knots.size() < 4) return {};
+    return knots;
+}
+
+bool nearPoint(Point2 a, Point2 b) { return std::abs(a.x - b.x) <= kShapeTolerance && std::abs(a.y - b.y) <= kShapeTolerance; }
+
+// Each knot must sit on a distinct expected anchor. Sharp corners need zero handles; curved rectangle and
+// ellipse handles must be horizontal or vertical, which rejects rotated or skewed outlines.
+bool matchesAnchors(const std::vector<PathKnot>& knots, const std::vector<Point2>& expected, bool sharp) {
+    if (knots.size() != expected.size()) return false;
+    std::vector<bool> used(expected.size());
+    for (const auto& knot : knots) {
+        size_t match = expected.size();
+        for (size_t i = 0; i < expected.size() && match == expected.size(); ++i)
+            if (!used[i] && nearPoint(knot.anchor, expected[i])) match = i;
+        if (match == expected.size()) return false;
+        used[match] = true;
+        for (const Point2 handle : {knot.in, knot.out}) {
+            const bool aligned = std::abs(handle.x - knot.anchor.x) <= kShapeTolerance || std::abs(handle.y - knot.anchor.y) <= kShapeTolerance;
+            if (sharp ? !nearPoint(handle, knot.anchor) : !aligned) return false;
+        }
+    }
+    return true;
+}
+
+bool containsText(const std::vector<uint8_t>& blob, const char* text) {
+    const size_t length = std::strlen(text);
+    return std::search(blob.begin(), blob.end(), text, text + length) != blob.end();
+}
+
+// Reads the stroke into style and returns how far the path must grow outward to become the editable shape's bounds.
+// The editable stroke is drawn inside those bounds, so a centred stroke grows the bounds by half its width.
+// The width is read as document pixels, as in the rounded-rectangle fallback.
+std::optional<double> strokeOffset(const std::vector<uint8_t>& stroke, editing::ShapeStyle& style, std::string& reason) {
+    if (!descriptorBool(stroke, "strokeEnabled").value_or(false)) return 0.;
+    const auto width = descriptorNumber(stroke, "strokeStyleLineWidth");
+    if (!width || !std::isfinite(*width) || *width <= 0 || *width > 500) { reason = "the stroke width could not be read or is too wide"; return {}; }
+    if (const auto opacity = descriptorNumber(stroke, "strokeStyleOpacity"); opacity && (!std::isfinite(*opacity) || *opacity < 100)) { reason = "semi-transparent strokes are kept as pixels"; return {}; }
+    if (const auto dashes = descriptorValue(stroke, "strokeStyleLineDashSet"); dashes && *dashes + 8 <= stroke.size() && std::memcmp(stroke.data() + *dashes, "VlLs", 4) == 0 && readI32(stroke.data() + *dashes + 4) > 0) { reason = "dashed strokes are kept as pixels"; return {}; }
+    if (!containsText(stroke, "solidColorLayer")) { reason = "only solid colour strokes become editable"; return {}; }
+    const auto red = descriptorNumber(stroke, "Rd  "), green = descriptorNumber(stroke, "Grn "), blue = descriptorNumber(stroke, "Bl  ");
+    if (!red || !green || !blue || !std::isfinite(*red) || !std::isfinite(*green) || !std::isfinite(*blue)) { reason = "the stroke colour could not be read"; return {}; }
+    auto channel = [](double value) { return std::clamp(value / 255., 0., 1.); };
+    style.strokeEnabled = true;
+    style.strokeWidth = *width;
+    style.strokeRed = channel(*red);
+    style.strokeGreen = channel(*green);
+    style.strokeBlue = channel(*blue);
+    if (containsText(stroke, "strokeStyleAlignInside")) return 0.;
+    if (containsText(stroke, "strokeStyleAlignOutside")) return *width;
+    return *width / 2;
+}
+
+std::optional<VectorShape> vectorShape(const std::vector<uint8_t>& fill, const std::vector<uint8_t>& origination, const std::vector<uint8_t>& path, const std::vector<uint8_t>& stroke, double width, double height, std::string& reason) {
+    const bool solid = fill.size() >= 4 && std::memcmp(fill.data(), "SoCo", 4) == 0;
+    if (!solid) {
+        reason = fill.size() >= 4 && std::memcmp(fill.data(), "GdFl", 4) == 0 ? "gradient fills are kept as pixels" : "only solid colour fills become editable shapes";
+        return {};
+    }
+    if (!descriptorBool(stroke, "fillEnabled").value_or(true)) { reason = "a shape without fill is kept as pixels"; return {}; }
+    const auto red = descriptorNumber(fill, "Rd  "), green = descriptorNumber(fill, "Grn "), blue = descriptorNumber(fill, "Bl  ");
+    if (!red || !green || !blue || !std::isfinite(*red) || !std::isfinite(*green) || !std::isfinite(*blue)) { reason = "the fill colour could not be read"; return {}; }
+    auto channel = [](double value) { return std::clamp(value / 255., 0., 1.); };
+    editing::ShapeStyle style{editing::ShapeKind::Rectangle, channel(*red), channel(*green), channel(*blue), 0};
+    const auto offset = strokeOffset(stroke, style, reason);
+    if (!offset) return {};
+
+    auto outline = closedSubpath(path, width, height);
+    if (!outline) { reason = "the vector path is compound, open, or truncated"; return {}; }
+    const auto& knots = *outline;
+    editing::Rect bounds{};
+    if (origination.empty()) {
+        // Without origination metadata, only a sharp axis-aligned rectangle is accepted; its box comes from the path.
+        double left = knots[0].anchor.x, right = left, top = knots[0].anchor.y, bottom = top;
+        for (const auto& knot : knots) {
+            left = std::min(left, knot.anchor.x); right = std::max(right, knot.anchor.x);
+            top = std::min(top, knot.anchor.y); bottom = std::max(bottom, knot.anchor.y);
+        }
+        bounds = {left, top, right - left, bottom - top};
+        const std::vector<Point2> corners{{left, top}, {right, top}, {right, bottom}, {left, bottom}};
+        if (!matchesAnchors(knots, corners, true)) { reason = "the path is not an axis-aligned rectangle"; return {}; }
+    } else {
+        const auto type = descriptorLong(origination, "keyOriginType");
+        if (!type || (*type != 1 && *type != 2 && *type != 5)) { reason = "only rectangle and ellipse shapes become editable"; return {}; }
+        const auto box = tailFrom(origination, "keyOriginShapeBBox");
+        const auto top = descriptorNumber(box, "Top "), left = descriptorNumber(box, "Left"), bottom = descriptorNumber(box, "Btom"), right = descriptorNumber(box, "Rght");
+        if (!top || !left || !bottom || !right || !std::isfinite(*top) || !std::isfinite(*left) || !std::isfinite(*bottom) || !std::isfinite(*right) || *right <= *left || *bottom <= *top) {
+            reason = "the shape bounds could not be read";
+            return {};
+        }
+        bounds = {*left, *top, *right - *left, *bottom - *top};
+        const double cx = (*left + *right) / 2, cy = (*top + *bottom) / 2;
+        if (*type == 5) {
+            style.kind = editing::ShapeKind::Ellipse;
+            if (!matchesAnchors(knots, {{cx, *top}, {*right, cy}, {cx, *bottom}, {*left, cy}}, false)) { reason = "the path does not match the ellipse bounds"; return {}; }
+        } else {
+            double radius = 0;
+            if (*type == 2) {
+                const auto radii = tailFrom(origination, "keyOriginRRectRadii");
+                const auto values = {descriptorNumber(radii, "topLeft"), descriptorNumber(radii, "topRight"), descriptorNumber(radii, "bottomRight"), descriptorNumber(radii, "bottomLeft")};
+                double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+                for (const auto& value : values) {
+                    if (!value || !std::isfinite(*value)) { reason = "the corner radii could not be read"; return {}; }
+                    lo = std::min(lo, *value); hi = std::max(hi, *value);
+                }
+                if (hi - lo > kShapeTolerance) { reason = "unequal corner radii are kept as pixels"; return {}; }
+                radius = std::clamp(hi, 0., std::min(*right - *left, *bottom - *top) / 2);
+            }
+            style.cornerRadius = radius;
+            if (radius <= kShapeTolerance) {
+                const std::vector<Point2> corners{{*left, *top}, {*right, *top}, {*right, *bottom}, {*left, *bottom}};
+                if (!matchesAnchors(knots, corners, true)) { reason = "the path does not match the rectangle bounds"; return {}; }
+            } else {
+                const double r = radius, l = *left, t = *top, rt = *right, b = *bottom;
+                const std::vector<Point2> anchors{{l + r, t}, {rt - r, t}, {rt, t + r}, {rt, b - r}, {rt - r, b}, {l + r, b}, {l, b - r}, {l, t + r}};
+                if (!matchesAnchors(knots, anchors, false)) { reason = "the path does not match the rounded rectangle"; return {}; }
+            }
+        }
+    }
+    if (*offset > 0) {
+        bounds = {bounds.x - *offset, bounds.y - *offset, bounds.width + 2 * *offset, bounds.height + 2 * *offset};
+        if (style.cornerRadius > kShapeTolerance) style.cornerRadius += *offset;
+    }
+    // Live shapes use whole-pixel rasters; the sub-pixel edge is rounded once, which is disclosed in the user guide.
+    const double pixelWidth = std::round(bounds.width), pixelHeight = std::round(bounds.height);
+    if (pixelWidth < 1 || pixelHeight < 1 || pixelWidth > kMaxShapeSide || pixelHeight > kMaxShapeSide || pixelWidth * pixelHeight > kMaxShapePixels) {
+        reason = "the shape is too large to edit";
+        return {};
+    }
+    bounds.width = pixelWidth;
+    bounds.height = pixelHeight;
+    return VectorShape{style, bounds};
+}
+
+// Returns an empty string when the layer became an editable shape, or the reason it stays pixels.
+// The layer keeps its identity, mask, opacity, blend, and visibility; only pixels and shape metadata change.
+std::string convertVectorShape(Layer& layer, const std::vector<uint8_t>& fill, const std::vector<uint8_t>& origination, const std::vector<uint8_t>& path, const std::vector<uint8_t>& stroke, double width, double height) {
+    std::string reason;
+    auto shape = vectorShape(fill, origination, path, stroke, width, height, reason);
+    if (!shape) return reason;
+    try {
+        auto made = editing::createShapeLayer(shape->bounds, shape->style, layer.name);
+        if (!made) return "the shape is empty";
+        layer.raster = made->raster;
+        layer.shapeJson = std::move(made->shapeJson);
+        layer.transform = made->transform;
+        layer.deep.reset();
+    } catch (const std::exception& error) {
+        return error.what();
+    }
+    return {};
+}
+
 bool readMerged(Reader& in, int width, int height, int depth, int channels, Layer& layer, std::string& report) {
     if (in.at + 2 > in.size) return false;
     auto compression = in.u16();
@@ -441,7 +643,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     if (channels < 3 || (depth != 8 && depth != 16) || mode != 3) throw std::runtime_error("Only 8-bit or 16-bit RGB PSD files are supported");
     if (!width || !height || width > 30000 || height > 30000 || uint64_t(width) * height > 100000000) throw std::runtime_error("PSD exceeds the canvas limit");
     in.skip(in.u32()); in.skip(in.u32());
-    PsdImport result; result.document.id = newId(); result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report;
+    PsdImport result; result.document.id = newId(); result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report; std::vector<std::string> warnings;
     if (depth == 16) report += "16-bit channels were preserved.\n";
     auto section = in.wide(); auto sectionEnd = in.at + size_t(std::min<uint64_t>(section, in.size > in.at ? in.size - in.at : 0));
     if (section) {
@@ -472,7 +674,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             if (!depthLayers && info) in.at = infoAt;
             if (depthLayers || info) {
             auto count = std::abs(in.i16()); if (count > 256) throw std::runtime_error("Too many PSD layers");
-            struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name; bool group{}, closer{}, visible{true}, hasMask{}; int maskTop{}, maskLeft{}, maskBottom{}, maskRight{}; uint8_t maskFlags{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::vector<uint8_t> typeTool, fill, geometry, strokeData; };
+            struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name; bool group{}, closer{}, visible{true}, hasMask{}; int maskTop{}, maskLeft{}, maskBottom{}, maskRight{}; uint8_t maskFlags{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::vector<uint8_t> typeTool, fill, solidFill, geometry, strokeData, vectorPath; };
             std::vector<Record> records;
             for (int i = 0; i < count; ++i) {
                 Record record; record.top = in.i32(); record.left = in.i32(); record.bottom = in.i32(); record.right = in.i32();
@@ -503,7 +705,9 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                         }
                     }
                     else if ((key == "TySh" || key == "txt2") && record.typeTool.empty()) { auto stored = std::min(length, uint64_t(extraEnd > in.at ? extraEnd - in.at : 0)); record.typeTool.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
+                    else if (key == "SoCo" && record.solidFill.empty()) { auto stored = std::min(length, uint64_t(extraEnd > in.at ? extraEnd - in.at : 0)); record.solidFill.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
                     else if (key == "vscg" || key == "vogk" || key == "vstk") { auto stored = std::min(length, uint64_t(extraEnd > in.at ? extraEnd - in.at : 0)); auto& dest = key == "vscg" ? record.fill : key == "vogk" ? record.geometry : record.strokeData; if (dest.empty()) dest.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
+                    else if ((key == "vmsk" || key == "vsms") && record.vectorPath.empty()) { auto stored = std::min(length, uint64_t(extraEnd > in.at ? extraEnd - in.at : 0)); record.vectorPath.assign(in.data + in.at, in.data + in.at + size_t(stored)); }
                     auto next = start + size_t(length + (length & 1));
                     in.at = next > extraEnd ? extraEnd : next;
                 }
@@ -511,6 +715,13 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             }
             std::vector<std::string> folders;
             for (auto& record : records) {
+                // A shape's solid fill may be stored as a SoCo block, whose payload lacks the "SoCo" prefix that the vscg form carries.
+                // Only a layer with vector geometry is a shape, so a plain solid-colour fill layer keeps its existing handling.
+                if (record.fill.empty() && !record.geometry.empty() && !record.solidFill.empty()) {
+                    const std::string tag = "SoCo";
+                    record.fill.assign(tag.begin(), tag.end());
+                    record.fill.insert(record.fill.end(), record.solidFill.begin(), record.solidFill.end());
+                }
                 const int64_t sourceWidth = int64_t(record.right) - record.left;
                 const int64_t sourceHeight = int64_t(record.bottom) - record.top;
                 const int64_t visibleLeft = std::max<int64_t>(record.left, 0);
@@ -589,7 +800,10 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 layer.parentId = folders.empty() ? std::string{} : folders.back();
                 if (record.group) folders.push_back(layer.id);
                 else if ((sourceFits || cropFits) && red.size() == size_t(decodedPixels) && green.size() == red.size() && blue.size() == red.size()) installImage(layer, decodeWidth, decodeHeight, red, green, blue, alpha, red16, green16, blue16, alpha16);
+                std::string shapeReason;
+                if (!record.group && !record.closer && !record.fill.empty()) shapeReason = convertVectorShape(layer, record.fill, record.geometry, record.vectorPath, record.strokeData, result.document.width, result.document.height);
                 if (!layer.raster && !record.group) { if (auto painted = rasterizeRoundedRect(record.fill, record.geometry, record.strokeData)) { layer.raster = std::move(painted->raster); layer.transform = painted->transform; } }
+                if (!shapeReason.empty()) warnings.push_back(layer.name + (layer.raster ? " stays as pixels: " : " could not be imported: ") + shapeReason + ".");
                 const size_t decodedMaskPixels = size_t(decodeMaskWidth) * size_t(decodeMaskHeight);
                 if (maskFits && maskPlane.size() == decodedMaskPixels) {
                     if (record.maskFlags & 0x04) for (auto& value : maskPlane) value = uint8_t(255 - value);
@@ -610,6 +824,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
         } catch (const std::exception& error) {
             report += std::string("Layer records were skipped: ") + error.what() + "\n";
             result.document.layers.clear();
+            warnings.clear();
         }
     }
     in.at = std::max(in.at, sectionEnd);
@@ -621,6 +836,6 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
         catch (const std::exception& error) { report += std::string("Merged image was skipped: ") + error.what() + "\n"; }
     }
     if (result.document.layers.empty()) throw std::runtime_error(report.empty() ? "PSD contains no supported image" : report);
-    report += "Imported " + std::to_string(result.document.layers.size()) + " layer(s).\n"; result.report = report; validateDocument(result.document); return result;
+    report += "Imported " + std::to_string(result.document.layers.size()) + " layer(s).\n"; result.report = report; result.warnings = std::move(warnings); validateDocument(result.document); return result;
 }
 }

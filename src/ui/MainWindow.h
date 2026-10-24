@@ -137,6 +137,11 @@ class MainWindow final:public QMainWindow {
     QColor background_{Qt::white};
     editing::GradientSettings gradientSettings_;
     editing::ShapeStyle shapeStyle_;
+    // The layer whose style shapeStyle_ last loaded, and the stored style it matched; the bar reloads when either changes (e.g. undo).
+    std::string shapeStyleLayer_;
+    editing::ShapeStyle shapeStyleSynced_;
+    // Project whose open "Shape Style" history transaction collects spin-box steps until the field releases focus.
+    EditorProject* shapeStyleOwner_{};
     std::optional<Layer> drawingOriginal_;
     EditorProject* gradientOwner_{};
     Point gradientStart_,gradientEnd_;
@@ -275,6 +280,8 @@ class MainWindow final:public QMainWindow {
     void changeCropRatio();
     void cancelShape();
     void refreshShapeControls();
+    void applyShapeStyleToSelection();
+    void finishShapeStyleEdit();
     void cancelCrop();
     void refreshCropControls();
     void resizeSelection(bool expand,double amount);
