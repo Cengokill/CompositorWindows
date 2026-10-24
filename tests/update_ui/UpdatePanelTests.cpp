@@ -37,7 +37,10 @@ void release_parse(){
     require(stable&&stable->version==update::Version{0,2,0}&&stable->pageUrl=="https://github.com/Cengokill/CompositorWindows/releases/tag/v0.2.0","stable vX.Y.Z release accepted");
     require(update::parseLatestRelease(release("1.4.5"))->version==update::Version{1,4,5},"tag without v accepted");
     require(!update::parseLatestRelease(release("v0.3.0",true))&&!update::parseLatestRelease(release("v0.3.0",false,true)),"drafts and prereleases ignored");
-    for(const char* tag:{"v1.2","v01.2.3","v1.2.3-beta","latest","v1.2.3.4",""})require(throws([&]{update::parseLatestRelease(release(tag));}),"malformed tag rejected");
+    const auto first=update::parseLatestRelease(release("v1.0"));
+    require(first&&first->version==update::Version{1,0,0}&&first->tag=="v1.0"&&update::Version{0,1,8}<first->version,"two-part tag v1.0 reads as 1.0.0, newer than 0.1.8");
+    require(update::parseLatestRelease(release("2.3"))->version==update::Version{2,3,0},"two-part tag without v accepted");
+    for(const char* tag:{"v1","v01.2","v1.02","v1.0-beta","v1.2.","v01.2.3","v1.2.3-beta","latest","v1.2.3.4",""})require(throws([&]{update::parseLatestRelease(release(tag));}),"malformed tag rejected");
     for(const char* page:{"http://github.com/Cengokill/CompositorWindows/releases/tag/v0.2.0","https://github.com/other/CompositorWindows/releases/tag/v0.2.0","https://evil.example/Cengokill/CompositorWindows/releases/x","https://github.com/Cengokill/CompositorWindows/releases/x?download=1","https://user@github.com/Cengokill/CompositorWindows/releases/x"})
         require(throws([&]{update::parseLatestRelease(release("v0.2.0",false,false,page));}),"foreign or unsafe release page rejected");
     require(throws([]{update::parseLatestRelease("[]");})&&throws([]{update::parseLatestRelease("{");})&&throws([]{update::parseLatestRelease(R"({"tag_name":"v0.2.0","draft":"no","prerelease":false,"html_url":"x"})");}),"non-object, truncated and mistyped JSON rejected");
