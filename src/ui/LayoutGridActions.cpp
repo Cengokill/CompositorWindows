@@ -6,7 +6,9 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QIcon>
 #include <QMenu>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -48,7 +50,10 @@ public:
 private:
     void setColor(std::array<uint8_t,3> value){
         value_.color=value;
-        color_->setText(QColor(value[0],value[1],value[2]).name());
+        const QColor color(value[0],value[1],value[2]);
+        QPixmap swatch(16,16);swatch.fill(color);
+        color_->setIcon(QIcon(swatch));
+        color_->setText(color.name());
     }
     editing::LayoutGrid value_;
     QDoubleSpinBox* spacing_{};
