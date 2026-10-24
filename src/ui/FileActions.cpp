@@ -555,13 +555,14 @@ bool MainWindow::importPhotoshop(const QString& path){
     }
 }
 void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
-bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;if(!p->saveJob.isNull()){statusBar()->showMessage("A save is already in progress",5000);return false;}auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}startProjectSave(*p,path);return true;}
+bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;if(!p->saveJob.isNull()){statusBar()->showMessage("A save is already in progress",5000);return false;}auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}for(const auto& other:projects_)if(!other->savePath.isEmpty()&&QDir::cleanPath(other->savePath).compare(QDir::cleanPath(path),Qt::CaseInsensitive)==0){statusBar()->showMessage("Another open project is already saving to this location",5000);return false;}startProjectSave(*p,path);return true;}
 void MainWindow::startProjectSave(EditorProject& project,const QString& path){
     // The snapshot is the document value and revision captured here on the UI thread. The
     // worker never reads the live project, and edits after this point stay unsaved.
     const auto revision=project.history.revision();
     const QPointer<NativeCanvas> identity(project.canvas);
     project.saveError.clear();
+    project.savePath=path;
     ui::ProjectSaveJob::Host host;
     host.beforeWrite=projectSaveBeforeWrite_;
     host.completed=[this,identity,path,revision](const QString& error){
@@ -572,6 +573,7 @@ void MainWindow::startProjectSave(EditorProject& project,const QString& path){
             return;
         }
         owner->saveJob=nullptr;
+        owner->savePath.clear();
         if(error.isEmpty()){
             owner->path=path;
             owner->history.markSavedIfCurrent(revision);
