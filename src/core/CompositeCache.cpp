@@ -110,7 +110,8 @@ LayerDamage compareLayers(const Document* previous,const Document& doc,double un
         // Masks, adjustments, and any other change still rebuild the viewport.
         const bool lod=lodActive(before,units)||lodActive(after,units);
         if(rasterGeometry||dependent||(lod&&!pureTranslation(before,after))){result.all=true;return result;}
-        if(metadata!=after){if(!boundsOnlyMetadata(metadata,after)){result.all=true;return result;}
+        // A restyled shape changes its pixels with its metadata; tile damage cannot describe that, so rebuild.
+        if(metadata!=after){if(before.raster!=after.raster||!boundsOnlyMetadata(metadata,after)){result.all=true;return result;}
             if(visualMetadata(before,after)){const bool children=before.visible!=after.visible||before.opacity!=after.opacity;addPainted(*previous,i,units,result.regions,children);addPainted(doc,i,units,result.regions,children);}
             continue;}
         const int sourceColumns=(after.raster->width+255)/256;
