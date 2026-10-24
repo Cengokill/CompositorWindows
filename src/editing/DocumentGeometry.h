@@ -1,6 +1,7 @@
 #pragma once
 #include "Selection.h"
 #include "Snapping.h"
+#include <optional>
 #include <string>
 
 namespace compositor::editing {
@@ -15,6 +16,11 @@ struct CanvasSizeDraft {
     double displayed(bool widthAxis) const;
     void set(double value,bool widthAxis);
 };
+// New Canvas sizes are whole pixels. A print value is converted at the chosen DPI;
+// displayed print values are derived from the pixel count, never the reverse.
+enum class PrintUnit { Pixels, Inches, Centimeters, Millimeters };
+std::optional<int> creationPixels(double value,PrintUnit unit,double dpi);
+double creationDisplayed(int pixels,PrintUnit unit,double dpi);
 struct CanvasSizeOptions {
     int width,height;
     int anchor{4}; // row-major 0..8
