@@ -19,6 +19,7 @@
 #include "PropertyControls.h"
 #include "RawImportDialog.h"
 #include "EditPanelSession.h"
+#include "ProjectSaveJob.h"
 #include "ProjectToolState.h"
 #include "CommandPalette.h"
 #include "CommandRegistry.h"
@@ -63,6 +64,9 @@ struct EditorProject {
     std::string brushLayerId;
     QString path;
     QString defaultTitle{"Untitled"};
+    // Save activity is separate from projectBusy: edits remain allowed while the snapshot is written.
+    QPointer<ui::ProjectSaveJob> saveJob;
+    QString saveError;
     QStackedWidget* page{};
     QWidget* welcome{};
     NativeCanvas* canvas{};
@@ -251,6 +255,10 @@ class MainWindow final:public QMainWindow {
     void openProjectDialog();
     bool loadProjectDirectory(const QString&);
     bool saveProject(bool saveAs=false);
+    void startProjectSave(EditorProject&,const QString& path);
+    // Blocks the close flow until the project's pending write finishes. Returns false if that write failed.
+    bool waitForProjectSave(EditorProject&);
+    std::function<void()> projectSaveBeforeWrite_;
     bool closeProject(int);
     void pointerBegin(QPointF,Qt::KeyboardModifiers,int clickCount=1);
     void pointerUpdate(QPointF,Qt::KeyboardModifiers);
@@ -435,5 +443,7 @@ public:
     NativeCanvas* canvas(){auto*p=current();return p?p->canvas:nullptr;}
     QString brushAdapterName()const{return brushGpu_?QString::fromStdString(brushGpu_->adapterName()):QString{};}
     void exerciseNativeUi(const QString& evidenceDirectory);
+    // Test seam: holds the next background save on the worker before it writes.
+    void setProjectSaveBeforeWriteForTesting(std::function<void()> hook){projectSaveBeforeWrite_=std::move(hook);}
 };
 }

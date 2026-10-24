@@ -262,6 +262,10 @@ public:
     std::optional<Snapshot> undo();
     std::optional<Snapshot> redo();
     void markSaved(){ savedRevision_=revision_; }
+    // Revisions are unique for the life of the history. A background save uses the revision it captured,
+    // so the saved state applies only while that exact revision is still current.
+    uint64_t revision() const {return revision_;}
+    bool markSavedIfCurrent(uint64_t revision){ if(revision!=revision_)return false; savedRevision_=revision; return true; }
     void reset();
     bool modified() const {return revision_!=savedRevision_;}
     bool canUndo() const {return depth_==0&&!past_.empty();}
