@@ -4,6 +4,7 @@
 #include "imaging/wic_codec.h"
 #include "imaging/onnx_subject_provider.h"
 #include "core/DocumentExport.h"
+#include "CompositorVersion.h"
 #include <QTemporaryDir>
 #include <QFileInfo>
 #include <QApplication>
@@ -14,7 +15,7 @@
 #include <QTextStream>
 
 int main(int argc,char**argv){
-    QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion("0.1.8");
+    QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion(COMPOSITOR_VERSION_STRING);
     compositor::logging::install();
     compositor::logging::trace(QString("startup executable=%1 arguments=%2")
         .arg(QCoreApplication::applicationFilePath(),app.arguments().join(" | ")));

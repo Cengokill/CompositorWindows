@@ -1,3 +1,9 @@
+# Compositor Windows 1.1.0
+
+Version 1.1.0 is the first build that reports its release number: the executable, the update check, and the packages all read it from `project(VERSION)` in `CMakeLists.txt`. Packages use the stable channel instead of the community preview. Compositor checks GitHub for new stable releases and links to their page; installing an update is still manual.
+
+This release adds the keyboard shortcut editor (Help > Keyboard Shortcuts), File > Open Recent, the daily stable release check, new canvas presets with print units and backgrounds, the layout grid and snap targets, editable Photoshop shapes, RAW development before import, canvas-only full screen (F11), 90° canvas rotation, one-page PDF export, Color Balance and Black & White controls, restyled Camera Raw sliders with double-click reset, background project saving, and cropping of oversized PSD layers.
+
 # Compositor Windows preview 0.1.8
 
 This independent Windows 11 x64 port is based on Compositor 1.0.4 at

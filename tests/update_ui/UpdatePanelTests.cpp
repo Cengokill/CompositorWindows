@@ -1,3 +1,4 @@
+#include "CompositorVersion.h"
 #include "ui/UpdatePanel.h"
 #include "update/ReleaseCheck.h"
 #include "update/Updater.h"
@@ -19,6 +20,8 @@
 #include <chrono>
 #include <future>
 #include <map>
+#include <vector>
+#include <Windows.h>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -141,8 +144,20 @@ void panel_release_check(){
     pending("late");// Must not touch the destroyed panel.
     QPointer<QDialog> plain=ui::openUpdatePanel(&owner,{},root.path());settled(plain);require(!button(plain,"updateReleaseCheck")->isVisible(),"no release button without a host");
 }}
-int main(int argc,char** argv){
-    QApplication application(argc,argv);
+// The version comes from CMake project(VERSION) only: the generated header, the value
+// CTest passes from PROJECT_VERSION and the Compositor.exe version resource must agree.
+void app_version(const QString& projectVersion,const QString& executable){
+    require(QString(COMPOSITOR_VERSION_STRING)=="1.1.0","generated version is 1.1.0");
+    require(projectVersion==COMPOSITOR_VERSION_STRING,"generated version matches CMake PROJECT_VERSION");
+    require(update::Version{1,0,0}<update::Version::parse(COMPOSITOR_VERSION_STRING),"release v1.0 is not offered to this build");
+    const auto path=executable.toStdWString();DWORD handle=0;const DWORD size=GetFileVersionInfoSizeW(path.c_str(),&handle);require(size>0,"Compositor.exe has a version resource");
+    std::vector<unsigned char> data(size);require(GetFileVersionInfoW(path.c_str(),0,size,data.data()),"version resource is readable");
+    VS_FIXEDFILEINFO* fixed=nullptr;UINT length=0;require(VerQueryValueW(data.data(),L"\\",reinterpret_cast<void**>(&fixed),&length)&&fixed,"fixed file info exists");
+    require(fixed->dwFileVersionMS==DWORD(MAKELONG(COMPOSITOR_VERSION_MINOR,COMPOSITOR_VERSION_MAJOR))&&fixed->dwFileVersionLS==DWORD(MAKELONG(0,COMPOSITOR_VERSION_PATCH))&&fixed->dwProductVersionMS==fixed->dwFileVersionMS&&fixed->dwProductVersionLS==fixed->dwFileVersionLS,"numeric file and product versions match");
+    require(!(fixed->dwFileFlags&fixed->dwFileFlagsMask&VS_FF_PRERELEASE),"executable is not flagged prerelease");
+    for(const wchar_t* key:{L"\\StringFileInfo\\040904B0\\FileVersion",L"\\StringFileInfo\\040904B0\\ProductVersion"}){wchar_t* text=nullptr;require(VerQueryValueW(data.data(),key,reinterpret_cast<void**>(&text),&length)&&text&&QString::fromWCharArray(text)==COMPOSITOR_VERSION_STRING,"string file and product versions match");}
+}
+int main(int argc,char** argv){    QApplication application(argc,argv);
     if(argc==2){
         QTemporaryDir settingsRoot;QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("ReleaseCheck");
         QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsRoot.path());
@@ -150,21 +165,24 @@ int main(int argc,char** argv){
         try{if(!cases.contains(argv[1]))throw std::runtime_error("unknown release case");cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}
         catch(const std::exception& error){std::cerr<<"FAIL "<<argv[1]<<": "<<error.what()<<'\n';return 1;}
     }
-    if(argc!=4)return 2;
-    const QString key=QString::fromLocal8Bit(argv[1]),root=QString::fromLocal8Bit(argv[2]),output=QString::fromLocal8Bit(argv[3]);
+    if(argc==4&&std::string(argv[1])=="app_version"){
+        try{app_version(QString::fromLocal8Bit(argv[2]),QString::fromLocal8Bit(argv[3]));std::cout<<"PASS app_version\n";return 0;}
+        catch(const std::exception& error){std::cerr<<"FAIL app_version: "<<error.what()<<'\n';return 1;}
+    }
+    if(argc!=4)return 2;    const QString key=QString::fromLocal8Bit(argv[1]),root=QString::fromLocal8Bit(argv[2]),output=QString::fromLocal8Bit(argv[3]);
     QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("UpdatePanel");
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,root+"/settings");QSettings::setPath(QSettings::IniFormat,QSettings::SystemScope,root+"/settings");
     QJsonObject result{{"case",key}};bool passed=false;
     try{
-        application.setProperty("manualUpdatesOnly", key=="preview_ignores_test_feed");
+        application.setProperty("manualUpdatesOnly", key=="manual_ignores_test_feed");
         QWidget owner;owner.resize(300,200);owner.show();
         int restarts=0;ui::UpdatePanelHost host;host.restart=[&](const auto& seen){require(seen==std::filesystem::path(root.toStdWString()),"restart root changed");++restarts;return false;};
         QPointer<QDialog> panel=ui::openUpdatePanel(&owner,host,key=="portable_unconfigured"?root+"/portable":root+"/versions/0.1.0");
         settled(panel);const QString initial=state(panel);result["initial_state"]=initial;
-        if(key=="portable_unconfigured"||key=="missing_configuration"||key=="preview_ignores_test_feed"){
+        if(key=="portable_unconfigured"||key=="missing_configuration"||key=="manual_ignores_test_feed"){
             require(initial=="unconfigured","unconfigured build attempted update");require(!button(panel,"updateInstall")->isEnabled(),"unconfigured install enabled");require(text(panel,"updateStatus").contains("not configured"),"unconfigured explanation absent");
             require(text(panel,"updateSourceInformation").isEmpty()&&!panel->findChild<QLabel*>("updateSourceInformation")->isVisible(),"unconfigured explanation shown twice");
-            if(key=="preview_ignores_test_feed")require(current(root)=="0.1.0"&&text(panel,"updateStatus").contains("preview"),"preview accepted development update configuration");
+            if(key=="manual_ignores_test_feed")require(current(root)=="0.1.0"&&text(panel,"updateStatus").contains("new stable releases")&&!text(panel,"updateStatus").contains("preview"),"manual-update build accepted development update configuration");
         }else if(key=="missing_optin"||key=="invalid_configuration"||key=="invalid_state"){
             require(initial=="error","invalid configuration/state was accepted");require(!button(panel,"updateInstall")->isEnabled(),"failed configuration permits install");require(!button(panel,"updateRestart")->isVisible(),"failed configuration permits restart");
             if(key=="invalid_state")require(text(panel,"updateVersions").contains("unavailable")&&!text(panel,"updateVersions").contains("0.0.0"),"unknown state fabricated a version");

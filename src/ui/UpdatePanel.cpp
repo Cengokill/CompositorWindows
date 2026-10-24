@@ -36,7 +36,7 @@ struct Configuration {
 Configuration configuration(const QString& applicationDirectory) {
     Configuration result;
     if (QCoreApplication::instance()->property("manualUpdatesOnly").toBool()) {
-        result.information = "Automatic updates are not configured for this preview. Install a new MSI or extract a new portable download to update Compositor.";
+        result.information = "Compositor checks GitHub for new stable releases and links to their download page. To update, install the new MSI or extract the new portable download.";
         return result;
     }
     QDir version(applicationDirectory);

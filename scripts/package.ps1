@@ -1,6 +1,7 @@
-param([switch]$SkipBuild,[switch]$PortableOnly,[string]$Version='0.1.4')
+param([switch]$SkipBuild,[switch]$PortableOnly,[string]$Version)
 $ErrorActionPreference='Stop'
 $packageRoot=Split-Path $PSScriptRoot -Parent
+if(-not $Version){$Version=([regex]::Match((Get-Content -LiteralPath (Join-Path $packageRoot 'CMakeLists.txt') -Raw),'project\(CompositorWindows VERSION ([0-9.]+)')).Groups[1].Value}
 if($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'){throw 'Version must be a numeric semantic version'}
 $versionParts=$Version.Split('.')
 if([long]$versionParts[0] -gt 255 -or [long]$versionParts[1] -gt 255 -or [long]$versionParts[2] -gt 65535){throw 'MSI version must fit 255.255.65535'}
@@ -13,7 +14,7 @@ try {
   & cmake --build --preset windows-x64-release --target Compositor --parallel 4; if($LASTEXITCODE){throw 'Release build failed'}
  }
  $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
- $output=Join-Path $packageRoot "dist\CompositorWindows-$Version-preview-$stamp"
+ $output=Join-Path $packageRoot "dist\CompositorWindows-$Version-$stamp"
  if(Test-Path -LiteralPath $output){throw 'Package output already exists'}
  $portable=Join-Path $output 'CompositorWindows'
  $payload=$portable
@@ -151,7 +152,7 @@ try {
  Copy-Item -LiteralPath (Join-Path $packageRoot 'docs\user-guide.md') -Destination (Join-Path $payload 'USER-GUIDE.md')
  Copy-Item -LiteralPath (Join-Path $packageRoot 'docs\release-notes.md') -Destination (Join-Path $payload 'RELEASE-NOTES.md')
  $encoding=[Text.UTF8Encoding]::new($false)
- $policy=[ordered]@{schema=1;channel='community-preview';automaticUpdates=$false;upstream='a19db9011282399785dc18efcfded904627bdcc2'}
+ $policy=[ordered]@{schema=1;channel='stable';automaticUpdates=$false;upstream='a19db9011282399785dc18efcfded904627bdcc2'}
  [IO.File]::WriteAllText((Join-Path $payload 'release-policy.json'),($policy|ConvertTo-Json),$encoding)
  $readme=@"
 Compositor Windows $Version
@@ -179,7 +180,7 @@ Licenses and corresponding sources are in licenses and sources.
   if($LASTEXITCODE){throw 'Cannot record package source status'}
   if($sourceStatus.Count){$sourceDirty=$true}
  }
- [ordered]@{schema=2;version=$Version;channel='community-preview';createdUtc=[DateTime]::UtcNow.ToString('o');sourceRevision=$revision;sourceDirty=$sourceDirty;sourcePaths=$sourcePaths;sourceSnapshot=[IO.Path]::GetFileName($sourceArchive);sourceSha256=(Get-FileHash -LiteralPath $sourceArchive).Hash.ToLowerInvariant();upstream=$policy.upstream;signed=$false;automaticUpdates=$false;entryPoint='Compositor.exe';files=$files} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-manifest.json') -Encoding utf8
+ [ordered]@{schema=2;version=$Version;channel='stable';createdUtc=[DateTime]::UtcNow.ToString('o');sourceRevision=$revision;sourceDirty=$sourceDirty;sourcePaths=$sourcePaths;sourceSnapshot=[IO.Path]::GetFileName($sourceArchive);sourceSha256=(Get-FileHash -LiteralPath $sourceArchive).Hash.ToLowerInvariant();upstream=$policy.upstream;signed=$false;automaticUpdates=$false;entryPoint='Compositor.exe';files=$files} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-manifest.json') -Encoding utf8
  Compress-Archive -LiteralPath $portable -DestinationPath (Join-Path $output "CompositorWindows-$Version-portable.zip") -CompressionLevel Optimal
  $demo=Join-Path $packageRoot 'demo'
  if(Test-Path -LiteralPath $demo){
