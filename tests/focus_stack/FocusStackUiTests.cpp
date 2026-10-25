@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QMessageBox>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
@@ -38,7 +39,7 @@ struct Fixture {
     std::string active;
     QTimer dismiss;
     QStringList errors;
-    QString nearPath,midPath,farPath,mismatchPath,corruptPath;
+    QString nearPath,midPath,farPath,mismatchPath,narrowPath,corruptPath;
     Fixture(){
         require(directory.isValid(),"Owned fixture directory");
         QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,directory.path());
@@ -47,6 +48,7 @@ struct Fixture {
         midPath=write("mid.png",focus_stack_fixture::frame(W,H,[](int x,int){return x<W/3||x>=2*W/3;},2,-1));
         farPath=write("far.png",focus_stack_fixture::frame(W,H,[](int x,int){return x<2*W/3;}));
         mismatchPath=write("mismatch.png",focus_stack_fixture::frame(W+8,H,[](int,int){return false;}));
+        narrowPath=write("narrow.png",focus_stack_fixture::frame(W-8,H,[](int,int){return false;}));
         corruptPath=directory.filePath("corrupt.png");{QFile file(corruptPath);require(file.open(QIODevice::WriteOnly),"Corrupt fixture");file.write("not an image");}
         window=std::make_unique<MainWindow>(true);owner=&window->addProject(document(),"Focus stack fixture");
         window->resize(1100,800);window->show();QTest::qWait(20);before=owner->document;active=owner->active;
@@ -64,6 +66,27 @@ struct Fixture {
     std::shared_ptr<const Raster> expected()const{return ui::runFocusStack({native(nearPath),native(midPath),native(farPath)},ui::decodeImportImage,{});}
     int tabs()const{auto* widget=window->findChild<QTabWidget*>();require(widget,"Project tabs exist");return widget->count();}
 };
+void busy_project_reports_message(){
+    // The project became busy after the command was chosen: the request is refused with a message, not silently.
+    Fixture f;f.window->setProperty("testFocusStackOutput",QString("layer"));f.owner->projectBusy=true;
+    f.window->focusStackSelectedImages(f.sources());
+    require(!f.job(),"No job starts on a busy project");
+    require(f.window->statusBar()->currentMessage().contains("The project is busy"),"Busy project is reported in the status bar");
+    f.owner->projectBusy=false;QTest::qWait(30);f.unchanged();require(f.errors.isEmpty(),"No error dialog");
+}
+void later_frame_bounded_before_decode(){
+    // A later frame larger than the first must be refused by the decoder's size check, before its pixels are allocated.
+    Fixture f;std::vector<std::uint64_t> pixelLimits;std::vector<std::uint32_t> sideLimits;
+    const ui::ImportDecoder recording=[&](const std::filesystem::path& file,const imaging::ImportOptions& options){
+        pixelLimits.push_back(options.remainingPixels);sideLimits.push_back(options.maxSide);return ui::decodeImportImage(file,options);};
+    bool rejected=false;
+    try{ui::runFocusStack({native(f.nearPath),native(f.mismatchPath)},recording,{});}
+    catch(const std::exception& error){rejected=std::string(error.what()).starts_with("mismatch.png: ");}
+    require(rejected,"Larger later frame is rejected");
+    require(pixelLimits.size()==2&&pixelLimits[0]==imaging::ImportOptions{}.remainingPixels&&pixelLimits[1]==std::uint64_t(W)*H,"Later frame is decoded with the first frame's pixel count as its limit");
+    require(sideLimits[1]==std::uint32_t(std::max(W,H)),"Later frame is decoded with the first frame's longest side as its limit");
+    require(ui::runFocusStack({native(f.nearPath),native(f.midPath),native(f.farPath)},recording,{})!=nullptr,"Same-size frames still stack under the limit");
+}
 bool samePixels(const Raster& a,const Raster& b){return a.width==b.width&&a.height==b.height&&a.rgba()==b.rgba();}
 void apply_new_layer_single_undo(){
     Fixture f;f.start(f.sources(),"layer");
@@ -113,7 +136,9 @@ void cancel_keeps_document(){
 }
 void invalid_input_unchanged(){
     {Fixture f;const int tabs=f.tabs();f.start({f.nearPath,f.mismatchPath},"layer");f.wait();f.unchanged();require(f.tabs()==tabs,"No tab");
-     require(f.errors.size()==1&&f.errors.front().contains("mismatch.png")&&f.errors.front().contains("differs from the first image"),"Size mismatch names the file");}
+     require(f.errors.size()==1&&f.errors.front().startsWith("mismatch.png: ")&&f.errors.front().contains("every image must be 96x64"),"Larger mismatch names the file and the required size");}
+    {Fixture f;f.start({f.nearPath,f.narrowPath},"layer");f.wait();f.unchanged();
+     require(f.errors.size()==1&&f.errors.front().contains("narrow.png")&&f.errors.front().contains("differs from the first image"),"Smaller mismatch names the file");}
     {Fixture f;const int tabs=f.tabs();f.start({f.nearPath,f.corruptPath},"document");f.wait();f.unchanged();require(f.tabs()==tabs,"No tab");
      require(f.errors.size()==1&&f.errors.front().startsWith("corrupt.png: "),"Unreadable file is named");}
 }
@@ -152,6 +177,8 @@ int main(int argc,char** argv){
         else if(name=="single_image_rejected")single_image_rejected();
         else if(name=="stale_result_discarded")stale_result_discarded();
         else if(name=="export_includes_result")export_includes_result();
+        else if(name=="later_frame_bounded_before_decode")later_frame_bounded_before_decode();
+        else if(name=="busy_project_reports_message")busy_project_reports_message();
         else throw std::runtime_error("unknown case");
         std::cout<<"PASS "<<name<<'\n';return 0;
     }catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}

@@ -7,6 +7,7 @@
 #include <QProgressDialog>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <stdexcept>
@@ -53,12 +54,17 @@ std::shared_ptr<const Raster> runFocusStack(const std::vector<std::filesystem::p
         try{decoded=decode(file,options);imaging::validate(decoded.image);}
         catch(const std::exception& error){
             if(cancelled&&cancelled())throw std::runtime_error("Focus stack cancelled");
-            throw std::runtime_error(name+": "+error.what());
+            if(frames.empty())throw std::runtime_error(name+": "+error.what());
+            throw std::runtime_error(name+": "+error.what()+"; every image must be "+std::to_string(frames.front().width)+"x"
+                +std::to_string(frames.front().height)+" like the first image");
         }
         if(frames.empty()){
             // Bound the whole stack from the first frame before decoding the others.
             if(editing::focusStackWorkingBytes(decoded.image.width,decoded.image.height,files.size())>maxWorkingBytes)
                 throw std::runtime_error("These images are too large to focus stack together");
+            // Later frames must match the first, so the decoder rejects a larger one before allocating its pixels.
+            options.remainingPixels=std::uint64_t(decoded.image.width)*decoded.image.height;
+            options.maxSide=std::max(decoded.image.width,decoded.image.height);
         }else if(decoded.image.width!=frames.front().width||decoded.image.height!=frames.front().height){
             throw std::runtime_error(name+": size "+std::to_string(decoded.image.width)+"x"+std::to_string(decoded.image.height)
                 +" differs from the first image ("+std::to_string(frames.front().width)+"x"+std::to_string(frames.front().height)+")");

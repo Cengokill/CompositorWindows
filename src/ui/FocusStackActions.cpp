@@ -56,7 +56,8 @@ void MainWindow::focusStackSelectedImages(const QStringList& paths){
         new ui::FocusStackJob(std::move(files),std::move(host),this);
         return;
     }
-    if(owner->projectBusy||owner->importing)return;
+    // The project can become busy (save, import) while the picker or output dialog is open.
+    if(owner->projectBusy||owner->importing){statusBar()->showMessage("The project is busy; focus stack it again when the current operation finishes",5000);return;}
     const auto before=owner->document;const auto beforeActive=owner->active;
     QPointer<NativeCanvas> token=owner->canvas;
     host.settled=[this,owner,token]{if(!token)return;owner->projectBusy=false;refresh(false,false);};

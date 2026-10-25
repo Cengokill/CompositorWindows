@@ -1,4 +1,5 @@
-// Manual measurement: three 6000x4000 (24 MP) frames. Not registered with CTest.
+// Measurement: three 6000x4000 (24 MP) frames. CTest focus_stack.performance (label "performance").
+// Fails when the known shifts are not recovered or the process peak exceeds the budget estimate.
 #include "editing/FocusStack.h"
 #include "FocusStackFrames.h"
 #include <windows.h>
@@ -21,5 +22,9 @@ int main(){
         <<" shifts="<<result.shifts[1].dx<<","<<result.shifts[1].dy<<" "<<result.shifts[2].dx<<","<<result.shifts[2].dy
         <<" inputs_mb="<<(before.WorkingSetSize>>20)<<" peak_working_set_mb="<<(after.PeakWorkingSetSize>>20)
         <<" budget_estimate_mb="<<(editing::focusStackWorkingBytes(W,H,3)>>20)<<'\n';
-    return 0;
+    const bool shifts=result.shifts[1]==editing::FocusShift{4,-3}&&result.shifts[2]==editing::FocusShift{-6,2};
+    const bool withinBudget=after.PeakWorkingSetSize<=editing::focusStackWorkingBytes(W,H,3);
+    if(!shifts)std::cerr<<"FAIL known shifts not recovered\n";
+    if(!withinBudget)std::cerr<<"FAIL peak working set exceeds the budget estimate\n";
+    return shifts&&withinBudget?0:1;
 }
