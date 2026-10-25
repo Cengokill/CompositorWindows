@@ -1,13 +1,44 @@
 #include "FocusStackJob.h"
 #include "editing/FocusStack.h"
 #include <QFutureWatcher>
+#include <QPainter>
 #include <QPointer>
+#include <QProgressBar>
 #include <QProgressDialog>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <atomic>
+#include <cmath>
 #include <stdexcept>
 namespace compositor::ui {
+namespace {
+constexpr double kPi=3.14159265358979323846;
+// Flat indeterminate bar: an accent segment glides back and forth along a track, in the editor's controls' colours.
+class BusyBar final : public QProgressBar {
+public:
+    explicit BusyBar(QWidget* parent):QProgressBar(parent){
+        setRange(0,0);setTextVisible(false);setFixedHeight(4);
+        timer_.setInterval(16);
+        connect(&timer_,&QTimer::timeout,this,[this]{phase_=std::fmod(phase_+0.008,1.0);update();});
+    }
+protected:
+    void showEvent(QShowEvent* event) override{timer_.start();QProgressBar::showEvent(event);}
+    void hideEvent(QHideEvent* event) override{timer_.stop();QProgressBar::hideEvent(event);}
+    void paintEvent(QPaintEvent*) override{
+        QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(Qt::NoPen);
+        const QRectF bounds(rect());
+        painter.setBrush(QColor("#33363c"));painter.drawRoundedRect(bounds,2,2);
+        // Ease in and out at each end of the track so the sweep reverses smoothly.
+        const double position=0.5-0.5*std::cos(phase_*2*kPi);
+        const double width=bounds.width()*0.3;
+        painter.setBrush(QColor("#579cf5"));
+        painter.drawRoundedRect(QRectF(position*(bounds.width()-width),0,width,bounds.height()),2,2);
+    }
+private:
+    QTimer timer_;
+    double phase_{0};
+};
+}
 std::shared_ptr<const Raster> runFocusStack(const std::vector<std::filesystem::path>& files,const ImportDecoder& decode,
     const std::function<bool()>& cancelled,std::uint64_t maxWorkingBytes){
     if(!decode)throw std::invalid_argument("Image decoder is required");
@@ -48,6 +79,9 @@ struct FocusStackJob::Impl {
     QProgressDialog progress;
     explicit Impl(QWidget* parent):progress("Focus stacking images…","Cancel",0,0,parent){
         progress.setObjectName("focusStackProgress");progress.setWindowTitle("Focus Stack");
+        // Already styled, so the chrome handler keeps Qt's layout; otherwise the label and Cancel button are hidden.
+        progress.setProperty("studioChrome",true);
+        progress.setBar(new BusyBar(&progress));
         progress.setWindowModality(Qt::NonModal);progress.setMinimumDuration(0);
         progress.setAutoClose(false);progress.setAutoReset(false);
     }

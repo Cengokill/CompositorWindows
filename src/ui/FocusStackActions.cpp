@@ -12,6 +12,8 @@ enum class FocusStackOutput { Cancel, NewLayer, NewDocument };
 void showFocusStackError(QWidget* parent,const QString& text){
     auto* message=new QMessageBox(QMessageBox::Warning,"Focus Stack",text,QMessageBox::Ok,parent);
     message->setObjectName("focusStackError");message->setAttribute(Qt::WA_DeleteOnClose);
+    // Already styled, so the chrome handler keeps Qt's layout; otherwise the message is clipped (KNOWN-ISSUES: Dialog chrome).
+    message->setProperty("studioChrome",true);
     message->setWindowModality(Qt::WindowModal);message->show();
 }
 // Tests inject "layer", "document" or "cancel" instead of answering the dialog.
@@ -21,6 +23,8 @@ FocusStackOutput chooseFocusStackOutput(QWidget* parent){
         return value=="layer"?FocusStackOutput::NewLayer:value=="document"?FocusStackOutput::NewDocument:FocusStackOutput::Cancel;}
     QMessageBox message(QMessageBox::Question,"Focus Stack","Add the focus-stacked result as a new layer in this document, or open it as a new document?",QMessageBox::NoButton,parent);
     message.setObjectName("focusStackOutput");
+    // Already styled, so the chrome handler keeps Qt's layout; otherwise the question is clipped (KNOWN-ISSUES: Dialog chrome).
+    message.setProperty("studioChrome",true);
     auto* layer=message.addButton("New Layer",QMessageBox::AcceptRole);layer->setObjectName("focusStackNewLayer");
     auto* document=message.addButton("New Document",QMessageBox::AcceptRole);document->setObjectName("focusStackNewDocument");
     message.addButton(QMessageBox::Cancel);
