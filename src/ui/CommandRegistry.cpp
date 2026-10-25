@@ -92,6 +92,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("file.open","File","Open Project…","Ctrl+O",C::Workspace,G::WorkspaceSwitch,P::ProjectOperation,"Compositor/Document/ProjectWorkspace.swift:59");
         add("file.clear_recent","Open Recent","Clear Menu","",C::Application,G::Always,P::None,"Compositor/CompositorApp.swift (73dc0f4)");
         add("file.import","File","Import Image…","",C::Document,G::Import,P::None,"Compositor/CompositorApp.swift:58");
+        add("file.focus_stack","File","Focus Stack Images…","",C::Document,G::Import,P::ProjectOperation,"Windows addition (issue #24)");
         add("file.export","File","Export Image…","Ctrl+Shift+E",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:68");
         add("file.save","File","Save Project","Ctrl+S",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:62");
         add("file.save_as","File","Save Project As…","Ctrl+Shift+S",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:64");

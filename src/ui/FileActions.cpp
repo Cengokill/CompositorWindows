@@ -528,12 +528,8 @@ void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObj
         guard->importSelectedImages(paths);
     });
 }
-void startNativeImport(MainWindow* window,const QString& directory,QObject* destination){
-    const auto injected=window->property("testNativeImportPaths");
-    if(injected.isValid()){
-        deferSelectedImageImport(window,injected.toStringList(),destination,true);
-        return;
-    }
+// Runs the native multi-select picker off the GUI thread and delivers its paths on the GUI thread.
+void pickNativeImages(MainWindow* window,const QString& directory,std::function<void(MainWindow*,QStringList)> deliver){
     if(window->property("nativePickerInProgress").toBool()){
         reportPickerBusy(window);
         return;
@@ -557,14 +553,24 @@ void startNativeImport(MainWindow* window,const QString& directory,QObject* dest
     }
     QObject::connect(thread,&QThread::finished,thread,&QObject::deleteLater);
     QPointer<MainWindow> guard(window);
-    QPointer<QObject> target(destination);
-    QObject::connect(thread,&QThread::finished,window,[guard,paths,target]{
+    QObject::connect(thread,&QThread::finished,window,[guard,paths,deliver=std::move(deliver)]{
         if(!guard)return;
         guard->setProperty("nativePickerInProgress",false);
         logging::trace(QString("native picker result delivered count=%1").arg(paths->size()));
-        deferSelectedImageImport(guard.data(),std::move(*paths),target,true);
+        deliver(guard.data(),std::move(*paths));
     },Qt::QueuedConnection);
     thread->start();
+}
+void startNativeImport(MainWindow* window,const QString& directory,QObject* destination){
+    const auto injected=window->property("testNativeImportPaths");
+    if(injected.isValid()){
+        deferSelectedImageImport(window,injected.toStringList(),destination,true);
+        return;
+    }
+    QPointer<QObject> target(destination);
+    pickNativeImages(window,directory,[target](MainWindow* guard,QStringList paths){
+        deferSelectedImageImport(guard,std::move(paths),target,true);
+    });
 }
 }
 void MainWindow::importWelcomeImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
@@ -594,6 +600,12 @@ bool MainWindow::importPhotoshop(const QString& path){
     }
 }
 void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
+void MainWindow::focusStackImages(){
+    interruptPointer();
+    const auto injected=property("testFocusStackPaths");
+    if(injected.isValid()){focusStackSelectedImages(injected.toStringList());return;}
+    pickNativeImages(this,userDownloadsDirectory(),[](MainWindow* window,QStringList paths){window->focusStackSelectedImages(paths);});
+}
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;if(!p->saveJob.isNull()){statusBar()->showMessage("A save is already in progress",5000);return false;}auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}for(const auto& other:projects_)if(!other->savePath.isEmpty()&&QDir::cleanPath(other->savePath).compare(QDir::cleanPath(path),Qt::CaseInsensitive)==0){statusBar()->showMessage("Another open project is already saving to this location",5000);return false;}startProjectSave(*p,path);return true;}
 void MainWindow::startProjectSave(EditorProject& project,const QString& path){
     // The snapshot is the document value and revision captured here on the UI thread. The

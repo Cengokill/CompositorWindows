@@ -277,6 +277,7 @@ private:
     bool releaseCheckRunning_{},releaseCheckManual_{};
     std::vector<std::function<void(const QString&)>> releaseReports_;
     void importImage();
+    void focusStackImages();
     void importWelcomeImage();
     void exportImage();
     void openProjectDialog();
@@ -472,6 +473,8 @@ protected:
 public:
     static QString userDownloadsDirectory();
     void importSelectedImages(const QStringList&,QObject* destination=nullptr);
+    // Focus-stacks the files into a new layer of the current document or a new document.
+    void focusStackSelectedImages(const QStringList&);
     explicit MainWindow(bool warp=false);
     ~MainWindow()override;
     EditorProject& addEmptyProject(bool reuseEmpty=true);
