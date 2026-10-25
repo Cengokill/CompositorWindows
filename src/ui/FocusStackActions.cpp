@@ -80,7 +80,8 @@ void MainWindow::focusStackSelectedImages(const QStringList& paths){
         }
         owner->selected={id};owner->maskSelected=false;
         if(!parent.empty())owner->collapsedGroups.erase(parent);
-        if(current()==owner)refresh();
+        // Focus returns to the window after the progress dialog; keep it on the canvas so Edit > Undo tracks the history, not a text field.
+        if(current()==owner){refresh();if(owner->canvas)owner->canvas->setFocus();}
     };
     owner->projectBusy=true;refresh(false,false);
     try{new ui::FocusStackJob(std::move(files),std::move(host),this);}

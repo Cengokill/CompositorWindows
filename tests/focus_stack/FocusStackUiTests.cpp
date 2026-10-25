@@ -77,6 +77,26 @@ void apply_new_layer_single_undo(){
     trigger(*f.window,"edit.undo");require(f.owner->document==f.before&&f.owner->active==f.active,"Undo restores the original document");
     trigger(*f.window,"edit.redo");require(f.owner->document->layers.size()==2&&samePixels(*f.owner->document->layers.back().raster,*f.expected()),"Redo restores the result");
 }
+void shortcut_undo_after_layer(){
+    Fixture f;f.start(f.sources(),"layer");
+    f.wait();
+    require(f.errors.isEmpty()&&f.owner->history.undoCount()==1,"One history entry for the new layer");
+    f.window->activateWindow();f.window->raise();QTest::qWait(20);
+    QTest::keyClick(f.window.get(),Qt::Key_Z,Qt::ControlModifier);
+    QTest::qWait(20);
+    require(f.owner->document==f.before&&f.owner->active==f.active,"Ctrl+Z restores the original document");
+}
+void undo_enabled_with_text_focus(){
+    // A focused text field makes Edit > Undo track the field, not the project history.
+    Fixture f;auto* field=new QLineEdit(f.window.get());field->setGeometry(0,0,120,24);field->show();field->setFocus();QTest::qWait(20);
+    require(QApplication::focusWidget()==field,"Text field holds focus before stacking");
+    f.start(f.sources(),"layer");
+    f.wait();
+    require(f.errors.isEmpty()&&f.owner->history.undoCount()==1,"One history entry for the new layer");
+    // The progress window takes activation; when Compositor is active again, focus returns to the window's focus widget.
+    f.window->activateWindow();QTest::qWait(20);
+    require(action(*f.window,"edit.undo")->isEnabled(),"Edit > Undo stays enabled after stacking into a layer");
+}
 void new_document_tab(){
     Fixture f;const int tabs=f.tabs();f.start(f.sources(),"document");
     require(!f.owner->projectBusy,"New-document mode leaves the current project editable");
@@ -124,6 +144,8 @@ int main(int argc,char** argv){
         if(argc!=2)throw std::runtime_error("one test name required");
         const std::string name=argv[1];
         if(name=="apply_new_layer_single_undo")apply_new_layer_single_undo();
+        else if(name=="shortcut_undo_after_layer")shortcut_undo_after_layer();
+        else if(name=="undo_enabled_with_text_focus")undo_enabled_with_text_focus();
         else if(name=="new_document_tab")new_document_tab();
         else if(name=="cancel_keeps_document")cancel_keeps_document();
         else if(name=="invalid_input_unchanged")invalid_input_unchanged();
