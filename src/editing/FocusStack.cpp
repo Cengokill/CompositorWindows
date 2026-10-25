@@ -8,6 +8,9 @@ namespace compositor::editing {
 namespace {
 struct Gray { int width{},height{}; std::vector<float> values; float at(int x,int y)const{return values[size_t(y)*width+x];} };
 void cancelCheck(const FocusStackLimits& limits){if(limits.cancelled&&limits.cancelled())throw std::runtime_error("Focus stack cancelled");}
+// When the second-best sharpness reaches this fraction of the best, the choice is noise-driven: the pixel is
+// averaged over every covering frame instead, which avoids a patchwork of frame tints in low-texture areas.
+constexpr float kContestedRatio=0.6f;
 Gray luma(const imaging::RgbaImage& image){
     Gray gray{int(image.width),int(image.height),std::vector<float>(size_t(image.width)*image.height)};
     for(int y=0;y<gray.height;++y){const auto* row=&image.pixels[size_t(y)*image.stride];
@@ -108,7 +111,7 @@ FocusStackResult focusStack(const std::vector<imaging::RgbaImage>& frames,const 
     const int w=int(width),h=int(height),radius=radiusFor(width,height),maxShift=maxShiftFor(width,height);
     FocusStackResult result;result.shifts.resize(frames.size());
     result.source.assign(size_t(w)*h,0);
-    std::vector<float> best;
+    std::vector<float> best,second;
     const Gray reference=luma(frames.front());
     for(size_t index=0;index<frames.size();++index){
         cancelCheck(limits);
@@ -117,16 +120,35 @@ FocusStackResult focusStack(const std::vector<imaging::RgbaImage>& frames,const 
         cancelCheck(limits);
         auto score=sharpness(current,result.shifts[index],radius,limits);
         if(!index){best=std::move(score);continue;}
+        // Allocated after the sharpness pass so the peak memory stays at the budgeted five float planes.
+        if(second.empty())second.assign(best.size(),0.0f);
         const auto shift=result.shifts[index];
         for(int y=0;y<h;++y)for(int x=0;x<w;++x){const size_t i=size_t(y)*w+x;
-            if(covers(w,h,shift,x,y)&&score[i]>best[i]){best[i]=score[i];result.source[i]=uint8_t(index);}}
+            if(!covers(w,h,shift,x,y))continue;
+            if(score[i]>best[i]){second[i]=best[i];best[i]=score[i];result.source[i]=uint8_t(index);}
+            else if(score[i]>second[i])second[i]=score[i];
+        }
     }
     cancelCheck(limits);
     auto& out=result.image;out.width=width;out.height=height;out.stride=size_t(width)*4;out.pixels.resize(out.stride*height);
     for(int y=0;y<h;++y)for(int x=0;x<w;++x){
-        const auto source=result.source[size_t(y)*w+x];const auto shift=result.shifts[source];const auto& frame=frames[source];
-        const auto* p=&frame.pixels[size_t(y+shift.dy)*frame.stride+size_t(x+shift.dx)*4];
-        std::copy(p,p+4,&out.pixels[size_t(y)*out.stride+size_t(x)*4]);
+        const size_t i=size_t(y)*w+x;auto* dst=&out.pixels[size_t(y)*out.stride+size_t(x)*4];
+        if(second[i]<kContestedRatio*best[i]){
+            const auto source=result.source[i];const auto shift=result.shifts[source];const auto& frame=frames[source];
+            const auto* p=&frame.pixels[size_t(y+shift.dy)*frame.stride+size_t(x+shift.dx)*4];
+            std::copy(p,p+4,dst);
+            continue;
+        }
+        unsigned sum[4]{},count=0;
+        for(size_t f=0;f<frames.size();++f){
+            const auto shift=result.shifts[f];
+            if(!covers(w,h,shift,x,y))continue;
+            const auto& frame=frames[f];
+            const auto* p=&frame.pixels[size_t(y+shift.dy)*frame.stride+size_t(x+shift.dx)*4];
+            for(int c=0;c<4;++c)sum[c]+=p[c];
+            ++count;
+        }
+        for(int c=0;c<4;++c)dst[c]=uint8_t((sum[c]+count/2)/count);
     }
     return result;
 }

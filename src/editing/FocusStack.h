@@ -29,6 +29,7 @@ struct FocusStackResult {
 };
 // Requires 2..16 valid frames of identical size. Each output pixel copies the aligned frame
 // with the highest local sharpness; pixels a shifted frame does not cover use the other frames.
+// Where the two sharpest frames score about equally, the pixel is instead the average of every covering frame.
 FocusStackResult focusStack(const std::vector<imaging::RgbaImage>& frames,const FocusStackLimits& = {});
 inline constexpr std::size_t maxFocusStackFrames=16;
 }

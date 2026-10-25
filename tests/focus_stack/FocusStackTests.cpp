@@ -1,6 +1,8 @@
 #include "editing/FocusStack.h"
 #include "FocusStackFrames.h"
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -52,10 +54,11 @@ void run(const std::string& key){
         require(result.image.width==W&&result.image.height==H&&result.shifts[1]==editing::FocusShift{},"Output size and zero shift");
         for(int y=0;y<H;++y)for(int x=0;x<W;++x)if(leftInterior(x)||rightInterior(x))
             for(int c=0;c<4;++c)require(result.image.pixels[size_t(y)*result.image.stride+size_t(x)*4+c]==sharp.pixels[size_t(y)*sharp.stride+size_t(x)*4+c],"Interior pixels must equal the sharp texture");
-        // Seam pixels must each be copied from one of the two frames.
+        // Seam pixels are copied from one frame, or averaged when both frames are about equally sharp there.
         for(int y=0;y<H;++y)for(int x=W/2-16;x<W/2+16;++x){const auto* o=&result.image.pixels[size_t(y)*result.image.stride+size_t(x)*4];
             const auto* a=&nearImage.pixels[size_t(y)*nearImage.stride+size_t(x)*4];const auto* b=&farImage.pixels[size_t(y)*farImage.stride+size_t(x)*4];
-            require(std::equal(o,o+4,a)||std::equal(o,o+4,b),"Seam pixels come from one source");}
+            bool averaged=true;for(int c=0;c<4;++c)averaged=averaged&&o[c]==(a[c]+b[c]+1)/2;
+            require(std::equal(o,o+4,a)||std::equal(o,o+4,b)||averaged,"Seam pixels come from one source or their average");}
     }else if(key=="uncovered_pixels_use_reference"){
         // The shifted frame is sharp everywhere and the reference is blurred everywhere.
         const auto reference=frame(W,H,[](int,int){return true;}),moving=frame(W,H,none,3,-2);
@@ -66,6 +69,20 @@ void run(const std::string& key){
             if(!covered){++uncovered;require(result.source[size_t(y)*W+x]==0,"Uncovered pixels must use the reference frame");}}
         require(uncovered==size_t(3*H+2*W-6),"Expected uncovered border count");
         require(result.source[size_t(80)*W+100]==1,"Covered interior uses the sharp shifted frame");
+    }else if(key=="contested_pixels_average"){
+        // Identical low-texture frames with a colour cast per frame that barely changes luma (red +6k, green -2k):
+        // sharpness ties everywhere, so the result must be the average of all three rather than the first frame.
+        // A pure brightness offset would bias the alignment estimate and is avoided here.
+        const auto base=frame(W,H,[](int,int){return true;});
+        auto tinted=[&](int k){auto image=base;for(size_t i=0;i<image.pixels.size();i+=4){
+            image.pixels[i]=std::uint8_t(std::min(255,image.pixels[i]+6*k));image.pixels[i+1]=std::uint8_t(std::max(0,image.pixels[i+1]-2*k));}return image;};
+        const auto a=tinted(0),b=tinted(1),c=tinted(2);
+        const auto result=editing::focusStack({a,b,c});
+        require(result.shifts[1]==editing::FocusShift{}&&result.shifts[2]==editing::FocusShift{},"Identical textures stay unshifted");
+        for(size_t i=0;i<result.image.pixels.size();i+=4)for(int ch=0;ch<3;++ch){
+            const int expected=(int(a.pixels[i+ch])+b.pixels[i+ch]+c.pixels[i+ch]+1)/3;
+            require(std::abs(int(result.image.pixels[i+ch])-expected)<=1,"Contested pixels must average every covering frame");
+        }
     }else if(key=="rejects_size_mismatch"){
         fails([]{editing::focusStack({frame(64,48,none),frame(64,49,none)});},"Focus stack images must all have the same dimensions");
     }else if(key=="rejects_single_image"){
