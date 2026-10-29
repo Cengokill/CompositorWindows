@@ -15,7 +15,7 @@ public:
         std::function<void()> settled;
         std::function<void(const QString&)> error;
     };
-    LastFilterJob(std::function<Layer(std::function<bool()>)> work,Host,QWidget* parent,EditorProject* owner);
+    LastFilterJob(std::function<Layer(std::function<bool()>)> work,Host,QWidget* parent,EditorProject* owner,const QString& progressText={});
     ~LastFilterJob()override;
     void cancel();
     EditorProject* owner()const;

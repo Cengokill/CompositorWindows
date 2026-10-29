@@ -7,6 +7,16 @@ if (-not $taskVS) { throw 'Install Visual Studio 2022 C++ x64 tools and Windows 
 & (Join-Path $taskVS 'Common7\Tools\Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { $env:PATH = "$taskVS\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:PATH" }
 $taskLock = Get-Content (Join-Path $taskRoot 'dependencies.lock.json') -Raw | ConvertFrom-Json
+foreach($taskHdrName in @('imath','openexr','libdeflate')){
+    $taskHdrAsset=$taskLock.hdr.$taskHdrName
+    $taskHdrArchive=Join-Path $taskRoot "dependencies/downloads/hdr/$taskHdrName.tar.gz"
+    if(-not (Test-Path -LiteralPath $taskHdrArchive)){
+        if($Offline){throw "Locked HDR archive missing: $taskHdrArchive. Run bootstrap with network access once."}
+        New-Item -ItemType Directory -Force (Split-Path $taskHdrArchive -Parent) | Out-Null
+        Invoke-WebRequest -Uri $taskHdrAsset.url -OutFile $taskHdrArchive
+    }
+    if((Get-FileHash -LiteralPath $taskHdrArchive -Algorithm SHA256).Hash -ine $taskHdrAsset.sha256){throw "HDR archive SHA256 mismatch: $taskHdrName"}
+}
 $taskArchive = Join-Path $taskRoot 'dependencies\downloads\qtbase.7z'
 $taskQt = Join-Path $taskRoot 'dependencies\qt'
 if (-not (Test-Path (Join-Path $taskQt 'lib\cmake\Qt6\Qt6Config.cmake'))) {

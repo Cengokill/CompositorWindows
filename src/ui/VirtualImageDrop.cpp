@@ -43,7 +43,7 @@ QString safeName(QString name){
     const QString stem=name.section('.',0,0).toUpper();
     itemCheck(stem!="CON"&&stem!="PRN"&&stem!="AUX"&&stem!="NUL"&&!(stem.size()==4&&(stem.startsWith("COM")||stem.startsWith("LPT"))&&stem[3]>='1'&&stem[3]<='9'),"Virtual image filename is a reserved device name");
     const auto suffix=QFileInfo(name).suffix().toLower();
-    itemCheck(QStringList{"png","jpg","jpeg","heic","heif","tif","tiff"}.contains(suffix),"Virtual image filename has an unsupported suffix");
+    itemCheck(QStringList{"png","jpg","jpeg","heic","heif","tif","tiff","exr","hdr"}.contains(suffix),"Virtual image filename has an unsupported suffix");
     return QFileInfo(name).completeBaseName()+"-"+QUuid::createUuid().toString(QUuid::WithoutBraces)+"."+suffix;
 }
 void validateLimits(const VirtualDropLimits& value){

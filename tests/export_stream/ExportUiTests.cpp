@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "imaging/hdr_codec.h"
 #include <QApplication>
 #include <QAction>
 #include <QColorDialog>
@@ -90,6 +91,12 @@ int main(int argc,char**argv){
         });
         require(cancelled&&read(existing)==original&&QDir(output.path()).entryList(QDir::Files).size()==1,"Cancelling a ready PDF export touched the destination");
         require(project.document==before&&!project.projectBusy&&project.history.undoCount()==0,"Cancelled PDF export changed source/history");
+    });
+    test("exr_export_preserves_highlights_and_corrects_suffix",[]{
+        QTemporaryDir output;MainWindow window(true);auto d=blank(8,4);Layer layer;layer.id=newId();layer.name="HDR";layer.transform={0,0,8,4};auto pixels=makeDeep(8,4);for(int y=0;y<4;++y)for(int x=0;x<8;++x)pixels->setPixel(x,y,{2,1,.5f,1});layer.deep=pixels;layer.raster=rasterFromDeep(*pixels);d.layers={layer};auto& project=window.addProject(d);const auto before=project.document;
+        window.setProperty("testNativeSavePath",output.filePath("bright.png"));bool saved=false;
+        drive(window,[&]{auto* dialog=window.findChild<QDialog*>("imageExportDialog");if(!dialog||saved)return;control<QComboBox>(dialog,"exportFormat")->setCurrentIndex(3);require(!control<QSlider>(dialog,"exportQuality")->isEnabled()&&!control<QPushButton>(dialog,"exportMatte")->isEnabled(),"EXR enabled SDR quality/matte controls");auto* buttons=control<QDialogButtonBox>(dialog,"exportButtons");if(buttons->button(QDialogButtonBox::Save)->isEnabled()&&dialog->property("readyExportPath").toString().endsWith(".exr")){saved=true;buttons->button(QDialogButtonBox::Save)->click();}});
+        auto result=imaging::decodeExr(std::filesystem::path(output.filePath("bright.exr").toStdWString()));require(saved&&result->pixel(7,0)[0]>1.99f&&!QFile::exists(output.filePath("bright.png")),"EXR export lost highlights or used wrong suffix");require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"EXR export mutated source/history");
     });
     std::cout<<"Export UI "<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

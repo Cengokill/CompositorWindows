@@ -162,6 +162,7 @@ bool MainWindow::beginRetouch(Point point,Qt::KeyboardModifiers modifiers) {
     }
     auto* layer=active();
     if(!layer||layerSelection().ids.size()!=1)return true;
+    if(!project->maskSelected&&layer->deep&&layer->deep->isHdr()){statusBar()->showMessage("Use Layer > Convert HDR to 16-Bit before retouching");return true;}
     const auto entries=layers::entries(*project->document);
     if(std::none_of(entries.begin(),entries.end(),[&](const layers::Entry& entry){return entry.id==layer->id&&entry.visible;}))return true;
     const auto& selected=project->document->selection;

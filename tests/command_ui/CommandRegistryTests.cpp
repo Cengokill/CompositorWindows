@@ -33,7 +33,8 @@ namespace {
 void check(bool value,const char*message){if(!value)throw std::runtime_error(message);}
 CommandState ready(){CommandState s;s.document=s.activeLayer=s.asset=s.effectiveVisible=s.singleSelected=s.historyUndo=s.historyRedo=s.renderHasPixels=s.transformable=true;return s;}
 const CommandSpec& spec(const char*id){auto*s=commandSpecById(id);check(s!=nullptr,"missing catalog id");return *s;}
-void source_predicates(){
+void source_predicates(){{auto hdr=ready();check(!commandEnabled(CommandGate::HdrLayer,hdr),"SDR layer enabled HDR conversion");hdr.hdrLayer=true;check(commandEnabled(CommandGate::HdrLayer,hdr),"HDR layer disabled conversion");hdr.maskSelected=true;check(!commandEnabled(CommandGate::HdrLayer,hdr),"Mask target enabled HDR conversion");hdr.maskSelected=false;hdr.projectBusy=true;check(!commandEnabled(CommandGate::HdrLayer,hdr),"Busy project enabled HDR conversion");}
+
     auto s=ready();check(canStartProjectOperation(s)&&canSwitchProject(s)&&canUseHistory(s)&&canEditLayers(s),"ready session");
     // LevelsTests.swift:38 exact three predicate assertions after beginning Levels.
     s.levels=true;check(!canEditLayers(s)&&!canUseHistory(s)&&!canStartProjectOperation(s),"Levels excludes layers/history/project operations");s.levels=false;
