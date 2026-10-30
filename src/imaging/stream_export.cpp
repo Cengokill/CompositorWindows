@@ -1,4 +1,5 @@
 #include "export_temporary_file.h"
+#include "cmyk.h"
 #include <propvarutil.h>
 #include <array>
 #include <cmath>
@@ -16,7 +17,7 @@ using detail::ok;
 using detail::regularFile;
 using detail::TemporaryFile;
 RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& path, UINT requestedWidth, UINT requestedHeight,
-                      std::size_t availableBytes, std::size_t& peakBytes, const std::function<bool()>& check) {
+                      std::size_t availableBytes, std::size_t& peakBytes, const std::function<bool()>& check,bool cmyk) {
     cancelled(check);
     ComPtr<IWICBitmapDecoder> decoder;
     ok(imaging->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder), "Open encoded JPEG preview");
@@ -25,9 +26,10 @@ RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& 
     ok(frame.As(&scaled), "JPEG codec does not support bounded native preview downscaling");
     UINT width = requestedWidth, height = requestedHeight;
     ok(scaled->GetClosestSize(&width, &height), "Choose bounded JPEG decode size");
-    GUID format = GUID_WICPixelFormat32bppBGRA;
+    GUID format = cmyk?GUID_WICPixelFormat32bppCMYK:GUID_WICPixelFormat32bppBGRA;
     ok(scaled->GetClosestPixelFormat(&format), "Choose bounded JPEG decode format");
-    UINT channels = format == GUID_WICPixelFormat32bppBGRA ? 4 : format == GUID_WICPixelFormat24bppBGR ? 3 : 0;
+    if(cmyk&&format!=GUID_WICPixelFormat32bppCMYK)throw std::runtime_error("JPEG decoder cannot provide bounded CMYK preview pixels");
+    UINT channels = (format == GUID_WICPixelFormat32bppBGRA||format==GUID_WICPixelFormat32bppCMYK) ? 4 : format == GUID_WICPixelFormat24bppBGR ? 3 : 0;
     if (!channels || !width || !height || width > 30000 || height > 30000) throw std::runtime_error("Unsupported bounded JPEG preview format");
     const auto bytes = std::uint64_t(width) * height * channels;
     const auto outputBytes = std::uint64_t(requestedWidth) * requestedHeight * 4;
@@ -44,7 +46,7 @@ RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& 
     // Apply the same declared-profile normalization as normal import. Raw JPEG
     // decoder channels can differ by a byte from the normalized document space.
     UINT profileCount = 0; ok(frame->GetColorContexts(0, nullptr, &profileCount), "Read encoded JPEG profile count");
-    if (profileCount != 1) throw std::runtime_error("Encoded JPEG is missing its sRGB profile");
+    if (profileCount != 1) throw std::runtime_error("Encoded JPEG is missing its color profile");
     ComPtr<IWICColorContext> profile, srgb;
     ok(imaging->CreateColorContext(&profile), "Create encoded JPEG profile context");
     IWICColorContext* contexts[]{profile.Get()}; ok(frame->GetColorContexts(1, contexts, &profileCount), "Read encoded JPEG profile");
@@ -61,8 +63,9 @@ RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& 
     cancelled(check);
     return result;
 }
-void writeProfile(IWICImagingFactory* imaging, IWICBitmapFrameEncode* frame, ImageFormat format) {
-    if (format == ImageFormat::Png) {
+void writeProfile(IWICImagingFactory* imaging, IWICBitmapFrameEncode* frame, ImageFormat format,CmykProfilePtr profile) {
+    if(profile){ComPtr<IWICColorContext> color;ok(imaging->CreateColorContext(&color),"Create CMYK export context");ok(color->InitializeFromMemory(const_cast<BYTE*>(profile->bytes.data()),UINT(profile->bytes.size())),"Read CMYK output profile");IWICColorContext* contexts[]{color.Get()};ok(frame->SetColorContexts(1,contexts),"Embed CMYK output profile");
+    }else if (format == ImageFormat::Png) {
         ComPtr<IWICMetadataQueryWriter> metadata; ok(frame->GetMetadataQueryWriter(&metadata), "Get PNG export metadata");
         PROPVARIANT value; PropVariantInit(&value); value.vt = VT_UI1; value.bVal = 0;
         ok(metadata->SetMetadataByName(L"/sRGB/RenderingIntent", &value), "Write PNG sRGB declaration");
@@ -86,26 +89,28 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
     const RgbaRows& rows, const ExportOptions& options, const StreamExportLimits& limits, const ExportProgress& progress) {
     validateExportExtent(width, height);
     if (!rows || !std::isfinite(options.dpi) || options.dpi <= 0 || !std::isfinite(options.jpegQuality) ||
-        (options.format != ImageFormat::Png && options.format != ImageFormat::Jpeg) || !limits.stripeRows || limits.stripeRows > 256 ||
+        (options.format != ImageFormat::Png && options.format != ImageFormat::Jpeg && options.format != ImageFormat::Tiff) || !limits.stripeRows || limits.stripeRows > 256 ||
         limits.previewWidth > 1000 || limits.previewHeight > 1000 || limits.maxBufferBytes > 1024ULL * 1024 * 1024)
         throw std::invalid_argument("Invalid streaming image export settings");
+    if(options.cmykProfile&&options.format==ImageFormat::Png)throw std::invalid_argument("PNG does not support CMYK output");
+    std::unique_ptr<CmykTransform> color;if(options.cmykProfile)color=std::make_unique<CmykTransform>(options.cmykProfile);
     cancelled(options.cancelled);
     const auto [previewWidth, previewHeight] = fitPreview(width, height, limits.previewWidth, limits.previewHeight);
-    const bool pngPreview = options.format == ImageFormat::Png && previewWidth && previewHeight;
+    const bool losslessPreview = options.format != ImageFormat::Jpeg && previewWidth && previewHeight;
     using Accumulator = std::array<std::uint64_t, 4>;
     const std::size_t previewPixels = std::size_t(previewWidth) * previewHeight;
-    const std::size_t previewStorage = pngPreview ? previewPixels * (sizeof(Accumulator) + 4) + std::size_t(width) * sizeof(UINT) : 0;
+    const std::size_t previewStorage = losslessPreview ? previewPixels * (sizeof(Accumulator) + 4) + std::size_t(width) * sizeof(UINT) : 0;
     // Reserve 8MiB for the canonical renderer's bounded tile/adjustment buffers.
     constexpr std::size_t renderReserve = 8 * 1024 * 1024;
-    const UINT channels = options.format == ImageFormat::Jpeg ? 3U : 4U;
+    const UINT channels = options.format == ImageFormat::Jpeg && !color ? 3U : 4U;
     const std::size_t bytesPerRow = std::size_t(width) * (4 + channels);
     if (limits.maxBufferBytes <= previewStorage + renderReserve + bytesPerRow)
         throw std::invalid_argument("Streaming export buffer budget is too small");
     const auto stripeRows = UINT(std::min<std::size_t>({height, limits.stripeRows, (limits.maxBufferBytes - previewStorage - renderReserve) / bytesPerRow}));
     std::vector<std::uint8_t> rgba(std::size_t(width) * stripeRows * 4), encoded(std::size_t(width) * stripeRows * channels);
-    std::vector<Accumulator> sums(pngPreview ? previewPixels : 0);
-    std::vector<UINT> previewX(pngPreview ? width : 0);
-    if (pngPreview) for (UINT x = 0; x < width; ++x) previewX[x] = UINT(std::uint64_t(x) * previewWidth / width);
+    std::vector<Accumulator> sums(losslessPreview ? previewPixels : 0);
+    std::vector<UINT> previewX(losslessPreview ? width : 0);
+    if (losslessPreview) for (UINT x = 0; x < width; ++x) previewX[x] = UINT(std::uint64_t(x) * previewWidth / width);
     StreamingExportResult result; result.stripeRows = stripeRows;
     result.peakOwnedPixelBytes = rgba.size() + encoded.size() + previewStorage;
     Apartment apartment; auto imaging = factory(); TemporaryFile temporary(destination);
@@ -113,7 +118,7 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         ComPtr<IWICStream> stream; ok(imaging->CreateStream(&stream), "Create streaming export file");
         ok(stream->InitializeFromFilename(temporary.path.c_str(), GENERIC_WRITE), "Open streaming export file");
         ComPtr<IWICBitmapEncoder> encoder;
-        ok(imaging->CreateEncoder(options.format == ImageFormat::Png ? GUID_ContainerFormatPng : GUID_ContainerFormatJpeg, nullptr, &encoder), "Create streaming image encoder");
+        ok(imaging->CreateEncoder(options.format == ImageFormat::Png ? GUID_ContainerFormatPng : options.format==ImageFormat::Tiff?GUID_ContainerFormatTiff:GUID_ContainerFormatJpeg, nullptr, &encoder), "Create streaming image encoder");
         ok(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "Initialize scanline encoder without image cache");
         ComPtr<IWICBitmapFrameEncode> frame; ComPtr<IPropertyBag2> properties;
         ok(encoder->CreateNewFrame(&frame, &properties), "Create streaming export frame");
@@ -122,17 +127,27 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
             VARIANT value; VariantInit(&value); value.vt = VT_R4; value.fltVal = float(std::clamp(options.jpegQuality, 0., 1.));
             ok(properties->Write(1, &property, &value), "Set JPEG export quality");
         }
+        if (options.format == ImageFormat::Tiff) {
+            PROPBAG2 property{}; property.pstrName = const_cast<LPOLESTR>(L"TiffCompressionMethod");
+            VARIANT value; VariantInit(&value); value.vt = VT_UI1; value.bVal = WICTiffCompressionLZW;
+            ok(properties->Write(1, &property, &value), "Set lossless TIFF compression");
+        }
         ok(frame->Initialize(properties.Get()), "Initialize streaming export frame");
         ok(frame->SetSize(width, height), "Set export dimensions"); ok(frame->SetResolution(options.dpi, options.dpi), "Set export resolution");
-        GUID format = options.format == ImageFormat::Png ? GUID_WICPixelFormat32bppBGRA : GUID_WICPixelFormat24bppBGR;
+        GUID format = color?GUID_WICPixelFormat32bppCMYK:options.format!=ImageFormat::Jpeg?GUID_WICPixelFormat32bppBGRA:GUID_WICPixelFormat24bppBGR;
         const auto requested = format; ok(frame->SetPixelFormat(&format), "Choose export pixel format");
         if (format != requested) throw std::runtime_error("Encoder changed the required export pixel format");
-        writeProfile(imaging.Get(), frame.Get(), options.format);
+        writeProfile(imaging.Get(), frame.Get(), options.format,options.cmykProfile);
         const std::array<std::uint8_t, 3> matte{options.matteR, options.matteG, options.matteB};
         for (UINT y = 0; y < height; y += stripeRows) {
             cancelled(options.cancelled); const UINT count = std::min(stripeRows, height - y);
             rows(y, count, std::span(rgba).first(std::size_t(width) * count * 4), std::size_t(width) * 4);
-            for (UINT row = 0; row < count; ++row) {
+            if(color){
+                const auto bytes=size_t(width)*count*4;
+                color->encode(std::span(rgba).first(bytes),std::span(encoded).first(bytes),matte);
+                if(losslessPreview){color->decode(std::span(encoded).first(bytes),std::span(rgba).first(bytes));
+                    for(UINT row=0;row<count;++row)for(UINT x=0;x<width;++x){auto& sum=sums[size_t(uint64_t(y+row)*previewHeight/height)*previewWidth+previewX[x]];for(UINT c=0;c<4;++c)sum[c]+=rgba[(size_t(row)*width+x)*4+c];}}
+            }else for (UINT row = 0; row < count; ++row) {
                 cancelled(options.cancelled);
                 for (UINT x = 0; x < width; ++x) {
                     const auto* p = rgba.data() + (std::size_t(row) * width + x) * 4;
@@ -141,7 +156,7 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
                     for (UINT c = 0; c < 3; ++c) q[2 - c] = channels == 3 ? std::uint8_t(std::min(255U, unsigned(p[c]) + (unsigned(matte[c]) * (255 - p[3]) + 127) / 255))
                         : p[3] ? std::uint8_t(std::min(255U, (unsigned(p[c]) * 255 + p[3] / 2) / p[3])) : 0;
                     if (channels == 4) q[3] = p[3];
-                    if (pngPreview) {
+                    if (losslessPreview) {
                         auto& sum = sums[std::size_t(std::uint64_t(y + row) * previewHeight / height) * previewWidth + previewX[x]];
                         for (UINT c = 0; c < 3; ++c) sum[c] += (unsigned(q[2 - c]) * p[3] + 127) / 255;
                         sum[3] += p[3];
@@ -154,7 +169,7 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         cancelled(options.cancelled); ok(frame->Commit(), "Commit streaming image frame"); ok(encoder->Commit(), "Commit streaming image container");
     }
     cancelled(options.cancelled);
-    if (pngPreview) {
+    if (losslessPreview) {
         result.preview = {previewWidth, previewHeight, std::size_t(previewWidth) * 4, std::vector<std::uint8_t>(previewPixels * 4)};
         auto boundary = [](UINT i, UINT source, UINT target) { return (std::uint64_t(i) * source + target - 1) / target; };
         for (UINT y = 0; y < previewHeight; ++y) for (UINT x = 0; x < previewWidth; ++x) {
@@ -165,7 +180,7 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         // Release stripe allocations before decoding the encoded JPEG thumbnail.
         std::vector<std::uint8_t>().swap(rgba); std::vector<std::uint8_t>().swap(encoded);
         result.preview = jpegPreview(imaging.Get(), temporary.path, previewWidth, previewHeight, limits.maxBufferBytes - renderReserve,
-                                     result.peakOwnedPixelBytes, options.cancelled);
+                                     result.peakOwnedPixelBytes, options.cancelled,bool(color));
     }
     result.encodedBytes = std::filesystem::file_size(temporary.path);
     temporary.replace(destination, options.cancelled);

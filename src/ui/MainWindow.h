@@ -52,6 +52,7 @@ struct EditorProject {
     std::vector<std::string> selected;
     bool maskSelected{};
     bool importing{},projectBusy{};
+    bool proofColors{};
     ProjectToolState toolState;
     retouch::CloneAlignment cloneAlignment;
     bool cloneSampleAllLayers{};
@@ -262,7 +263,12 @@ private:
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
     void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&);
-    bool importPhotoshop(const QString& path);
+    enum class PhotoshopResult { Imported, Cancelled, Failed };
+    PhotoshopResult importPhotoshop(const QString& path,CmykProfilePtr fallback={});
+    bool reviewCmykImports(const QStringList&,ui::RawSettings&);
+    void setupCmykActions(QMenu*);
+    void chooseCmykProfile();
+    void refreshCmykActions();
     void refresh(bool render=true,bool rebuildLayers=true);
     void edit(const char* name,const std::function<void(Document&)>& operation,bool rebuildLayers=true);
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);

@@ -33,7 +33,7 @@ struct ExportSize { std::uint32_t width{}, height{}; };
 // non-finite/non-positive scale.
 ExportSize scaledExportSize(std::uint32_t width, std::uint32_t height, double scale);
 // Input callback writes premultiplied sRGB RGBA8, top-to-bottom, into the supplied storage.
-// PNG preview is averaged from the exact losslessly encoded pixels. JPEG preview is
+// PNG/TIFF preview is averaged from the losslessly encoded samples (CMYK is converted back to RGB). JPEG preview is
 // decoded from the finished JPEG through WIC's bounded native downscaling interface.
 StreamingExportResult encodeRowsAtomic(const std::filesystem::path&, std::uint32_t width, std::uint32_t height,
     const RgbaRows&, const ExportOptions& = {}, const StreamExportLimits& = {}, const ExportProgress& = {});

@@ -89,6 +89,8 @@ void validateDocument(const Document& d) {
     if (d.width < 1 || d.height < 1 || d.width > 30000 || d.height > 30000 ||
         d.layers.size() > 10000 || !std::isfinite(d.resolution) || d.resolution < 1 || d.resolution > 9600)
         throw std::runtime_error("Invalid document dimensions or resolution");
+    if(d.cmykProfile&&(d.cmykProfile->bytes.size()<132||d.cmykProfile->bytes.size()>16*1024*1024||d.cmykProfile->sha256.size()!=64))
+        throw std::runtime_error("Invalid document CMYK profile");
     std::unordered_map<std::string, const Layer*> layers;
     uint64_t imagePixels = 0, maskPixels = 0;
     for (const auto& layer : d.layers) {
@@ -224,6 +226,7 @@ size_t History::retainedBytes(const std::optional<Document>& doc,std::span<const
     auto scan=[&](const std::optional<Document>& document,bool count){
         size_t bytes=0;
         if(!document)return bytes;
+        if(document->cmykProfile&&seen.insert(document->cmykProfile.get()).second&&count)bytes+=document->cmykProfile->bytes.size();
         for(const auto&layer:document->layers){
             if(layer.raster)for(const auto&tile:layer.raster->tiles)
                 if(seen.insert(tile.get()).second&&count)bytes+=sizeof(Raster::Tile);
