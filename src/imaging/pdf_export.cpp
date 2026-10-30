@@ -1,4 +1,5 @@
 #include "export_temporary_file.h"
+#include "cmyk.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -66,10 +67,10 @@ struct DataRange { std::uint64_t offset{}; std::uint32_t length{}; };
 
 std::uint32_t bigEndian(const std::uint8_t* p) { return std::uint32_t(p[0]) << 24 | std::uint32_t(p[1]) << 16 | std::uint32_t(p[2]) << 8 | p[3]; }
 
-// The IDAT payloads of an 8-bit RGB, non-interlaced PNG written by WIC. Concatenated they are one zlib stream whose rows
+// The IDAT payloads of an 8-bit, non-interlaced RGB or four-channel carrier PNG written by WIC. They form one zlib stream whose rows
 // carry PNG filter bytes, which a PDF FlateDecode image reads directly with /Predictor 15, so the pixels are embedded
 // losslessly without being decompressed or held in memory.
-std::vector<DataRange> pngImageData(const std::filesystem::path& png, std::uint32_t width, std::uint32_t height) {
+std::vector<DataRange> pngImageData(const std::filesystem::path& png, std::uint32_t width, std::uint32_t height,bool cmyk) {
     std::ifstream in(png, std::ios::binary);
     const auto malformed = [] { return std::runtime_error("The PNG encoder produced an unexpected layout"); };
     std::array<std::uint8_t, 8> signature{};
@@ -85,8 +86,8 @@ std::vector<DataRange> pngImageData(const std::filesystem::path& png, std::uint3
         if (type == "IHDR") {
             std::array<std::uint8_t, 13> ihdr{};
             if (length != ihdr.size() || !in.read(reinterpret_cast<char*>(ihdr.data()), ihdr.size())) throw malformed();
-            // 8 bits, color type 2 (RGB), deflate, adaptive filtering, no interlace.
-            if (bigEndian(ihdr.data()) != width || bigEndian(ihdr.data() + 4) != height || ihdr[8] != 8 || ihdr[9] != 2 || ihdr[10] || ihdr[11] || ihdr[12]) throw malformed();
+            // RGB uses color type 2; the CMYK byte carrier uses type 6. Both are 8-bit, non-interlaced.
+            if (bigEndian(ihdr.data()) != width || bigEndian(ihdr.data() + 4) != height || ihdr[8] != 8 || ihdr[9] != (cmyk?6:2) || ihdr[10] || ihdr[11] || ihdr[12]) throw malformed();
             header = true;
         } else if (type == "IDAT") {
             if (!header) throw malformed();
@@ -112,10 +113,10 @@ std::vector<std::uint8_t> srgbProfile() {
 // One page holding one image XObject, the PNG's pixels. Object numbers: 1 catalog, 2 page tree, 3 page, 4 image,
 // 5 page content, 6 ICC profile.
 void writePdf(PdfFile& pdf, const std::filesystem::path& png, const std::vector<DataRange>& image, ExportSize size, double pageWidth, double pageHeight,
-              const std::function<bool()>& check) {
+              const std::function<bool()>& check,CmykProfilePtr cmyk) {
     std::array<std::uint64_t, 7> offsets{};
     const auto object = [&](int id, std::string_view body) { offsets[id] = pdf.offset(); pdf.write(std::to_string(id) + " 0 obj\n"); pdf.write(body); pdf.write("endobj\n"); };
-    const auto profile = srgbProfile();
+    const auto profile = cmyk?cmyk->bytes:srgbProfile();
     pdf.write(std::string_view("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n"));
     object(1, "<< /Type /Catalog /Pages 2 0 R >>\n");
     object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n");
@@ -125,7 +126,7 @@ void writePdf(PdfFile& pdf, const std::filesystem::path& png, const std::vector<
     for (const auto& range : image) imageBytes += range.length;
     offsets[4] = pdf.offset();
     pdf.write("4 0 obj\n<< /Type /XObject /Subtype /Image /Width " + std::to_string(size.width) + " /Height " + std::to_string(size.height) +
-              " /ColorSpace [/ICCBased 6 0 R] /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns " +
+              " /ColorSpace [/ICCBased 6 0 R] /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors " + std::string(cmyk?"4":"3") + " /BitsPerComponent 8 /Columns " +
               std::to_string(size.width) + " >> /Length " + std::to_string(imageBytes) + " >>\nstream\n");
     std::ifstream in(png, std::ios::binary);
     std::vector<char> buffer(copyChunk);
@@ -142,7 +143,7 @@ void writePdf(PdfFile& pdf, const std::filesystem::path& png, const std::vector<
     const std::string content = "q " + number(pageWidth) + " 0 0 " + number(pageHeight) + " 0 0 cm\n/Im0 Do\nQ\n";
     object(5, "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "endstream\n");
     offsets[6] = pdf.offset();
-    pdf.write("6 0 obj\n<< /N 3 /Alternate /DeviceRGB /Length " + std::to_string(profile.size()) + " >>\nstream\n");
+    pdf.write("6 0 obj\n<< /N " + std::string(cmyk?"4 /Alternate /DeviceCMYK":"3 /Alternate /DeviceRGB") + " /Length " + std::to_string(profile.size()) + " >>\nstream\n");
     pdf.write(profile.data(), profile.size());
     pdf.write("\nendstream\nendobj\n");
     const auto xref = pdf.offset();
@@ -238,9 +239,14 @@ void encodePageImage(IWICImagingFactory* imaging, const std::filesystem::path& p
     ok(properties->Write(1, &filter, &adaptive), "Choose adaptive PNG filtering");
     ok(frame->Initialize(properties.Get()), "Initialize PDF image frame");
     ok(frame->SetSize(size.width, size.height), "Set PDF image size");
-    GUID format = GUID_WICPixelFormat24bppBGR;
+    std::unique_ptr<CmykTransform> color;if(options.cmykProfile)color=std::make_unique<CmykTransform>(options.cmykProfile);
+    const UINT channels=color?4U:3U;
+    // For CMYK, PNG is only an internal lossless four-byte carrier: RGBA stores C,M,Y,K.
+    // PDF consumes its raw IDAT stream with four color components, never PNG alpha semantics.
+    GUID format = color?GUID_WICPixelFormat32bppBGRA:GUID_WICPixelFormat24bppBGR;
+    const auto requested=format;
     ok(frame->SetPixelFormat(&format), "Choose PDF image pixel format");
-    if (format != GUID_WICPixelFormat24bppBGR) throw std::runtime_error("Encoder changed the required PDF image pixel format");
+    if (format != requested) throw std::runtime_error("Encoder changed the required PDF image pixel format");
     for (std::uint32_t top = 0; top < size.height; top += stripeRows) {
         cancelled(options.cancelled);
         const auto count = std::min(stripeRows, size.height - top);
@@ -248,7 +254,11 @@ void encodePageImage(IWICImagingFactory* imaging, const std::filesystem::path& p
             const WICRect area{0, INT(top), INT(size.width), INT(count)};
             ok(scaler->CopyPixels(&area, size.width * 4, UINT(rgba.size()), rgba.data()), "Scale PDF canvas rows");
         } else checkedRows(rows, size.width, top, count, std::span(rgba).first(std::size_t(size.width) * count * 4), std::size_t(size.width) * 4);
-        for (std::uint32_t row = 0; row < count; ++row) {
+        if(color){const auto bytes=size_t(size.width)*count*4;color->encode(std::span(rgba).first(bytes),std::span(rgb).first(bytes),matte);
+            color->decode(std::span(rgb).first(bytes),std::span(rgba).first(bytes));
+            for(uint32_t row=0;row<count;++row){auto* sum=preview.row(top+row);for(uint32_t x=0;x<size.width;++x){const auto i=(size_t(row)*size.width+x)*4;
+                if(sum)for(size_t c=0;c<3;++c)sum[preview.column(x)][c]+=rgba[i+c];std::swap(rgb[i],rgb[i+2]);}}
+        }else for (std::uint32_t row = 0; row < count; ++row) {
             auto* sum = preview.row(top + row);
             for (std::uint32_t x = 0; x < size.width; ++x) {
                 const auto* p = rgba.data() + (std::size_t(row) * size.width + x) * 4;
@@ -258,7 +268,7 @@ void encodePageImage(IWICImagingFactory* imaging, const std::filesystem::path& p
                 if (sum) for (int c = 0; c < 3; ++c) sum[preview.column(x)][c] += q[2 - c];
             }
         }
-        ok(frame->WritePixels(count, size.width * 3, UINT(std::size_t(size.width) * count * 3), rgb.data()), "Encode PDF image rows");
+        ok(frame->WritePixels(count, size.width * channels, UINT(std::size_t(size.width) * count * channels), rgb.data()), "Encode PDF image rows");
         if (progress) progress(progressOffset + top + count, progressTotal);
     }
     cancelled(options.cancelled);
@@ -292,10 +302,11 @@ StreamingExportResult encodePdfAtomic(const std::filesystem::path& destination, 
     const std::size_t previewPixels = std::size_t(previewWidth) * previewHeight;
     const std::size_t previewStorage = previewPixels * (sizeof(PreviewSum) + 4) + std::size_t(size.width) * sizeof(std::uint32_t);
     constexpr std::size_t renderReserve = 8 * 1024 * 1024;   // as encodeRowsAtomic: the canonical renderer's own buffers
-    const std::size_t bytesPerRow = std::size_t(size.width) * (4 + 3);
+    const size_t channels=options.cmykProfile?4:3;
+    const std::size_t bytesPerRow = std::size_t(size.width) * (4 + channels);
     if (limits.maxBufferBytes <= previewStorage + renderReserve + bytesPerRow) throw std::invalid_argument("Streaming export buffer budget is too small");
     const auto stripeRows = std::uint32_t(std::min<std::size_t>({size.height, limits.stripeRows, (limits.maxBufferBytes - previewStorage - renderReserve) / bytesPerRow}));
-    std::vector<std::uint8_t> rgba(std::size_t(size.width) * stripeRows * 4), rgb(std::size_t(size.width) * stripeRows * 3);
+    std::vector<std::uint8_t> rgba(std::size_t(size.width) * stripeRows * 4), rgb(std::size_t(size.width) * stripeRows * channels);
     PagePreview preview(size, previewWidth, previewHeight);
     StreamingExportResult result;
     result.stripeRows = stripeRows;
@@ -315,11 +326,11 @@ StreamingExportResult encodePdfAtomic(const std::filesystem::path& destination, 
     if (previewPixels) result.preview = preview.average();
 
     // The page is the export's pixels at the document's resolution; PDF points are 1/72 inch.
-    const auto image = pngImageData(pngFile.path, size.width, size.height);
+    const auto image = pngImageData(pngFile.path, size.width, size.height,bool(options.cmykProfile));
     TemporaryFile pdfFile(destination);
     {
         PdfFile pdf(pdfFile.path);
-        writePdf(pdf, pngFile.path, image, size, size.width * 72.0 / options.dpi, size.height * 72.0 / options.dpi, options.cancelled);
+        writePdf(pdf, pngFile.path, image, size, size.width * 72.0 / options.dpi, size.height * 72.0 / options.dpi, options.cancelled,options.cmykProfile);
     }
     result.encodedBytes = std::filesystem::file_size(pdfFile.path);
     pdfFile.replace(destination, options.cancelled);

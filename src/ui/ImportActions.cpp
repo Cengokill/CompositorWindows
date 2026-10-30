@@ -30,6 +30,7 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
     ImportResult result;result.before=state;result.after=std::move(state);
     const auto point=result.before.document?batch.point:std::nullopt;
     const auto budget=std::min<uint64_t>(options.remainingPixels,100000000);
+    const auto fallback=options.cmykFallback;
     auto cancelled=[&]{return options.cancelled&&options.cancelled();};
     for(const auto& path:batch.files){
         if(cancelled()){result.cancelled=true;break;}
@@ -43,10 +44,11 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             options.remainingPixels=budget-used;
             const auto adjustments=batch.rawAdjustments.find(path);
             options.raw=adjustments==batch.rawAdjustments.end()?imaging::RawAdjustments{}:adjustments->second;
+            const auto sourceProfile=batch.cmykProfiles.find(path);options.cmykFallback=sourceProfile==batch.cmykProfiles.end()?fallback:sourceProfile->second;
             auto decoded=decode(path,options);imaging::checkCancelled(options);
             imaging::checkedBytes(decoded.image.width,decoded.image.height,4,options);imaging::validate(decoded.image);
             auto raster=Raster::fromRgba(int(decoded.image.width),int(decoded.image.height),decoded.image.pixels.data(),decoded.image.stride);
-            if(!result.after.document){Document document;document.id=newId();document.width=raster->width;document.height=raster->height;result.after.document=std::move(document);}
+            if(!result.after.document){Document document;document.cmykProfile=decoded.metadata.cmykProfile;document.id=newId();document.width=raster->width;document.height=raster->height;result.after.document=std::move(document);}
             auto& document=*result.after.document;
             const Point center=point.value_or(Point{document.width/2.,document.height/2.});
             Layer layer;layer.id=newId();layer.name=QFileInfo(QString::fromStdWString(path.wstring())).completeBaseName().toUtf8().toStdString();layer.raster=std::move(raster);

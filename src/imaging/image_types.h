@@ -1,4 +1,5 @@
 #pragma once
+#include "core/CmykProfile.h"
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -35,6 +36,7 @@ struct ImportOptions {
     RawAdjustments raw;
     // Must be thread-safe and non-throwing; native inference polls on a worker thread.
     std::function<bool()> cancelled;
+    CmykProfilePtr cmykFallback;
 };
 inline void checkCancelled(const ImportOptions& o) { if(o.cancelled && o.cancelled()) throw std::runtime_error("Image operation cancelled"); }
 inline std::size_t checkedBytes(std::uint32_t w,std::uint32_t h,std::uint32_t channels,const ImportOptions& o={},std::uint32_t bytesPerSample=1) {
@@ -64,6 +66,7 @@ struct ImageMetadata {
     double dpiX{72},dpiY{72};
     ProfileStatus profileStatus{ProfileStatus::AssumedSrgbNoProfile};
     std::string decoder;
+    CmykProfilePtr cmykProfile;
 };
 struct DecodedImage { RgbaImage image; ImageMetadata metadata; };
 // A RAW frame developed with the requested settings, plus what the decoder can change.
@@ -77,5 +80,6 @@ struct ExportOptions {
     // PDF only: resamples the flattened canvas, keeping dpi, so the printed page scales with it.
     double scale{1.0};
     std::function<bool()> cancelled;
+    CmykProfilePtr cmykProfile;
 };
 }

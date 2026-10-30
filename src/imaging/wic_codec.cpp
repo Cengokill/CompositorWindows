@@ -2,6 +2,9 @@
 #define NOMINMAX
 #endif
 #include "wic_codec.h"
+#include "cmyk.h"
+#include "stream_export.h"
+#include <cstring>
 #include "win32_file_path.h"
 #include <windows.h>
 #include <wincodec.h>
@@ -22,7 +25,28 @@ std::uint16_t orientation(IWICBitmapFrameDecode* frame){
 }
 ComPtr<IWICColorContext> srgb(IWICImagingFactory* f){ComPtr<IWICColorContext> c;ok(f->CreateColorContext(&c),"Create sRGB context");ok(c->InitializeFromExifColorSpace(1),"Initialize sRGB context");return c;}
 ComPtr<IWICBitmapSource> convert(IWICImagingFactory* f,IWICBitmapSource* source,REFWICPixelFormatGUID format){ComPtr<IWICFormatConverter> c;ok(f->CreateFormatConverter(&c),"Create converter");ok(c->Initialize(source,format,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom),"Convert pixel format");ComPtr<IWICBitmapSource> out;ok(c.As(&out),"Query bitmap source");return out;}
+bool isCmyk(REFGUID format){return format==GUID_WICPixelFormat32bppCMYK||format==GUID_WICPixelFormat64bppCMYK||format==GUID_WICPixelFormat40bppCMYKAlpha||format==GUID_WICPixelFormat80bppCMYKAlpha;}
+CmykProfilePtr frameProfile(IWICImagingFactory* f,IWICBitmapFrameDecode* frame,CmykProfilePtr fallback){
+    GUID format{};ok(frame->GetPixelFormat(&format),"Read source color model");if(!isCmyk(format))return {};
+    UINT count{};const auto hr=frame->GetColorContexts(0,nullptr,&count);if(hr!=WINCODEC_ERR_UNSUPPORTEDOPERATION)ok(hr,"Read CMYK profile count");if(count>16)throw std::runtime_error("Too many embedded color profiles");
+    if(count){std::vector<ComPtr<IWICColorContext>> contexts(count);std::vector<IWICColorContext*> pointers(count);
+        for(UINT i=0;i<count;++i){ok(f->CreateColorContext(&contexts[i]),"Create CMYK context");pointers[i]=contexts[i].Get();}
+        ok(frame->GetColorContexts(count,pointers.data(),&count),"Read CMYK contexts");
+        for(const auto& context:contexts){WICColorContextType type{};ok(context->GetType(&type),"Read ICC context type");if(type!=WICColorContextProfile)continue;
+            UINT size{};ok(context->GetProfileBytes(0,nullptr,&size),"Read ICC size");if(size<132||size>maxCmykProfileBytes)throw std::runtime_error("Invalid embedded CMYK profile size");
+            std::vector<uint8_t> bytes(size);ok(context->GetProfileBytes(size,bytes.data(),&size),"Read CMYK ICC bytes");return makeCmykProfile(bytes,"Embedded CMYK profile");}
+        throw std::runtime_error("CMYK image has no usable embedded ICC profile");
+    }
+    if(!fallback)throw MissingCmykProfile();return fallback;
+}
 void premultiply(std::vector<std::uint8_t>& p){for(std::size_t i=0;i<p.size();i+=4)for(int c=0;c<3;++c)p[i+c]=std::uint8_t((unsigned(p[i+c])*p[i+3]+127)/255);}
+}
+CmykProfilePtr WicCodec::sourceCmykProfile(const std::filesystem::path& filename,CmykProfilePtr fallback){
+    Apartment apartment;auto f=factory();ComPtr<IWICBitmapDecoder> decoder;const auto path=win32FilePath(filename);
+    // Non-decodable files keep the existing per-file import failure path. Once a
+    // CMYK frame is identified, invalid/missing ICC data must stop preflight.
+    if(FAILED(f->CreateDecoderFromFilename(path.c_str(),nullptr,GENERIC_READ,WICDecodeMetadataCacheOnDemand,&decoder)))return {};
+    ComPtr<IWICBitmapFrameDecode> frame;if(FAILED(decoder->GetFrame(0,&frame)))return {};return frameProfile(f.Get(),frame.Get(),std::move(fallback));
 }
 DecodedImage WicCodec::decode(const std::filesystem::path& filename,const ImportOptions& options){
     const auto path=win32FilePath(filename);
@@ -37,7 +61,10 @@ DecodedImage WicCodec::decode(const std::filesystem::path& filename,const Import
     ComPtr<IWICBitmapSource> source;ok(frame.As(&source),"Get frame source");UINT count=0;HRESULT colorHr=frame->GetColorContexts(0,nullptr,&count);
     if(FAILED(colorHr)&&colorHr!=WINCODEC_ERR_UNSUPPORTEDOPERATION)ok(colorHr,"Read color context count");
     if(count>16)throw std::runtime_error("Too many embedded color contexts");
-    if(count){
+    out.metadata.cmykProfile=frameProfile(f.Get(),frame.Get(),options.cmykFallback);
+    if(out.metadata.cmykProfile){
+        const auto& bytes=out.metadata.cmykProfile->bytes;ComPtr<IWICColorContext> context;ok(f->CreateColorContext(&context),"Create CMYK source context");ok(context->InitializeFromMemory(const_cast<BYTE*>(bytes.data()),UINT(bytes.size())),"Read CMYK source profile");auto dest=srgb(f.Get());ComPtr<IWICColorTransform> transform;ok(f->CreateColorTransformer(&transform),"Create CMYK import transform");ok(transform->Initialize(source.Get(),context.Get(),dest.Get(),GUID_WICPixelFormat32bppRGBA),"Convert CMYK import to sRGB");ok(transform.As(&source),"Read converted CMYK source");out.metadata.profileStatus=ProfileStatus::ConvertedEmbeddedProfile;
+    }else if(count){
         std::vector<ComPtr<IWICColorContext>> contexts(count);std::vector<IWICColorContext*> raw(count);
         for(UINT i=0;i<count;++i){ok(f->CreateColorContext(&contexts[i]),"Create embedded color context");raw[i]=contexts[i].Get();}
         ok(frame->GetColorContexts(count,raw.data(),&count),"Read embedded color contexts");
@@ -67,6 +94,7 @@ void WicCodec::normalizeStraightRgba(std::span<std::uint8_t> rgba,std::uint32_t 
 }
 void WicCodec::encode(const std::filesystem::path& filename,const RgbaImage& image,const ExportOptions& options){
     const auto path=win32FilePath(filename);
+    if(options.cmykProfile){validate(image);encodeRowsAtomic(filename,image.width,image.height,[&](uint32_t y,uint32_t count,std::span<uint8_t> output,size_t stride){for(uint32_t row=0;row<count;++row)std::memcpy(output.data()+row*stride,image.pixels.data()+(y+row)*image.stride,size_t(image.width)*4);},options);return;}
     validate(image);if(!std::isfinite(options.dpi)||options.dpi<=0||!std::isfinite(options.jpegQuality)||options.format==ImageFormat::Pdf)throw std::runtime_error("Invalid export settings");
     auto cancelled=[&]{if(options.cancelled&&options.cancelled())throw std::runtime_error("Image export cancelled");};cancelled();Apartment apartment;auto f=factory();
     GUID id{};ok(CoCreateGuid(&id),"Create output identifier");wchar_t guid[40]{};StringFromGUID2(id,guid,40);auto temp=path;temp+=std::wstring(L".")+guid+L".tmp";

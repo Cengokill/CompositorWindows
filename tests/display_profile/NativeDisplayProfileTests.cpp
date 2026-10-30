@@ -1,4 +1,8 @@
 #include "ui/NativeCanvas.h"
+#include "imaging/cmyk.h"
+#include "../cmyk/ProfileFixture.h"
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QApplication>
 #include <QDir>
 #include <QFile>
@@ -43,6 +47,17 @@ int main(int argc,char** argv){
                 canvas.recreateDevice();require(compare(capture(canvas),baseline,true)<=2,"Device recreation lost monitor conversion");
                 canvas.resize(520,390);canvas.setDisplayProfileOverride(missing);baseline=capture(canvas);canvas.setDisplayProfileOverride(linearPath);result=capture(canvas);maximum=compare(result,baseline,true);require(maximum<=2,"Resize lost the physical presentation profile or DPI");
             }
+        }else if(args[1]=="cmyk"){
+            const auto fixture=cmyk_test::profileBytes(linearPath);const auto profile=imaging::makeCmykProfile(std::span(reinterpret_cast<const uint8_t*>(fixture.data()),size_t(fixture.size())),"Synthetic CMYK");
+            canvas.setCmykProof(profile,true);canvas.setCmykProof({},false);canvas.setCmykProof(profile,true);
+            QElapsedTimer wait;wait.start();while(!canvas.cmykProofReady()&&canvas.cmykProofError().isEmpty()&&wait.elapsed()<15000){QApplication::processEvents(QEventLoop::AllEvents,10);}
+            require(canvas.cmykProofReady(),"CMYK proof worker failed or timed out");canvas.repaint();QApplication::processEvents();result=canvas.captureRendered();require(canvas.cmykProofError().isEmpty()&&canvas.deviceReady(),"CMYK GPU proof failed");
+            require(compare(result,baseline,false)>5,"CMYK proof did not change the displayed color/matte");
+            imaging::CmykTransform transform(profile);
+            for(const int x:{64,110}){const auto source=raster->pixel(x,50);const std::array<uint8_t,4> rgba{source.r,source.g,source.b,source.a};std::array<uint8_t,4> inks{},back{};transform.encode(rgba,inks,{255,255,255});transform.decode(inks,back);const auto point=canvas.viewMapping().toView({x+.5,50.5});const auto shown=result.pixelColor(int(point.x*canvas.devicePixelRatioF()),int(point.y*canvas.devicePixelRatioF()));require(std::abs(shown.red()-back[0])<=4&&std::abs(shown.green()-back[1])<=4&&std::abs(shown.blue()-back[2])<=4,"Proof LUT channel order or white matte differs from conversion");}
+            const auto proof=result;canvas.recreateDevice();canvas.repaint();QApplication::processEvents();result=canvas.captureRendered();require(compare(result,proof,false)==0,"Device recreation changed CMYK proof");
+            canvas.setCmykProof(profile,false);canvas.repaint();QApplication::processEvents();result=canvas.captureRendered();require(compare(result,baseline,false)==0,"Disabling proof did not restore exact RGB presentation");
+            canvas.setCmykProof(profile,true); // Destruction must cancel/wait safely, with no late UI callback.
         }else if(args[1]=="srgb_identity"){
             canvas.setDisplayProfileOverride(srgb());result=capture(canvas);require(canvas.presentationConvertsColor(),"System sRGB profile did not initialize");maximum=compare(result,baseline,false);require(maximum==0,"sRGB presentation must be exact identity");
         }else if(args[1]=="fallback"){

@@ -1,4 +1,8 @@
 #include "ui/MainWindow.h"
+#include "imaging/cmyk.h"
+#include "../cmyk/Fixtures.h"
+#include "../cmyk/ProfileFixture.h"
+#include "imaging/wic_codec.h"
 #include <QApplication>
 #include <QAction>
 #include <QColorDialog>
@@ -51,7 +55,7 @@ int main(int argc,char**argv){
             auto*format=control<QComboBox>(dialog,"exportFormat");auto*scale=control<QComboBox>(dialog,"exportScale");auto*matte=control<QPushButton>(dialog,"exportMatte");
             auto*page=control<QLabel>(dialog,"exportPageSize");auto*preview_=control<QLabel>(dialog,"exportPreview");auto*save=control<QDialogButtonBox>(dialog,"exportButtons")->button(QDialogButtonBox::Save);
             if(step==0){
-                require(format->count()==3&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG","Format order changed");
+                require(format->count()==4&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG"&&format->itemText(3)=="TIFF","Format order changed");
                 auto*quality=control<QSlider>(dialog,"exportQuality");
                 require(!scale->isEnabled()&&!matte->isEnabled()&&page->isHidden()&&scale->isHidden()&&quality->isHidden(),"PNG offered PDF-only or JPEG-only controls");
                 format->setCurrentIndex(2);
@@ -90,6 +94,30 @@ int main(int argc,char**argv){
         });
         require(cancelled&&read(existing)==original&&QDir(output.path()).entryList(QDir::Files).size()==1,"Cancelling a ready PDF export touched the destination");
         require(project.document==before&&!project.projectBusy&&project.history.undoCount()==0,"Cancelled PDF export changed source/history");
+    });
+    test("cmyk_export_generation_save_and_cancel",[]{
+        cmyk_test::ProfileFile fixture;const auto profile=imaging::readCmykProfile(std::filesystem::path(fixture.path.toStdWString()));
+        QTemporaryDir output;MainWindow window(true);auto d=blank(64,32);d.cmykProfile=profile;auto& project=window.addProject(d);const auto before=project.document;
+        QByteArray expected;const auto destination=output.filePath("CMYK.tif");int stage=0;
+        drive(window,[&]{auto* dialog=window.findChild<QDialog*>("imageExportDialog");if(!dialog)return;auto* save=control<QDialogButtonBox>(dialog,"exportButtons")->button(QDialogButtonBox::Save);
+            if(stage==0){auto* mode=control<QComboBox>(dialog,"exportColorMode");require(!mode->isEnabled()&&mode->currentIndex()==0,"PNG did not default to RGB");control<QComboBox>(dialog,"exportFormat")->setCurrentIndex(3);mode->setCurrentIndex(1);require(!save->isEnabled(),"RGB preview remained saveable after CMYK choice");stage=1;}
+            else if(stage==1&&save->isEnabled()){expected=read(dialog->property("readyExportPath").toString());window.setProperty("testNativeSavePath",destination);stage=2;save->click();}
+        });
+        require(stage==2&&read(destination)==expected,"CMYK Save did not use prepared bytes");require(imaging::WicCodec::sourceCmykProfile(std::filesystem::path(destination.toStdWString()))->sha256==profile->sha256,"TIFF export lost CMYK profile");
+        bool cancelled=false;drive(window,[&]{auto* dialog=window.findChild<QDialog*>("imageExportDialog");if(!dialog)return;control<QComboBox>(dialog,"exportFormat")->setCurrentIndex(1);control<QComboBox>(dialog,"exportColorMode")->setCurrentIndex(1);auto* buttons=control<QDialogButtonBox>(dialog,"exportButtons");if(buttons->button(QDialogButtonBox::Save)->isEnabled()){cancelled=true;buttons->button(QDialogButtonBox::Cancel)->click();}});
+        require(cancelled&&project.document==before&&project.history.undoCount()==0&&!project.projectBusy&&read(destination)==expected,"Cancelled CMYK export changed document/destination");
+    });
+    test("cmyk_profile_menu_undo_noop_and_preference",[]{
+        MainWindow window(true);auto& project=window.addProject(blank(64,32));auto* load=window.findChild<QAction*>("viewCmykProfile");auto* proof=window.findChild<QAction*>("viewCmykProof");require(load&&proof,"CMYK menu commands missing");
+        cmyk_test::ProfileFile fixture;const auto file=fixture.path;
+        auto choose=[&](bool cancel){QElapsedTimer elapsed;elapsed.start();QTimer timer;timer.setInterval(10);QObject::connect(&timer,&QTimer::timeout,&window,[&]{for(auto* widget:QApplication::topLevelWidgets())if(auto* picker=qobject_cast<QFileDialog*>(widget)){if(cancel||elapsed.elapsed()>5000)picker->reject();else{picker->selectFile(file);QMetaObject::invokeMethod(picker,"accept");}}});timer.start();load->trigger();timer.stop();};
+        choose(true);require(!project.document->cmykProfile&&project.history.undoCount()==0,"Profile picker Cancel changed history");choose(false);require(project.document->cmykProfile&&project.history.undoCount()==1,"Profile menu did not make one edit");
+        const auto profile=project.document->cmykProfile;choose(false);require(project.history.undoCount()==1,"Same ICC profile created a no-op edit");
+        proof->trigger();require(project.proofColors&&project.history.undoCount()==1,"Proof toggle changed history");proof->trigger();require(!project.proofColors,"Proof toggle did not restore normal view");
+        project.document=project.history.undo()->document;require(!project.document->cmykProfile,"Undo lost original profile state");project.document=project.history.redo()->document;require(project.document->cmykProfile==profile,"Redo lost selected profile");
+        const auto stored=QSettings().value("cmyk/fallbackBytes").toByteArray();require(stored.size()==qsizetype(profile->bytes.size()),"Accepted fallback preference missing");
+        QTemporaryDir source;const auto unprofiled=source.filePath("fallback.psd");const auto bytes=cmyk_test::psd();{QFile file(unprofiled);require(file.open(QIODevice::WriteOnly),"Write fallback fixture");file.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()));}
+        MainWindow reopened(true);bool prompted=false;QTimer answer;answer.setInterval(10);QObject::connect(&answer,&QTimer::timeout,&reopened,[&]{if(auto* message=reopened.findChild<QMessageBox*>("missingCmykProfile")){prompted=true;message->done(QMessageBox::Cancel);}});answer.start();reopened.openPath(unprofiled);answer.stop();auto* name=reopened.findChild<QAction*>("viewCmykProfileName");require(!prompted&&name&&name->text().contains(QString::fromStdString(profile->name)),"Saved fallback was not restored in a new window import");
     });
     std::cout<<"Export UI "<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

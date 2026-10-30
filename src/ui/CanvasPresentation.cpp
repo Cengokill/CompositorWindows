@@ -12,6 +12,7 @@ void presentationCheck(HRESULT result,const char* operation){
 }
 }
 void NativeCanvas::resetPresentationResources(){
+    resetCmykResources();
     presentationEffect_.Reset();presentationScene_.Reset();presentationBytes_=0;presentationAttempted_=false;
 }
 void NativeCanvas::watchPresentationWindow(){
@@ -36,7 +37,7 @@ void NativeCanvas::setDisplayProfileOverride(std::optional<std::filesystem::path
 }
 void NativeCanvas::setPresentationBudget(uint64_t bytes){
     if(bytes>128ULL*1024*1024)throw std::invalid_argument("Presentation budget cannot exceed 128 MiB");
-    if(bytes!=presentationByteBudget_){presentationByteBudget_=bytes;resetPresentationResources();update();}
+    if(bytes!=presentationByteBudget_){proofFailure_.clear();presentationByteBudget_=bytes;resetPresentationResources();update();}
 }
 bool NativeCanvas::eventFilter(QObject* watched,QEvent* event){
     if(watched==profileWindow_){

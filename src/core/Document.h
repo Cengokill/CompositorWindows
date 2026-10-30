@@ -1,4 +1,5 @@
 #pragma once
+#include "CmykProfile.h"
 #include "DeepImage.h"
 #include <array>
 #include <cstdint>
@@ -181,6 +182,7 @@ struct Document {
     std::vector<Layer> layers; // Bottom to top.
     std::optional<Selection> selection;
     std::vector<Guide> guides;
+    CmykProfilePtr cmykProfile;
     bool operator==(const Document&) const = default;
 };
 // Immutable render-only source override. It is never part of Document, history,

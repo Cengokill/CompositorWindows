@@ -137,6 +137,8 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("view.fit","View","Fit Canvas","Ctrl+0",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:87");
         add("view.actual","View","Actual Pixels","Ctrl+1",C::View,G::Document,P::None,"Compositor/CompositorApp.swift:88");
         add("view.pixel_grid","View","Pixel Grid","",C::View,G::Always,P::None,"Compositor/CompositorApp.swift:93");
+        add("view.cmyk_proof","CMYK","Proof Colors","",C::View,G::Layers,P::None,"Windows CMYK proofing");
+        add("view.cmyk_profile","CMYK","Load Profile…","",C::View,G::Layers,P::None,"Windows CMYK document profile");
         add("view.rulers","View","Rulers","Ctrl+R",C::View,G::Always,P::None,"Windows canvas rulers");
         add("view.canvas_only","View","Canvas-Only Full Screen","F11",C::View,G::Document,P::None,"Windows canvas-only full screen (issue #12)");
         add("canvas.size","Canvas","Canvas Size…","Ctrl+Alt+C",C::Document,G::DocumentOperation,P::ProjectOperation,"Compositor/CompositorApp.swift:196");

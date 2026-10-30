@@ -96,6 +96,7 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     imaging::ExportOptions options, const imaging::StreamExportLimits& limits, const imaging::ExportProgress& progress) {
     imaging::validateExportExtent(std::uint32_t(document.width), std::uint32_t(document.height));
     validateDocument(document);
+    if (options.cmykProfile && options.format == imaging::ImageFormat::Png) throw std::invalid_argument("PNG does not support CMYK output");
     options.dpi = document.resolution;
     const bool deepPng = options.format == imaging::ImageFormat::Png && flatDeepExport(document);
     if (deepPng) {
