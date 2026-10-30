@@ -52,7 +52,7 @@ int main(int argc,char**argv){
             auto*format=control<QComboBox>(dialog,"exportFormat");auto*scale=control<QComboBox>(dialog,"exportScale");auto*matte=control<QPushButton>(dialog,"exportMatte");
             auto*page=control<QLabel>(dialog,"exportPageSize");auto*preview_=control<QLabel>(dialog,"exportPreview");auto*save=control<QDialogButtonBox>(dialog,"exportButtons")->button(QDialogButtonBox::Save);
             if(step==0){
-                require(format->count()==3&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG","Format order changed");
+                require(format->count()==4&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG"&&format->itemText(3)=="OpenEXR","Expected PNG, JPEG, PDF and OpenEXR in that order");
                 auto*quality=control<QSlider>(dialog,"exportQuality");
                 require(!scale->isEnabled()&&!matte->isEnabled()&&page->isHidden()&&scale->isHidden()&&quality->isHidden(),"PNG offered PDF-only or JPEG-only controls");
                 format->setCurrentIndex(2);
