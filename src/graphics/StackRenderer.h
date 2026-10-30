@@ -8,9 +8,12 @@ struct RenderRegion {double x{},y{};int width{},height{};double unitsPerPixel{1}
 // opacity or masks. Returns adjusted premultiplied RGBA of the same dimensions.
 using AdjustmentCallback=std::function<std::shared_ptr<const Raster>(
     const Layer&,std::shared_ptr<const Raster>,RenderRegion)>;
+using DeepAdjustmentCallback=std::function<std::shared_ptr<const DeepImage>(
+    const Layer&,std::shared_ptr<const DeepImage>,RenderRegion)>;
 class StackRenderer final:public IRasterBackend {
 public:
-    explicit StackRenderer(AdjustmentCallback adjustment={},std::shared_ptr<const LayerRenderPreview> preview={}):adjustment_(std::move(adjustment)),preview_(std::move(preview)){}
+    explicit StackRenderer(AdjustmentCallback adjustment={},std::shared_ptr<const LayerRenderPreview> preview={},DeepAdjustmentCallback deepAdjustment={}):adjustment_(std::move(adjustment)),preview_(std::move(preview)),deepAdjustment_(std::move(deepAdjustment)){}
+    std::shared_ptr<const DeepImage> renderDeep(const Document&,RenderRegion,const std::function<bool()>& cancelled={})const;
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height)const override;
     // Physical display sampling on original geometry (steps 1/32 through 32768).
     // Export stays at step 1. x/y is the corner before the first pixel center.
@@ -22,5 +25,6 @@ public:
 private:
     AdjustmentCallback adjustment_;
     std::shared_ptr<const LayerRenderPreview> preview_;
+    DeepAdjustmentCallback deepAdjustment_;
 };
 } // namespace compositor::graphics

@@ -10,7 +10,12 @@
 #include <map>
 #include <memory>
 
+class QWidget;
+
 namespace compositor::ui {
+using PreparedImages=std::map<std::filesystem::path,std::shared_ptr<const imaging::DecodedImage>>;
+// Decode HDR files once, before callers commit gestures or create tabs.
+bool prepareHdrImports(QWidget*,const std::vector<std::filesystem::path>&,PreparedImages&);
 struct ImportState {
     std::optional<Document> document;
     std::string active;
@@ -28,6 +33,7 @@ struct ImportBatch {
     // stricter workspace guard before they can begin.
     enum class Origin { Deferred, Explicit };
     Origin origin{Origin::Deferred};
+    PreparedImages prepared;
 };
 struct ImportResult {
     ImportState before, after;

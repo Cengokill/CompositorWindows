@@ -74,6 +74,14 @@ struct GradientPreview::Impl {
         if(mask){auto v=channel(foreground.r,background.r,old.r);return {v,v,v,255};}
         return {channel(foreground.r,background.r,old.r),channel(foreground.g,background.g,old.g),channel(foreground.b,background.b,old.b),byte(255*amount+old.a*(1-amount))};
     }
+    WidePixel pixelHdr(int x,int y)const{
+        auto old=original.deep->pixel(x,y);if(!active||mask)return old;double amount=coverage(documentPoint(x,y));
+        double dx=end.x-start.x,dy=end.y-start.y,l2=dx*dx+dy*dy;auto p=documentPoint(x,y);
+        double t=settings.shape==GradientShape::Radial?std::hypot(p.x-start.x,p.y-start.y)/std::sqrt(l2):((p.x-start.x)*dx+(p.y-start.y)*dy)/l2;t=std::clamp(t,0.,1.);if(settings.reversed)t=1-t;
+        amount*=std::clamp(settings.opacity,0.,1.);if(settings.style==GradientStyle::ForegroundToTransparent)amount*=1-t;
+        const float fg[]{foreground.r/255.f,foreground.g/255.f,foreground.b/255.f},bg[]{background.r/255.f,background.g/255.f,background.b/255.f};
+        for(int c=0;c<3;++c){double color=settings.style==GradientStyle::ForegroundToTransparent?fg[c]:fg[c]+(bg[c]-fg[c])*t;old[c]=float(color*amount+old[c]*(1-amount));}old[3]=float(amount+old[3]*(1-amount));return old;
+    }
     void sampleDeep(int x,int y,uint16_t out[4])const{if(!original.deep||!original.deep->valid()||x<0||y<0||x>=original.deep->width||y>=original.deep->height){out[0]=out[1]=out[2]=out[3]=0;return;}std::copy_n(original.deep->at(x,y),4,out);}
     void pixel16(int x,int y,uint16_t out[4])const{
         sampleDeep(x,y,out);if(!active||mask)return;auto p=documentPoint(x,y);double amount=coverage(p);if(amount==0)return;
@@ -104,6 +112,7 @@ std::shared_ptr<const LayerRenderPreview> GradientPreview::renderPreview()const{
     source->alignmentY=(gray?gray->height==s->baseHeight?gray->samplingOriginY:0:s->original.raster?s->original.raster->samplingOriginY:0)-y;
     if(s->mask){if(p->layer.mask->placement)p->layer.mask->previewExterior=s->maskExterior();source->gray=[s,x,y](int px,int py){return s->pixel(x+px,y+py).r;};p->maskSource=source;p->mask=[source](Point unit,Transform::Sampling sampling,uint8_t exterior){return graphics::sampleMaskPixels(source->width,source->height,source->gray,unit,sampling,exterior);};}
     else{p->layer.transform=s->placement(s->grid);p->layer.shapeJson.clear();if(!p->layer.raster){static const auto placeholder=Raster::filled(1,1);p->layer.raster=placeholder;}source->rgba=[s,x,y](int px,int py){return s->pixel(x+px,y+py);};p->imageSource=source;
+        if(s->original.deep&&s->original.deep->isHdr())p->deepImage=[s,x,y,source](Point unit,Transform::Sampling sampling){return graphics::sampleWidePixels(source->width,source->height,[&](int px,int py){return s->pixelHdr(x+px,y+py);},unit,sampling);};
         p->image=[source](Point unit,Transform::Sampling sampling){return graphics::sampleRasterPixels(source->width,source->height,source->rgba,unit,sampling);};
         if(p->layer.mask&&!p->layer.mask->placement&&s->grid!=Rect{0,0,double(s->baseWidth),double(s->baseHeight)}){auto m=std::make_shared<graphics::SamplingSource>();m->width=source->width;m->height=source->height;const auto& old=*s->original.mask->raster;m->alignmentX=(old.width==s->baseWidth?old.samplingOriginX:0)-x;m->alignmentY=(old.height==s->baseHeight?old.samplingOriginY:0)-y;m->identity=s;m->gray=[s,x,y](int px,int py){return s->inheritedMask(x+px,y+py);};p->maskSource=m;p->mask=[m](Point unit,Transform::Sampling sampling,uint8_t exterior){return graphics::sampleMaskPixels(m->width,m->height,m->gray,unit,sampling,exterior);};}}
     return p;
@@ -111,12 +120,14 @@ std::shared_ptr<const LayerRenderPreview> GradientPreview::renderPreview()const{
 Layer GradientPreview::materializeLayer()const{
     const auto& s=*impl_;if(!s.active)return s.original;auto result=s.original;int w=int(s.grid.width),h=int(s.grid.height),ox=int(s.grid.x),oy=int(s.grid.y);
     if(s.mask){auto gray=std::make_shared<GrayRaster>();gray->width=w;gray->height=h;gray->pixels.resize(size_t(w)*h);for(int y=0;y<h;++y)for(int x=0;x<w;++x)gray->pixels[size_t(y)*w+x]=s.pixel(ox+x,oy+y).r;result.mask->raster=gray;result.mask->previewExterior.reset();return result;}
+    if(s.original.deep&&s.original.deep->isHdr()&&uint64_t(w)*h*24>1200000000)throw std::runtime_error("HDR gradient exceeds working memory budget");
     auto image=std::make_shared<Raster>(*Raster::filled(w,h));const int columns=(w+255)/256;int left=w,top=h,right=0,bottom=0;
     for(size_t key=0;key<image->tiles.size();++key){auto tile=std::make_shared<Raster::Tile>();int tx=int(key%columns)*256,ty=int(key/columns)*256;for(int y=0;y<std::min(256,h-ty);++y)for(int x=0;x<std::min(256,w-tx);++x){auto value=s.pixel(ox+tx+x,oy+ty+y);tile->pixels[size_t(y)*256+x]=value;if(value.a){left=std::min(left,tx+x);top=std::min(top,ty+y);right=std::max(right,tx+x+1);bottom=std::max(bottom,ty+y+1);}}image->tiles[key]=std::move(tile);}
     if(right<=left){left=top=0;right=w;bottom=h;}Rect crop{double(ox+left),double(oy+top),double(right-left),double(bottom-top)};
     if(left||top||right!=w||bottom!=h){auto tight=std::make_shared<Raster>(*Raster::filled(right-left,bottom-top));int cols=(tight->width+255)/256;for(size_t key=0;key<tight->tiles.size();++key){auto tile=std::make_shared<Raster::Tile>();int tx=int(key%cols)*256,ty=int(key/cols)*256;for(int y=0;y<std::min(256,tight->height-ty);++y)for(int x=0;x<std::min(256,tight->width-tx);++x)tile->pixels[size_t(y)*256+x]=image->pixel(left+tx+x,top+ty+y);tight->tiles[key]=std::move(tile);}image=std::move(tight);}
     result.raster=image;result.transform=s.placement(crop);result.shapeJson.clear();result.deep.reset();
-    if(s.original.deep){auto deep=std::make_shared<DeepImage>();deep->width=image->width;deep->height=image->height;deep->samples.resize(std::size_t(deep->width)*std::size_t(deep->height)*4);for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x)s.pixel16(ox+left+x,oy+top+y,deep->at(x,y));result.deep=deep;result.raster=rasterFromDeep(*deep);}
+    if(s.original.deep&&s.original.deep->isHdr()){auto deep=makeDeep(image->width,image->height);for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x)deep->setPixel(x,y,s.pixelHdr(ox+left+x,oy+top+y));result.deep=deep;result.raster=rasterFromDeep(*deep);}
+    else if(s.original.deep){auto deep=std::make_shared<DeepImage>();deep->width=image->width;deep->height=image->height;deep->samples.resize(std::size_t(deep->width)*std::size_t(deep->height)*4);for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x)s.pixel16(ox+left+x,oy+top+y,deep->at(x,y));result.deep=deep;result.raster=rasterFromDeep(*deep);}
     if(result.mask&&!result.mask->placement&&crop!=Rect{0,0,double(s.baseWidth),double(s.baseHeight)}){auto gray=std::make_shared<GrayRaster>();gray->width=int(crop.width);gray->height=int(crop.height);gray->pixels.resize(size_t(gray->width)*gray->height);for(int y=0;y<gray->height;++y)for(int x=0;x<gray->width;++x)gray->pixels[size_t(y)*gray->width+x]=s.inheritedMask(int(crop.x)+x,int(crop.y)+y);result.mask->raster=gray;}
     return result;
 }

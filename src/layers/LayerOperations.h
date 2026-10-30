@@ -37,7 +37,7 @@ EditResult toggleClipping(const Document&,SelectionState,const std::string& targ
 struct DeletePlan {std::vector<std::string> roots,dependents;std::unordered_set<std::string> removed;};
 DeletePlan deletionPlan(const Document&,SelectionState);
 enum class DeleteMode {Cancel,Bake,RemoveLinks};
-std::shared_ptr<const Raster> bakeLiveMask(const Document&,const std::string& target,const Limits& = {});
+std::shared_ptr<const Raster> bakeLiveMask(const Document&,const std::string& target,const Limits& = {},std::shared_ptr<const DeepImage>* deep=nullptr);
 EditResult erase(const Document&,SelectionState,DeleteMode,const Limits& = {});
 struct MergePlan {std::vector<std::string> ids;std::unordered_set<std::string> removed;std::string name,parent,anchor,action;};
 std::optional<MergePlan> mergePlan(const Document&,SelectionState);

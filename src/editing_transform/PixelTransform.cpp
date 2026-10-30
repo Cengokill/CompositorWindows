@@ -40,6 +40,7 @@ struct PixelTransformSession::Impl {
     PixelTransformResult result;
     Impl(Layer source,std::shared_ptr<const GrayRaster> clip,PixelTransformKind mode,bool copy):original(std::move(source)),selection(std::move(clip)),kind(mode),duplicate(copy){
         if(!original.raster||original.group||!original.transform.valid()||!selection)throw std::invalid_argument("Selected pixel transform requires image pixels and selection");
+        if(original.deep&&original.deep->isHdr())throw std::runtime_error("Convert HDR to 16-Bit before transforming selected pixels");
         budget({0,0,double(original.raster->width),double(original.raster->height)});
         if(!selection->validStorage()||original.raster->tiles.size()!=size_t((original.raster->width+255)/256)*size_t((original.raster->height+255)/256))throw std::invalid_argument("Invalid selected pixel storage");for(auto& tile:original.raster->tiles)if(!tile)throw std::invalid_argument("Missing selected pixel tile");
         if(original.mask&&(!original.mask->raster||original.mask->raster->width<1||original.mask->raster->height<1||original.mask->raster->pixels.size()!=size_t(original.mask->raster->width)*original.mask->raster->height))throw std::invalid_argument("Invalid selected layer mask");

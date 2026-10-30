@@ -80,7 +80,7 @@ QStringList nativeImportPaths(HWND owner,const QString& directory){
     // loop away from Qt prevents qwindows/comdlg re-entry from corrupting
     // Qt's object tree.
     static const wchar_t filter[]=
-        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw\0"
+        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw\0"
         L"All files\0*.*\0";
     std::wstring buffer(32768,L'\0');
     const auto initial=directory.toStdWString();
@@ -161,7 +161,7 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     return *path;
 }
 // The Format combo's entries, in order. The index is also what the export tests select.
-enum class ExportKind {Png,Jpeg,Pdf};
+enum class ExportKind {Png,Jpeg,Pdf,Exr};
 QString withExportSuffix(QString path,ExportKind kind){
     QFileInfo info(path);
     const auto suffix=info.suffix().toLower();
@@ -169,17 +169,19 @@ QString withExportSuffix(QString path,ExportKind kind){
     case ExportKind::Jpeg:if(suffix=="jpg"||suffix=="jpeg")return path;break;
     case ExportKind::Png:if(suffix=="png")return path;break;
     case ExportKind::Pdf:if(suffix=="pdf")return path;break;
+    case ExportKind::Exr:if(suffix=="exr")return path;break;
     }
     const auto stem=info.completeBaseName().isEmpty()?QStringLiteral("Untitled"):info.completeBaseName();
-    const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":".png";
+    const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":kind==ExportKind::Exr?".exr":".png";
     return QDir::cleanPath(QDir(info.path()).filePath(stem+extension));
 }
 QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested){
     static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
     static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
     static const wchar_t pdfFilter[]=L"PDF\0*.pdf\0All files\0*.*\0";
-    const wchar_t* filter=kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:pngFilter;
-    const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":L"png";
+    static const wchar_t exrFilter[]=L"OpenEXR image\0*.exr\0\0";
+    const wchar_t* filter=kind==ExportKind::Exr?exrFilter:kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:pngFilter;
+    const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":kind==ExportKind::Exr?L"exr":L"png";
     auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,L"Export Image",defaultExtension);
     if(path.isEmpty())return {};
     return withExportSuffix(path,kind);
@@ -234,7 +236,8 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     host.canAdvance=[this]{return !QApplication::activeModalWidget()&&(!importQueue_||importQueue_->idle());};
     host.managing=[this](bool active){managingProjectOpen_=active;refresh(false,false);};
     host.project=[this](const QString& path){loadProjectDirectory(path);};
-    host.review=[this](const QString& path,ui::RawSettings& settings){return ui::reviewRawImports(this,{nativePath(path)},settings);};
+    auto hdrPrepared=std::make_shared<ui::PreparedImages>();
+    host.review=[this,hdrPrepared](const QString& path,ui::RawSettings& settings){hdrPrepared->clear();return ui::reviewRawImports(this,{nativePath(path)},settings)&&ui::prepareHdrImports(this,{nativePath(path)},*hdrPrepared);};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
         QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);
         auto* target=hasDestination?project(captured):&addEmptyProject();
@@ -242,11 +245,11 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==target){tabs_->setCurrentIndex(int(i));break;}
         return target->canvas;
     };
-    host.image=[this,project](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
+    host.image=[this,project,hdrPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
         auto ext=QFileInfo(path).suffix().toLower();
         if(ext=="psd"||ext=="psb"){importPhotoshop(path);if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,false);return;}
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
-        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;
+        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.prepared=std::move(*hdrPrepared);
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
@@ -258,7 +261,7 @@ void MainWindow::receiveDropPaths(const QStringList& paths,NativeCanvas* destina
     ui::WorkspaceDropRequest request;request.paths=paths;request.destination=destination;request.hasDestination=destination!=nullptr;request.point=point;
     ensureWorkspaceDropQueue()->enqueue(std::move(request));
 }
-void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings){
+void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings,const ui::PreparedImages& prepared){
     if(paths.isEmpty())return;
     QStringList images;
     for(const auto& path:paths){
@@ -268,7 +271,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     }
     if(images.isEmpty())return;
     ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
-    batch.rawAdjustments=rawSettings;
+    batch.rawAdjustments=rawSettings;batch.prepared=prepared;
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -470,10 +473,11 @@ void MainWindow::openPath(const QString&path){
         refresh(false,false);
         if(!accepted)return;
     }
+    ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,{nativePath(path)},prepared))return;
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     if(photoshop){importPhotoshop(path);return;}
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
-    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings);
+    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared);
 }
 QString MainWindow::userDownloadsDirectory(){
     PWSTR known=nullptr;
@@ -507,9 +511,10 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
     // The RAW review precedes every PSD import, so cancelling it leaves the whole batch unimported.
     ui::RawSettings rawSettings;
     if(!ui::reviewRawImports(this,files,rawSettings))return;
+    ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,files,prepared))return;
     for(const auto& path:photoshop){if(importPhotoshop(path)&&!destination)target=current();}
     if(images.isEmpty())return;
-    queueImageImports(images,target,{},rawSettings);
+    queueImageImports(images,target,{},rawSettings,prepared);
 }
 namespace {
 void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObject> destination,bool pinned){
@@ -655,7 +660,7 @@ void MainWindow::exportImage(){
     struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
     QTemporaryDir temp;if(!temp.isValid())throw std::runtime_error("Cannot create image export storage");
     QDialog dialog(this);dialog.setObjectName("imageExportDialog");dialog.setWindowTitle("Export Image");QFormLayout layout(&dialog);
-    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF"});layout.addRow("Format",&format);
+    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF","OpenEXR"});layout.addRow("Format",&format);
     const auto kind=[&]{return ExportKind(format.currentIndex());};
     // PDF only: the page holds the canvas resampled by this factor, at the document's resolution, so it prints that much larger or smaller.
     QComboBox scale;scale.setObjectName("exportScale");for(const int percent:{25,50,75,100,200})scale.addItem(QString("%1%").arg(percent),percent/100.);scale.setCurrentIndex(3);layout.addRow("Scale",&scale);
@@ -683,10 +688,10 @@ void MainWindow::exportImage(){
     start=[&]{
         if(running||closed)return;
         running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);percent->store(0);
-        imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:imaging::ImageFormat::Pdf;options.jpegQuality=quality.value()/100.;
+        imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:kind()==ExportKind::Exr?imaging::ImageFormat::Exr:imaging::ImageFormat::Pdf;options.jpegQuality=quality.value()/100.;
         if(kind()==ExportKind::Pdf)options.scale=scale.currentData().toDouble();
         options.matteR=uint8_t(matteColor.red());options.matteG=uint8_t(matteColor.green());options.matteB=uint8_t(matteColor.blue());options.cancelled=[flag=cancel]{return flag->load();};
-        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":"pdf"));
+        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":kind()==ExportKind::Exr?"exr":"pdf"));
         watcher.setFuture(QtConcurrent::run([snapshot,path,options,percent]{Prepared out;out.path=path;try{out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});}catch(const imaging::ExportCancelled&){out.cancelled=true;}catch(const std::exception&e){out.error=QString::fromUtf8(e.what());}return out;}));
     };
     connect(&watcher,&QFutureWatcher<Prepared>::finished,&dialog,[&]{
@@ -703,7 +708,7 @@ void MainWindow::exportImage(){
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
-    auto applyKind=[&]{quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(kind()!=ExportKind::Png);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
+    auto applyKind=[&]{quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf);layout.setRowVisible(&matte,kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
     connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&scale,&QComboBox::currentIndexChanged,&dialog,[&]{showPageSize();changed();});
     connect(&quality,&QSlider::valueChanged,&dialog,changed);
@@ -716,7 +721,7 @@ void MainWindow::exportImage(){
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     const auto chosen=kind();
     if(chosen==ExportKind::Jpeg)settings.setValue("jpegExportQuality",quality.value()/100.);
-    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(chosen==ExportKind::Png?".png":chosen==ExportKind::Jpeg?".jpg":".pdf");
+    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(chosen==ExportKind::Png?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Exr?".exr":".pdf");
     const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
     QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;

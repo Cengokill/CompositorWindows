@@ -1,6 +1,9 @@
 #include "DocumentExport.h"
 #include "core/DeepImage.h"
 #include "imaging/wic_codec.h"
+#include "imaging/hdr_codec.h"
+#include "effects/Adjustments.h"
+#include "imaging/export_temporary_file.h"
 #include <algorithm>
 #include <cmath>
 
@@ -47,6 +50,7 @@ bool flatDeepExport(const Document& document) {
         if (layer.group || !layer.parentId.empty() || !layer.maskSourceId.empty()) return false;
         if (!layer.visible) continue;
         if (!layer.adjustmentJson.empty() || layer.effects.active()) return false;
+        if(layer.deep&&layer.deep->isHdr())return false;
         if (layer.opacity > 0 && layer.deep && layer.deep->valid()) anyDeep = true;
     }
     return anyDeep;
@@ -97,6 +101,40 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     imaging::validateExportExtent(std::uint32_t(document.width), std::uint32_t(document.height));
     validateDocument(document);
     options.dpi = document.resolution;
+    if(options.format==imaging::ImageFormat::Exr){
+        imaging::detail::TemporaryFile temporary(path);SoftwareRenderer renderer;
+        if(!limits.stripeRows||limits.maxBufferBytes<512*1024)throw std::runtime_error("EXR export buffer budget is too small");
+        imaging::StreamingExportResult result;result.stripeRows=limits.stripeRows;
+        const auto width=uint32_t(document.width),height=uint32_t(document.height);
+        const auto previewSize=imaging::detail::fitPreview(width,height,limits.previewWidth,limits.previewHeight);
+        result.preview={previewSize.first,previewSize.second,size_t(previewSize.first)*4,std::vector<uint8_t>(size_t(previewSize.first)*previewSize.second*4)};
+        // One row of HDR values is handed to the encoder. Render tiles stay
+        // bounded independently of canvas size; adjustment halos are supplied
+        // by the same export region renderer as the SDR stack.
+        int cachedTop=-1;std::shared_ptr<const DeepImage> stripe;
+        int margin=0;for(const auto& layer:document.layers)if(layer.visible&&!layer.adjustmentJson.empty()){const int next=effects::adjustmentPadding(layer.adjustmentJson);if(next>15000-margin)throw std::runtime_error("EXR adjustment padding exceeds export budget");margin+=next;}
+        const auto renderBytes=[&](int rows){return uint64_t(std::min(1024,document.width)+2*margin)*(rows+2*margin)*80+uint64_t(width)*rows*8+uint64_t(width)*sizeof(WidePixel)+result.preview.pixels.size();};
+        int stripeRows=int(std::min<uint64_t>(limits.stripeRows,height));
+        while(stripeRows>1&&renderBytes(stripeRows)>limits.maxBufferBytes)stripeRows=std::max(1,stripeRows/2);
+        if(renderBytes(stripeRows)>limits.maxBufferBytes)throw std::runtime_error("EXR adjustment halo exceeds export buffer budget");
+        result.stripeRows=uint32_t(stripeRows);
+        try{imaging::encodeExr(temporary.path,document.width,document.height,[&](int y,std::span<WidePixel> row){
+            if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();
+            if(cachedTop<0||y>=cachedTop+stripe->height){cachedTop=y;stripe.reset();auto next=makeDeep(document.width,std::min(stripeRows,document.height-y));
+                for(int left=0;left<document.width;left+=1024){const int tileWidth=std::min(1024,document.width-left);auto tile=renderer.renderDeep(document,left,y,tileWidth,next->height,options.cancelled);for(int row=0;row<next->height;++row)for(int col=0;col<tileWidth;++col)next->setPixel(left+col,row,tile->pixel(col,row));result.maxRenderPixelBytes=std::max(result.maxRenderPixelBytes,size_t(tileWidth+2*margin)*(next->height+2*margin)*80+next->samples.size()*2);}
+                stripe=std::move(next);
+            }
+            for(int x=0;x<document.width;++x)row[size_t(x)]=stripe->pixel(x,y-cachedTop);
+            if(result.preview.width&&result.preview.height){
+                for(uint32_t py=0;py<result.preview.height;++py)if(int((uint64_t(2*py+1)*height)/(2*result.preview.height))==y){
+                    for(uint32_t px=0;px<result.preview.width;++px){auto p=row[size_t((uint64_t(2*px+1)*width)/(2*result.preview.width))];const auto i=size_t(py)*result.preview.stride+px*4;auto alpha=uint8_t(std::clamp(std::lround(p[3]*255),0L,255L));result.preview.pixels[i+3]=alpha;for(int c=0;c<3;++c)result.preview.pixels[i+c]=uint8_t(std::clamp(std::lround(p[c]*255),0L,long(alpha)));}
+                }
+            }
+            if(progress)progress(uint32_t(y+1),height);
+        },options.cancelled);}catch(...){if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();throw;}
+        if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();
+        result.encodedBytes=std::filesystem::file_size(temporary.path);result.peakOwnedPixelBytes=result.maxRenderPixelBytes+size_t(width)*sizeof(WidePixel)+result.preview.pixels.size();temporary.replace(path,options.cancelled);return result;
+    }
     const bool deepPng = options.format == imaging::ImageFormat::Png && flatDeepExport(document);
     if (deepPng) {
         auto flat = flattenDeep(document, options);
@@ -112,6 +150,7 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     constexpr int chunkWidth = 1024;
     std::size_t renderBound = 0;
     SoftwareRenderer renderer;
+    const bool hdrStack=std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.deep&&layer.deep->isHdr();});
     // A stack with no image or adjustment has no color contribution, including
     // empty layers/folders with masks. Fill its encoder stripes directly instead
     // of allocating and discarding transparent Raster tiles for every chunk.
@@ -123,10 +162,11 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
             for (int left = 0; left < document.width; left += chunkWidth) {
                 if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
                 const int width = std::min(chunkWidth, document.width - left);
-                auto raster = renderer.render(document, left, int(top), width, int(rows));
+                auto raster = hdrStack?rasterFromDeep(*renderer.renderDeep(document,left,int(top),width,int(rows),options.cancelled)):renderer.render(document, left, int(top), width, int(rows));
                 // StackRenderer holds at most result/group/alpha scanlines plus two
                 // adjustment tile sets. Add one 33^3 RGB float lookup cube allowance.
                 renderBound = std::max(renderBound, std::size_t(width) * rows * 9 + raster->retainedBytes() * 3 + 1024 * 1024);
+                if(hdrStack){int margin=0;for(const auto& layer:document.layers)if(layer.visible&&!layer.adjustmentJson.empty())margin+=effects::adjustmentPadding(layer.adjustmentJson);renderBound=std::max(renderBound,size_t(width+2*margin)*(rows+2*margin)*80+raster->retainedBytes());}
                 for (std::uint32_t y = 0; y < rows; ++y) {
                     auto* row = output.data() + std::size_t(y) * stride + std::size_t(left) * 4;
                     for (int x = 0; x < width; ++x) {

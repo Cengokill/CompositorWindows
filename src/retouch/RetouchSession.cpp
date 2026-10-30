@@ -153,6 +153,7 @@ struct RetouchSession::Impl {
     }
     Impl(Layer layer,int w,int h,Settings options,Sources input,std::shared_ptr<const GrayRaster> clip,std::shared_ptr<graphics::D3D11BrushCoverage> gpu,bool mask,uint64_t budget)
         :Impl(mask?maskRaster(layer.mask?layer.mask->raster:nullptr):layer.raster?layer.raster:Raster::filled(1,1),mask&&layer.mask?layer.mask->placement.value_or(layer.transform):layer.transform,w,h,options,std::move(input),std::move(clip),std::move(gpu)){
+        if(!mask&&layer.deep&&layer.deep->isHdr())throw std::runtime_error("Convert HDR to 16-Bit before retouching");
         if(mask&&options.mode!=Mode::Blur)throw std::invalid_argument("Only Blur supports mask retouch");
         if(!mask&&!layer.raster&&(options.mode==Mode::Blur||warp(options.mode)))throw std::invalid_argument("Blur and warp require image pixels");
         originalLayer=std::move(layer);maskTarget=mask;if(mask)originalMask=originalLayer.mask->raster;else original=originalLayer.raster;

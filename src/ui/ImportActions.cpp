@@ -3,6 +3,9 @@
 #include "imaging/heif_codec.h"
 #include "imaging/svg_raster.h"
 #include "imaging/raw_develop.h"
+#include "imaging/hdr_codec.h"
+#include <QProgressDialog>
+#include <QMessageBox>
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -15,6 +18,12 @@
 namespace compositor::ui {
 imaging::DecodedImage decodeImportImage(const std::filesystem::path& path,const imaging::ImportOptions& options){
     auto extension=QString::fromStdWString(path.extension().wstring()).toLower();
+    if(extension==".exr"||extension==".hdr"){
+        auto deep=extension==".exr"?imaging::decodeExr(path,options):imaging::decodeRadiance(path,options);
+        auto raster=rasterFromDeep(*deep);imaging::DecodedImage decoded;
+        decoded.image={uint32_t(deep->width),uint32_t(deep->height),size_t(deep->width)*4,raster->rgba()};
+        decoded.metadata.decoder=extension==".exr"?"OpenEXR":"Radiance RGBE";decoded.deep=std::move(deep);return decoded;
+    }
     if(extension==".svg")return imaging::rasterizeSvg(path,options);
     if(imaging::isRawFileExtension(path))return imaging::decodeRaw(path,options);
     QFile file(QString::fromStdWString(path.wstring()));
@@ -22,6 +31,17 @@ imaging::DecodedImage decodeImportImage(const std::filesystem::path& path,const 
     const auto signature=file.read(16);file.close();
     return signature.size()>=12&&signature.mid(4,4)=="ftyp"
         ?imaging::HeifCodec::decode(path,options):imaging::WicCodec::decode(path,options);
+}
+bool prepareHdrImports(QWidget* parent,const std::vector<std::filesystem::path>& files,PreparedImages& prepared){
+    std::vector<std::filesystem::path> hdr;for(const auto& path:files){auto ext=QString::fromStdWString(path.extension().wstring()).toLower();if(ext==".exr"||ext==".hdr")hdr.push_back(path);}if(hdr.empty())return true;
+    struct Result {PreparedImages images;QString error;};
+    QProgressDialog progress("Reading HDR images…","Cancel",0,0,parent);progress.setProperty("studioChrome",true);progress.setObjectName("hdrImportPreflight");progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);progress.setAutoClose(false);progress.setAutoReset(false);
+    auto cancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<Result> watcher;
+    QObject::connect(&progress,&QProgressDialog::canceled,&progress,[cancelled]{cancelled->store(true);});
+    QObject::connect(&watcher,&QFutureWatcher<Result>::finished,&progress,&QDialog::accept);
+    watcher.setFuture(QtConcurrent::run([hdr,cancelled]{Result result;uint64_t pixels=0,bytes=0;try{for(const auto& path:hdr){imaging::ImportOptions options;options.remainingPixels=100000000-pixels;options.maxWorkingBytes=1200000000-bytes;options.cancelled=[cancelled]{return cancelled->load();};auto image=std::make_shared<const imaging::DecodedImage>(decodeImportImage(path,options));pixels+=uint64_t(image->image.width)*image->image.height;bytes+=image->deep->samples.size()*2+image->image.pixels.size();result.images.emplace(path,std::move(image));}}catch(const std::exception& e){result.error=QString::fromUtf8(e.what());}return result;}));
+    progress.exec();cancelled->store(cancelled->load()||watcher.isRunning());watcher.waitForFinished();
+    if(cancelled->load())return false;auto result=watcher.result();if(!result.error.isEmpty()){QMessageBox message(QMessageBox::Critical,"Import HDR Image",result.error,QMessageBox::Ok,parent);message.setProperty("studioChrome",true);message.exec();return false;}prepared=std::move(result.images);return true;
 }
 ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const ImportDecoder& decode,imaging::ImportOptions options){
     if(!decode)throw std::invalid_argument("Image decoder is required");
@@ -43,13 +63,18 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             options.remainingPixels=budget-used;
             const auto adjustments=batch.rawAdjustments.find(path);
             options.raw=adjustments==batch.rawAdjustments.end()?imaging::RawAdjustments{}:adjustments->second;
-            auto decoded=decode(path,options);imaging::checkCancelled(options);
+            const auto prepared=batch.prepared.find(path);
+            // A shared immutable preflight result avoids decoding the HDR file twice.
+            auto owned=prepared==batch.prepared.end()?std::make_shared<const imaging::DecodedImage>(decode(path,options)):prepared->second;
+            if(!owned)throw std::runtime_error("Prepared image is missing");
+            const auto& decoded=*owned;imaging::checkCancelled(options);
             imaging::checkedBytes(decoded.image.width,decoded.image.height,4,options);imaging::validate(decoded.image);
             auto raster=Raster::fromRgba(int(decoded.image.width),int(decoded.image.height),decoded.image.pixels.data(),decoded.image.stride);
             if(!result.after.document){Document document;document.id=newId();document.width=raster->width;document.height=raster->height;result.after.document=std::move(document);}
             auto& document=*result.after.document;
             const Point center=point.value_or(Point{document.width/2.,document.height/2.});
             Layer layer;layer.id=newId();layer.name=QFileInfo(QString::fromStdWString(path.wstring())).completeBaseName().toUtf8().toStdString();layer.raster=std::move(raster);
+            if(decoded.deep){if(!decoded.deep->valid()||decoded.deep->width!=layer.raster->width||decoded.deep->height!=layer.raster->height)throw std::runtime_error("HDR import grid is invalid");layer.deep=decoded.deep;}
             layer.transform={std::floor(center.x-layer.raster->width/2.),std::floor(center.y-layer.raster->height/2.),double(layer.raster->width),double(layer.raster->height)};
             for(const auto& active:document.layers)if(active.id==result.after.active){layer.parentId=active.group?active.id:active.parentId;break;}
             if(!layer.parentId.empty())result.expandedGroups.push_back(layer.parentId);

@@ -36,20 +36,24 @@ struct Request {
     CameraRawSettings cameraRaw;
     CameraRawView cameraRawView;
     Limits limits;
+    std::shared_ptr<const DeepImage> deepSource;
 };
 struct Result {
     std::shared_ptr<const Raster> raster;Transform transform;
     PixelRect sourceBounds;double previewScale{1};bool changed{};
     std::optional<CameraRawScope> cameraRawScope;
     std::string implementation;
+    std::shared_ptr<const DeepImage> deep;
 };
 // Linear RGBA/float intermediates plus one tiled Raster. Distinct from the
 // 1.2 GB import/merge working caps. Default Limits permit a 100-megapixel Apply.
 std::uint64_t estimatedWorkingBytes(int width,int height,std::uint64_t bytesPerPixel=24);
 double blurMargin(Kind,const Settings&);
+bool supportsHdr(Kind);
 // The direct PixelFilter.run boundary: supplied image is already padded/scaled;
 // optional coverage must match that grid. Output retains dimensions.
 std::shared_ptr<const Raster> runPixels(Kind,const Raster&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {});
+std::shared_ptr<const DeepImage> runDeepPixels(Kind,const DeepImage&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {},const CameraRawSettings& = {},const CameraRawView& = {});
 // The FilterEdit boundary: grow, prepare preview, run, selection blend, final trim.
 Result apply(const Request&);
 // Reposition a cropped/expanded source grid without moving retained pixels.

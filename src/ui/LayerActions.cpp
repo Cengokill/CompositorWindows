@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LastFilterJob.h"
 #include "LayerPanel.h"
 #include "LayerCopyCommit.h"
 #include <QMenuBar>
@@ -55,6 +56,17 @@ void MainWindow::finishVisibilitySwipe(){
     }
 }
 void MainWindow::layerCommand(int command){
+    if(command==14){
+        auto* p=current();auto* layer=active();if(!canEditLayers()||!p||!layer||!layer->deep||!layer->deep->isHdr()||layerSelection().ids.size()!=1)return;
+        QMessageBox confirmation(QMessageBox::Question,"Convert HDR to 16-Bit","Values brighter than white and negative colors will be clipped. This conversion can be undone.",QMessageBox::Ok|QMessageBox::Cancel,this);confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);if(confirmation.exec()!=QMessageBox::Ok)return;
+        const auto original=*layer;QPointer<NativeCanvas> token=p->canvas;ui::LastFilterJob::Host host;
+        host.settled=[this,token]{if(!token)return;for(auto& project:projects_)if(project->canvas==token){project->projectBusy=false;refresh(false,false);break;}};
+        host.error=[this](const QString& error){QMessageBox::critical(this,"Convert HDR to 16-Bit",error);};
+        host.commit=[this,p,token,original](Layer converted){if(!token||current()!=p||p->canvas!=token||!p->document)return;auto target=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& l){return l.id==original.id;});if(target==p->document->layers.end()||*target!=original)return;edit("Convert HDR to 16-Bit",[&](Document&){*target=std::move(converted);});};
+        p->projectBusy=true;refresh(false,false);
+        try{new ui::LastFilterJob([original](std::function<bool()> cancelled){auto layer=original;layer.deep=hdrTo16Bit(*original.deep,cancelled);layer.raster=rasterFromDeep(*layer.deep);return layer;},std::move(host),this,p,"Converting HDR pixels…");}
+        catch(...){p->projectBusy=false;refresh(false,false);throw;}return;
+    }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
     auto*p=current();if(!p||!p->document)return;const auto&d=*p->document;auto selection=layerSelection();
     switch(command){
@@ -97,6 +109,7 @@ void MainWindow::setupLayerActions(){
     action(menu,"New Group",{},[this]{layerCommand(0);});action(menu,"Group Selected",QKeySequence("Ctrl+G"),[this]{layerCommand(1);});action(menu,"Ungroup",QKeySequence("Shift+Ctrl+G"),[this]{layerCommand(13);});action(menu,"Move Out of Group",{},[this]{layerCommand(2);});
     action(menu,"Text Layer…",{},[this]{if(!current()||!current()->document)return;selectTool(Tool::Text);beginText({32,32},true);});
     action(menu,"Create / Release Clipping Mask",QKeySequence("Ctrl+Alt+G"),[this]{layerCommand(7);});action(menu,"Merge Layers",QKeySequence("Ctrl+E"),[this]{layerCommand(8);});action(menu,"Copy Layer to Project…",{},[this]{layerCommand(9);});
+    action(menu,"Convert HDR to 16-Bit…",{},[this]{layerCommand(14);});
     ui::LayerPanelController::Host host;
     host.dragOwner=[this]()->QObject*{auto*p=current();return p?p->canvas:nullptr;};
     host.prepare=[this]{if(refreshing_)return;applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();finishOpacityEdit();pointerCancel();};

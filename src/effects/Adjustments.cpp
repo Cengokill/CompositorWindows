@@ -70,6 +70,7 @@ std::array<uint8_t,768> gradient(const Settings&s){auto dark=s.reverse?s.highlig
 }
 std::string defaultAdjustmentJson(std::string_view kind){named(text(kind),kinds);QJsonObject range{{"black",0},{"white",255},{"gamma",1},{"outputBlack",0},{"outputWhite",255}};QJsonArray ls,cs;for(int i=0;i<4;++i){ls.append(range);cs.append(QJsonArray{QJsonObject{{"x",0},{"y",0}},QJsonObject{{"x",255},{"y",255}}});}return QJsonDocument(QJsonObject{{"kind",text(kind)},{"hue",0},{"saturation",0},{"lightness",0},{"colorize",false},{"levels",QJsonObject{{"channel","RGB"},{"ranges",ls}}},{"curves",QJsonObject{{"channel","RGB"},{"channels",cs}}}}).toJson(QJsonDocument::Compact).toStdString();}
 void validateAdjustmentJson(std::string_view json){settings(parse(json));}
+int adjustmentPadding(std::string_view json){const auto s=settings(parse(json));return s.kind==9?int(std::ceil(s.blurRadius*3+2)):s.kind==10?int(std::ceil(s.blurDistance+2)):0;}
 std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region,const std::function<bool()>& cancelled){
  auto cancel=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};cancel();
  if(!source||source->width<1||source->height<1||source->width>30000||source->height>30000||uint64_t(source->width)*source->height>100000000)throw std::invalid_argument("Invalid source raster");
@@ -97,4 +98,32 @@ std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> sour
     if(tile->pixels!=original->pixels){result->tiles[index]=tile;any=true;}
  }cancel();return any?std::shared_ptr<const Raster>(result):source;
 }
+std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region,const std::function<bool()>& cancelled){
+    auto cancel=[&]{if(cancelled&&cancelled())throw std::runtime_error("HDR adjustment cancelled");};cancel();
+    if(!source||!source->valid())throw std::runtime_error("Invalid deep adjustment source");
+    if(selection&&(selection->width!=source->width||selection->height!=source->height||!selection->validStorage()))throw std::runtime_error("HDR selection must match source grid");
+    auto s=settings(parse(json));if(s.identity())return source;
+    if(s.kind>=9){filters::Settings filter;filter.radius=s.blurRadius;filter.angle=s.blurAngle;filter.distance=s.blurDistance;filter.amount=s.noiseAmount;filter.gaussian=s.noiseGaussian;filter.monochromatic=s.noiseMono;
+        filters::Limits limits;limits.cancelled=cancelled;return filters::runDeepPixels(s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:filters::Kind::AddNoise,*source,filter,1,s.seed,selection,limits);}
+    // Exposure is evaluated in scene-linear light. Other bounded color kernels
+    // see per-pixel normalized highlights, then their brightness is restored.
+    if(s.kind!=3&&s.kind!=1&&s.kind!=2){
+        auto normal=normalizeDeep(*source,cancelled);auto changed=applyAdjustment(normal.raster,json,nullptr,region,cancelled);
+        if(changed==normal.raster)return source;
+        auto result=restoreDeep(*changed,normal.scales,cancelled);
+        if(!selection)return result;
+        auto mixed=std::make_shared<DeepImage>(*result);for(int y=0;y<source->height;++y){cancel();for(int x=0;x<source->width;++x){const auto old=source->pixel(x,y);auto p=result->pixel(x,y);float amount=selection->pixel(x,y)/255.f;for(int c=0;c<4;++c)p[c]=old[c]+(p[c]-old[c])*amount;mixed->setPixel(x,y,p);}}return mixed;
+    }
+    auto output=std::make_shared<DeepImage>(*source);bool changed=false;
+    for(int y=0;y<source->height;++y){cancel();for(int x=0;x<source->width;++x){auto p=source->pixel(x,y),out=p;if(!(p[3]>0))continue;const double amount=selection?selection->pixel(x,y)/255.:1.;if(amount==0)continue;
+        const double peak=std::max({1.,double(p[0]/p[3]),double(p[1]/p[3]),double(p[2]/p[3])});
+        for(int c=0;c<3;++c){const double straight=p[c]/p[3];double value;
+            if(s.kind==3)value=linearToSrgb(std::pow(std::max(0.,srgbToLinear(straight)*std::pow(2.,s.exposure)+s.offset),1/s.gamma));
+            else {value=std::clamp(straight/peak,0.,1.);value=s.kind==1?s.levels[0].apply(s.levels[c+1].apply(value)):s.curves[0].value(s.curves[c+1].value(value*255))/255.;value*=peak;}
+            out[c]=float(p[c]+(value*p[3]-p[c])*amount);
+        }
+        if(out!=p){output->setPixel(x,y,out);changed=true;}
+    }}cancel();return changed?std::shared_ptr<const DeepImage>(output):source;
+}
+
 }

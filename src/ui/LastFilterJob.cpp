@@ -21,9 +21,10 @@ struct LastFilterJob::Impl {
         progress.setAutoClose(false);progress.setAutoReset(false);
     }
 };
-LastFilterJob::LastFilterJob(std::function<Layer(std::function<bool()>)> work,Host host,QWidget* parent,EditorProject* owner)
+LastFilterJob::LastFilterJob(std::function<Layer(std::function<bool()>)> work,Host host,QWidget* parent,EditorProject* owner,const QString& progressText)
     :QObject(parent),impl_(std::make_unique<Impl>(parent)){
     if(!work||!host.commit||!host.settled||!host.error||!owner)throw std::invalid_argument("Incomplete last-filter job");
+    if(!progressText.isEmpty()){impl_->progress.setProperty("studioChrome",true);impl_->progress.setLabelText(progressText);impl_->progress.setWindowTitle("Convert HDR to 16-Bit");}
     setObjectName("lastFilterJob");impl_->host=std::move(host);impl_->owner=owner;
     connect(&impl_->progress,&QProgressDialog::canceled,this,[this]{cancel();});
     connect(&impl_->watcher,&QFutureWatcher<Impl::Result>::finished,this,[this]{

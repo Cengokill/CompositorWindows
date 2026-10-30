@@ -6,6 +6,7 @@
 #include "editing/Shapes.h"
 #include "imaging/psd/PsdDocument.h"
 #include "imaging/wic_codec.h"
+#include "imaging/hdr_codec.h"
 #include "persistence/ProjectStore.h"
 #include <QAction>
 #include <QApplication>
@@ -607,6 +608,30 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         auto* layers=w.findChild<QTreeWidget*>();require(layers,"Layer tree absent");
         QStringList names;for(QTreeWidgetItemIterator it(layers);*it;++it)names<<(*it)->text(0);
         require(names.join("|").contains("Gradient")&&names.join("|").contains("Plain"),"Continued PSD import did not show both layers");
+    });
+    test("hdr_explicit_batch_preserves_pixels_and_one_history_entry",[&]{
+        QTemporaryDir directory;auto exr=directory.filePath("bright.exr");auto pixels=makeDeep(8,4);for(int y=0;y<4;++y)for(int x=0;x<8;++x)pixels->setPixel(x,y,{2,1,.5f,1});imaging::encodeExr(path(exr),*pixels);
+        auto png=image(directory.path(),"ordinary.png",8,4);MainWindow w(true);auto& p=w.addProject(document());const auto before=p.document;
+        w.importSelectedImages({png,exr},p.canvas);finish(w);
+        require(p.document->layers.size()==2&&p.document->layers.back().deep&&p.document->layers.back().deep->isHdr(),"HDR import lost deep pixels");
+        require(p.document->layers.back().deep->pixel(7,0)[0]>1.99f&&p.history.undoCount()==1,"HDR batch clipped pixels or split history");
+        require(p.history.undo()->document==before,"HDR batch undo did not restore document");
+    });
+    test("hdr_failed_preflight_does_not_open_tab_or_commit_mixed_batch",[&]{
+        QTemporaryDir directory;auto bad=directory.filePath("broken.exr");{QFile file(bad);require(file.open(QIODevice::WriteOnly),"Bad HDR fixture write");file.write("not an EXR");}
+        auto png=image(directory.path(),"ordinary.png");MainWindow w(true);auto& p=w.addProject(document());auto before=p.document;auto* tabs=w.findChild<QTabWidget*>();const int count=tabs->count();bool sawError=false;
+        QTimer poll;poll.setInterval(0);QObject::connect(&poll,&QTimer::timeout,&w,[&]{for(auto* box:w.findChildren<QMessageBox*>()){sawError=true;box->accept();}});poll.start();w.importSelectedImages({png,bad},p.canvas);poll.stop();
+        require(sawError&&p.document==before&&p.history.undoCount()==0&&tabs->count()==count,"Failed HDR preflight changed workspace/history");
+    });
+    test("hdr_cancelled_preflight_preserves_workspace",[&]{
+        QTemporaryDir directory;auto exr=directory.filePath("large.exr");imaging::encodeExr(path(exr),1000,1000,[](int,std::span<WidePixel> row){std::fill(row.begin(),row.end(),WidePixel{2,1,.5f,1});});
+        MainWindow w(true);auto& p=w.addProject(document());const auto before=p.document;auto* tabs=w.findChild<QTabWidget*>();const int count=tabs->count();bool cancelled=false;
+        QTimer poll;poll.setInterval(0);QObject::connect(&poll,&QTimer::timeout,&w,[&]{if(auto* progress=w.findChild<QProgressDialog*>("hdrImportPreflight")){if(auto* button=progress->findChild<QPushButton*>()){cancelled=true;button->click();poll.stop();}}});poll.start();w.openPath(exr);poll.stop();
+        require(cancelled&&p.document==before&&p.history.undoCount()==0&&tabs->count()==count,"Cancelled HDR preflight changed tabs/document/history");
+    });
+    test("hdr_workspace_drop_retains_hdr_and_url_history",[&]{
+        QTemporaryDir directory;auto exr=directory.filePath("dropped.exr");auto pixels=makeDeep(8,4);for(int y=0;y<4;++y)for(int x=0;x<8;++x)pixels->setPixel(x,y,{2,1,.5f,1});imaging::encodeExr(path(exr),*pixels);
+        MainWindow w(true);auto& p=w.addProject(document());w.show();QApplication::processEvents();QMimeData mime;mime.setUrls({QUrl::fromLocalFile(exr)});require(drop(w,mime,canvasPoint(w,{64,64})),"HDR drop rejected");finish(w);require(p.document->layers.size()==1&&p.document->layers[0].deep&&p.document->layers[0].deep->isHdr()&&p.history.undoCount()==1,"HDR drop lost pixels/history");
     });
     std::cout<<"IMPORT_UI_SUMMARY passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;
 }

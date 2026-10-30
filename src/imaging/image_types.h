@@ -1,4 +1,5 @@
 #pragma once
+#include "core/DeepImage.h"
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -40,7 +41,7 @@ inline void checkCancelled(const ImportOptions& o) { if(o.cancelled && o.cancell
 inline std::size_t checkedBytes(std::uint32_t w,std::uint32_t h,std::uint32_t channels,const ImportOptions& o={},std::uint32_t bytesPerSample=1) {
     const auto n=std::uint64_t(w)*h;
     const auto sampleBytes=std::uint64_t(channels)*bytesPerSample;
-    if(!bytesPerSample || bytesPerSample>2 || !channels || channels>4 || !w || !h || w>std::min(o.maxSide,30000U) || h>std::min(o.maxSide,30000U) || n>std::min(o.remainingPixels,100000000ULL) || !sampleBytes || n>std::numeric_limits<std::size_t>::max()/sampleBytes || n*sampleBytes>o.maxWorkingBytes)
+    if(!bytesPerSample || bytesPerSample>2 || !channels || channels>4 || !w || !h || w>std::min(o.maxSide,30000U) || h>std::min(o.maxSide,30000U) || n>std::min<std::uint64_t>(o.remainingPixels,100000000) || !sampleBytes || n>std::numeric_limits<std::size_t>::max()/sampleBytes || n*sampleBytes>o.maxWorkingBytes)
         throw std::runtime_error("Image exceeds dimensions, pixel, or allocation budget");
     return static_cast<std::size_t>(n*sampleBytes);
 }
@@ -65,11 +66,11 @@ struct ImageMetadata {
     ProfileStatus profileStatus{ProfileStatus::AssumedSrgbNoProfile};
     std::string decoder;
 };
-struct DecodedImage { RgbaImage image; ImageMetadata metadata; };
+struct DecodedImage { RgbaImage image; ImageMetadata metadata; std::shared_ptr<const DeepImage> deep; };
 // A RAW frame developed with the requested settings, plus what the decoder can change.
 struct RawDevelopment { DecodedImage image; RawCapabilities capabilities; RawAsShot asShot; };
 // Pdf is written only by the streaming document export (encodePdfAtomic); WicCodec has no PDF encoder.
-enum class ImageFormat { Png, Jpeg, Tiff, Pdf };
+enum class ImageFormat { Png, Jpeg, Tiff, Pdf, Exr };
 struct ExportOptions {
     ImageFormat format{ImageFormat::Png};
     double dpi{72},jpegQuality{0.85};
