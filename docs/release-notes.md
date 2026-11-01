@@ -35,6 +35,10 @@ Version 0.1.8 shows horizontal and vertical rulers at the edges of the canvas. T
 
 The current source starts a new session with the rulers hidden. **File > Open Project** and the welcome **Open project** button use the Windows folder picker, start in Downloads, and accept one or more `.comp` folders. A 16-bit RGB PSD or PSB layer keeps its samples. Saving that document writes project format v13 and a 16-bit PNG. PNG export stays 16-bit for a visible root layer that is not clipped and has no adjustment or effect. A gradient or fill keeps the extra precision. Brush strokes, filters, and other pixel edits drop the layer to 8-bit, and JPEG export is 8-bit. Transform fields show position, size, and angle without trailing zeros. **File > Export Image** also writes a one-page PDF at the document's print size, with a chosen scale and background in the preview; Cancel leaves an existing file unchanged.
 
+## Unreleased: HDR image workflows
+
+Import single-image linear-sRGB EXR or Radiance HDR, retain highlights on HDR layers, recover them with Exposure, and save/reopen EXR assets inside `.comp` projects. Export Image adds OpenEXR. Supported adjustments, blur, painting, gradients, resizing and merges retain HDR; unsupported destructive tools require the explicit, undoable HDR-to-16-bit conversion. The canvas remains SDR. Windows application/build verification and Mac fixture exchange are pending for this change.
+
 ## What you can do
 
 Import PNG, JPEG, TIFF and HEIC images; arrange layers and masks; select,

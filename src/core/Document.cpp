@@ -40,6 +40,28 @@ Pixel scale(Pixel p,double a){return {byte(p.r*a),byte(p.g*a),byte(p.b*a),byte(p
 Pixel sample(const Raster& r,Point u,Transform::Sampling sampling){double x=u.x*r.width,y=u.y*r.height;if(x<0||y<0||x>=r.width||y>=r.height)return {};if(sampling==Transform::Sampling::Nearest)return r.pixel(int(x),int(y));x-=.5;y-=.5;int ix=int(std::floor(x)),iy=int(std::floor(y));double fx=x-ix,fy=y-iy;auto get=[&](int a,int b){return r.pixel(std::clamp(a,0,r.width-1),std::clamp(b,0,r.height-1));};auto a=get(ix,iy),b=get(ix+1,iy),c=get(ix,iy+1),d=get(ix+1,iy+1);auto mix=[&](uint8_t Pixel::*m){return byte((1-fy)*((1-fx)*(a.*m)+fx*(b.*m))+fy*((1-fx)*(c.*m)+fx*(d.*m)));};return {mix(&Pixel::r),mix(&Pixel::g),mix(&Pixel::b),mix(&Pixel::a)};}
 double maskCoverage(const Layer& l,Point p){if(!l.mask||!l.mask->enabled||!l.mask->raster)return 1;const auto& r=*l.mask->raster;if(r.width==1&&r.height==1)return r.pixels[0]/255.;auto u=l.mask->placement.value_or(l.transform).toUnit(p);return r.pixel(int(std::floor(u.x*r.width)),int(std::floor(u.y*r.height)))/255.;}
 }
+WidePixel blendWidePixel(WidePixel background,WidePixel source,Blend mode){
+    const double ab=background[3],as=source[3];WidePixel out{};out[3]=float(as+ab*(1-as));
+    Color b{},s{};for(int c=0;c<3;++c){b[c]=ab>0?background[c]/ab:0;s[c]=as>0?source[c]/as:0;}
+    Color mixed=s;
+    if(mode==Blend::Hue||mode==Blend::Saturation||mode==Blend::Color||mode==Blend::Luminosity){
+        const double peak=std::max({1.,b[0],b[1],b[2],s[0],s[1],s[2]});for(int c=0;c<3;++c){b[c]/=peak;s[c]/=peak;}
+        if(mode==Blend::Hue)mixed=setLum(setSat(s,sat(b)),lum(b));else if(mode==Blend::Saturation)mixed=setLum(setSat(b,sat(s)),lum(b));else if(mode==Blend::Color)mixed=setLum(s,lum(b));else mixed=setLum(b,lum(s));for(auto& v:mixed)v*=peak;
+    }else if(mode!=Blend::Normal){
+        for(int c=0;c<3;++c){const double base=b[c],over=s[c];
+            // Preserve the extended range; clamps intrinsic to bounded blend
+            // modes remain deliberate, rather than quantizing the whole stack.
+            if(mode==Blend::LinearDodge)mixed[c]=base+over;
+            else if(mode==Blend::LinearBurn)mixed[c]=std::max(0.,base+over-1);
+            else if(mode==Blend::Subtract)mixed[c]=std::max(0.,base-over);
+            else if(mode==Blend::Divide)mixed[c]=over==0?1:base/over;
+            else mixed[c]=separable(base,over,mode);
+        }
+    }
+    for(int c=0;c<3;++c)out[c]=float(source[c]*(1-ab)+background[c]*(1-as)+as*ab*mixed[c]);
+    return out;
+}
+std::shared_ptr<const DeepImage> IRasterBackend::renderDeep(const Document&,int,int,int,int,const std::function<bool()>&)const{throw std::runtime_error("This renderer does not support HDR");}
 bool Transform::valid() const {return std::isfinite(x)&&std::isfinite(y)&&std::isfinite(width)&&std::isfinite(height)&&std::isfinite(rotation)&&std::abs(x)<=1000000&&std::abs(y)<=1000000&&width>=1&&width<=300000&&height>=1&&height<=300000;}
 Point Transform::fromUnit(Point p)const{double a=std::remainder(rotation,360.)*std::numbers::pi/180,c=std::cos(a),s=std::sin(a);double px=(p.x-.5)*width*(flipX?-1:1),py=(p.y-.5)*height*(flipY?-1:1);return {x+width/2+px*c-py*s,y+height/2+px*s+py*c};}
 Point Transform::toUnit(Point p)const{double a=std::remainder(rotation,360.)*std::numbers::pi/180,c=std::cos(a),s=std::sin(a),px=p.x-x-width/2,py=p.y-y-height/2;return {.5+(px*c+py*s)/width*(flipX?-1:1),.5+(-px*s+py*c)/height*(flipY?-1:1)};}

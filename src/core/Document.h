@@ -25,6 +25,7 @@ struct Transform {
     bool operator==(const Transform&) const = default;
 };
 enum class Blend { Normal,Multiply,Screen,Overlay,Darken,Lighten,Difference,ColorDodge,ColorBurn,Hue,Saturation,Color,Luminosity,LinearBurn,LinearDodge,SoftLight,HardLight,VividLight,LinearLight,PinLight,HardMix,Exclusion,Subtract,Divide };
+WidePixel blendWidePixel(WidePixel background,WidePixel source,Blend mode);
 inline constexpr std::array<const char*,24> blendNames{"Normal","Multiply","Screen","Overlay","Darken","Lighten","Difference","Color Dodge","Color Burn","Hue","Saturation","Color","Luminosity","Linear Burn","Linear Dodge","Soft Light","Hard Light","Vivid Light","Linear Light","Pin Light","Hard Mix","Exclusion","Subtract","Divide"};
 
 // Immutable 256x256 tiles. Editing copies only touched tiles. Flattening is explicit.
@@ -153,7 +154,7 @@ struct Layer {
     Blend blend{Blend::Normal};
     Transform transform;
     std::shared_ptr<const Raster> raster;
-    // Optional 16-bit pixels. The raster is their dithered 8-bit working copy.
+    // Optional unsigned 16-bit or HDR pixels; raster is their SDR presentation.
     std::shared_ptr<const DeepImage> deep;
     std::optional<Mask> mask;
     // Exact serialized live metadata is retained while its editing implementation lands.
@@ -191,6 +192,7 @@ struct LayerRenderPreview {
     std::shared_ptr<const void> identity;
     std::shared_ptr<const void> lineage;
     std::function<Pixel(Point,Transform::Sampling)> image;
+    std::function<WidePixel(Point,Transform::Sampling)> deepImage;
     std::function<double(Point,Transform::Sampling,uint8_t)> mask;
     std::shared_ptr<const graphics::SamplingSource> imageSource,maskSource;
     // Null previous compares against the canonical source. Nullopt means that
@@ -204,12 +206,14 @@ class IRasterBackend {
 public:
     virtual ~IRasterBackend()=default;
     virtual std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const=0;
+    virtual std::shared_ptr<const DeepImage> renderDeep(const Document&,int,int,int,int,const std::function<bool()>& = {}) const;
 };
 class SoftwareRenderer final:public IRasterBackend {
     std::shared_ptr<const LayerRenderPreview> preview_;
 public:
     explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={}):preview_(std::move(preview)){}
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
+    std::shared_ptr<const DeepImage> renderDeep(const Document&,int x,int y,int width,int height,const std::function<bool()>& cancelled={}) const override;
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel) const;
     std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel) const;
     // Cursor previews have at most1024 samples per axis; ceil-to-screen sizing

@@ -45,6 +45,7 @@ bool commandEnabled(CommandGate gate,const CommandState&s){
     case CommandGate::Redo:return canUseHistory(s)&&s.historyRedo;
     case CommandGate::Layers:return editable;
     case CommandGate::ActiveLayer:return editable&&s.activeLayer;
+    case CommandGate::HdrLayer:return editable&&s.activeLayer&&s.singleSelected&&s.hdrLayer&&!s.maskSelected;
     case CommandGate::SingleLayer:return editable&&s.singleSelected&&s.activeLayer;
     case CommandGate::Duplicate:return canCopyPixels(s)||(!s.selection&&editable&&s.activeLayer&&!s.group);
     case CommandGate::Parent:return editable&&s.activeLayer&&s.hasParent;
@@ -148,6 +149,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("crop.cancel","Canvas","Cancel Crop","",C::Pending,G::ApplyCrop,P::None,"Compositor/Document/Crop.swift:178");
         add("layer.new","Layer","New Layer","Ctrl+Shift+N",C::Layer,G::Layers,P::FinishAppearance,"Compositor/CompositorApp.swift:241");
         add("layer.duplicate","Layer","Duplicate Layer","Ctrl+Shift+J",C::Layer,G::Duplicate,P::FinishAppearance,"Compositor/CompositorApp.swift:228");
+        add("layer.convert_hdr","Layer","Convert HDR to 16-Bit…","",C::Layer,G::HdrLayer,P::None,"HDR workflow (issue #29)");
         add("layer.rename","Layer","Rename Layer…","",C::Layer,G::ActiveLayer,P::FinishAppearance,"Compositor/CompositorApp.swift:243");
         add("layer.delete","Layer","Delete Layer","",C::Layer,G::ActiveLayer,P::FinishAppearance,"Compositor/CompositorApp.swift:263");
         add("layer.raise","Layer","Raise Layer","Ctrl+]",C::Layer,G::MoveUp,P::FinishAppearance,"Compositor/CompositorApp.swift:249");

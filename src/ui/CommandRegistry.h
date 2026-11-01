@@ -23,6 +23,7 @@ struct CommandState {
     bool levels{},hueSaturation{},filterEdit{},showsNewDocument{},showsImporter{};
     bool renamingLayer{},importError{},adjustmentEditing{},transformEdit{},persistentTransform{};
     bool crop{},gradient{},pixelMove{},colorPicker{},lassoDraft{},managing{},modalDialog{};
+    bool hdrLayer{};
     bool activeLayer{},group{},asset{},adjustmentLayer{},mask{},maskEnabled{},maskSelected{},effectiveVisible{},singleSelected{};
     bool selection{},selectionEmpty{},renderHasPixels{},historyUndo{},historyRedo{},clipboardImage{};
     bool transformable{},hasParent{},canMoveUp{},canMoveDown{},canMerge{},canToggleClipping{},hasOtherProject{},shape{};
@@ -40,7 +41,7 @@ bool canInvert(const CommandState&);
 
 enum class CommandClass { Application,Workspace,Document,Layer,Selection,Pixels,Adjustment,Tool,View,Pending };
 enum class CommandGate {
-    Always,ProjectStart,WorkspaceSwitch,DocumentOperation,Import,Document,Undo,Redo,Layers,ActiveLayer,
+    Always,ProjectStart,WorkspaceSwitch,DocumentOperation,Import,Document,Undo,Redo,Layers,ActiveLayer, HdrLayer,
     SingleLayer,Duplicate,Parent,MoveUp,MoveDown,Merge,Clipping,OtherProject,Mask,AddMask,ImageAlpha,
     Selection,ModifySelection,Copy,Cut,CopyMerged,Paste,Paint,Clear,Invert,Adjust,NewAdjustment,
     EditAdjustment,ContentAwareFill,Transform,TransformDraft,TransformControls,ShapeStyle,Tool,Palette,

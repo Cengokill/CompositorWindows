@@ -19,7 +19,7 @@ struct EditViewState {
         Document shown=current;auto& layer=shown.layers[size_t(target-current.layers.begin())];
         if(live)layer.adjustmentJson=result->adjustmentJson;
         else {
-            layer.raster=result->raster;layer.deep.reset();
+            layer.raster=result->raster;layer.deep=result->deep;
             // Filters have a fixed grown preview placement; Hue and ordinary
             // ungrown previews follow the current layer transform after Undo.
             if(result->transform!=original.transform){
@@ -66,12 +66,12 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
         auto target=std::find_if(owner->document->layers.begin(),owner->document->layers.end(),[&](const Layer& l){return l.id==state->original.id;});
         auto rendered=std::find_if(value.document.layers.begin(),value.document.layers.end(),[&](const Layer& l){return l.id==state->original.id;});
         if(target==owner->document->layers.end()||rendered==value.document.layers.end())return;
-        if(!state->live&&(target->raster!=state->original.raster||
+        if(!state->live&&(target->raster!=state->original.raster||target->deep!=state->original.deep||
             (editPanel_&&editPanel_->kind()!=ui::EditPanelSession::Kind::Hue&&target->transform!=state->original.transform)))return;
         Document prepared=*owner->document;auto& changed=prepared.layers[size_t(target-owner->document->layers.begin())];
         if(state->live)changed.adjustmentJson=rendered->adjustmentJson;
         else if(value.mergeLayer)changed=value.mergeLayer(*target);
-        else {changed.raster=rendered->raster;changed.deep.reset();changed.shapeJson=rendered->shapeJson;}
+        else {changed.raster=rendered->raster;changed.deep=rendered->deep;changed.shapeJson=rendered->shapeJson;}
         validateDocument(prepared);
         if(!state->live)owner->history.begin(action,owner->document,owner->active);
         try{owner->document=std::move(prepared);owner->history.end(owner->document,owner->active);state->livePending=false;if(value.maskSelected)owner->maskSelected=true;}

@@ -29,3 +29,41 @@ For a full Release build followed by one CTest run and the separate native viewp
 Do not run validation alongside another build or test process using the same build directory. Do not enumerate and build every `.vcxproj`: the `Experimental`, `Nightly`, and memory-check projects launch CTest dashboards and can start tests while other executables are still being linked. The normal build command above does not select those dashboard targets.
 
 Most native tests generate their own inputs. Some image-quality and diagnostic tests need external corpora, including `evidence/imaging/astronaut.png` for the subject-dialog test. Historical audit scripts additionally expect the pinned upstream checkout and the old research/evidence workspace. Those inputs and generated reports are not shipped in Git or the application-source ZIP; these optional tools are not a prerequisite for building the editor. Mac comparison tooling is documented in [reference/README.md](../reference/README.md).
+
+
+## HDR codec sources
+
+`dependencies.lock.json` pins OpenEXR 3.3.5, Imath 3.1.12 and libdeflate 1.18 by commit and source-archive SHA256. Bootstrap verifies their archives in `dependencies/downloads/hdr`; the first online configure can also acquire them. Keep these archives for offline configuration. `scripts/HdrDependencies.cmake` builds them statically, without their tools, examples or tests. No additional codec DLL is needed. Packaging includes the verified archives and licenses beside the existing dependency sources/notices. The Radiance decoder is the pinned, HDR-only `src/imaging/third_party/stb_image.h`, with its license retained.
+
+`migration.hdr` generates small independent linear EXR and RGBE fixtures and exercises the production HDR codecs, renderer, project store, export and history. The UI cases cover import/drop, preflight failure/Cancel, adjustment Apply/Cancel/undo, conversion confirmation/worker cancellation/undo, command gating and EXR export. Keep manual Windows verification separate from host-side numeric checks.
+
+CTest runs existing executables; it does not rebuild them. Building only `Compositor` leaves test executables untouched. Before the HDR checks, explicitly build every selected test target and stop on a build failure:
+
+```powershell
+cmake --preset windows-x64-release
+if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed; tests were not started.' }
+cmake --build --preset windows-x64-release --target migration_tests core_tests stack_renderer_tests command_ui_tests import_ui_tests export_ui_tests nonmodal_edit_tests --parallel 4
+if ($LASTEXITCODE -ne 0) { throw 'Test build failed; tests were not started.' }
+ctest --preset windows-x64-release -R 'migration.hdr|core[.]|graphics.stack_renderer|command_ui|imports.ui|export.ui|nonmodal_edit.hdr_' --timeout 120 --output-on-failure
+```
+
+If either HDR nonmodal case reports `provide named nonmodal case`, check that the executable is from the current checkout: both names are registered in `tests/nonmodal_edit/NonmodalEditTests.cpp`. The current import executable includes four `hdr_` cases and 45 named cases in total; output containing only the 41 older cases indicates an outdated executable. Do not count an unknown case or a missing executable as an exercised HDR path.
+
+The complete `imports.ui` test also requires the existing EXIF/profile fixtures in `evidence/imaging`. A missing `orientation-6.tif` or `adobe-rgb.png` is a failed prerequisite, not a reason to remove the assertions. The normal imaging bootstrap prepares these inputs. To restore only these fixtures in an already prepared checkout, run the existing generator with a Python environment containing Pillow (for example, the bootstrapped `dependencies/imaging/model-venv/Scripts/python.exe`). Restore its ICC input from the existing dependency lock first:
+
+```powershell
+$taskImagingLock = Get-Content dependencies/imaging/lock.json -Raw | ConvertFrom-Json
+$taskProfile = $taskImagingLock.assets | Where-Object { $_.path -eq 'evidence/imaging/AdobeCompat-v2.icc' }
+if (-not $taskProfile) { throw 'Locked fixture ICC profile is missing from the dependency lock.' }
+New-Item -ItemType Directory -Force evidence/imaging | Out-Null
+if (-not (Test-Path -LiteralPath $taskProfile.path)) {
+    Invoke-WebRequest -Uri $taskProfile.url -OutFile $taskProfile.path -ErrorAction Stop
+}
+if ((Get-FileHash -LiteralPath $taskProfile.path -Algorithm SHA256).Hash -ine $taskProfile.sha256) {
+    throw 'Fixture ICC profile checksum mismatch.'
+}
+python tests/imaging/make_fixtures.py
+if ($LASTEXITCODE -ne 0) { throw 'Imaging fixture generation failed; do not treat imports.ui as validated.' }
+```
+
+Prepare the fixtures before the test run above. Their generation does not establish that WIC orientation/profile handling or the HDR UI tests passed on Windows.

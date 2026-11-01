@@ -42,7 +42,7 @@ std::shared_ptr<const Raster> reframe(const std::shared_ptr<const Raster>& src,R
         auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<th;++y)for(int x=0;x<tw;++x)tile->pixels[size_t(y)*256+x]=src->pixel(sx+x,sy+y);out->tiles[key]=tile;
     }return out;
 }
-Rect alphaBounds(const Raster& raster){int l=raster.width,t=raster.height,r=0,b=0;for(int y=0;y<raster.height;++y)for(int x=0;x<raster.width;++x)if(raster.pixel(x,y).a){l=std::min(l,x);t=std::min(t,y);r=std::max(r,x+1);b=std::max(b,y+1);}return r<=l?Rect{0,0,double(raster.width),double(raster.height)}:Rect{double(l),double(t),double(r-l),double(b-t)};}
+template<class Alpha>Rect alphaBounds(const Raster& raster,Alpha alpha){int l=raster.width,t=raster.height,r=0,b=0;for(int y=0;y<raster.height;++y)for(int x=0;x<raster.width;++x)if(alpha(x,y)){l=std::min(l,x);t=std::min(t,y);r=std::max(r,x+1);b=std::max(b,y+1);}return r<=l?Rect{0,0,double(raster.width),double(raster.height)}:Rect{double(l),double(t),double(r-l),double(b-t)};}
 std::shared_ptr<const GrayRaster> reframeMask(const GrayRaster& src,Rect grid,int baseWidth,int baseHeight){
     grayCheck(src);int w=int(grid.width),h=int(grid.height);sizeCheck(w,h);auto out=std::make_shared<GrayRaster>();out->width=w;out->height=h;out->pixels.resize(size_t(w)*h,255);
     for(int y=0;y<h;++y)for(int x=0;x<w;++x){double px=x+grid.x+.5,py=y+grid.y+.5;if(px>=0&&py>=0&&px<baseWidth&&py<baseHeight)out->pixels[size_t(y)*w+x]=src.pixel(int(px*src.width/baseWidth),int(py*src.height/baseHeight));}return out;
@@ -100,6 +100,7 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
     int baseWidth=layer.raster?layer.raster->width:int(std::round(layer.transform.width)),baseHeight=layer.raster?layer.raster->height:int(std::round(layer.transform.height));
     if(baseWidth<1||baseHeight<1||baseWidth>30000||baseHeight>30000)throw std::runtime_error("Invalid pixel edit grid");if(layer.raster)sizeCheck(baseWidth,baseHeight);
     Rect grid=operation==PixelEdit::Invert?Rect{0,0,double(baseWidth),double(baseHeight)}:editGrid(layer,doc,baseWidth,baseHeight,operation,selectedBounds);if(grid.empty())return layer;
+    if(layer.deep&&layer.deep->isHdr()&&uint64_t(grid.width)*uint64_t(grid.height)*24>1200000000)throw std::runtime_error("HDR pixel edit exceeds working memory budget");
     auto transform=transformFor(layer.transform,grid,baseWidth,baseHeight);auto source=reframe(layer.raster,grid);auto coverage=mappedCoverage(doc,transform,source->width,source->height,operation!=PixelEdit::Invert);PixelMapping mapping(transform,source->width,source->height);
     auto changed=editRaster(source,[&](Pixel old,int x,int y){double a=coverage?coverage->pixel(x,y)/255.:1.;if(a==0)return old;
         if(operation==PixelEdit::Clear)return Pixel{byte(old.r*(1-a)),byte(old.g*(1-a)),byte(old.b*(1-a)),byte(old.a*(1-a))};
@@ -107,11 +108,21 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
         if(gradient){auto ramp=gradient->at(mapping(x,y));a*=ramp[3];return Pixel{byte(ramp[0]*a+old.r*(1-a)),byte(ramp[1]*a+old.g*(1-a)),byte(ramp[2]*a+old.b*(1-a)),byte(255*a+old.a*(1-a))};}
         return Pixel{byte(color.r*a+old.r*(1-a)),byte(color.g*a+old.g*(1-a)),byte(color.b*a+old.b*(1-a)),byte(255*a+old.a*(1-a))};
     });
-    if(changed==source)return layer;
+    if(changed==source&&!(layer.deep&&layer.deep->isHdr()))return layer;
     const int sourceX=int(grid.x),sourceY=int(grid.y);Rect pixelCrop{0,0,double(source->width),double(source->height)};
-    if(operation!=PixelEdit::Invert){pixelCrop=alphaBounds(*changed);changed=reframe(changed,pixelCrop);grid.x+=pixelCrop.x;grid.y+=pixelCrop.y;grid.width=pixelCrop.width;grid.height=pixelCrop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
+    const bool hdr=layer.deep&&layer.deep->isHdr();
+    auto hdrPixel=[&](int x,int y){auto p=layer.deep->pixel(x+sourceX,y+sourceY);float a=coverage?coverage->pixel(x,y)/255.f:1.f;
+        for(int c=0;c<4;++c){float target=c==3?1.f:(&color.r)[c]/255.f;if(operation==PixelEdit::Clear)target=0;else if(operation==PixelEdit::Invert)target=c==3?p[3]:p[3]-p[c];p[c]+=float((target-p[c])*a);}return p;
+    };
+    // Display alpha can quantize retained HDR pixels to zero.
+    if(operation!=PixelEdit::Invert){pixelCrop=alphaBounds(*changed,[&](int x,int y){return hdr?hdrPixel(x,y)[3]>0:changed->pixel(x,y).a!=0;});changed=reframe(changed,pixelCrop);grid.x+=pixelCrop.x;grid.y+=pixelCrop.y;grid.width=pixelCrop.width;grid.height=pixelCrop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
     auto result=layer;result.raster=changed;result.transform=transform;result.shapeJson.clear();result.text.reset();result.deep.reset();
-    if(operation==PixelEdit::Fill&&!gradient&&layer.deep&&layer.deep->valid()){
+    if(hdr){
+        auto deep=makeDeep(result.raster->width,result.raster->height);
+        for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x)deep->setPixel(x,y,hdrPixel(x+int(pixelCrop.x),y+int(pixelCrop.y)));
+        result.deep=deep;result.raster=rasterFromDeep(*deep);
+    }
+    else if(operation==PixelEdit::Fill&&!gradient&&layer.deep&&layer.deep->valid()){
         auto deep=std::make_shared<DeepImage>();deep->width=source->width;deep->height=source->height;deep->samples.assign(std::size_t(deep->width)*std::size_t(deep->height)*4,0);
         for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x){int sx=x+sourceX,sy=y+sourceY;if(sx>=0&&sy>=0&&sx<layer.deep->width&&sy<layer.deep->height)std::copy_n(layer.deep->at(sx,sy),4,deep->at(x,y));}
         for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x){double a=coverage?coverage->pixel(x,y)/255.:1.;if(a==0)continue;auto* sample=deep->at(x,y);auto mix=[&](uint16_t old,uint8_t color){return uint16_t(std::clamp(std::lround(promote8(color)*a+old*(1-a)),0L,65535L));};sample[0]=mix(sample[0],color.r);sample[1]=mix(sample[1],color.g);sample[2]=mix(sample[2],color.b);sample[3]=uint16_t(std::clamp(std::lround(65535*a+sample[3]*(1-a)),0L,65535L));}

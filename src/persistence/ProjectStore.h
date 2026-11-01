@@ -5,8 +5,8 @@
 #include <string>
 
 namespace compositor {
-// Color codecs reject non-PNG and multiple frames. Masks stay 8-bit gray without alpha.
-// 16-bit color PNG is format version 13. Each decoder checks dimensions before allocating.
+// Color assets are PNG, or single-image HDR EXR from v13. Masks stay 8-bit
+// gray PNG without alpha. Each decoder checks dimensions before allocating.
 struct ProjectAssetCodec {
     std::function<std::shared_ptr<const Raster>(const std::filesystem::path&)> readColor;
     std::function<std::shared_ptr<const GrayRaster>(const std::filesystem::path&)> readGray;

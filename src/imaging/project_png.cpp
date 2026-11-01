@@ -60,6 +60,7 @@ std::shared_ptr<const DeepImage> WicCodec::decodeProjectDeepPng(const std::files
     return image;
 }
 void WicCodec::encodeProjectDeepPng(const std::filesystem::path& filename,const DeepImage& image){
+    if(image.isHdr())throw std::runtime_error("HDR pixels require EXR storage");
     const auto path=win32FilePath(filename);if(!image.valid())throw std::runtime_error("Invalid 16-bit image");
     Apartment apartment;GUID id{};ok(CoCreateGuid(&id));wchar_t guid[40]{};StringFromGUID2(id,guid,40);auto temp=path;temp+=std::wstring(L".")+guid+L".tmp";
     struct Cleanup{std::filesystem::path p;~Cleanup(){std::error_code ec;std::filesystem::remove(p,ec);}} cleanup{temp};
