@@ -18,6 +18,7 @@
 #include "PaletteDialog.h"
 #include "PropertyControls.h"
 #include "RawImportDialog.h"
+#include "ImportActions.h"
 #include "EditPanelSession.h"
 #include "ProjectSaveJob.h"
 #include "ProjectToolState.h"
@@ -262,7 +263,7 @@ private:
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
-    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&);
+    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&,const ui::PreparedImages& = {});
     enum class PhotoshopResult { Imported, Cancelled, Failed };
     PhotoshopResult importPhotoshop(const QString& path,CmykProfilePtr fallback={});
     bool reviewCmykImports(const QStringList&,ui::RawSettings&);

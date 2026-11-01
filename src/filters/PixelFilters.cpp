@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <type_traits>
 #include <stdexcept>
 namespace compositor::filters {
 std::uint64_t estimatedWorkingBytes(int w,int h,std::uint64_t bytesPerPixel){
@@ -31,19 +32,20 @@ void kindCheck(Kind k){switch(k){case Kind::GaussianBlur:case Kind::MotionBlur:c
 graphics::Rgba8View view(std::vector<std::uint8_t>& v,int w,int h){return {v,std::uint32_t(w),std::uint32_t(h),std::size_t(w)*4};}
 std::uint8_t byte(double x){return std::uint8_t(std::clamp(std::floor(x+.5),0.,255.));}
 std::vector<double> gaussianWeights(double sigma){int radius=std::max(1,int(std::ceil(sigma*3)));std::vector<double> weights(std::size_t(radius)*2+1);double total=0;for(int t=-radius;t<=radius;++t)total+=(weights[t+radius]=std::exp(-double(t*t)/(2*sigma*sigma)));for(auto& weight:weights)weight/=total;return weights;}
-std::vector<std::uint8_t> gaussian(const std::vector<std::uint8_t>& source,int w,int h,double sigma,const Limits& limits){
-    auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);std::vector<float> pass(std::size_t(w)*h);std::vector<std::uint8_t> output(source.size());
+template<class T> T blurValue(double value){if constexpr(std::is_same_v<T,uint8_t>)return byte(value);else return T(value);}
+template<class T> std::vector<T> gaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits){
+    auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);std::vector<float> pass(std::size_t(w)*h);std::vector<T> output(source.size());
     // Transparent exterior. Float intermediate prevents repeated 8-bit quantization.
     for(int c=0;c<4;++c){for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=std::max(-r,-x);k<=std::min(r,w-1-x);++k)sum+=source[(std::size_t(y)*w+x+k)*4+c]*weights[k+r];pass[std::size_t(y)*w+x]=float(sum);}}
-        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=std::max(-r,-y);k<=std::min(r,h-1-y);++k)sum+=pass[std::size_t(y+k)*w+x]*weights[k+r];output[(std::size_t(y)*w+x)*4+c]=byte(sum);}}}
+        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=std::max(-r,-y);k<=std::min(r,h-1-y);++k)sum+=pass[std::size_t(y+k)*w+x]*weights[k+r];output[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum);}}}
     return output;
 }
-double sample(const std::vector<std::uint8_t>& p,int w,int h,double x,double y,int channel){
+template<class T> double sample(const std::vector<T>& p,int w,int h,double x,double y,int channel){
     if(x<=-1||y<=-1||x>=w||y>=h)return 0;int ix=int(std::floor(x)),iy=int(std::floor(y));double fx=x-ix,fy=y-iy;auto get=[&](int xx,int yy){return xx<0||yy<0||xx>=w||yy>=h?0.:double(p[(std::size_t(yy)*w+xx)*4+channel]);};return (get(ix,iy)*(1-fx)+get(ix+1,iy)*fx)*(1-fy)+(get(ix,iy+1)*(1-fx)+get(ix+1,iy+1)*fx)*fy;
 }
-std::vector<std::uint8_t> motion(const std::vector<std::uint8_t>& source,int w,int h,double sigma,double angle,const Limits& limits){
-    auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);const double a=angle*std::numbers::pi/180,dx=std::cos(a),dy=-std::sin(a);std::vector<std::uint8_t> out(source.size());
-    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&63)==0)cancel(limits);std::array<double,4> sum{};for(int k=-r;k<=r;++k)for(int c=0;c<4;++c)sum[c]+=sample(source,w,h,x+k*dx,y+k*dy,c)*weights[k+r];for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=byte(sum[c]);}}return out;
+template<class T> std::vector<T> motion(const std::vector<T>& source,int w,int h,double sigma,double angle,const Limits& limits){
+    auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);const double a=angle*std::numbers::pi/180,dx=std::cos(a),dy=-std::sin(a);std::vector<T> out(source.size());
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&63)==0)cancel(limits);std::array<double,4> sum{};for(int k=-r;k<=r;++k)for(int c=0;c<4;++c)sum[c]+=sample(source,w,h,x+k*dx,y+k*dy,c)*weights[k+r];for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum[c]);}}return out;
 }
 bool finishingIdentity(Kind kind,const Settings& s){
     switch(kind){
@@ -118,6 +120,7 @@ std::shared_ptr<const Raster> resize(const Raster& source,PixelRect bounds,int w
 PixelRect coverageBounds(const SourceSelection& selected){const auto&m=*selected.coverage;int loX=m.width,loY=m.height,hiX=0,hiY=0;for(int y=0;y<m.height;++y)for(int x=0;x<m.width;++x)if(m.pixel(x,y)){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}return {selected.originX+loX,selected.originY+loY,hiX-loX,hiY-loY};}
 }
 Settings Settings::normalized()const{auto out=*this;out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);return out;}
+bool supportsHdr(Kind kind){return kind!=Kind::LensCorrection&&kind!=Kind::ContentAwareFill&&kind!=Kind::Bloom&&kind!=Kind::TonalContrast&&kind!=Kind::Scanlines;}
 double blurMargin(Kind kind,const Settings& raw){kindCheck(kind);auto s=raw.normalized();return kind==Kind::GaussianBlur?s.radius*3+2:kind==Kind::MotionBlur?s.distance/2+2:0;}
 Transform placedGrid(const Transform& placed,int originalWidth,int originalHeight,PixelRect rect){
     if(!placed.valid()||originalWidth<1||originalHeight<1||rect.width<1||rect.height<1)throw std::runtime_error("Invalid filter placement");auto out=placed;out.width=rect.width*placed.width/originalWidth;out.height=rect.height*placed.height/originalHeight;auto middle=placed.fromUnit({(rect.x+rect.width/2.)/originalWidth,(rect.y+rect.height/2.)/originalHeight});out.x=middle.x-out.width/2;out.y=middle.y-out.height/2;if(!out.valid())throw std::runtime_error("Expanded filter transform exceeds document limits");return out;
@@ -142,6 +145,35 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
     cancel(limits);if(selection)for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=std::size_t(y)*w+x;unsigned coverage=selection->pixels[i];for(int c=0;c<4;++c)result[i*4+c]=std::uint8_t((unsigned(result[i*4+c])*coverage+unsigned(original[i*4+c])*(255-coverage)+127)/255);}}
     graphics::clampPremultiplied(view(result,w,h));return Raster::fromRgba(w,h,result.data(),std::size_t(w)*4);
 }
+std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source,const Settings& raw,double scale,uint32_t seed,const GrayRaster* selection,const Limits& limits,const CameraRawSettings& cameraRaw,const CameraRawView& cameraView){
+    if(!source.valid())throw std::runtime_error("Invalid HDR filter source");
+    count(source.width,source.height,limits,64);cancel(limits);const auto settings=raw.normalized();
+    if(selection&&(selection->width!=source.width||selection->height!=source.height||!selection->validStorage()))throw std::runtime_error("HDR selection must match source grid");
+    if(!supportsHdr(kind))throw std::runtime_error("Convert the HDR layer to SDR before this spatial filter");
+    std::shared_ptr<const DeepImage> result;
+    std::shared_ptr<const DeepImage> exposed;
+    const DeepImage* colorSource=&source;
+    auto rawSettings=cameraRaw.normalized();
+    if(kind==Kind::CameraRaw){
+        if(rawSettings.geometry.adjusts()||rawSettings.optics.distortionK(1)!=0||rawSettings.optics.removeChromaticAberration||rawSettings.detail.adjusts()||rawSettings.glow!=0||rawSettings.texture!=0||rawSettings.clarity!=0)throw std::runtime_error("Convert HDR to 16-Bit before spatial Camera Raw corrections");
+        if(rawSettings.exposure!=0){auto image=makeDeep(source.width,source.height);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);if(p[3]>0)for(int c=0;c<3;++c)p[c]=float(linearToSrgb(srgbToLinear(p[c]/p[3])*std::pow(2.,rawSettings.exposure))*p[3]);image->setPixel(x,y,p);}}exposed=image;colorSource=image.get();rawSettings.exposure=0;}
+    }
+    if(kind==Kind::GaussianBlur||kind==Kind::MotionBlur){
+        std::vector<float> input(size_t(source.width)*source.height*4);
+        for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);std::copy(p.begin(),p.end(),input.begin()+(size_t(y)*source.width+x)*4);}}
+        auto output=kind==Kind::GaussianBlur?gaussian(input,source.width,source.height,settings.radius*scale,limits):motion(input,source.width,source.height,settings.distance*scale/std::sqrt(12.),settings.angle,limits);
+        auto image=makeDeep(source.width,source.height);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto i=(size_t(y)*source.width+x)*4;image->setPixel(x,y,{output[i],output[i+1],output[i+2],std::clamp(output[i+3],0.f,1.f)});}}result=image;
+    }else{
+        auto normal=normalizeDeep(*colorSource,limits.cancelled);std::shared_ptr<const Raster> changed;
+        if(kind==Kind::CameraRaw)changed=renderCameraRaw(*normal.raster,rawSettings,cameraView,nullptr,limits.cancelled).raster;
+        else changed=runPixels(kind,*normal.raster,settings,scale,seed,nullptr,limits);
+        if(!changed)throw std::runtime_error("HDR filter returned no pixels");
+        if(changed==normal.raster&&!exposed)return std::make_shared<DeepImage>(source);
+        result=changed==normal.raster&&exposed?exposed:restoreDeep(*changed,normal.scales,limits.cancelled);
+    }
+    if(selection){auto mixed=std::make_shared<DeepImage>(*result);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto a=source.pixel(x,y),b=result->pixel(x,y);float amount=selection->pixel(x,y)/255.f;for(int c=0;c<4;++c)b[c]=a[c]+(b[c]-a[c])*amount;mixed->setPixel(x,y,b);}}result=mixed;}
+    return result;
+}
 Result apply(const Request& request){
     kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>1002)throw std::runtime_error("Invalid retained blur margin");
     Result result{request.source,request.transform,{0,0,original.width,original.height},1,false,{}};auto settings=request.settings.normalized();if(request.selection){if(!request.selection->coverage)throw std::runtime_error("Present selection must have coverage");checkSelection(*request.selection->coverage);if(std::abs(std::int64_t(request.selection->originX))>30000||std::abs(std::int64_t(request.selection->originY))>30000)throw std::runtime_error("Source selection origin exceeds supported extent");if(empty(*request.selection->coverage))return result;}
@@ -156,16 +188,27 @@ Result apply(const Request& request){
     else{count(bounds.width,bounds.height,request.limits,request.kind==Kind::ContentAwareFill?32:24);working=request.source;
         if(bounds!=PixelRect{0,0,original.width,original.height}){std::vector<std::uint8_t> pixels(std::size_t(bounds.width)*bounds.height*4);for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=original.pixel(x,y);auto i=(std::size_t(y-bounds.y)*bounds.width+x-bounds.x)*4;pixels[i]=p.r;pixels[i+1]=p.g;pixels[i+2]=p.b;pixels[i+3]=p.a;}}working=Raster::fromRgba(bounds.width,bounds.height,pixels.data(),std::size_t(bounds.width)*4);}}
     std::optional<GrayRaster> selected;if(request.selection){const auto& input=*request.selection;selected=GrayRaster{working->width,working->height,std::vector<std::uint8_t>(std::size_t(working->width)*working->height)};for(int y=0;y<working->height;++y)for(int x=0;x<working->width;++x){int sx=int(std::floor(bounds.x+(x+.5)*bounds.width/working->width))-input.originX,sy=int(std::floor(bounds.y+(y+.5)*bounds.height/working->height))-input.originY;selected->pixels[std::size_t(y)*working->width+x]=input.coverage->pixel(sx,sy);}}
-    if(request.kind==Kind::CameraRaw){
+    std::shared_ptr<const DeepImage> deepOutput;
+    if(request.deepSource&&request.deepSource->isHdr()){
+        if(!request.deepSource->valid()||request.deepSource->width!=original.width||request.deepSource->height!=original.height)throw std::runtime_error("HDR filter source grid changed");
+        count(working->width,working->height,request.limits,80);
+        auto prepared=makeDeep(working->width,working->height);
+        for(int y=0;y<prepared->height;++y){cancel(request.limits);for(int x=0;x<prepared->width;++x){const int sx=bounds.x+int((int64_t(2*x+1)*bounds.width)/(2*prepared->width)),sy=bounds.y+int((int64_t(2*y+1)*bounds.height)/(2*prepared->height));prepared->setPixel(x,y,request.deepSource->pixel(sx,sy));}}
+        auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
+        deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,request.cameraRaw,view);
+        if(request.kind==Kind::CameraRaw){auto normal=normalizeDeep(*deepOutput,request.limits.cancelled);result.cameraRawScope=CameraRawScope::make(normal.raster->rgba().data(),normal.raster->width,normal.raster->height);}
+    }
+    if(request.kind==Kind::CameraRaw&&!deepOutput){
         auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
         auto rendered=renderCameraRaw(*working,request.cameraRaw,view,selected?&*selected:nullptr,request.limits.cancelled);
         cancel(request.limits);result.raster=rendered.changed&&rendered.raster?rendered.raster:working;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=rendered.changed;result.cameraRawScope=rendered.scope;result.implementation="camera raw";return result;
     }
-    auto output=runPixels(request.kind,*working,settings,factor,request.seed,selected?&*selected:nullptr,request.limits);
-    if(spreads&&!request.preview){int loX=output->width,loY=output->height,hiX=0,hiY=0;for(int y=0;y<output->height;++y){cancel(request.limits);for(int x=0;x<output->width;++x)if(output->pixel(x,y).a){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
-        if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
+    if(deepOutput&&bounds==PixelRect{0,0,original.width,original.height}&&deepOutput->width==request.deepSource->width&&deepOutput->height==request.deepSource->height&&deepOutput->samples==request.deepSource->samples){result.deep=request.deepSource;return result;}
+    auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,selected?&*selected:nullptr,request.limits);
+    if(spreads&&!request.preview){int loX=output->width,loY=output->height,hiX=0,hiY=0;for(int y=0;y<output->height;++y){cancel(request.limits);for(int x=0;x<output->width;++x)if(deepOutput?deepOutput->pixel(x,y)[3]>0:output->pixel(x,y).a!=0){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
+        if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}if(deepOutput){auto crop=makeDeep(w,h);for(int y=0;y<h;++y)for(int x=0;x<w;++x)crop->setPixel(x,y,deepOutput->pixel(x+loX,y+loY));deepOutput=crop;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
     }
-    cancel(request.limits);result.raster=output;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=true;result.implementation=spreads?"analytic software kernel; Mac raster comparison pending":"pinned upstream C algorithm";return result;
+    cancel(request.limits);result.deep=deepOutput;result.raster=output;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=true;result.implementation=spreads?"analytic software kernel; Mac raster comparison pending":"pinned upstream C algorithm";return result;
 }
 }
 

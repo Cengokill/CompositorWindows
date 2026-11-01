@@ -22,5 +22,35 @@
     "windows_sdk": "10.0.26100.0",
     "cmake": "3.31.6-msvc6",
     "msvc": "14.44.35207"
+  },
+  "hdr": {
+    "openexr": {
+      "version": "3.3.5",
+      "commit": "6661cb40c6fa8d332f142e660e25ac96675c15bd",
+      "license": "BSD-3-Clause",
+      "url": "https://github.com/AcademySoftwareFoundation/openexr/archive/6661cb40c6fa8d332f142e660e25ac96675c15bd.tar.gz",
+      "sha256": "6438c34123ab378f9b1aa98909ed5e65f4898fac7689ea736800ddb641b7cdfa"
+    },
+    "imath": {
+      "version": "3.1.12",
+      "commit": "c0396a055a01bc537d32f435aee11a9b7ed6f0b5",
+      "license": "BSD-3-Clause",
+      "url": "https://github.com/AcademySoftwareFoundation/Imath/archive/c0396a055a01bc537d32f435aee11a9b7ed6f0b5.tar.gz",
+      "sha256": "adb799567cd7b6a505deedb8f8f653b07c12ed2c38c6bdadded4da0b32cc2abf"
+    },
+    "libdeflate": {
+      "version": "1.18",
+      "commit": "495fee110ebb48a5eb63b75fd67e42b2955871e2",
+      "license": "MIT",
+      "url": "https://github.com/ebiggers/libdeflate/archive/495fee110ebb48a5eb63b75fd67e42b2955871e2.tar.gz",
+      "sha256": "4182481e6b1a1ebe00ae076d4eddb6978d9153749a6f4f3c2914770b5ffc8956"
+    },
+    "stb_image": {
+      "commit": "003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5",
+      "path": "src/imaging/third_party/stb_image.h",
+      "license": "MIT (dual-licensed public domain)",
+      "url": "https://github.com/nothings/stb",
+      "sha256": "b00dffc0175fbf1c6174a5c31e30be5721cb3f764f19429a8e9b0d1027920884"
+    }
   }
 }

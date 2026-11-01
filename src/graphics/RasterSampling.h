@@ -2,6 +2,15 @@
 #include "MaskSampling.h"
 
 namespace compositor::graphics {
+template<class Reader> inline WidePixel sampleWidePixels(int width,int height,const Reader& pixel,Point unit,Transform::Sampling sampling){
+    double x=unit.x*width,y=unit.y*height;
+    if(!std::isfinite(x)||!std::isfinite(y)||x<0||y<0||x>=width||y>=height)return {};
+    if(sampling==Transform::Sampling::Nearest)return pixel(int(x),int(y));
+    x-=.5;y-=.5;const int ix=int(std::floor(x)),iy=int(std::floor(y));const double fx=x-ix,fy=y-iy;
+    auto get=[&](int px,int py){return pixel(std::clamp(px,0,width-1),std::clamp(py,0,height-1));};
+    const auto a=get(ix,iy),b=get(ix+1,iy),c=get(ix,iy+1),d=get(ix+1,iy+1);WidePixel out{};
+    for(int k=0;k<4;++k)out[k]=float((1-fy)*((1-fx)*a[k]+fx*b[k])+fy*((1-fx)*c[k]+fx*d[k]));return out;
+}
 // Final fractional Windows sampler. Smooth and High share bilinear math;
 // StackRenderer supplies Lanczos halvings first. CoreGraphics final filtering
 // and geometric edge antialiasing remain unverified.

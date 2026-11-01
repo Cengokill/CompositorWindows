@@ -48,6 +48,16 @@ try {
  $wixLicense=Join-Path $packageRoot 'dependencies\packaging\WIX-LICENSE.txt'
  if(Test-Path -LiteralPath $wixLicense){Copy-Item -LiteralPath $wixLicense -Destination (Join-Path $payload 'licenses')}
  $qtLock=Get-Content -LiteralPath (Join-Path $packageRoot 'dependencies.lock.json') -Raw | ConvertFrom-Json
+ foreach($name in @('imath','openexr','libdeflate')){
+  $hdrArchive=Join-Path $packageRoot "dependencies/downloads/hdr/$name.tar.gz"
+  if((Get-FileHash -LiteralPath $hdrArchive -Algorithm SHA256).Hash -ine $qtLock.hdr.$name.sha256){throw "HDR source checksum mismatch: $name"}
+  Copy-Item -LiteralPath $hdrArchive -Destination (Join-Path $payload "sources/$name-source.tar.gz")
+  $license=if($name -eq 'libdeflate'){'COPYING'}else{'LICENSE.md'}
+  $sourceName=if($name -eq 'libdeflate'){'deflate'}else{$name}
+  Copy-Item -LiteralPath (Join-Path $packageRoot "build/release/_deps/$sourceName-src/$license") -Destination (Join-Path $payload "licenses/$name-LICENSE.txt")
+ }
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'src/imaging/third_party/stb-LICENSE.txt') -Destination (Join-Path $payload 'licenses/stb-LICENSE.txt')
+
  $qtSource=Join-Path $packageRoot $qtLock.qt.source.path
  if((Get-FileHash -LiteralPath $qtSource -Algorithm SHA256).Hash -ine $qtLock.qt.source.sha256){throw 'Qt corresponding source checksum mismatch'}
  Copy-Item -LiteralPath $qtSource -Destination (Join-Path $payload 'sources')
@@ -70,7 +80,7 @@ try {
    }
   }
  }
- foreach($dir in @('src','shaders')){Copy-ApplicationSource (Join-Path $packageRoot $dir) (Join-Path $source $dir) @('.cpp','.c','.h','.hpp','.hlsl','.rc','.manifest','.in')}
+ foreach($dir in @('src','shaders')){Copy-ApplicationSource (Join-Path $packageRoot $dir) (Join-Path $source $dir) @('.cpp','.c','.h','.hpp','.hlsl','.rc','.manifest','.in','.txt')}
  Copy-ApplicationSource (Join-Path $packageRoot 'assets') (Join-Path $source 'assets') @('.ico','.svg','.png','.txt','.ttf')
  $testSources=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
  $includeDirectories=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -121,7 +131,7 @@ try {
   Copy-Item -LiteralPath $path -Destination $destination
  }
  New-Item -ItemType Directory -Path (Join-Path $source 'scripts'),(Join-Path $source 'docs') | Out-Null
- foreach($script in @('bootstrap.ps1','bootstrap-imaging.ps1','bootstrap-packaging.ps1','deploy-imaging-runtime.cmake','restore-imaging-runtime.ps1','package.ps1')){
+ foreach($script in @('bootstrap.ps1','bootstrap-imaging.ps1','bootstrap-packaging.ps1','HdrDependencies.cmake','deploy-imaging-runtime.cmake','restore-imaging-runtime.ps1','package.ps1')){
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $source 'scripts')
  }
  Copy-ApplicationSource (Join-Path $PSScriptRoot 'msi') (Join-Path $source 'scripts\msi') @('.ps1','.wxs','.json','.txt')

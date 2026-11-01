@@ -94,12 +94,12 @@ Layer carryFilterMask(const Layer& original,Layer layer,const filters::Request& 
 struct PreparedFilter {Layer layer;std::optional<filters::CameraRawScope> scope;};
 PreparedFilter filteredLayer(const Layer& original,const filters::Request& job){
     auto result=filters::apply(job);auto layer=original;
-    layer.raster=result.raster;if(result.raster!=original.raster)layer.deep.reset();layer.transform=result.transform;if(result.changed){layer.shapeJson.clear();layer.text.reset();}
+    layer.raster=result.raster;if(result.raster!=original.raster)layer.deep=result.deep;layer.transform=result.transform;if(result.changed){layer.shapeJson.clear();layer.text.reset();}
     return {carryFilterMask(original,std::move(layer),job,result.changed),result.cameraRawScope};
 }
 std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer& original,const filters::Request& job){
     return [rendered,original,job](const Layer& current){
-        auto layer=current;layer.raster=rendered.raster;if(rendered.raster!=current.raster)layer.deep.reset();layer.transform=rendered.transform;layer.shapeJson=rendered.shapeJson;
+        auto layer=current;layer.raster=rendered.raster;if(rendered.raster!=current.raster)layer.deep=rendered.deep;layer.transform=rendered.transform;layer.shapeJson=rendered.shapeJson;
         if(current.mask==original.mask&&current.transform==original.transform){layer.mask=rendered.mask;return layer;}
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
@@ -107,7 +107,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
 QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
-    request.kind=kind;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
+    request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
     request.transform=layer.raster?layer.transform:Transform{0,0,double(before.width),double(before.height)};
     request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,layer,kind);
     if(kind==filters::Kind::Dither&&request.settings.ditherLevels<=0)request.settings.ditherLevels=4;
@@ -367,6 +367,7 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     const auto kind=filters::Kind(kindIndex);
     if(repeating&&!canRunFilterKind(*p,kind))return;
     if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
+    if(layer->deep&&layer->deep->isHdr()&&!filters::supportsHdr(kind))throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
     const auto before=*p->document;const auto original=*layer;
     auto request=buildFilterRequest(*p,before,original,kind);
     if(repeating){
@@ -381,7 +382,7 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
             if(!token||current()!=p||!p->document)return;
             auto target=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& layer){return layer.id==original.id;});
             if(target==p->document->layers.end())return;
-            if(target->raster!=original.raster||target->transform!=original.transform)return;
+            if(target->raster!=original.raster||target->deep!=original.deep||target->transform!=original.transform)return;
             auto merge=filterMerge(rendered,original,job);
             Document prepared=*p->document;
             auto& changed=prepared.layers[size_t(target-p->document->layers.begin())];

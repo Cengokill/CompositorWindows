@@ -645,12 +645,14 @@ static void raw_development_contract() {
     check(!errorOf([&] { imaging::developRaw(truncated, {}); }).empty(), "truncated RAW was accepted");
 }
 void cmykContract(const std::string&);
+void hdrNumericContracts();
+void hdrStorageContracts();
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "psd-folder") {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

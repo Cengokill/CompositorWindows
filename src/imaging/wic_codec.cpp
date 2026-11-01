@@ -93,6 +93,7 @@ void WicCodec::normalizeStraightRgba(std::span<std::uint8_t> rgba,std::uint32_t 
     std::vector<std::uint8_t> copy(rgba.size());ok(transform->CopyPixels(nullptr,w*4,static_cast<UINT>(copy.size()),copy.data()),"Read ICC transformed pixels");std::copy(copy.begin(),copy.end(),rgba.begin());
 }
 void WicCodec::encode(const std::filesystem::path& filename,const RgbaImage& image,const ExportOptions& options){
+    if(options.format==ImageFormat::Exr)throw std::runtime_error("OpenEXR requires the HDR document exporter");
     const auto path=win32FilePath(filename);
     if(options.cmykProfile){validate(image);encodeRowsAtomic(filename,image.width,image.height,[&](uint32_t y,uint32_t count,std::span<uint8_t> output,size_t stride){for(uint32_t row=0;row<count;++row)std::memcpy(output.data()+row*stride,image.pixels.data()+(y+row)*image.stride,size_t(image.width)*4);},options);return;}
     validate(image);if(!std::isfinite(options.dpi)||options.dpi<=0||!std::isfinite(options.jpegQuality)||options.format==ImageFormat::Pdf)throw std::runtime_error("Invalid export settings");

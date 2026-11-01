@@ -3,6 +3,7 @@
 #include "../cmyk/Fixtures.h"
 #include "../cmyk/ProfileFixture.h"
 #include "imaging/wic_codec.h"
+#include "imaging/hdr_codec.h"
 #include <QApplication>
 #include <QAction>
 #include <QColorDialog>
@@ -55,7 +56,7 @@ int main(int argc,char**argv){
             auto*format=control<QComboBox>(dialog,"exportFormat");auto*scale=control<QComboBox>(dialog,"exportScale");auto*matte=control<QPushButton>(dialog,"exportMatte");
             auto*page=control<QLabel>(dialog,"exportPageSize");auto*preview_=control<QLabel>(dialog,"exportPreview");auto*save=control<QDialogButtonBox>(dialog,"exportButtons")->button(QDialogButtonBox::Save);
             if(step==0){
-                require(format->count()==4&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG"&&format->itemText(3)=="TIFF","Format order changed");
+                require(format->count()==5&&format->itemText(2)=="PDF"&&format->itemText(0)=="PNG"&&format->itemText(1)=="JPEG"&&format->itemText(3)=="TIFF"&&format->itemText(4)=="OpenEXR","Expected PNG, JPEG, PDF, TIFF and OpenEXR in that order");
                 auto*quality=control<QSlider>(dialog,"exportQuality");
                 require(!scale->isEnabled()&&!matte->isEnabled()&&page->isHidden()&&scale->isHidden()&&quality->isHidden(),"PNG offered PDF-only or JPEG-only controls");
                 format->setCurrentIndex(2);
@@ -118,6 +119,12 @@ int main(int argc,char**argv){
         const auto stored=QSettings().value("cmyk/fallbackBytes").toByteArray();require(stored.size()==qsizetype(profile->bytes.size()),"Accepted fallback preference missing");
         QTemporaryDir source;const auto unprofiled=source.filePath("fallback.psd");const auto bytes=cmyk_test::psd();{QFile file(unprofiled);require(file.open(QIODevice::WriteOnly),"Write fallback fixture");file.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()));}
         MainWindow reopened(true);bool prompted=false;QTimer answer;answer.setInterval(10);QObject::connect(&answer,&QTimer::timeout,&reopened,[&]{if(auto* message=reopened.findChild<QMessageBox*>("missingCmykProfile")){prompted=true;message->done(QMessageBox::Cancel);}});answer.start();reopened.openPath(unprofiled);answer.stop();auto* name=reopened.findChild<QAction*>("viewCmykProfileName");require(!prompted&&name&&name->text().contains(QString::fromStdString(profile->name)),"Saved fallback was not restored in a new window import");
+    });
+    test("exr_export_preserves_highlights_and_corrects_suffix",[]{
+        QTemporaryDir output;MainWindow window(true);auto d=blank(8,4);Layer layer;layer.id=newId();layer.name="HDR";layer.transform={0,0,8,4};auto pixels=makeDeep(8,4);for(int y=0;y<4;++y)for(int x=0;x<8;++x)pixels->setPixel(x,y,{2,1,.5f,1});layer.deep=pixels;layer.raster=rasterFromDeep(*pixels);d.layers={layer};auto& project=window.addProject(d);const auto before=project.document;
+        window.setProperty("testNativeSavePath",output.filePath("bright.png"));bool saved=false;
+        drive(window,[&]{auto* dialog=window.findChild<QDialog*>("imageExportDialog");if(!dialog||saved)return;control<QComboBox>(dialog,"exportFormat")->setCurrentIndex(4);require(!control<QSlider>(dialog,"exportQuality")->isEnabled()&&!control<QPushButton>(dialog,"exportMatte")->isEnabled(),"EXR enabled SDR quality/matte controls");auto* buttons=control<QDialogButtonBox>(dialog,"exportButtons");if(buttons->button(QDialogButtonBox::Save)->isEnabled()&&dialog->property("readyExportPath").toString().endsWith(".exr")){saved=true;buttons->button(QDialogButtonBox::Save)->click();}});
+        auto result=imaging::decodeExr(std::filesystem::path(output.filePath("bright.exr").toStdWString()));require(saved&&result->pixel(7,0)[0]>1.99f&&!QFile::exists(output.filePath("bright.png")),"EXR export lost highlights or used wrong suffix");require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"EXR export mutated source/history");
     });
     std::cout<<"Export UI "<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

@@ -36,7 +36,7 @@ int main(int argc,char** argv){try{
     std::function<bool()> cancelled=[&]{++checks;return requested.load();};
     std::jthread canceller([&]{std::unique_lock lock(mutex);cv.wait(lock,[&]{return started;});lock.unlock();std::this_thread::sleep_for(std::chrono::milliseconds(20));requestedAt=Clock::now();requested.store(true);});
     bool stopped=false;const auto begin=Clock::now();{std::lock_guard lock(mutex);started=true;cv.notify_one();}
-    try{invokeAdjustment(&effects::applyAdjustment,source,json,cancelled);}catch(const std::runtime_error& error){stopped=std::string(error.what()).find("cancelled")!=std::string::npos;if(!stopped)throw;}
+    try{invokeAdjustment(static_cast<std::shared_ptr<const Raster>(*)(std::shared_ptr<const Raster>,std::string_view,const GrayRaster*,effects::AdjustmentRegion,const std::function<bool()>&)>(&effects::applyAdjustment),source,json,cancelled);}catch(const std::runtime_error& error){stopped=std::string(error.what()).find("cancelled")!=std::string::npos;if(!stopped)throw;}
     const auto finished=Clock::now();canceller.join();
     const double elapsed=std::chrono::duration<double,std::milli>(finished-begin).count(),latency=std::chrono::duration<double,std::milli>(finished-requestedAt).count();
     const bool immutable=source->tiles.front()==tile&&source->pixel(0,0)==Pixel{70,100,150,255}&&source->pixel(4095,4095)==Pixel{70,100,150,255};

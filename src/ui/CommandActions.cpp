@@ -42,7 +42,7 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.canMerge=layers::mergePlan(document,selected).has_value();
     state.hasOtherProject=std::any_of(projects_.begin(),projects_.end(),[&](const auto& item){return item.get()!=project&&!item->importing&&!item->projectBusy;});
     if(found==document.layers.end())return state;
-    const auto& layer=*found;state.activeLayer=true;state.group=layer.group;state.asset=bool(layer.raster);
+    const auto& layer=*found;state.activeLayer=true;state.group=layer.group;state.asset=bool(layer.raster);state.hdrLayer=layer.deep&&layer.deep->isHdr();
     state.mask=layer.mask.has_value();state.maskEnabled=layer.mask&&layer.mask->enabled;
     state.maskSelected=project->maskSelected&&state.mask;
     state.adjustmentLayer=!layer.adjustmentJson.empty();state.shape=!layer.shapeJson.empty();state.hasParent=!layer.parentId.empty();
