@@ -1,6 +1,7 @@
 # After the wind
 
 A short editing demonstration for the Compositor Windows preview.
+For free HDR/EXR manual-test images, see [HDR test images](hdr/README.md).
 The project and input images below provide a complete editing exercise.
 Use the MSI-installed application or the matching portable `Compositor.exe`.
 Open the complete `After the wind.comp` directory for the editable result;
