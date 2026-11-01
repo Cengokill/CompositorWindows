@@ -618,7 +618,8 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         for(int entry=0;entry<3;++entry){MainWindow window(true);auto& project=window.addProject(document());const auto before=project.document;auto* tabs=window.findChild<QTabWidget*>();require(tabs,"Missing tabs");const int tabCount=tabs->count();bool asked=false;
             QTimer timer;timer.setInterval(10);QObject::connect(&timer,&QTimer::timeout,&window,[&]{if(auto* message=window.findChild<QMessageBox*>("missingCmykProfile")){asked=true;message->done(QMessageBox::Cancel);}});timer.start();
             if(entry==0)window.openPath(file);else if(entry==1)window.importSelectedImages({first,file},project.canvas);else window.receiveDropPaths({first,file},project.canvas,{});
-            if(entry==2)finish(window);timer.stop();require(asked&&project.document==before&&project.history.undoCount()==0&&tabs->count()==tabCount,"CMYK cancellation changed document/history/tabs or imported earlier RGB file");
+            // A cancelled drop batch never creates an ImportQueue, so wait only for the drop review.
+            if(entry==2)until([&]{auto*d=ui::WorkspaceDropQueue::find(&window);return !d||d->idle();});timer.stop();require(asked&&project.document==before&&project.history.undoCount()==0&&tabs->count()==tabCount,"CMYK cancellation changed document/history/tabs or imported earlier RGB file");
         }
     });
     test("hdr_explicit_batch_preserves_pixels_and_one_history_entry",[&]{

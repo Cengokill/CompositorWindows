@@ -30,12 +30,17 @@ def lut(inputs,outputs,grid,fn):
     out+=(u16(0)+u16(65535))*inputs
     for p in itertools.product(range(grid),repeat=inputs):out+=b''.join(u16(x*65535) for x in fn([i/(grid-1) for i in p]))
     return out+(u16(0)+u16(65535))*outputs
+# Windows ICM rejected this profile until it had a gamut tag and rendering-intent tables. This all-zero table marks every PCS color as in gamut.
+def gamut():
+    return b'mft2'+bytes(4)+bytes((3,1,2,0))+b''.join(fixed(float(i%4==0)) for i in range(9))+u16(2)+u16(2)+(u16(0)+u16(65535))*3+bytes(16)+(u16(0)+u16(65535))
 name=b'Compositor Synthetic CMYK\0'
 desc=b'desc'+bytes(4)+u32(len(name))+name+bytes(4+4+2+1+67)
-tags=[(b'desc',desc),(b'cprt',b'text'+bytes(4)+b'MIT; CompositorWindows test fixture\0'),(b'wtpt',b'XYZ '+bytes(4)+b''.join(fixed(x) for x in (.9642,1,.8249))),(b'A2B0',lut(4,3,9,forward)),(b'B2A0',lut(3,4,17,reverse))]
+a2b0=lut(4,3,9,forward);b2a0=lut(3,4,17,reverse)
+tags=[(b'desc',desc),(b'cprt',b'text'+bytes(4)+b'MIT; CompositorWindows test fixture\0'),(b'wtpt',b'XYZ '+bytes(4)+b''.join(fixed(x) for x in (.9642,1,.8249))),(b'A2B0',a2b0),(b'B2A0',b2a0),(b'gamt',gamut()),(b'A2B1',a2b0),(b'A2B2',a2b0),(b'B2A1',b2a0),(b'B2A2',b2a0)]
 header=bytearray(128);header[8:12]=bytes((2,16,0,0));header[12:24]=b'prtrCMYKXYZ ';header[24:36]=struct.pack('>6H',2026,1,1,0,0,0);header[36:40]=b'acsp';header[40:44]=b'MSFT';header[68:80]=b''.join(fixed(x) for x in (.9642,1,.8249))
-offset=132+12*len(tags);table=b'';payload=b''
+offset=132+12*len(tags);table=b'';payload=b'';placed={}
 for sig,data in tags:
-    table+=sig+u32(offset)+u32(len(data));padded=data+bytes((-len(data))%4);payload+=padded;offset+=len(padded)
+    if data not in placed:placed[data]=offset;padded=data+bytes((-len(data))%4);payload+=padded;offset+=len(padded)
+    table+=sig+u32(placed[data])+u32(len(data))
 header[:4]=u32(offset)
 Path(__file__).with_name('synthetic-cmyk.icc.base64').write_bytes(base64.encodebytes(header+u32(len(tags))+table+payload))

@@ -45,7 +45,7 @@ void MainWindow::setupCmykActions(QMenu* view){
     auto* proof=action(menu,"Proof Colors",{},[this]{auto* p=current();if(!p||!p->document)return;if(!p->document->cmykProfile){chooseCmykProfile();if(!p->document->cmykProfile){refreshCmykActions();return;}}p->proofColors=!p->proofColors;refreshCmykActions();});
     proof->setObjectName("viewCmykProof");proof->setCheckable(true);
     auto* profile=action(menu,"Load Profile…",{},[this]{chooseCmykProfile();});profile->setObjectName("viewCmykProfile");
-    auto* name=menu->addAction("Profile: none");name->setObjectName("viewCmykProfileName");name->setEnabled(false);
+    auto* name=menu->addSection("Profile: none");name->setObjectName("viewCmykProfileName");
 }
 void MainWindow::chooseCmykProfile(){
     auto* p=current();if(!p||!p->document||p->importing||p->projectBusy)return;

@@ -118,7 +118,8 @@ std::vector<float> cmykProofLookup(CmykProfilePtr profile,const std::function<bo
     for(size_t b=0;b<n;++b)for(size_t g=0;g<n;++g){if(cancelled&&cancelled())throw std::runtime_error("CMYK proof preparation cancelled");
         for(size_t r=0;r<n;++r){rgb[r*3]=uint16_t((r*65535+16)/32);rgb[r*3+1]=uint16_t((g*65535+16)/32);rgb[r*3+2]=uint16_t((b*65535+16)/32);}
         transform.toCmyk(rgb,ink);transform.toRgb(ink,back);
-        for(size_t r=0;r<n;++r)for(size_t c=0;c<3;++c)lookup[((b*n+g)*n+r)*4+c]=float(back[r*3+c])/65535.f;
+        // Direct2D indexes the 3D table with its first axis on the input blue channel (the B8G8R8A8 proof scene), so blue varies fastest.
+        for(size_t r=0;r<n;++r)for(size_t c=0;c<3;++c)lookup[((r*n+g)*n+b)*4+c]=float(back[r*3+c])/65535.f;
     }return lookup;
 }
 }
