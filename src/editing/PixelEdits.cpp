@@ -42,7 +42,7 @@ std::shared_ptr<const Raster> reframe(const std::shared_ptr<const Raster>& src,R
         auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<th;++y)for(int x=0;x<tw;++x)tile->pixels[size_t(y)*256+x]=src->pixel(sx+x,sy+y);out->tiles[key]=tile;
     }return out;
 }
-Rect alphaBounds(const Raster& raster){int l=raster.width,t=raster.height,r=0,b=0;for(int y=0;y<raster.height;++y)for(int x=0;x<raster.width;++x)if(raster.pixel(x,y).a){l=std::min(l,x);t=std::min(t,y);r=std::max(r,x+1);b=std::max(b,y+1);}return r<=l?Rect{0,0,double(raster.width),double(raster.height)}:Rect{double(l),double(t),double(r-l),double(b-t)};}
+template<class Alpha>Rect alphaBounds(const Raster& raster,Alpha alpha){int l=raster.width,t=raster.height,r=0,b=0;for(int y=0;y<raster.height;++y)for(int x=0;x<raster.width;++x)if(alpha(x,y)){l=std::min(l,x);t=std::min(t,y);r=std::max(r,x+1);b=std::max(b,y+1);}return r<=l?Rect{0,0,double(raster.width),double(raster.height)}:Rect{double(l),double(t),double(r-l),double(b-t)};}
 std::shared_ptr<const GrayRaster> reframeMask(const GrayRaster& src,Rect grid,int baseWidth,int baseHeight){
     grayCheck(src);int w=int(grid.width),h=int(grid.height);sizeCheck(w,h);auto out=std::make_shared<GrayRaster>();out->width=w;out->height=h;out->pixels.resize(size_t(w)*h,255);
     for(int y=0;y<h;++y)for(int x=0;x<w;++x){double px=x+grid.x+.5,py=y+grid.y+.5;if(px>=0&&py>=0&&px<baseWidth&&py<baseHeight)out->pixels[size_t(y)*w+x]=src.pixel(int(px*src.width/baseWidth),int(py*src.height/baseHeight));}return out;
@@ -110,13 +110,17 @@ static Layer editLayerImpl(const Layer& layer,const Document& doc,PixelEdit oper
     });
     if(changed==source&&!(layer.deep&&layer.deep->isHdr()))return layer;
     const int sourceX=int(grid.x),sourceY=int(grid.y);Rect pixelCrop{0,0,double(source->width),double(source->height)};
-    if(operation!=PixelEdit::Invert){pixelCrop=alphaBounds(*changed);changed=reframe(changed,pixelCrop);grid.x+=pixelCrop.x;grid.y+=pixelCrop.y;grid.width=pixelCrop.width;grid.height=pixelCrop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
+    const bool hdr=layer.deep&&layer.deep->isHdr();
+    auto hdrPixel=[&](int x,int y){auto p=layer.deep->pixel(x+sourceX,y+sourceY);float a=coverage?coverage->pixel(x,y)/255.f:1.f;
+        for(int c=0;c<4;++c){float target=c==3?1.f:(&color.r)[c]/255.f;if(operation==PixelEdit::Clear)target=0;else if(operation==PixelEdit::Invert)target=c==3?p[3]:p[3]-p[c];p[c]+=float((target-p[c])*a);}return p;
+    };
+    // Display alpha can quantize retained HDR pixels to zero.
+    if(operation!=PixelEdit::Invert){pixelCrop=alphaBounds(*changed,[&](int x,int y){return hdr?hdrPixel(x,y)[3]>0:changed->pixel(x,y).a!=0;});changed=reframe(changed,pixelCrop);grid.x+=pixelCrop.x;grid.y+=pixelCrop.y;grid.width=pixelCrop.width;grid.height=pixelCrop.height;transform=transformFor(layer.transform,grid,baseWidth,baseHeight);}
     auto result=layer;result.raster=changed;result.transform=transform;result.shapeJson.clear();result.text.reset();result.deep.reset();
-    if(layer.deep&&layer.deep->isHdr()){
+    if(hdr){
         auto deep=makeDeep(result.raster->width,result.raster->height);
-        for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x){const int gx=x+int(pixelCrop.x),gy=y+int(pixelCrop.y);auto p=layer.deep->pixel(gx+sourceX,gy+sourceY);float a=coverage?coverage->pixel(gx,gy)/255.f:1.f;
-            for(int c=0;c<4;++c){float target=c==3?1.f:(&color.r)[c]/255.f;if(operation==PixelEdit::Clear)target=0;else if(operation==PixelEdit::Invert)target=c==3?p[3]:p[3]-p[c];p[c]+=float((target-p[c])*a);}deep->setPixel(x,y,p);
-        }result.deep=deep;result.raster=rasterFromDeep(*deep);
+        for(int y=0;y<deep->height;++y)for(int x=0;x<deep->width;++x)deep->setPixel(x,y,hdrPixel(x+int(pixelCrop.x),y+int(pixelCrop.y)));
+        result.deep=deep;result.raster=rasterFromDeep(*deep);
     }
     else if(operation==PixelEdit::Fill&&!gradient&&layer.deep&&layer.deep->valid()){
         auto deep=std::make_shared<DeepImage>();deep->width=source->width;deep->height=source->height;deep->samples.assign(std::size_t(deep->width)*std::size_t(deep->height)*4,0);

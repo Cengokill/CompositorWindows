@@ -36,8 +36,29 @@ Layer bright(int width=8,int height=4){
     Layer layer;layer.id=newId();layer.name="HDR ramp";layer.deep=pixels;layer.raster=rasterFromDeep(*pixels);layer.transform={0,0,double(width),double(height)};return layer;
 }
 Document document(){Document d;d.id=newId();d.width=8;d.height=4;d.layers={bright()};return d;}
-std::string exposure(double ev){auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Exposure"))).object();json["exposureSettings"]=QJsonObject{{"exposure",ev},{"offset",0},{"gamma",1}};return QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();}
 std::filesystem::path native(const QString& path){return std::filesystem::path(path.toStdWString());}
+Document faintAlphaDocument(){
+    auto d=document();d.width=10;d.height=6;auto deep=makeDeep(d.width,d.height);
+    // These half-float pixels are nontransparent but invisible in the SDR cache.
+    const float alpha=std::ldexp(1.f,-20);
+    deep->setPixel(1,1,{4*alpha,2*alpha,alpha,alpha});deep->setPixel(8,4,{alpha,2*alpha,4*alpha,alpha});
+    deep->setPixel(4,2,{2,1,.5f,1});deep->setPixel(5,2,{2,1,.5f,1});
+    auto& layer=d.layers[0];layer.deep=deep;layer.raster=rasterFromDeep(*deep);layer.transform={0,0,10,6};
+    require(layer.raster->pixel(1,1).a==0&&layer.raster->pixel(8,4).a==0,"Faint HDR fixture is visible in SDR");
+    auto selection=std::make_shared<GrayRaster>();selection->width=d.width;selection->height=d.height;selection->pixels.resize(size_t(d.width)*d.height);selection->pixels[2*d.width+4]=255;d.selection=Selection{selection};return d;
+}
+void checkFaintAlphaEdit(const Document& original,const Layer& edited,WidePixel selected){
+    require(edited.deep&&edited.deep->isHdr(),"Selected edit dropped HDR storage");
+    auto d=original;d.layers[0]=edited;auto pixels=SoftwareRenderer().renderDeep(d,0,0,d.width,d.height);
+    for(int y=0;y<d.height;++y)for(int x=0;x<d.width;++x)require(pixels->pixel(x,y)==(x==4&&y==2?selected:original.layers[0].deep->pixel(x,y)),"HDR edit changed pixels outside the selection or missed the selected pixel");
+    require(edited.transform.x==1&&edited.transform.y==1&&edited.deep->width==8&&edited.deep->height==4,"HDR crop omitted faint edges or retained transparent padding");
+    History history;std::optional<Document> state=original;const auto id=edited.id;history.begin("Selected HDR edit",state,id);state=d;history.end(state,id);
+    require(history.undoCount()==1,"Selected HDR edit created extra history entries");auto undone=history.undo();require(undone&&undone->document==original,"Selected HDR edit undo lost the original layer");auto redone=history.redo();require(redone&&redone->document==d,"Selected HDR edit redo lost the edited layer");
+    QTemporaryDir directory;require(directory.isValid(),"Faint HDR temporary directory failed");auto root=native(directory.path());ProjectStore store(makeWicProjectCodec());auto project=root/"faint.comp";store.save(project,d,id);auto opened=store.load(project);auto reopened=SoftwareRenderer().renderDeep(opened.document,0,0,d.width,d.height);
+    imaging::ExportOptions options;options.format=imaging::ImageFormat::Exr;auto output=root/"faint.exr";exportDocumentAtomic(opened.document,output,options);auto exported=imaging::decodeExr(output);
+    for(auto point:{Point{1,1},Point{8,4}}){int x=int(point.x),y=int(point.y);auto expected=original.layers[0].deep->pixel(x,y);for(int c=0;c<4;++c){near(reopened->pixel(x,y)[c],expected[c],c==3?0:std::ldexp(1.,-23),"Project round trip lost faint HDR pixels");near(exported->pixel(x,y)[c],expected[c],c==3?0:std::ldexp(1.,-23),"EXR export lost faint HDR pixels");}}
+}
+std::string exposure(double ev){auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Exposure"))).object();json["exposureSettings"]=QJsonObject{{"exposure",ev},{"offset",0},{"gamma",1}};return QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();}
 // An independent OpenEXR writer supplies scene-linear FLOAT samples, including
 // a nonzero data-window origin. This does not use the production encoder.
 void externalExr(const std::filesystem::path& path,bool tiled=false,bool nonfinite=false){
@@ -94,7 +115,24 @@ void hdrNumericContracts(){
     auto previewDocument=original;previewDocument.layers.push_back(live);auto previewImage=SoftwareRenderer(snapshot->renderPreview()).render(previewDocument,0,0,8,4);previewDocument.layers[0]=painted;auto committedImage=renderer.render(previewDocument,0,0,8,4);require(previewImage->pixel(7,1)==committedImage->pixel(7,1),"Brush HDR preview differs after Apply");
     std::cout<<"PASS HDR codec, half, exposure, selection, renderer, groups, merge, blur, cancellation and history contracts\n";
 }
+void hdrPixelEditAlphaContracts(){
+    auto d=faintAlphaDocument();
+    checkFaintAlphaEdit(d,editing::editLayer(d.layers[0],d,editing::PixelEdit::Fill,{0,0,0,255},false),{0,0,0,1});
+    checkFaintAlphaEdit(d,editing::editLayer(d.layers[0],d,editing::PixelEdit::Clear,{},false),{});
+    auto coverage=std::make_shared<GrayRaster>();coverage->width=d.width;coverage->height=d.height;coverage->pixels.assign(size_t(d.width)*d.height,255);d.selection=Selection{coverage};
+    auto cleared=editing::editLayer(d.layers[0],d,editing::PixelEdit::Clear,{},false);require(cleared.transform==d.layers[0].transform&&cleared.deep&&cleared.deep->width==d.width&&cleared.deep->height==d.height,"Fully transparent HDR crop changed the grid");for(auto sample:cleared.deep->samples)require(sample==0,"Selected HDR clear retained pixels");
+    std::cout<<"PASS HDR selected fill/clear faint alpha, history, project and EXR contracts\n";
+}
+void hdrGradientAlphaContracts(){
+    auto d=faintAlphaDocument();editing::GradientSettings settings;settings.style=editing::GradientStyle::ForegroundToBackground;settings.opacity=1;
+    editing::GradientPreview preview(d.layers[0],d,{0,0},{10,0},settings,{255,0,0,255},{255,0,0,255});
+    auto rendered=SoftwareRenderer(preview.renderPreview()).renderDeep(d,0,0,d.width,d.height);
+    for(auto point:{Point{1,1},Point{8,4}})require(rendered->pixel(int(point.x),int(point.y))==d.layers[0].deep->pixel(int(point.x),int(point.y)),"Gradient preview lost faint HDR pixels");
+    checkFaintAlphaEdit(d,preview.materializeLayer(),{1,0,0,1});
+    std::cout<<"PASS HDR selected gradient faint alpha, history, project and EXR contracts\n";
+}
 void hdrStorageContracts(){
+    hdrPixelEditAlphaContracts();hdrGradientAlphaContracts();
     auto edits=document();auto filled=editing::editLayer(edits.layers[0],edits,editing::PixelEdit::Fill,{0,0,0,255},false);require(filled.deep&&filled.deep->isHdr()&&filled.deep->pixel(7,0)[0]==0,"HDR fill lost depth or failed to replace white");
     rejects([&]{SoftwareRenderer().render(edits,0,0,30000,1000);},"SDR output bypassed HDR render allocation bounds");
     editing::GradientSettings gradient;gradient.opacity=.5;gradient.style=editing::GradientStyle::ForegroundToBackground;auto ramp=editing::gradientLayer(edits.layers[0],edits,{0,0},{8,0},gradient,{0,0,0,255},{0,0,0,255},false);require(ramp.deep&&ramp.deep->isHdr(),"Gradient dropped HDR");near(ramp.deep->pixel(7,0)[0],edits.layers[0].deep->pixel(7,0)[0]/2,.003,"Gradient clipped highlights before blending");
