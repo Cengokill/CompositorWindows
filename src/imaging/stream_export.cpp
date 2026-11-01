@@ -63,6 +63,16 @@ RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& 
     cancelled(check);
     return result;
 }
+// WIC writes the JFIF density only for 1- or 3-component JPEG, so a CMYK frame needs the density as Exif (APP1).
+void writeCmykJpegDensity(IWICBitmapFrameEncode* frame, double dpi) {
+    ComPtr<IWICMetadataQueryWriter> metadata; ok(frame->GetMetadataQueryWriter(&metadata), "Get CMYK JPEG metadata writer");
+    const auto inches = ULONG(std::clamp(std::llround(dpi), 1LL, 0xFFFFFFFFLL));
+    PROPVARIANT resolution; PropVariantInit(&resolution); resolution.vt = VT_UI8; resolution.uhVal.LowPart = inches; resolution.uhVal.HighPart = 1;
+    ok(metadata->SetMetadataByName(L"/app1/ifd/{ushort=282}", &resolution), "Write CMYK JPEG X resolution");
+    ok(metadata->SetMetadataByName(L"/app1/ifd/{ushort=283}", &resolution), "Write CMYK JPEG Y resolution");
+    PROPVARIANT unit; PropVariantInit(&unit); unit.vt = VT_UI2; unit.uiVal = 2;
+    ok(metadata->SetMetadataByName(L"/app1/ifd/{ushort=296}", &unit), "Write CMYK JPEG resolution unit");
+}
 void writeProfile(IWICImagingFactory* imaging, IWICBitmapFrameEncode* frame, ImageFormat format,CmykProfilePtr profile) {
     if(profile){ComPtr<IWICColorContext> color;ok(imaging->CreateColorContext(&color),"Create CMYK export context");ok(color->InitializeFromMemory(const_cast<BYTE*>(profile->bytes.data()),UINT(profile->bytes.size())),"Read CMYK output profile");IWICColorContext* contexts[]{color.Get()};ok(frame->SetColorContexts(1,contexts),"Embed CMYK output profile");
     }else if (format == ImageFormat::Png) {
@@ -138,6 +148,7 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         const auto requested = format; ok(frame->SetPixelFormat(&format), "Choose export pixel format");
         if (format != requested) throw std::runtime_error("Encoder changed the required export pixel format");
         writeProfile(imaging.Get(), frame.Get(), options.format,options.cmykProfile);
+        if (options.format == ImageFormat::Jpeg && color) writeCmykJpegDensity(frame.Get(), options.dpi);
         const std::array<std::uint8_t, 3> matte{options.matteR, options.matteG, options.matteB};
         for (UINT y = 0; y < height; y += stripeRows) {
             cancelled(options.cancelled); const UINT count = std::min(stripeRows, height - y);
