@@ -40,6 +40,56 @@ void testMotion(){
     // Measured impulse variance freezes the source distance/sqrt(12) interpretation.
     double mass=0,variance=0;for(int x=0;x<41;++x){double a=horizontal->pixel(x,20).a;mass+=a;variance+=a*(x-20)*(x-20);}variance/=mass;require(std::abs(std::sqrt(variance)-16/std::sqrt(12.))<.3,"motion distance conversion");
 }
+void testProgressive(){
+    auto stripes=image(96,96,[](int x,int){const auto v=std::uint8_t((x/2)%2?255:0);return Pixel{v,v,v,255};});
+    Settings s;s.progressiveTo=5;s.progressiveStart=Point{48,16};s.progressiveEnd=Point{48,80};
+    auto contrast=[](const Raster& r,int y){return std::abs(int(r.pixel(48,y).r)-int(r.pixel(50,y).r));};
+    auto linear=runPixels(Kind::ProgressiveBlur,*stripes,s,1,0);
+    require(contrast(*linear,10)>200&&contrast(*linear,85)<60,"linear progressive blur transition");
+    s.progressiveTo=20.1;s.progressiveEnd=Point{48,48};
+    auto beyond=runPixels(Kind::ProgressiveBlur,*stripes,s,1,0);
+    require(contrast(*beyond,10)>200&&contrast(*beyond,80)<30,"non-integer To blurs pixels past the guide end");
+    auto scaled=runPixels(Kind::ProgressiveBlur,*stripes,s,.25,0);
+    require(contrast(*scaled,10)>200&&contrast(*scaled,80)<40,"scaled progressive amount still covers the strongest end");
+    auto wide=image(160,160,[](int x,int){const auto v=std::uint8_t((x/8)%2?255:0);return Pixel{v,v,v,255};});
+    auto fractional=request(Kind::ProgressiveBlur,wide);fractional.settings.progressiveTo=20.1;fractional.settings.progressiveStart=fractional.transform.fromUnit({.5,.1});fractional.settings.progressiveEnd=fractional.transform.fromUnit({.5,.5});
+    fractional.preview=true;fractional.previewMaxEdge=80;
+    auto reduced=apply(fractional);
+    require(reduced.previewScale<1&&reduced.raster->width<160,"reduced progressive preview downsamples");
+    auto rowRange=[&](double oy){const int w=reduced.raster->width,h=reduced.raster->height,bw=reduced.sourceBounds.width,bh=reduced.sourceBounds.height;const int y=std::clamp(int(std::floor((oy+.5-reduced.sourceBounds.y)*h/bh)),0,h-1);const int x0=std::clamp(int(std::ceil((0.5-reduced.sourceBounds.x)*w/bw)),0,w-1);const int x1=std::clamp(int(std::floor((159.5-reduced.sourceBounds.x)*w/bw)),x0,w-1);int lo=255,hi=0;for(int x=x0;x<=x1;++x){const int r=reduced.raster->pixel(x,y).r;lo=std::min(lo,r);hi=std::max(hi,r);}return hi-lo;};
+    require(rowRange(16)>200&&rowRange(140)<120,"reduced preview keeps strongest blur past the guide end");
+    s.progressiveTo=5;s.progressiveEnd=Point{48,80};
+    s.progressiveInverted=true;auto inverted=runPixels(Kind::ProgressiveBlur,*stripes,s,1,0);
+    require(contrast(*inverted,10)<60&&contrast(*inverted,85)>200,"progressive inversion");
+    s.progressiveInverted=false;s.progressiveRadial=true;s.progressiveStart=Point{48,48};s.progressiveEnd=Point{72,48};
+    auto radial=runPixels(Kind::ProgressiveBlur,*stripes,s,1,0);
+    require(contrast(*radial,48)>200&&contrast(*radial,10)<60,"radial progressive blur transition");
+    auto selection=mask(96,96,[](int,int y){return std::uint8_t(y<48?0:255);});
+    auto selected=runPixels(Kind::ProgressiveBlur,*stripes,s,1,0,selection.get());
+    require(selected->pixel(48,10)==stripes->pixel(48,10)&&selected->pixel(48,85)==radial->pixel(48,85),"progressive selection coverage");
+    auto q=request(Kind::ProgressiveBlur,stripes);q.settings=s;q.settings.progressiveTo=0;q.settings.progressiveFrom=0;
+    require(!apply(q).changed,"zero progressive blur is identity");
+    q.settings.progressiveTo=5;q.settings.progressiveStart=Point{58,68};q.settings.progressiveEnd=Point{82,68};
+    auto result=apply(q);require(result.changed&&result.sourceBounds.width>96&&result.sourceBounds.height>96,"progressive blur grows bounds");
+    auto canvas=request(Kind::ProgressiveBlur,image(48,32,[](int,int){return Pixel{40,80,120,255};}));
+    canvas.settings.progressiveTo=8;canvas.canvasWidth=48;canvas.canvasHeight=32;canvas.transform={0,0,48,32};
+    auto clamped=apply(canvas);
+    require(clamped.sourceBounds==PixelRect{0,0,48,32}&&clamped.raster->pixel(0,0).a==255&&clamped.raster->pixel(47,31).a==255,"canvas-filling layer keeps edge pixels without padding");
+    auto leftEdge=request(Kind::ProgressiveBlur,image(32,24,[](int,int){return Pixel{40,80,120,255};}));
+    leftEdge.settings.progressiveTo=8;leftEdge.canvasWidth=64;leftEdge.canvasHeight=48;leftEdge.transform={0,12,32,24};
+    auto sided=apply(leftEdge);
+    require(canvasTouchingSides(leftEdge.transform,32,24,64,48).left&&sided.sourceBounds.x==0&&sided.sourceBounds.width>32,"only the canvas-touching side stays unpadded");
+    require(sided.raster->pixel(0,0).a==255,"left canvas edge stays opaque");
+    auto translated=q;translated.transform={40,70,96,96,37,true,false};
+    const auto start=translated.transform.fromUnit({.5,.5}),end=translated.transform.fromUnit({.75,.5});
+    translated.settings.progressiveStart=start;translated.settings.progressiveEnd=end;
+    auto identity=q;identity.transform={0,0,96,96};identity.settings.progressiveStart=Point{48,48};identity.settings.progressiveEnd=Point{72,48};
+    require(apply(translated).raster->rgba()==apply(identity).raster->rgba(),"rotated flipped progressive mapping retains layer-space transition");
+    q.deepSource=makeDeep(96,96,DeepImage::Format::Unorm16);auto mutableDeep=std::const_pointer_cast<DeepImage>(q.deepSource);
+    for(int y=0;y<96;++y)for(int x=0;x<96;++x)mutableDeep->setPixel(x,y,{.1234f,.1234f,.1234f,1});
+    result=apply(q);require(result.deep&&result.deep->format==DeepImage::Format::Unorm16,"progressive blur retains 16-bit source");
+    int polls=0;q.limits.cancelled=[&]{return ++polls>12;};fails([&]{apply(q);},"progressive blur cancellation");
+}
 void testNoise(){
     auto gray=image(32,8,[](int x,int){return x<16?Pixel{128,128,128,255}:Pixel{};});Settings s;s.amount=10;auto color=runPixels(Kind::AddNoise,*gray,s,1,7),again=runPixels(Kind::AddNoise,*gray,s,1,7);require(color->rgba()==again->rgba(),"source stable seed");
     std::set<int> values;bool different=false;for(int y=0;y<8;++y)for(int x=0;x<32;++x){auto p=color->pixel(x,y);if(x<16){require(p.a==255&&p.r>=112&&p.r<=144,"source uniform range and alpha");values.insert(p.r);different|=p.r!=p.g;}else require(p==Pixel{},"source transparent noise");}require(values.size()>5&&different,"source color noise channels");
@@ -103,5 +153,5 @@ int benchmark(){
     }return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 
