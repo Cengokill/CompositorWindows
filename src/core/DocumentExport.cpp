@@ -113,7 +113,7 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
         // bounded independently of canvas size; adjustment halos are supplied
         // by the same export region renderer as the SDR stack.
         int cachedTop=-1;std::shared_ptr<const DeepImage> stripe;
-        int margin=0;for(const auto& layer:document.layers)if(layer.visible&&!layer.adjustmentJson.empty()){const int next=effects::adjustmentPadding(layer.adjustmentJson);if(next>15000-margin)throw std::runtime_error("EXR adjustment padding exceeds export budget");margin+=next;}
+        const int margin=effects::adjustmentStackPadding(document);
         const auto renderBytes=[&](int rows){return uint64_t(std::min(1024,document.width)+2*margin)*(rows+2*margin)*80+uint64_t(width)*rows*8+uint64_t(width)*sizeof(WidePixel)+result.preview.pixels.size();};
         int stripeRows=int(std::min<uint64_t>(limits.stripeRows,height));
         while(stripeRows>1&&renderBytes(stripeRows)>limits.maxBufferBytes)stripeRows=std::max(1,stripeRows/2);
@@ -163,15 +163,18 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
             for (int left = 0; left < document.width; left += chunkWidth) {
                 if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
                 const int width = std::min(chunkWidth, document.width - left);
-                auto raster = hdrStack?rasterFromDeep(*renderer.renderDeep(document,left,int(top),width,int(rows),options.cancelled)):renderer.render(document, left, int(top), width, int(rows));
+                const int margin=effects::adjustmentStackPadding(document);
+                if(width>30000-2*margin||rows>std::uint32_t(30000-2*margin)||std::uint64_t(width+2*margin)*(rows+2*margin)>100000000)throw std::runtime_error("Adjustment export padding exceeds render budget");
+                auto raster = hdrStack?rasterFromDeep(*renderer.renderDeep(document,left,int(top),width,int(rows),options.cancelled)):renderer.render(document, left-margin, int(top)-margin, width+2*margin, int(rows)+2*margin);
+                const int offset=hdrStack?0:margin;
                 // StackRenderer holds at most result/group/alpha scanlines plus two
                 // adjustment tile sets. Add one 33^3 RGB float lookup cube allowance.
-                renderBound = std::max(renderBound, std::size_t(width) * rows * 9 + raster->retainedBytes() * 3 + 1024 * 1024);
-                if(hdrStack){int margin=0;for(const auto& layer:document.layers)if(layer.visible&&!layer.adjustmentJson.empty())margin+=effects::adjustmentPadding(layer.adjustmentJson);renderBound=std::max(renderBound,size_t(width+2*margin)*(rows+2*margin)*80+raster->retainedBytes());}
+                renderBound = std::max(renderBound, std::size_t(width+2*offset) * (rows+2*offset) * 9 + raster->retainedBytes() * 3 + 1024 * 1024);
+                if(hdrStack)renderBound=std::max(renderBound,size_t(width+2*margin)*(rows+2*margin)*80+raster->retainedBytes());
                 for (std::uint32_t y = 0; y < rows; ++y) {
                     auto* row = output.data() + std::size_t(y) * stride + std::size_t(left) * 4;
                     for (int x = 0; x < width; ++x) {
-                        auto p = raster->pixel(x, int(y));
+                        auto p = raster->pixel(x+offset, int(y)+offset);
                         row[x * 4] = p.r; row[x * 4 + 1] = p.g; row[x * 4 + 2] = p.b; row[x * 4 + 3] = p.a;
                     }
                 }

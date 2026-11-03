@@ -68,10 +68,13 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
         if(target==owner->document->layers.end()||rendered==value.document.layers.end())return;
         if(!state->live&&(target->raster!=state->original.raster||target->deep!=state->original.deep||
             (editPanel_&&editPanel_->kind()!=ui::EditPanelSession::Kind::Hue&&target->transform!=state->original.transform)))return;
-        Document prepared=*owner->document;auto& changed=prepared.layers[size_t(target-owner->document->layers.begin())];
-        if(state->live)changed.adjustmentJson=rendered->adjustmentJson;
-        else if(value.mergeLayer)changed=value.mergeLayer(*target);
-        else {changed.raster=rendered->raster;changed.deep=rendered->deep;changed.shapeJson=rendered->shapeJson;}
+        Document prepared=value.replaceDocument?value.document:*owner->document;
+        if(!value.replaceDocument){
+            auto& changed=prepared.layers[size_t(target-owner->document->layers.begin())];
+            if(state->live)changed.adjustmentJson=rendered->adjustmentJson;
+            else if(value.mergeLayer)changed=value.mergeLayer(*target);
+            else {changed.raster=rendered->raster;changed.deep=rendered->deep;changed.shapeJson=rendered->shapeJson;}
+        }
         validateDocument(prepared);
         if(!state->live)owner->history.begin(action,owner->document,owner->active);
         try{owner->document=std::move(prepared);owner->history.end(owner->document,owner->active);state->livePending=false;if(value.maskSelected)owner->maskSelected=true;}

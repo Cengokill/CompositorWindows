@@ -120,6 +120,42 @@ void testCoverageAndPlacement(){
     bool lowAlpha=false;for(int y=0;y<commit.raster->height;++y)lowAlpha|=commit.raster->pixel(0,y).a>0&&commit.raster->pixel(0,y).a<255;require(lowAlpha,"unclamped blur spreads through border");
     for(Point pixel:{Point{0,0},Point{10,6}}){auto before=placed.fromUnit({pixel.x/10,pixel.y/6});auto after=commit.transform.fromUnit({(pixel.x-commit.sourceBounds.x)/commit.sourceBounds.width,(pixel.y-commit.sourceBounds.y)/commit.sourceBounds.height});require(near(before.x,after.x)&&near(before.y,after.y),"trim keeps original pixel placement");}
 }
+void testRgbSplit(){
+    auto source=image(64,32,[](int x,int){return x<32?Pixel{200,80,40,255}:Pixel{40,80,200,255};});
+    Settings s;s.rgbSplitDistance=0;s.rgbSplitBlur=0;
+    require(runPixels(Kind::RgbSplit,*source,s,1,0)->rgba()==source->rgba(),"zero RGB Split is identity");
+    s.rgbSplitDistance=12;s.rgbSplitAngle=0;s.rgbSplitCenter=Point{32,16};
+    auto linear=runPixels(Kind::RgbSplit,*source,s,1,0);
+    require(linear->pixel(31,16)!=source->pixel(31,16)||linear->pixel(32,16)!=source->pixel(32,16),"linear RGB Split changes pixels");
+    require(linear->pixel(31,16).r!=linear->pixel(31,16).b,"linear RGB Split separates channels");
+    s.rgbSplitRadial=true;s.rgbSplitReach=24;
+    auto radial=runPixels(Kind::RgbSplit,*source,s,1,0);
+    require(radial->rgba()!=linear->rgba(),"radial RGB Split differs from linear");
+    auto coverage=mask(64,32,[](int,int y){return std::uint8_t(y<16?0:255);});
+    auto selected=runPixels(Kind::RgbSplit,*source,s,1,0,coverage.get());
+    require(selected->pixel(16,4)==source->pixel(16,4)&&selected->pixel(16,24)==radial->pixel(16,24),"RGB Split selection coverage");
+    auto q=request(Kind::RgbSplit,source);q.settings=s;
+    fails([&]{apply(q);},"radial RGB Split without canvas bounds must fail instead of clipping");
+    q.canvasWidth=160;q.canvasHeight=80;
+    const auto radialBounds=filterWorkingBounds(q);
+    require(radialBounds.x<=-10&&radialBounds.x+radialBounds.width>=150&&radialBounds.y<=-20&&radialBounds.y+radialBounds.height>=60,"radial working bounds cover the canvas");
+    auto grown=apply(q);require(grown.changed&&grown.sourceBounds.width>64,"RGB Split grows bounds");
+    q.settings.rgbSplitDistance=0;q.settings.rgbSplitBlur=0;require(!apply(q).changed,"neutral RGB Split apply is identity");
+    q.settings.rgbSplitDistance=12;int polls=0;q.limits.cancelled=[&]{return ++polls>8;};fails([&]{apply(q);},"RGB Split cancellation");
+    q.limits={};q.deepSource=makeDeep(64,32);fails([&]{apply(q);},"HDR RGB Split must fail");
+    auto bright=image(32,32,[](int x,int y){return x==16&&y==16?Pixel{255,255,255,255}:Pixel{20,20,20,255};});
+    Settings bloom;bloom.bloom=80;bloom.bloomThreshold=.5;
+    auto filterBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    Settings glow;glow.bloomGlow=true;glow.bloomAmount=80;glow.bloomRadius=8;
+    auto glowBloom=runPixels(Kind::Bloom,*bright,glow,1,0);
+    require(filterBloom->rgba()!=bright->rgba()&&glowBloom->rgba()!=bright->rgba()&&filterBloom->rgba()!=glowBloom->rgba(),"Bloom filter and Bloom / Glow kernels stay distinct");
+    bloom.bloomThreshold=0;bloom.bloom=20;
+    auto lowBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    bloom.bloom=80;auto highBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    require(lowBloom->rgba()!=highBloom->rgba(),"Bloom strength affects zero-threshold output");
+    bloom.bloomThreshold=.000001;auto nearZeroBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    require(highBloom->rgba()==nearZeroBloom->rgba(),"Bloom is continuous at zero threshold");
+}
 void testPreviewAndFailure(){
     auto q=request(Kind::LensCorrection,Raster::filled(3001,17,{100,100,100,255}));q.preview=true;q.settings.distortion=10;auto preview=apply(q);require(preview.raster->width==2048&&preview.raster->height==11&&near(preview.previewScale,2048./3001)&&preview.transform==q.transform,"2048 preview source scale");q.kind=Kind::AddNoise;preview=apply(q);require(preview.raster->width==3001&&preview.previewScale==1,"noise preview remains full resolution");
     q.kind=Kind::LensCorrection;q.settings.distortion=0;auto noop=apply(q);require(!noop.changed&&noop.raster==q.source,"neutral lens has no commit");q.kind=Kind::GaussianBlur;q.selection=SourceSelection{mask(3001,17,[](int,int){return std::uint8_t(0);})};noop=apply(q);require(!noop.changed&&noop.raster==q.source,"present empty selection has no commit");
@@ -153,5 +189,5 @@ int benchmark(){
     }return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

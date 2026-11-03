@@ -1,4 +1,5 @@
 #include "effects/Adjustments.h"
+#include "filters/PixelFilters.h"
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -25,7 +26,35 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
  else if(test=="hsv_primary_alpha"){auto o=settings("Hue/Saturation");o["hue"]=120;for(uint8_t a:{uint8_t(255),uint8_t(128),uint8_t(32)})check(apply(Raster::filled(1,1,{a,0,0,a}),o)->pixel(0,0)==Pixel{0,a,0,a},"HSV primary hue/alpha changed");o["hue"]=0;o["saturation"]=-100;auto p=apply(Raster::filled(1,1,{255,0,0,255}),o)->pixel(0,0);check(p.r==p.g&&p.g==p.b,"HSV desaturation not gray");o["lightness"]=100;check(apply(Raster::filled(1,1,{255,0,0,255}),o)->pixel(0,0)==Pixel{255,255,255,255},"HSV lightness endpoint wrong");}
  else if(test=="hsv_bands_colorize"){auto o=settings("Hue/Saturation");QJsonObject hsv{{"range","Reds"},{"colorize",false},{"invertRange",false},{"adjustments",QJsonArray{"Reds",QJsonObject{{"hue",60},{"saturation",0},{"lightness",0}},"Blues",QJsonObject{{"hue",0},{"saturation",-100},{"lightness",0}}}},{"bands",QJsonArray{}}};o["hsvSettings"]=hsv;check(apply(Raster::filled(1,1,{255,0,0,255}),o)->pixel(0,0)==Pixel{255,255,0,255},"Reds range failed");auto blue=apply(Raster::filled(1,1,{0,0,255,255}),o)->pixel(0,0);check(blue.r==blue.g&&blue.g==blue.b,"Blue range independent adjustment failed");hsv["colorize"]=true;hsv["adjustments"]=QJsonArray{"Reds",QJsonObject{{"hue",240},{"saturation",100},{"lightness",0}}};o["hsvSettings"]=hsv;check(apply(Raster::filled(1,1,{255,0,0,255}),o)->pixel(0,0)==Pixel{0,0,255,255},"Colorize selected range failed");}
  else if(test=="selected_immutable_tiles"){auto r=Raster::filled(513,257,{128,128,128,255});auto o=settings("Exposure");o["exposureSettings"]=QJsonObject{{"exposure",1},{"offset",0},{"gamma",1}};GrayRaster mask{513,257,std::vector<uint8_t>(513*257,0)};check(apply(r,o,&mask)==r,"Empty selection changed input");mask.pixels[10*513+10]=255;auto result=apply(r,o,&mask);check(result!=r&&result->tiles[0]!=r->tiles[0]&&result->tiles[1]==r->tiles[1]&&result->pixel(9,10)==r->pixel(9,10),"Selection failed immutable tile sharing");mask.pixels[10*513+10]=128;auto soft=apply(r,o,&mask)->pixel(10,10);auto changed=result->pixel(10,10);check(soft.r==uint8_t((128*127+int(changed.r)*128+127)/255)&&soft.a==255,"Soft selection blend differs");check(r->pixel(10,10)==Pixel{128,128,128,255},"Source mutated");}
- else if(test=="malformed_json"){auto r=Raster::filled(1,1,{});rejects([&]{applyAdjustment(r,"{}");});rejects([&]{defaultAdjustmentJson("Fake");});auto o=settings("Exposure");o["exposureSettings"]=QJsonObject{{"exposure",0},{"offset",0},{"gamma",0}};rejects([&]{apply(r,o);});o=settings("Hue/Saturation");o["hsvSettings"]=QJsonObject{{"range","Reds"},{"colorize",false},{"invertRange",false},{"adjustments",QJsonObject{}},{"bands",QJsonArray{}}};rejects([&]{apply(r,o);});GrayRaster mismatch{2,1,{0,0}};rejects([&]{apply(r,settings("Exposure"),&mismatch);});}
+ else if(test=="malformed_json"){auto r=Raster::filled(1,1,{});rejects([&]{applyAdjustment(r,"{}");});rejects([&]{defaultAdjustmentJson("Fake");});auto o=settings("Exposure");o["exposureSettings"]=QJsonObject{{"exposure",0},{"offset",0},{"gamma",0}};rejects([&]{apply(r,o);});o=settings("Hue/Saturation");o["hsvSettings"]=QJsonObject{{"range","Reds"},{"colorize",false},{"invertRange",false},{"adjustments",QJsonObject{}},{"bands",QJsonArray{}}};rejects([&]{apply(r,o);});GrayRaster mismatch{2,1,{0,0}};rejects([&]{apply(r,settings("Exposure"),&mismatch);});auto layer=settings("RGB Split");auto g=layer["filterLayerSettings"].toObject();g["rgbSplitDistance"]=-1;layer["filterLayerSettings"]=g;rejects([&]{apply(r,layer);});}
+ else if(test=="filter_layer_kernels"){
+    std::vector<uint8_t> bytes(48*24*4);for(int y=0;y<24;++y)for(int x=0;x<48;++x){auto i=size_t(y*48+x)*4;bytes[i]=uint8_t(x<24?200:40);bytes[i+1]=80;bytes[i+2]=uint8_t(x<24?40:200);bytes[i+3]=255;}
+    auto source=Raster::fromRgba(48,24,bytes.data(),48*4);
+    auto rgb=settings("RGB Split");auto layer=rgb["filterLayerSettings"].toObject();layer["rgbSplitDistance"]=16;layer["rgbSplitBlur"]=0;layer["rgbSplitAngle"]=0;layer["rgbSplitRadial"]=false;layer["rgbSplitCenter"]=QJsonArray{24,12};rgb["filterLayerSettings"]=layer;
+    auto adjusted=apply(source,rgb);
+    filters::Settings filter;filter.rgbSplitDistance=16;filter.rgbSplitCenter=Point{24,12};
+    auto direct=filters::runPixels(filters::Kind::RgbSplit,*source,filter,1,0);
+    check(adjusted->rgba()==direct->rgba(),"RGB Split adjustment must reuse the filter kernel");
+    auto glow=settings("Bloom / Glow");auto glowLayer=glow["filterLayerSettings"].toObject();glowLayer["bloomAmount"]=50;glowLayer["bloomRadius"]=6;glow["filterLayerSettings"]=glowLayer;
+    auto glowAdjusted=apply(source,glow);
+    filters::Settings glowFilter;glowFilter.bloomGlow=true;glowFilter.bloomAmount=50;glowFilter.bloomRadius=6;
+    check(glowAdjusted->rgba()==filters::runPixels(filters::Kind::Bloom,*source,glowFilter,1,0)->rgba(),"Bloom / Glow adjustment must reuse the glow kernel");
+    auto progressive=settings("Progressive Blur");auto p=progressive["filterLayerSettings"].toObject();p["progressiveFrom"]=0;p["progressiveTo"]=0;progressive["filterLayerSettings"]=p;
+    check(apply(source,progressive)==source,"Neutral Progressive Blur adjustment is identity");
+    // The same sampled grid must use document-space distances at every zoom.
+    for(double units:{.5,2.}){
+        const AdjustmentRegion region{10,20,units,96,48};
+        auto rgbSettings=layer;rgbSettings["rgbSplitRadial"]=true;rgbSettings["rgbSplitReach"]=20;rgbSettings.remove("rgbSplitCenter");rgb["filterLayerSettings"]=rgbSettings;
+        filters::Settings expected;expected.rgbSplitDistance=16;expected.rgbSplitRadial=true;expected.rgbSplitReach=20/units;expected.rgbSplitCenter=Point{(48-10)/units,(24-20)/units};expected.rgbSplitOriginX=10;expected.rgbSplitOriginY=20;expected.rgbSplitUnitsPerPixel=units;
+        check(apply(source,rgb,nullptr,region)->rgba()==filters::runPixels(filters::Kind::RgbSplit,*source,expected,1/units,0)->rgba(),"RGB Split scale or default center differs");
+        check(apply(source,glow,nullptr,region)->rgba()==filters::runPixels(filters::Kind::Bloom,*source,glowFilter,1/units,0)->rgba(),"Bloom radius does not follow render scale");
+        p["progressiveFrom"]=2;p["progressiveTo"]=8;progressive["filterLayerSettings"]=p;
+        filters::Settings expectedBlur;expectedBlur.progressiveFrom=2;expectedBlur.progressiveTo=8;expectedBlur.progressiveStart=Point{(48-10)/units,(0-20)/units};expectedBlur.progressiveEnd=Point{(48-10)/units,(48-20)/units};
+        check(apply(source,progressive,nullptr,region)->rgba()==filters::runPixels(filters::Kind::ProgressiveBlur,*source,expectedBlur,1/units,0)->rgba(),"Progressive Blur scale or default points differ");
+        auto deep=makeDeep(source->width,source->height);for(int y=0;y<source->height;++y)for(int x=0;x<source->width;++x){auto q=source->pixel(x,y);deep->setPixel(x,y,{q.r/255.f,q.g/255.f,q.b/255.f,q.a/255.f});}
+        check(applyAdjustment(deep,encode(progressive),nullptr,region)->samples==filters::runDeepPixels(filters::Kind::ProgressiveBlur,*deep,expectedBlur,1/units,0)->samples,"Deep Progressive Blur scale or defaults differ");
+    }
+ }
  else if(test=="levels_opaque_order"){auto r=Raster::filled(1,1,{64,64,64,255});auto o=levelSettings(1,changedLevels(0,2));auto l=o["levels"].toObject();auto a=l["ranges"].toArray();a[0]=changedLevels(40,1,210);l["ranges"]=a;o["levels"]=l;auto p=apply(r,o)->pixel(0,0);double expected=(std::sqrt(64./255)*255-40)/(210-40)*255;check(std::abs(p.r-expected)<=1&&p.r>p.g&&p.g==p.b,"Levels order differs from source");}
  else if(test=="levels_partial_alpha_selection"){
     const Pixel original{64,32,0,128};auto input=Raster::filled(3,1,original);GrayRaster selection{3,1,{0,128,255}};

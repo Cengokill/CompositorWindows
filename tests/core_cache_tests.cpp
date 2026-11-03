@@ -1,10 +1,18 @@
 #include "core/Document.h"
+#include "core/DocumentExport.h"
 #include "effects/Adjustments.h"
+#include "imaging/wic_codec.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <iostream>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <set>
@@ -12,7 +20,7 @@
 using namespace compositor;
 #define REQUIRE(...) do{if(!(__VA_ARGS__))throw std::runtime_error(std::string(__FILE__)+":"+std::to_string(__LINE__)+": " #__VA_ARGS__);}while(false)
 Document document(int width,int height,Pixel color={90,40,20,128}){Document d;d.id=newId();d.width=width;d.height=height;Layer layer;layer.id=newId();layer.raster=Raster::filled(width,height,color);layer.transform={0,0,double(width),double(height),0,false,false,Transform::Sampling::Nearest};layer.opacity=.75;d.layers={layer};return d;}
-void equal(const Raster& a,const Raster& b){REQUIRE(a.width==b.width&&a.height==b.height);for(int y=0;y<a.height;++y)for(int x=0;x<a.width;++x)REQUIRE(a.pixel(x,y)==b.pixel(x,y));}
+void equal(const Raster& a,const Raster& b,int slop=0){REQUIRE(a.width==b.width&&a.height==b.height);for(int y=0;y<a.height;++y)for(int x=0;x<a.width;++x){const auto p=a.pixel(x,y),q=b.pixel(x,y);auto delta=[&](uint8_t u,uint8_t v){return std::abs(int(u)-int(v));};if(delta(p.r,q.r)>slop||delta(p.g,q.g)>slop||delta(p.b,q.b)>slop||delta(p.a,q.a)>slop)throw std::runtime_error("pixel mismatch at "+std::to_string(x)+","+std::to_string(y)+" tiled="+std::to_string(p.r)+","+std::to_string(p.g)+","+std::to_string(p.b)+","+std::to_string(p.a)+" full="+std::to_string(q.r)+","+std::to_string(q.g)+","+std::to_string(q.b)+","+std::to_string(q.a));}}
 size_t unique(const Raster& raster){std::set<const Raster::Tile*> pointers;for(auto& tile:raster.tiles){REQUIRE(tile);pointers.insert(tile.get());}return pointers.size();}
 void blank_30000(){Document d;d.width=d.height=30000;CompositeCache cache;Raster::resetMaterializationCount();auto full=cache.render(d);REQUIRE(full->width==30000&&full->height==30000&&full->tiles.size()==13924&&unique(*full)==1);REQUIRE(full->pixel(29999,29999)==Pixel{}&&cache.render(d)==full);auto view=cache.renderViewport(d,0,0,30000,30000);REQUIRE(view.documentWidth==30000&&view.documentHeight==30000&&view.unitsPerPixel==16);REQUIRE(view.raster->tiles.size()==64&&unique(*view.raster)==1&&view.raster->pixel(1874,1874)==Pixel{});REQUIRE(Raster::materializationCount()==0);}
 void identity_fastpath(){auto d=document(768,512);d.layers[0].opacity=1;CompositeCache cache;REQUIRE(cache.render(d)==d.layers[0].raster);auto view=cache.renderViewport(d,256,256,256,256);REQUIRE(view.documentX==256&&view.documentY==256&&view.unitsPerPixel==1&&view.raster->tiles.size()==1&&view.raster->tiles[0]==d.layers[0].raster->tiles[4]);}
@@ -36,6 +44,77 @@ void blank_culling(){Document d;d.width=d.height=30000;Layer l;l.id=newId();l.ra
 
 void lod_offscreen_invalidation(){auto d=document(768,64);d.width=2304;d.layers[0].transform.width=2304;CompositeCache cache;auto left=cache.renderViewport(d,0,0,512,64,2,1,3);auto right=cache.renderViewport(d,1536,0,512,64,2,1,3);std::vector<Pixel> blue(256*64,{0,0,255,255});d.layers[0].raster=d.layers[0].raster->replacing(512,0,256,64,blue.data(),256);auto leftAfter=cache.renderViewport(d,0,0,512,64,2,1,3);REQUIRE(leftAfter.raster->tiles[0]==left.raster->tiles[0]);auto rightAfter=cache.renderViewport(d,1536,0,512,64,2,1,3);REQUIRE(rightAfter.unitsPerPixel==2&&rightAfter.raster->tiles[0]!=right.raster->tiles[0]&&rightAfter.raster->pixel(0,0).b==191);}
 void blur_adjustment_tile_seam(){Document d;d.id=newId();d.width=512;d.height=32;Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,32,{255,0,0,255});image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};Layer blur;blur.id=newId();blur.adjustmentJson=effects::defaultAdjustmentJson("Gaussian Blur");blur.transform={0,0,512,32};d.layers={image,blur};auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);REQUIRE(tiled->pixel(255,16)==full->pixel(255,16)&&tiled->pixel(256,16)==full->pixel(256,16));REQUIRE(tiled->pixel(256,16).a>200);}
+void rgb_split_adjustment_tile_seam(){
+    Document d;d.id=newId();d.width=512;d.height=32;
+    std::vector<Pixel> pixels(512*32);
+    for(int y=0;y<32;++y)for(int x=0;x<512;++x)
+        pixels[std::size_t(y)*512+x]={std::uint8_t((x*17+y*3)%256),std::uint8_t((x*7+y*19)%256),std::uint8_t((x*13+y*11)%256),255};
+    Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,32,{})->replacing(0,0,512,32,pixels.data(),512);image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};
+    Layer split;split.id=newId();auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("RGB Split"))).object();auto layer=json["filterLayerSettings"].toObject();layer["rgbSplitDistance"]=18;layer["rgbSplitBlur"]=8;layer["rgbSplitCenter"]=QJsonArray{256,16};
+    for(bool radial:{false,true}){
+        layer["rgbSplitRadial"]=radial;json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();split.transform={0,0,512,32};d.layers={image,split};
+        auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);equal(*tiled,*full);
+    }
+    layer["rgbSplitRadial"]=true;layer["rgbSplitDistance"]=40;layer["rgbSplitBlur"]=24;layer["rgbSplitReach"]=80;layer["rgbSplitCenter"]=QJsonObject{{"x",2},{"y",16}};
+    json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers={image,split};
+    auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);
+    equal(*tiled,*full);
+    auto scaled=SoftwareRenderer().renderScaled(d,0,0,256,16,2);auto view=cache.renderViewport(d,0,0,512,32,2);
+    equal(*view.raster,*scaled);
+    layer.remove("rgbSplitCenter");json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers={image,split};
+    full=SoftwareRenderer().render(d,0,0,512,32);cache.reset();tiled=cache.render(d);
+    equal(*tiled,*full);
+}
+void filter_default_points_tiles(){
+    Document d;d.id=newId();d.width=512;d.height=48;
+    std::vector<Pixel> pixels(512*48);
+    for(int y=0;y<48;++y)for(int x=0;x<512;++x)
+        pixels[std::size_t(y)*512+x]={std::uint8_t((x*11+y)%256),std::uint8_t((x+y*5)%256),std::uint8_t((x*3)%256),255};
+    Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,48,{})->replacing(0,0,512,48,pixels.data(),512);image.transform={0,0,512,48,0,false,false,Transform::Sampling::Nearest};
+    auto attach=[&](const char* kind,std::initializer_list<std::pair<const char*,QJsonValue>> fields){
+        Layer adj;adj.id=newId();auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson(kind))).object();auto layer=json["filterLayerSettings"].toObject();
+        for(const auto& field:fields)layer.insert(field.first,field.second);
+        layer.remove("progressiveStart");layer.remove("progressiveEnd");layer.remove("rgbSplitCenter");
+        json["filterLayerSettings"]=layer;adj.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();adj.transform={0,0,512,48};d.layers={image,adj};
+        auto full=SoftwareRenderer().render(d,0,0,512,48);CompositeCache cache;equal(*cache.render(d),*full,1);
+        auto view=cache.renderViewport(d,0,0,512,48,2);
+        REQUIRE(view.raster&&view.unitsPerPixel==2);
+        equal(*view.raster,*SoftwareRenderer().renderScaled(d,view.documentX,view.documentY,view.raster->width,view.raster->height,view.unitsPerPixel),1);
+    };
+    attach("RGB Split",{{"rgbSplitDistance",18},{"rgbSplitBlur",10},{"rgbSplitRadial",true}});
+    attach("Progressive Blur",{{"progressiveFrom",0},{"progressiveTo",16}});
+}
+void progressive_deep_scaled(){
+    auto fill=[&](DeepImage::Format format,float peak){
+        Document d;d.id=newId();d.width=320;d.height=48;
+        auto deep=makeDeep(320,48,format);
+        for(int y=0;y<48;++y)for(int x=0;x<320;++x){const float t=float(x)/319.f;deep->setPixel(x,y,{t*peak,.25f*peak,(1.f-t)*peak,1});}
+        Layer image;image.id=newId();image.opacity=1;image.deep=deep;image.raster=rasterFromDeep(*deep);image.transform={0,0,320,48};
+        Layer adj;adj.id=newId();auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Progressive Blur"))).object();auto layer=json["filterLayerSettings"].toObject();
+        layer["progressiveFrom"]=2;layer["progressiveTo"]=14;layer.remove("progressiveStart");layer.remove("progressiveEnd");json["filterLayerSettings"]=layer;
+        adj.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();adj.transform={0,0,320,48};d.layers={image,adj};
+        auto full=SoftwareRenderer().renderDeep(d,0,0,320,48);auto left=SoftwareRenderer().renderDeep(d,0,0,256,48);auto right=SoftwareRenderer().renderDeep(d,256,0,64,48);
+        REQUIRE(full&&left&&right);
+        if(format==DeepImage::Format::HalfFloat)REQUIRE(full->format==format);
+        auto close=[&](const DeepImage& a,const DeepImage& b,int dx){
+            for(int y=0;y<b.height;++y)for(int x=0;x<b.width;++x){const auto p=a.pixel(x+dx,y),q=b.pixel(x,y);
+                for(int c=0;c<4;++c)if(std::abs(p[c]-q[c])>1.5f/255.f)throw std::runtime_error("deep seam at "+std::to_string(x+dx)+","+std::to_string(y)+" d="+std::to_string(std::abs(p[c]-q[c])));}
+        };
+        close(*full,*left,0);close(*full,*right,256);
+        auto canvas=SoftwareRenderer().render(d,0,0,320,48);CompositeCache cache;equal(*cache.render(d),*canvas,1);
+        for(double units:{1.,2.,4.}){
+            auto view=cache.renderViewport(d,0,0,320,48,units);
+            REQUIRE(view.raster&&view.unitsPerPixel==units);
+            equal(*view.raster,*SoftwareRenderer().renderScaled(d,view.documentX,view.documentY,view.raster->width,view.raster->height,view.unitsPerPixel),1);
+        }
+        QTemporaryDir dir;REQUIRE(dir.isValid());
+        const auto png=std::filesystem::path(dir.filePath("progressive-deep.png").toStdWString());
+        imaging::ExportOptions pngOptions;pngOptions.format=imaging::ImageFormat::Png;
+        exportDocumentAtomic(d,png,pngOptions);
+        REQUIRE(imaging::WicCodec::decode(png).image.pixels==canvas->rgba());
+    };
+    fill(DeepImage::Format::Unorm16,1.f);fill(DeepImage::Format::HalfFloat,2.f);
+}
 Layer solid(const char* id,int width,int height,Pixel color,Transform transform){Layer layer;layer.id=id;layer.opacity=1;layer.raster=Raster::filled(width,height,color);layer.transform=transform;return layer;}
 void partial_metadata_damage(){
     Document d;d.id=newId();d.width=768;d.height=256;
@@ -133,4 +212,4 @@ void move_translation_damage(){
     std::cout<<"move_translation_damage zoom_units=1 first_ms="<<nativeMs<<" first_tiles="<<nativeTiles<<" translation_ms="<<nativeMoveMs<<" translation_tiles="<<fullScale.lastViewportComposedTiles()<<"\n";
     equal(*nativeMoved.raster,*CompositeCache{}.renderViewport(native,0,0,1920,1080,1,64,256).raster);
 }
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
