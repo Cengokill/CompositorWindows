@@ -67,8 +67,13 @@ std::optional<Transform> paddedPlacement(const filters::Request& job){
 }
 Layer carryFilterMask(const Layer& original,Layer layer,const filters::Request& job,bool changed){
     layer.mask=original.mask;
-    const auto padded=paddedPlacement(job);
-    if(!changed||!padded||!layer.mask)return layer;
+    if(!changed||!layer.mask)return layer;
+    auto padded=paddedPlacement(job);
+    if(!padded){
+        if(!layer.raster||!original.raster)return layer;
+        if(layer.transform==original.transform&&layer.raster->width==original.raster->width&&layer.raster->height==original.raster->height)return layer;
+        padded=layer.transform;
+    }
     auto& mask=*layer.mask;
     if(job.preview){if(!mask.placement)mask.placement=original.transform;return layer;}
     if(mask.placement||!mask.raster||(mask.raster->width==1&&mask.raster->height==1))return layer;

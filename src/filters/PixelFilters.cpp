@@ -97,14 +97,14 @@ template<class T> std::vector<T> progressive(const std::vector<T>& source,int w,
         std::vector<T> output(source.size());for(std::size_t i=0;i<mixed.size();++i)output[i]=blurValue<T>(mixed[i]);return output;
     }
     constexpr int levels=8;
-    std::vector<float> amount(std::size_t(w)*h);
+    std::vector<double> amount(std::size_t(w)*h);
     const double length=std::sqrt(len2);
     graphics::runParallelBatch(std::size_t(h),0,[&](std::size_t row){
         cancel(limits);const int y=int(row);
         for(int x=0;x<w;++x){
             const double px=x+.5-start.x,py=y+.5-start.y;
             const double t=std::clamp(s.progressiveRadial?std::hypot(px,py)/length:(px*dx+py*dy)/len2,0.,1.);
-            amount[std::size_t(y)*w+x]=float((from+(to-from)*t)*scale);
+            amount[std::size_t(y)*w+x]=std::clamp((from+(to-from)*t)*scale,0.,strongest);
         }
     });
     double prev=0;
@@ -116,8 +116,9 @@ template<class T> std::vector<T> progressive(const std::vector<T>& source,int w,
             cancel(limits);const int y=int(row);
             for(int x=0;x<w;++x){
                 const double radius=amount[std::size_t(y)*w+x];
-                if(radius<low||radius>high||(level>1&&radius==low))continue;
-                const double weight=(radius*radius-low*low)/(high*high-low*low);
+                if(radius<low||(level<levels&&radius>high)||(level>1&&radius==low))continue;
+                const double span=high*high-low*low;
+                const double weight=span>0?std::clamp((radius*radius-low*low)/span,0.,1.):1.;
                 const auto i=(std::size_t(y)*w+x)*4;
                 for(int c=0;c<4;++c)mixed[i+c]=float(lower[i+c]+(upper[i+c]-lower[i+c])*weight);
             }
