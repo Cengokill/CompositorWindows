@@ -109,10 +109,12 @@ PreviewResult makePreview(Document doc,std::string active,const std::string&json
                 doc.layers.insert(found==doc.layers.end()?doc.layers.end():found+1,layer);active=layer.id;}
         }else{
             if(found==doc.layers.end()||!found->raster)throw std::runtime_error("Select an image layer");
-            if(found->deep&&found->deep->isHdr()){
+            const auto deepKind=QJsonDocument::fromJson(QByteArray::fromStdString(json)).object()["kind"].toString();
+            const bool precise16=deepKind=="Levels"||deepKind=="Curves"||deepKind=="Exposure"||deepKind=="Invert"||deepKind=="Gaussian Blur"||deepKind=="Motion Blur"||deepKind=="Progressive Blur";
+            if(found->deep&&(found->deep->isHdr()||precise16)){
                 // Preview and Apply both start from the retained pixels. The
                 // reduced draft uses the same preview-size limit as SDR edits.
-                if(!full){auto reduced=adjustmentPreviewSource(found->raster,json,cancelled);if(reduced->width!=found->deep->width||reduced->height!=found->deep->height){auto image=makeDeep(reduced->width,reduced->height);for(int y=0;y<image->height;++y){check();for(int x=0;x<image->width;++x)image->setPixel(x,y,found->deep->pixel(std::min(found->deep->width-1,int((x+.5)*found->deep->width/image->width)),std::min(found->deep->height-1,int((y+.5)*found->deep->height/image->height))));}found->deep=image;found->raster=reduced;}}
+                if(!full){auto reduced=adjustmentPreviewSource(found->raster,json,cancelled);if(reduced->width!=found->deep->width||reduced->height!=found->deep->height){auto image=makeDeep(reduced->width,reduced->height,found->deep->format);for(int y=0;y<image->height;++y){check();for(int x=0;x<image->width;++x)image->setPixel(x,y,found->deep->pixel(std::min(found->deep->width-1,int((x+.5)*found->deep->width/image->width)),std::min(found->deep->height-1,int((y+.5)*found->deep->height/image->height))));}found->deep=image;found->raster=reduced;}}
                 auto selection=editing::mappedCoverage(doc,found->transform,found->deep->width,found->deep->height);
                 auto changed=effects::applyAdjustment(found->deep,json,selection.get(),{},cancelled);
                 if(changed!=found->deep){found->deep=changed;found->raster=rasterFromDeep(*changed);found->shapeJson.clear();found->text.reset();}

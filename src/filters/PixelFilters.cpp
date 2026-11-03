@@ -379,7 +379,7 @@ Result apply(const Request& request){
         }
     }
     std::shared_ptr<const DeepImage> deepOutput;
-    if(request.deepSource&&(request.deepSource->isHdr()||request.kind==Kind::ProgressiveBlur)){
+    if(request.deepSource&&(request.deepSource->isHdr()||request.kind==Kind::ProgressiveBlur||request.kind==Kind::GaussianBlur||request.kind==Kind::MotionBlur)){
         if(!request.deepSource->valid()||request.deepSource->width!=original.width||request.deepSource->height!=original.height)throw std::runtime_error("HDR filter source grid changed");
         count(working->width,working->height,request.limits,80);
         auto prepared=makeDeep(working->width,working->height,request.deepSource->format);

@@ -156,7 +156,7 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
         return filters::runDeepPixels(kind,*source,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);}
     // Exposure is evaluated in scene-linear light. Other bounded color kernels
     // see per-pixel normalized highlights, then their brightness is restored.
-    if(s.kind!=3&&s.kind!=1&&s.kind!=2){
+    if(s.kind!=3&&s.kind!=1&&s.kind!=2&&(s.kind!=6||source->isHdr())){
         auto normal=normalizeDeep(*source,cancelled);auto changed=applyAdjustment(normal.raster,json,nullptr,region,cancelled);
         if(changed==normal.raster)return source;
         auto result=restoreDeep(*changed,normal.scales,cancelled);
@@ -167,7 +167,8 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
     for(int y=0;y<source->height;++y){cancel();for(int x=0;x<source->width;++x){auto p=source->pixel(x,y),out=p;if(!(p[3]>0))continue;const double amount=selection?selection->pixel(x,y)/255.:1.;if(amount==0)continue;
         const double peak=std::max({1.,double(p[0]/p[3]),double(p[1]/p[3]),double(p[2]/p[3])});
         for(int c=0;c<3;++c){const double straight=p[c]/p[3];double value;
-            if(s.kind==3)value=linearToSrgb(std::pow(std::max(0.,srgbToLinear(straight)*std::pow(2.,s.exposure)+s.offset),1/s.gamma));
+            if(s.kind==6)value=1-straight;
+            else if(s.kind==3)value=linearToSrgb(std::pow(std::max(0.,srgbToLinear(straight)*std::pow(2.,s.exposure)+s.offset),1/s.gamma));
             else {value=std::clamp(straight/peak,0.,1.);value=s.kind==1?s.levels[0].apply(s.levels[c+1].apply(value)):s.curves[0].value(s.curves[c+1].value(value*255))/255.;value*=peak;}
             out[c]=float(p[c]+(value*p[3]-p[c])*amount);
         }
