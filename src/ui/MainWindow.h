@@ -268,6 +268,7 @@ private:
     PhotoshopResult importPhotoshop(const QString& path,CmykProfilePtr fallback={});
     bool reviewCmykImports(const QStringList&,ui::RawSettings&);
     void setupCmykActions(QMenu*);
+    QString chooseNativeCmykProfilePath();
     void chooseCmykProfile();
     void refreshCmykActions();
     void refresh(bool render=true,bool rebuildLayers=true);

@@ -12,7 +12,6 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMessageBox>
@@ -111,7 +110,7 @@ int main(int argc,char**argv){
     test("cmyk_profile_menu_undo_noop_and_preference",[]{
         MainWindow window(true);auto& project=window.addProject(blank(64,32));auto* load=window.findChild<QAction*>("viewCmykProfile");auto* proof=window.findChild<QAction*>("viewCmykProof");require(load&&proof,"CMYK menu commands missing");
         cmyk_test::ProfileFile fixture;const auto file=fixture.path;
-        auto choose=[&](bool cancel){QElapsedTimer elapsed;elapsed.start();QTimer timer;timer.setInterval(10);QObject::connect(&timer,&QTimer::timeout,&window,[&]{for(auto* widget:QApplication::topLevelWidgets())if(auto* picker=qobject_cast<QFileDialog*>(widget)){if(cancel||elapsed.elapsed()>5000)picker->reject();else{picker->selectFile(file);QMetaObject::invokeMethod(picker,"accept");}}});timer.start();load->trigger();timer.stop();};
+        auto choose=[&](bool cancel){window.setProperty("testCmykProfileCancel",cancel);window.setProperty("testCmykProfilePath",cancel?QString{}:file);load->trigger();window.setProperty("testCmykProfileCancel",false);window.setProperty("testCmykProfilePath",QString{});};
         choose(true);require(!project.document->cmykProfile&&project.history.undoCount()==0,"Profile picker Cancel changed history");choose(false);require(project.document->cmykProfile&&project.history.undoCount()==1,"Profile menu did not make one edit");
         const auto profile=project.document->cmykProfile;choose(false);require(project.history.undoCount()==1,"Same ICC profile created a no-op edit");
         proof->trigger();require(project.proofColors&&project.history.undoCount()==1,"Proof toggle changed history");proof->trigger();require(!project.proofColors,"Proof toggle did not restore normal view");
