@@ -15,6 +15,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
@@ -79,6 +80,63 @@ static void format_contract() {
     check(loadedFilters.document.layers[1].adjustmentJson.find("RGB Split") != std::string::npos, "RGB Split settings survived reopen");
     check(loadedFilters.document.layers[2].adjustmentJson.find("Bloom / Glow") != std::string::npos, "Bloom / Glow settings survived reopen");
     check(loadedFilters.document.layers[3].mask && loadedFilters.document.layers[3].mask->raster->pixels[0] == 180, "Progressive Blur mask survived reopen");
+    {
+        Document wide; wide.id = newId(); wide.width = 512; wide.height = 48; wide.resolution = 72;
+        Layer photo; photo.id = newId(); photo.name = "Photo"; photo.opacity = 1; photo.transform = {0, 0, 512, 48};
+        std::vector<Pixel> pixels(512 * 48);
+        for (int y = 0; y < 48; ++y) for (int x = 0; x < 512; ++x) pixels[std::size_t(y) * 512 + x] = {uint8_t((x * 11 + y) % 256), uint8_t((x + y * 5) % 256), uint8_t((x * 3) % 256), 255};
+        photo.raster = Raster::filled(512, 48, {})->replacing(0, 0, 512, 48, pixels.data(), 512);
+        Layer split; split.id = newId(); split.name = "RGB Split"; split.transform = {0, 0, 512, 48};
+        auto rgbJson = QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("RGB Split"))).object();
+        auto rgbLayer = rgbJson["filterLayerSettings"].toObject(); rgbLayer["rgbSplitDistance"] = 18; rgbLayer["rgbSplitBlur"] = 8; rgbLayer["rgbSplitRadial"] = true; rgbLayer.remove("rgbSplitCenter"); rgbJson["filterLayerSettings"] = rgbLayer;
+        split.adjustmentJson = QJsonDocument(rgbJson).toJson(QJsonDocument::Compact).toStdString();
+        Layer progressive; progressive.id = newId(); progressive.name = "Progressive"; progressive.transform = {0, 0, 512, 48};
+        auto progressiveJson = QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Progressive Blur"))).object();
+        auto progressiveLayer = progressiveJson["filterLayerSettings"].toObject(); progressiveLayer["progressiveTo"] = 16; progressiveLayer.remove("progressiveStart"); progressiveLayer.remove("progressiveEnd"); progressiveJson["filterLayerSettings"] = progressiveLayer;
+        progressive.adjustmentJson = QJsonDocument(progressiveJson).toJson(QJsonDocument::Compact).toStdString();
+        wide.layers = {photo, split};
+        auto widePath = std::filesystem::path(dir.filePath("filter-defaults.comp").toStdWString());
+        store.save(widePath, wide, split.id);
+        QFile wideManifest(QString::fromStdWString((widePath / L"manifest.json").wstring())); check(wideManifest.open(QIODevice::ReadWrite), "defaults manifest");
+        auto wideJson = QJsonDocument::fromJson(wideManifest.readAll()).object();
+        auto layers = wideJson["layers"].toArray();
+        for (int i = 0; i < layers.size(); ++i) {
+            auto layer = layers[i].toObject();
+            if (!layer.contains("adjustment") || !layer["adjustment"].isObject()) continue;
+            auto adjustment = layer["adjustment"].toObject();
+            if (adjustment["kind"].toString().isEmpty()) continue;
+            auto settings = adjustment["filterLayerSettings"].toObject();
+            settings.remove("progressiveStart"); settings.remove("progressiveEnd"); settings.remove("rgbSplitCenter");
+            adjustment["filterLayerSettings"] = settings; layer["adjustment"] = adjustment; layers[i] = layer;
+        }
+        wideJson["layers"] = layers; wideManifest.resize(0); wideManifest.write(QJsonDocument(wideJson).toJson()); wideManifest.close();
+        auto reopened = store.load(widePath).document;
+        auto canvas = SoftwareRenderer().render(reopened, 0, 0, 512, 48);
+        CompositeCache cache; auto tiled = cache.render(reopened);
+        auto close = [](Pixel a, Pixel b) { auto d = [](uint8_t u, uint8_t v) { return std::abs(int(u) - int(v)); }; return d(a.r, b.r) <= 1 && d(a.g, b.g) <= 1 && d(a.b, b.b) <= 1 && d(a.a, b.a) <= 1; };
+        for (int y = 0; y < 48; ++y) for (int x = 0; x < 512; ++x) check(close(tiled->pixel(x, y), canvas->pixel(x, y)), "default RGB Split points drifted across tiles after reopen");
+        wide.layers = {photo, progressive}; store.save(widePath, wide, progressive.id);
+        wideManifest.setFileName(QString::fromStdWString((widePath / L"manifest.json").wstring())); check(wideManifest.open(QIODevice::ReadWrite), "progressive defaults manifest");
+        wideJson = QJsonDocument::fromJson(wideManifest.readAll()).object(); layers = wideJson["layers"].toArray();
+        for (int i = 0; i < layers.size(); ++i) {
+            auto layer = layers[i].toObject();
+            if (!layer.contains("adjustment") || !layer["adjustment"].isObject()) continue;
+            auto adjustment = layer["adjustment"].toObject();
+            if (adjustment["kind"].toString().isEmpty()) continue;
+            auto settings = adjustment["filterLayerSettings"].toObject();
+            settings.remove("progressiveStart"); settings.remove("progressiveEnd"); settings.remove("rgbSplitCenter");
+            adjustment["filterLayerSettings"] = settings; layer["adjustment"] = adjustment; layers[i] = layer;
+        }
+        wideJson["layers"] = layers; wideManifest.resize(0); wideManifest.write(QJsonDocument(wideJson).toJson()); wideManifest.close();
+        reopened = store.load(widePath).document;
+        canvas = SoftwareRenderer().render(reopened, 0, 0, 512, 48); cache.reset(); tiled = cache.render(reopened);
+        for (int y = 0; y < 48; ++y) for (int x = 0; x < 512; ++x) check(close(tiled->pixel(x, y), canvas->pixel(x, y)), "default Progressive Blur points drifted across tiles after reopen");
+        const auto png = std::filesystem::path(dir.filePath("filter-defaults.png").toStdWString());
+        imaging::ExportOptions pngOptions; pngOptions.format = imaging::ImageFormat::Png;
+        exportDocumentAtomic(reopened, png, pngOptions);
+        auto decoded = imaging::WicCodec::decode(png);
+        check(decoded.image.pixels == canvas->rgba(), "reopened Progressive Blur canvas did not match PNG export");
+    }
     QFile filterManifest(QString::fromStdWString((filterPath / L"manifest.json").wstring())); check(filterManifest.open(QIODevice::ReadWrite), "filter-layer manifest");
     auto filterJson = QJsonDocument::fromJson(filterManifest.readAll()).object(); filterJson["version"] = 15; filterManifest.resize(0); filterManifest.write(QJsonDocument(filterJson).toJson()); filterManifest.close();
     bool filterRejected = false; try { store.load(filterPath); } catch (const std::exception&) { filterRejected = true; } check(filterRejected, "v15 must reject filter adjustment layers");

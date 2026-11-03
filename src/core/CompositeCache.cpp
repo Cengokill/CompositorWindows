@@ -194,7 +194,6 @@ int spatialMargin(const Document& doc,double units=1){
     }
     return int(std::ceil(margin/units));
 }
-Tile cropTile(const Raster& raster,int ox,int oy,int w,int h){auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<h;++y)for(int x=0;x<w;++x)tile->pixels[std::size_t(y)*Raster::tileSide+x]=raster.pixel(ox+x,oy+y);return tile;}
 }
 std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
     validateDocument(doc);if(auto direct=directRaster(doc)){previous_=doc;output_=direct;return output_;}
@@ -208,7 +207,6 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
     for(size_t index=0;index<dirty.size();++index)if(dirty[index]){int x=int(index%columns)*256,y=int(index/columns)*256,w=std::min(256,doc.width-x),h=std::min(256,doc.height-y);
         if(!touches(painted,x-margin,y-margin,w+margin*2.,h+margin*2.)){result->tiles[index]=zeroTile();continue;}
         if(flipped)result->tiles[index]=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,x,y,doc.width,doc.height);
-        else if(margin>0)result->tiles[index]=cropTile(*renderer.render(doc,x-margin,y-margin,w+margin*2,h+margin*2),margin,margin,w,h);
         else result->tiles[index]=renderer.render(doc,x,y,w,h)->tiles.front();}
     previous_=doc;output_=result;return output_;
 }
@@ -270,7 +268,6 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             else if(direct){const size_t index=size_t(ty)*((direct->width+255)/256)+tx;tile=index<direct->tiles.size()&&direct->tiles[index]?direct->tiles[index]:zeroTile();}
             else if(mirror)tile=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,tx*256,ty*256,doc.width,doc.height);
             else if(!touches(painted,dx-margin*units,dy-margin*units,(w+margin*2.)*units,(h+margin*2.)*units))tile=zeroTile();
-            else if(margin>0){tile=cropTile(*renderer.renderScaled(doc,dx-margin*units,dy-margin*units,w+margin*2,h+margin*2,units),margin,margin,w,h);++lastViewportComposedTiles_;}
             else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();++lastViewportComposedTiles_;}
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
