@@ -79,6 +79,8 @@ void rgb_split_canvas_split_layers(){
     });
     require(f.project.document->layers.size()==5&&f.project.history.undoCount()==1,"Split to Layers adds original-channel layers");
     require(f.project.document->layers[0].raster->rgba()==f.before.layers[0].raster->rgba(),"Split to Layers leaves the original pixels");
+    for(std::size_t i=1;i<5;++i)require(!f.project.document->layers[i].visible,"Split channels start hidden");
+    require(SoftwareRenderer().render(*f.project.document,0,0,64,48)->rgba()==SoftwareRenderer().render(f.before,0,0,64,48)->rgba(),"Split to Layers preserves the rendered canvas");
 }
 void live_filter_adjustments(){
     Fixture f;

@@ -155,20 +155,44 @@ double jsonField(const std::string& json,std::size_t from,const char* key,double
     const auto token=std::string("\"")+key+"\"";auto at=json.find(token,from);if(at==std::string::npos)return fallback;at=json.find(':',at+token.size());if(at==std::string::npos)return fallback;
     char* end=nullptr;const double value=std::strtod(json.c_str()+at+1,&end);return end==json.c_str()+at+1?fallback:value;
 }
-int spatialMargin(const Document& doc){
-    int margin=0;
-    for(const auto& layer:doc.layers){const auto& json=layer.adjustmentJson;if(!layer.visible||json.empty())continue;
+Point jsonPoint(const std::string& json,std::size_t from,const char* key,Point fallback){
+    const auto token=std::string("\"")+key+"\"";auto at=json.find(token,from);if(at==std::string::npos)return fallback;
+    at=json.find(':',at+token.size());if(at==std::string::npos)return fallback;
+    at=json.find_first_not_of(" \t\r\n",at+1);if(at==std::string::npos)return fallback;
+    if(json[at]=='{')return {jsonField(json,at,"x",fallback.x),jsonField(json,at,"y",fallback.y)};
+    if(json[at]!='[')return fallback;
+    char* end=nullptr;const double x=std::strtod(json.c_str()+at+1,&end);if(end==json.c_str()+at+1)return fallback;
+    while(*end==' '||*end=='\t'||*end=='\r'||*end=='\n')++end;if(*end++!=',')return fallback;
+    char* next=nullptr;const double y=std::strtod(end,&next);return next==end?fallback:Point{x,y};
+}
+int spatialMargin(const Document& doc,double units=1){
+    double margin=0;
+    // Walk from output to input: a lower adjustment must cover the expanded
+    // region required by every adjustment above it.
+    for(auto it=doc.layers.rbegin();it!=doc.layers.rend();++it){const auto& layer=*it;const auto& json=layer.adjustmentJson;if(!layer.visible||json.empty())continue;
         const bool gaussian=json.find("\"Gaussian Blur\"")!=std::string::npos,motion=json.find("\"Motion Blur\"")!=std::string::npos;
         const bool progressive=json.find("\"Progressive Blur\"")!=std::string::npos,glow=json.find("\"Bloom / Glow\"")!=std::string::npos,rgb=json.find("\"RGB Split\"")!=std::string::npos;
         if(!gaussian&&!motion&&!progressive&&!glow&&!rgb)continue;
-        const auto settings=json.find("\"filterSettings\"");
-        const auto layerSettings=json.find("\"filterLayerSettings\"");
-        if(gaussian){const double radius=settings==std::string::npos?8:jsonField(json,settings,"radius",8);if(radius>0)margin+=int(std::ceil(radius*3+2));}
-        if(motion){const double distance=settings==std::string::npos?16:jsonField(json,settings,"distance",16);if(distance>0)margin+=int(std::ceil(distance/2+2));}
-        if(progressive){const double from=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"progressiveFrom",0),to=layerSettings==std::string::npos?20:jsonField(json,layerSettings,"progressiveTo",20);margin+=int(std::ceil(std::max(from,to)*3+2));}
-        if(glow){const double radius=layerSettings==std::string::npos?24:jsonField(json,layerSettings,"bloomRadius",24);margin+=int(std::ceil(radius*3+2));}
-        if(rgb){const double distance=layerSettings==std::string::npos?10:jsonField(json,layerSettings,"rgbSplitDistance",10),blur=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"rgbSplitBlur",0);const bool radial=layerSettings!=std::string::npos&&json.find("\"rgbSplitRadial\":true",layerSettings)!=std::string::npos;margin+=int(std::ceil((distance+blur)*(radial?2:1)+2));}}
-    return std::clamp(margin,0,2048);
+        const auto settings=json.find("\"filterSettings\"");const auto layerSettings=json.find("\"filterLayerSettings\"");
+        if(gaussian){const double radius=settings==std::string::npos?8:jsonField(json,settings,"radius",8);if(radius>0)margin+=std::ceil(radius*3+2);}
+        if(motion){const double distance=settings==std::string::npos?16:jsonField(json,settings,"distance",16);if(distance>0)margin+=std::ceil(distance/2+2);}
+        if(progressive){const double from=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"progressiveFrom",0),to=layerSettings==std::string::npos?20:jsonField(json,layerSettings,"progressiveTo",20);margin+=std::ceil(std::max(from,to)*3+2);}
+        if(glow){const double radius=layerSettings==std::string::npos?24:jsonField(json,layerSettings,"bloomRadius",24);margin+=std::ceil(radius*3+2);}
+        if(rgb){
+            const double distance=layerSettings==std::string::npos?10:jsonField(json,layerSettings,"rgbSplitDistance",10),blur=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"rgbSplitBlur",0);
+            const auto flag=layerSettings==std::string::npos?std::string::npos:json.find("\"rgbSplitRadial\"",layerSettings);
+            const auto colon=flag==std::string::npos?flag:json.find(':',flag);
+            const auto value=colon==std::string::npos?colon:json.find_first_not_of(" \t\r\n",colon+1);
+            const bool radial=value!=std::string::npos&&json.compare(value,4,"true")==0;
+            double extent=1;
+            if(radial){const auto center=jsonPoint(json,layerSettings,"rgbSplitCenter",{doc.width/2.,doc.height/2.});const double reach=jsonField(json,layerSettings,"rgbSplitReach",1000);
+                extent=std::max({std::abs(center.x+margin),std::abs(doc.width+margin-center.x),std::abs(center.y+margin),std::abs(doc.height+margin-center.y)})/reach;}
+            // Negative jitter permits |t| < 5/3 and |u| < 1.
+            margin+=std::ceil(extent*(distance*5/3+blur)+2*units);
+        }
+        if(!std::isfinite(margin)||margin/units>14000)throw std::runtime_error("Adjustment padding exceeds render budget");
+    }
+    return int(std::ceil(margin/units));
 }
 Tile cropTile(const Raster& raster,int ox,int oy,int w,int h){auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<h;++y)for(int x=0;x<w;++x)tile->pixels[std::size_t(y)*Raster::tileSide+x]=raster.pixel(ox+x,oy+y);return tile;}
 }
@@ -238,7 +262,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     }
     if(all||!damage.empty())validateCulledAdjustments(doc,preview);
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
-    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);const int margin=spatialMargin(doc);
+    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
     for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){const std::pair<int,int> key{tx,ty};auto found=viewportTiles_.find(key);if(found==viewportTiles_.end()){
             const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;Tile tile;

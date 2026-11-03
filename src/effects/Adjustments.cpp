@@ -77,7 +77,21 @@ std::array<uint8_t,768> gradient(const Settings&s){auto dark=s.reverse?s.highlig
 }
 std::string defaultAdjustmentJson(std::string_view kind){named(text(kind),kinds);QJsonObject range{{"black",0},{"white",255},{"gamma",1},{"outputBlack",0},{"outputWhite",255}};QJsonArray ls,cs;for(int i=0;i<4;++i){ls.append(range);cs.append(QJsonArray{QJsonObject{{"x",0},{"y",0}},QJsonObject{{"x",255},{"y",255}}});}QJsonObject o{{"kind",text(kind)},{"hue",0},{"saturation",0},{"lightness",0},{"colorize",false},{"levels",QJsonObject{{"channel","RGB"},{"ranges",ls}}},{"curves",QJsonObject{{"channel","RGB"},{"channels",cs}}}};if(kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split")o["filterLayerSettings"]=QJsonObject{{"progressiveFrom",0},{"progressiveTo",20},{"progressiveRadial",false},{"progressiveInverted",false},{"bloomAmount",40},{"bloomRadius",24},{"rgbSplitDistance",10},{"rgbSplitBlur",0},{"rgbSplitAngle",0},{"rgbSplitRadial",false},{"rgbSplitReach",1000}};return QJsonDocument(o).toJson(QJsonDocument::Compact).toStdString();}
 void validateAdjustmentJson(std::string_view json){settings(parse(json));}
-int adjustmentPadding(std::string_view json){const auto s=settings(parse(json));return s.kind==9?int(std::ceil(s.blurRadius*3+2)):s.kind==10?int(std::ceil(s.blurDistance+2)):s.kind==12?int(std::ceil(std::max(s.progressiveFrom,s.progressiveTo)*3+2)):s.kind==13?int(std::ceil(s.bloomRadius*3+2)):s.kind==14?int(std::ceil((s.rgbSplitDistance+s.rgbSplitBlur)*(s.rgbSplitRadial?2:1)+2)):0;}
+int adjustmentPadding(std::string_view json){const auto s=settings(parse(json));return s.kind==9?int(std::ceil(s.blurRadius*3+2)):s.kind==10?int(std::ceil(s.blurDistance+2)):s.kind==12?int(std::ceil(std::max(s.progressiveFrom,s.progressiveTo)*3+2)):s.kind==13?int(std::ceil(s.bloomRadius*3+2)):s.kind==14?int(std::ceil(s.rgbSplitDistance*5/3+s.rgbSplitBlur+2)):0;}
+int adjustmentStackPadding(const Document& document){
+    double margin=0;
+    for(auto it=document.layers.rbegin();it!=document.layers.rend();++it){
+        if(!it->visible||it->adjustmentJson.empty())continue;
+        const auto s=settings(parse(it->adjustmentJson));
+        if(s.kind==14&&s.rgbSplitRadial){
+            const auto center=s.rgbSplitCenter.value_or(Point{document.width/2.,document.height/2.});
+            const double extent=std::max({std::abs(center.x+margin),std::abs(document.width+margin-center.x),std::abs(center.y+margin),std::abs(document.height+margin-center.y)})/s.rgbSplitReach;
+            margin+=std::ceil(extent*(s.rgbSplitDistance*5/3+s.rgbSplitBlur)+2);
+        }else margin+=adjustmentPadding(it->adjustmentJson);
+        if(!std::isfinite(margin)||margin>14000)throw std::runtime_error("Adjustment padding exceeds render budget");
+    }
+    return int(margin);
+}
 std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region,const std::function<bool()>& cancelled){
  auto cancel=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};cancel();
  if(!source||source->width<1||source->height<1||source->width>30000||source->height>30000||uint64_t(source->width)*source->height>100000000)throw std::invalid_argument("Invalid source raster");
@@ -88,13 +102,14 @@ std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> sour
  if(s.kind>=9){filters::Settings filter;filter.radius=s.blurRadius>0?s.blurRadius:1;filter.angle=s.blurAngle;filter.distance=s.blurDistance>0?s.blurDistance:1;filter.amount=s.noiseAmount>0?s.noiseAmount:.1;filter.gaussian=s.noiseGaussian;filter.monochromatic=s.noiseMono;
   filter.progressiveFrom=s.progressiveFrom;filter.progressiveTo=s.progressiveTo;filter.progressiveRadial=s.progressiveRadial;filter.progressiveInverted=s.progressiveInverted;
   filter.bloomGlow=s.kind==13;filter.bloomAmount=s.bloomAmount;filter.bloomRadius=s.bloomRadius;filter.bloom=s.bloomAmount;
-  filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=std::max(1.,s.rgbSplitReach/region.unitsPerPixel);
+  filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=s.rgbSplitReach/region.unitsPerPixel;
   filter.rgbSplitOriginX=region.originX;filter.rgbSplitOriginY=region.originY;filter.rgbSplitUnitsPerPixel=region.unitsPerPixel;
   auto map=[&](Point p){return Point{(p.x-region.originX)/region.unitsPerPixel,(p.y-region.originY)/region.unitsPerPixel};};
-  if(s.progressiveStart)filter.progressiveStart=map(*s.progressiveStart);if(s.progressiveEnd)filter.progressiveEnd=map(*s.progressiveEnd);
-  if(s.rgbSplitCenter)filter.rgbSplitCenter=map(*s.rgbSplitCenter);
+  const double dw=region.documentWidth>0?region.documentWidth:source->width*region.unitsPerPixel,dh=region.documentHeight>0?region.documentHeight:source->height*region.unitsPerPixel;
+  filter.progressiveStart=map(s.progressiveStart.value_or(Point{dw/2,0}));filter.progressiveEnd=map(s.progressiveEnd.value_or(Point{dw/2,dh}));
+  filter.rgbSplitCenter=map(s.rgbSplitCenter.value_or(Point{dw/2,dh/2}));
   auto kind=s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:s.kind==11?filters::Kind::AddNoise:s.kind==12?filters::Kind::ProgressiveBlur:s.kind==13?filters::Kind::Bloom:filters::Kind::RgbSplit;
-  filters::Limits limits;limits.cancelled=cancelled;return filters::runPixels(kind,*source,filter,1,s.seed,selection,limits);}
+  filters::Limits limits;limits.cancelled=cancelled;return filters::runPixels(kind,*source,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);}
  std::vector<std::array<float,3>> colors;if(s.kind==0)colors=cube(s);std::array<float,768> lut{};if(s.kind>=1&&s.kind<=3)lut=tables(s);std::array<uint8_t,768> gradientLut{};if(s.kind==4)gradientLut=gradient(s);
  cancel();auto result=std::make_shared<Raster>(*source);bool any=false;const int columns=(source->width+255)/256;
  for(int ty=0;ty<source->height;ty+=256)for(int tx=0;tx<source->width;tx+=256){cancel();int w=std::min(256,source->width-tx),h=std::min(256,source->height-ty);size_t index=size_t(ty/256)*columns+tx/256;auto original=source->tiles[index];
@@ -122,22 +137,23 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
     if(s.kind>=9){filters::Settings filter;filter.radius=s.blurRadius;filter.angle=s.blurAngle;filter.distance=s.blurDistance;filter.amount=s.noiseAmount;filter.gaussian=s.noiseGaussian;filter.monochromatic=s.noiseMono;
         filter.progressiveFrom=s.progressiveFrom;filter.progressiveTo=s.progressiveTo;filter.progressiveRadial=s.progressiveRadial;filter.progressiveInverted=s.progressiveInverted;
         filter.bloomGlow=s.kind==13;filter.bloomAmount=s.bloomAmount;filter.bloomRadius=s.bloomRadius;
-        filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=std::max(1.,s.rgbSplitReach/region.unitsPerPixel);
+        filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=s.rgbSplitReach/region.unitsPerPixel;
         filter.rgbSplitOriginX=region.originX;filter.rgbSplitOriginY=region.originY;filter.rgbSplitUnitsPerPixel=region.unitsPerPixel;
         auto map=[&](Point p){return Point{(p.x-region.originX)/region.unitsPerPixel,(p.y-region.originY)/region.unitsPerPixel};};
-        if(s.progressiveStart)filter.progressiveStart=map(*s.progressiveStart);if(s.progressiveEnd)filter.progressiveEnd=map(*s.progressiveEnd);
-        if(s.rgbSplitCenter)filter.rgbSplitCenter=map(*s.rgbSplitCenter);
+        const double dw=region.documentWidth>0?region.documentWidth:source->width*region.unitsPerPixel,dh=region.documentHeight>0?region.documentHeight:source->height*region.unitsPerPixel;
+        filter.progressiveStart=map(s.progressiveStart.value_or(Point{dw/2,0}));filter.progressiveEnd=map(s.progressiveEnd.value_or(Point{dw/2,dh}));
+        filter.rgbSplitCenter=map(s.rgbSplitCenter.value_or(Point{dw/2,dh/2}));
         auto kind=s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:s.kind==11?filters::Kind::AddNoise:s.kind==12?filters::Kind::ProgressiveBlur:s.kind==13?filters::Kind::Bloom:filters::Kind::RgbSplit;
         if(!filters::supportsHdr(kind)&&source->isHdr())throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
         filters::Limits limits;limits.cancelled=cancelled;
         if(!filters::supportsHdr(kind)){
-            auto raster=rasterFromDeep(*source);auto changed=filters::runPixels(kind,*raster,filter,1,s.seed,selection,limits);
+            auto raster=rasterFromDeep(*source);auto changed=filters::runPixels(kind,*raster,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);
             if(changed==raster)return source;
             auto image=makeDeep(changed->width,changed->height,source->format);
             for(int y=0;y<changed->height;++y){cancel();for(int x=0;x<changed->width;++x){auto p=changed->pixel(x,y);image->setPixel(x,y,{p.a?p.r/255.f:0.f,p.a?p.g/255.f:0.f,p.a?p.b/255.f:0.f,p.a/255.f});}}
             return image;
         }
-        return filters::runDeepPixels(kind,*source,filter,1,s.seed,selection,limits);}
+        return filters::runDeepPixels(kind,*source,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);}
     // Exposure is evaluated in scene-linear light. Other bounded color kernels
     // see per-pixel normalized highlights, then their brightness is restored.
     if(s.kind!=3&&s.kind!=1&&s.kind!=2){

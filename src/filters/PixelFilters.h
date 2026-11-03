@@ -69,6 +69,7 @@ double blurMargin(Kind,const Settings&);
 bool supportsHdr(Kind);
 LayerSides canvasTouchingSides(const Transform&,int sourceWidth,int sourceHeight,int canvasWidth,int canvasHeight);
 PixelRect blurWorkingBounds(Kind,const Settings&,int width,int height,double retainedBlurMargin,LayerSides);
+PixelRect filterWorkingBounds(const Request&);
 // The direct PixelFilter.run boundary: supplied image is already padded/scaled;
 // optional coverage must match that grid. Output retains dimensions.
 std::shared_ptr<const Raster> runPixels(Kind,const Raster&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {},LayerSides={});

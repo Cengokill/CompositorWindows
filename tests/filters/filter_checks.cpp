@@ -135,6 +135,10 @@ void testRgbSplit(){
     auto selected=runPixels(Kind::RgbSplit,*source,s,1,0,coverage.get());
     require(selected->pixel(16,4)==source->pixel(16,4)&&selected->pixel(16,24)==radial->pixel(16,24),"RGB Split selection coverage");
     auto q=request(Kind::RgbSplit,source);q.settings=s;
+    fails([&]{apply(q);},"radial RGB Split without canvas bounds must fail instead of clipping");
+    q.canvasWidth=160;q.canvasHeight=80;
+    const auto radialBounds=filterWorkingBounds(q);
+    require(radialBounds.x<=-10&&radialBounds.x+radialBounds.width>=150&&radialBounds.y<=-20&&radialBounds.y+radialBounds.height>=60,"radial working bounds cover the canvas");
     auto grown=apply(q);require(grown.changed&&grown.sourceBounds.width>64,"RGB Split grows bounds");
     q.settings.rgbSplitDistance=0;q.settings.rgbSplitBlur=0;require(!apply(q).changed,"neutral RGB Split apply is identity");
     q.settings.rgbSplitDistance=12;int polls=0;q.limits.cancelled=[&]{return ++polls>8;};fails([&]{apply(q);},"RGB Split cancellation");

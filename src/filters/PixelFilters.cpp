@@ -163,7 +163,7 @@ template<class T> std::vector<T> rgbSplit(const std::vector<T>& source,int w,int
     const double distance=s.rgbSplitDistance*scale,blurAmt=s.rgbSplitBlur*scale;
     if(distance<=0&&blurAmt<=0)return source;
     const Point center=s.rgbSplitCenter.value_or(Point{w/2.,h/2.});
-    const double reach=std::max(1.,s.rgbSplitReach);
+    const double reach=std::max(1e-9,s.rgbSplitReach);
     const double angle=s.rgbSplitAngle*std::numbers::pi/180,dx=std::cos(angle),dy=-std::sin(angle);
     const double spread=s.rgbSplitRadial?distance*2:distance,smear=s.rgbSplitRadial?blurAmt*2:blurAmt;
     const int spectral=distance>0?std::clamp(int(spread),3,32):1;
@@ -200,8 +200,8 @@ template<class T> std::vector<T> rgbSplit(const std::vector<T>& source,int w,int
     });
     return out;
 }
-void bloom(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,const Limits& limits){
-    const double amount=s.bloomGlow?s.bloomAmount:s.bloom,radius=s.bloomGlow?s.bloomRadius:8,threshold=s.bloomGlow?0.:s.bloomThreshold;
+void bloom(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,double scale,const Limits& limits){
+    const double amount=s.bloomGlow?s.bloomAmount:s.bloom,radius=s.bloomGlow?s.bloomRadius*scale:8,threshold=s.bloomGlow?0.:s.bloomThreshold;
     if(amount<=0)return;
     std::vector<std::uint8_t> bright=pixels;
     if(!s.bloomGlow){
@@ -256,7 +256,7 @@ std::shared_ptr<const Raster> resize(const Raster& source,PixelRect bounds,int w
 }
 PixelRect coverageBounds(const SourceSelection& selected){const auto&m=*selected.coverage;int loX=m.width,loY=m.height,hiX=0,hiY=0;for(int y=0;y<m.height;++y)for(int x=0;x<m.width;++x)if(m.pixel(x,y)){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}return {selected.originX+loX,selected.originY+loY,hiX-loX,hiY-loY};}
 }
-Settings Settings::normalized()const{auto out=*this;out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);out.bloomAmount=filters::normalized(bloomAmount,0,100,40);out.bloomRadius=filters::normalized(bloomRadius,1,150,24);out.rgbSplitDistance=filters::normalized(rgbSplitDistance,0,200,10);out.rgbSplitBlur=filters::normalized(rgbSplitBlur,0,400,0);out.rgbSplitAngle=filters::normalized(rgbSplitAngle,-180,180,0);out.rgbSplitReach=filters::normalized(rgbSplitReach,1,100000,1000);for(auto* point:{&out.progressiveStart,&out.progressiveEnd,&out.rgbSplitCenter})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
+Settings Settings::normalized()const{auto out=*this;out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);out.bloomAmount=filters::normalized(bloomAmount,0,100,40);out.bloomRadius=filters::normalized(bloomRadius,1,150,24);out.rgbSplitDistance=filters::normalized(rgbSplitDistance,0,200,10);out.rgbSplitBlur=filters::normalized(rgbSplitBlur,0,400,0);out.rgbSplitAngle=filters::normalized(rgbSplitAngle,-180,180,0);out.rgbSplitReach=filters::normalized(rgbSplitReach,1e-9,3200000,1000);for(auto* point:{&out.progressiveStart,&out.progressiveEnd,&out.rgbSplitCenter})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
 bool supportsHdr(Kind kind){return kind!=Kind::LensCorrection&&kind!=Kind::ContentAwareFill&&kind!=Kind::Bloom&&kind!=Kind::TonalContrast&&kind!=Kind::Scanlines&&kind!=Kind::RgbSplit;}
 double blurMargin(Kind kind,const Settings& raw){kindCheck(kind);auto s=raw.normalized();return kind==Kind::GaussianBlur?s.radius*3+2:kind==Kind::MotionBlur?s.distance/2+2:kind==Kind::ProgressiveBlur?std::max(s.progressiveFrom,s.progressiveTo)*3+2:kind==Kind::RgbSplit?(s.rgbSplitDistance+s.rgbSplitBlur)*(s.rgbSplitRadial?2:1)+2:kind==Kind::Bloom&&s.bloomGlow?s.bloomRadius*3+2:0;}
 LayerSides canvasTouchingSides(const Transform& placed,int sourceWidth,int sourceHeight,int canvasWidth,int canvasHeight){
@@ -273,11 +273,29 @@ PixelRect blurWorkingBounds(Kind kind,const Settings& raw,int width,int height,d
     const int left=sides.left?0:margin,top=sides.top?0:margin,right=sides.right?0:margin,bottom=sides.bottom?0:margin;
     return {-left,-top,width+left+right,height+top+bottom};
 }
+PixelRect filterWorkingBounds(const Request& request){
+    const int width=request.source->width,height=request.source->height;
+    const auto sides=canvasTouchingSides(request.transform,width,height,request.canvasWidth,request.canvasHeight);
+    auto bounds=blurWorkingBounds(request.kind,request.settings,width,height,request.retainedBlurMargin,sides);
+    if(request.kind!=Kind::RgbSplit||!request.settings.rgbSplitRadial)return bounds;
+    if(request.canvasWidth<1||request.canvasHeight<1)throw std::runtime_error("Radial RGB Split requires canvas bounds");
+    // A radial inverse sample can affect any point on the canvas, especially
+    // when distance is greater than reach. Include the canvas in source space.
+    double left=std::min(0,bounds.x),top=std::min(0,bounds.y),right=std::max(width,bounds.x+bounds.width),bottom=std::max(height,bounds.y+bounds.height);
+    for(Point p:std::array<Point,4>{{{0,0},{double(request.canvasWidth),0},{0,double(request.canvasHeight)},{double(request.canvasWidth),double(request.canvasHeight)}}}){
+        const auto u=request.transform.toUnit(p);const double x=u.x*width,y=u.y*height;
+        if(!std::isfinite(x)||!std::isfinite(y))throw std::runtime_error("Radial RGB Split canvas bounds are invalid");
+        left=std::min(left,x);top=std::min(top,y);right=std::max(right,x);bottom=std::max(bottom,y);
+    }
+    left=std::floor(left);top=std::floor(top);right=std::ceil(right);bottom=std::ceil(bottom);
+    if(left < -30000||top < -30000||right-left>30000||bottom-top>30000||(right-left)*(bottom-top)>100000000)throw std::runtime_error("Radial RGB Split canvas exceeds filter budget");
+    return {int(left),int(top),int(right-left),int(bottom-top)};
+}
 Transform placedGrid(const Transform& placed,int originalWidth,int originalHeight,PixelRect rect){
     if(!placed.valid()||originalWidth<1||originalHeight<1||rect.width<1||rect.height<1)throw std::runtime_error("Invalid filter placement");auto out=placed;out.width=rect.width*placed.width/originalWidth;out.height=rect.height*placed.height/originalHeight;auto middle=placed.fromUnit({(rect.x+rect.width/2.)/originalWidth,(rect.y+rect.height/2.)/originalHeight});out.x=middle.x-out.width/2;out.y=middle.y-out.height/2;if(!out.valid())throw std::runtime_error("Expanded filter transform exceeds document limits");return out;
 }
 std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Settings& raw,double scale,std::uint32_t seed,const GrayRaster* selection,const Limits& limits,LayerSides clamp){
-    kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?96:kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>1)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
+    kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?96:kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>64)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
     if(kind==Kind::ContentAwareFill&&!selection)throw std::runtime_error("Content-Aware Fill needs a selection");const auto s=raw.normalized();auto original=source.rgba();cancel(limits);const int w=source.width,h=source.height;if(finishingIdentity(kind,s))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);auto result=original;cancel(limits);
     if(selection&&empty(*selection))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);
     switch(kind){
@@ -289,7 +307,7 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
         case Kind::LensCorrection:graphics::lensDistort(graphics::readOnly(view(original,w,h)),view(result,w,h),s.distortion/100*.35,limits.cancelled);break;
         case Kind::ContentAwareFill:{graphics::ConstGray8View mask{selection->pixels,std::uint32_t(w),std::uint32_t(h),std::size_t(w)};if(!graphics::contentFill(view(result,w,h),mask,limits.cancelled))throw std::runtime_error("Not enough unselected opaque pixels to synthesize a fill");break;}
         case Kind::Vignette:vignette(result,w,h,s);break;
-        case Kind::Bloom:bloom(result,w,h,s,limits);break;
+        case Kind::Bloom:bloom(result,w,h,s,scale,limits);break;
         case Kind::TonalContrast:tonalContrast(result,w,h,s,limits);break;
         case Kind::Dither:dither(result,w,h,s,seed);break;
         case Kind::Scanlines:scanlines(result,w,h,s,limits);break;
@@ -333,7 +351,7 @@ Result apply(const Request& request){
     if(request.kind==Kind::ContentAwareFill&&!request.selection)throw std::runtime_error("Content-Aware Fill needs a selection");if(request.kind==Kind::LensCorrection&&settings.distortion==0)return result;if(finishingIdentity(request.kind,settings))return result;
     PixelRect bounds{0,0,original.width,original.height};const bool grows=spreads(request.kind);
     const auto clamp=grows?canvasTouchingSides(request.transform,original.width,original.height,request.canvasWidth,request.canvasHeight):LayerSides{};
-    if(grows)bounds=blurWorkingBounds(request.kind,settings,original.width,original.height,request.retainedBlurMargin,clamp);
+    if(grows)bounds=filterWorkingBounds(request);
     if(request.kind==Kind::ContentAwareFill){auto selection=coverageBounds(*request.selection);int loX=std::min(0,selection.x),loY=std::min(0,selection.y);bounds={loX,loY,std::max(original.width,selection.x+selection.width)-loX,std::max(original.height,selection.y+selection.height)-loY};}
     gateSize(bounds.width,bounds.height);
     auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=(request.kind==Kind::CameraRaw||request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit)&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;

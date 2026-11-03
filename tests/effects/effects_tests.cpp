@@ -41,6 +41,19 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
     check(glowAdjusted->rgba()==filters::runPixels(filters::Kind::Bloom,*source,glowFilter,1,0)->rgba(),"Bloom / Glow adjustment must reuse the glow kernel");
     auto progressive=settings("Progressive Blur");auto p=progressive["filterLayerSettings"].toObject();p["progressiveFrom"]=0;p["progressiveTo"]=0;progressive["filterLayerSettings"]=p;
     check(apply(source,progressive)==source,"Neutral Progressive Blur adjustment is identity");
+    // The same sampled grid must use document-space distances at every zoom.
+    for(double units:{.5,2.}){
+        const AdjustmentRegion region{10,20,units,96,48};
+        auto rgbSettings=layer;rgbSettings["rgbSplitRadial"]=true;rgbSettings["rgbSplitReach"]=20;rgbSettings.remove("rgbSplitCenter");rgb["filterLayerSettings"]=rgbSettings;
+        filters::Settings expected;expected.rgbSplitDistance=16;expected.rgbSplitRadial=true;expected.rgbSplitReach=20/units;expected.rgbSplitCenter=Point{(48-10)/units,(24-20)/units};expected.rgbSplitOriginX=10;expected.rgbSplitOriginY=20;expected.rgbSplitUnitsPerPixel=units;
+        check(apply(source,rgb,nullptr,region)->rgba()==filters::runPixels(filters::Kind::RgbSplit,*source,expected,1/units,0)->rgba(),"RGB Split scale or default center differs");
+        check(apply(source,glow,nullptr,region)->rgba()==filters::runPixels(filters::Kind::Bloom,*source,glowFilter,1/units,0)->rgba(),"Bloom radius does not follow render scale");
+        p["progressiveFrom"]=2;p["progressiveTo"]=8;progressive["filterLayerSettings"]=p;
+        filters::Settings expectedBlur;expectedBlur.progressiveFrom=2;expectedBlur.progressiveTo=8;expectedBlur.progressiveStart=Point{(48-10)/units,(0-20)/units};expectedBlur.progressiveEnd=Point{(48-10)/units,(48-20)/units};
+        check(apply(source,progressive,nullptr,region)->rgba()==filters::runPixels(filters::Kind::ProgressiveBlur,*source,expectedBlur,1/units,0)->rgba(),"Progressive Blur scale or default points differ");
+        auto deep=makeDeep(source->width,source->height);for(int y=0;y<source->height;++y)for(int x=0;x<source->width;++x){auto q=source->pixel(x,y);deep->setPixel(x,y,{q.r/255.f,q.g/255.f,q.b/255.f,q.a/255.f});}
+        check(applyAdjustment(deep,encode(progressive),nullptr,region)->samples==filters::runDeepPixels(filters::Kind::ProgressiveBlur,*deep,expectedBlur,1/units,0)->samples,"Deep Progressive Blur scale or defaults differ");
+    }
  }
  else if(test=="levels_opaque_order"){auto r=Raster::filled(1,1,{64,64,64,255});auto o=levelSettings(1,changedLevels(0,2));auto l=o["levels"].toObject();auto a=l["ranges"].toArray();a[0]=changedLevels(40,1,210);l["ranges"]=a;o["levels"]=l;auto p=apply(r,o)->pixel(0,0);double expected=(std::sqrt(64./255)*255-40)/(210-40)*255;check(std::abs(p.r-expected)<=1&&p.r>p.g&&p.g==p.b,"Levels order differs from source");}
  else if(test=="levels_partial_alpha_selection"){

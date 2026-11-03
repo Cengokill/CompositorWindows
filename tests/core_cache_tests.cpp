@@ -50,6 +50,13 @@ void rgb_split_adjustment_tile_seam(){
         layer["rgbSplitRadial"]=radial;json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();split.transform={0,0,512,32};d.layers={image,split};
         auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);equal(*tiled,*full);
     }
+    layer["rgbSplitRadial"]=true;layer["rgbSplitDistance"]=12;layer["rgbSplitBlur"]=0;layer["rgbSplitReach"]=50;layer["rgbSplitCenter"]=QJsonObject{{"x",2},{"y",16}};
+    json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers={image,split};
+    auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);
+    for(int y=4;y<28;++y)for(int x=250;x<262;++x)REQUIRE(tiled->pixel(x,y)==full->pixel(x,y));
+    layer.remove("rgbSplitCenter");json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers={image,split};
+    full=SoftwareRenderer().render(d,0,0,512,32);cache.reset();tiled=cache.render(d);
+    for(int y=4;y<28;++y)for(int x=250;x<262;++x)REQUIRE(tiled->pixel(x,y)==full->pixel(x,y));
 }
 Layer solid(const char* id,int width,int height,Pixel color,Transform transform){Layer layer;layer.id=id;layer.opacity=1;layer.raster=Raster::filled(width,height,color);layer.transform=transform;return layer;}
 void partial_metadata_damage(){
