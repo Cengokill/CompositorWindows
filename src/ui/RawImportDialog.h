@@ -22,7 +22,9 @@ namespace compositor::ui {
 class TrackSlider;
 
 // Settings accepted per file. A file without an entry imports as shot.
-using RawSettings = std::map<std::filesystem::path, imaging::RawAdjustments>;
+struct RawSettings : std::map<std::filesystem::path, imaging::RawAdjustments> {
+    std::map<std::filesystem::path,CmykProfilePtr> cmykProfiles;
+};
 
 // Reviews RAW development before any document change. Previews run on a worker through the
 // same developRaw path used by the final import; results from superseded settings are discarded.

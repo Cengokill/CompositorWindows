@@ -172,7 +172,7 @@ static void psd_contract() {
     auto upright = textFile("", true, "Upright");
     check(!upright.document.layers.at(0).text && upright.report.find("Vertical") != std::string::npos, "vertical PSD text stayed editable");
     std::vector<uint8_t> cmyk; auto c16 = [&](int v) { cmyk.push_back(uint8_t(v >> 8)); cmyk.push_back(uint8_t(v)); }; auto c32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) cmyk.push_back(uint8_t(v >> s)); }; auto cascii = [&](const char* s) { while (*s) cmyk.push_back(uint8_t(*s++)); };
-    cascii("8BPS"); c16(1); for (int i = 0; i < 6; ++i) cmyk.push_back(0); c16(4); c32(2); c32(2); c16(8); c16(4);
+    cascii("8BPS"); c16(1); for (int i = 0; i < 6; ++i) cmyk.push_back(0); c16(4); c32(2); c32(2); c16(8); c16(4); c32(0); c32(0);
     bool namedCmyk = false; try { imaging::readPsd(cmyk.data(), cmyk.size()); } catch (const std::exception& error) { namedCmyk = std::string(error.what()).find("CMYK") != std::string::npos; }
     check(namedCmyk, "CMYK PSD was not named in the error");
     std::vector<uint8_t> zip; auto z16 = [&](int v) { zip.push_back(uint8_t(v >> 8)); zip.push_back(uint8_t(v)); }; auto z32 = [&](uint32_t v) { for (int s = 24; s >= 0; s -= 8) zip.push_back(uint8_t(v >> s)); }; auto zascii = [&](const char* s) { while (*s) zip.push_back(uint8_t(*s++)); };
@@ -644,6 +644,7 @@ static void raw_development_contract() {
     truncatedFile.close();
     check(!errorOf([&] { imaging::developRaw(truncated, {}); }).empty(), "truncated RAW was accepted");
 }
+void cmykContract(const std::string&);
 void hdrNumericContracts();
 void hdrStorageContracts();
 int main(int argc, char** argv) {
@@ -652,6 +653,6 @@ int main(int argc, char** argv) {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

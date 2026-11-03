@@ -8,7 +8,7 @@ namespace compositor::ui {
 struct WorkspaceDropQueue::Impl {
     Host host;std::deque<WorkspaceDropRequest> pending;std::optional<WorkspaceDropRequest> running;
     QPointer<QObject> waiting;qsizetype index{};bool waitingActive{},cancelled{},draining{},completing{};
-    QTimer retry;
+    QTimer retry;RawSettings reviewed;
 };
 WorkspaceDropQueue::WorkspaceDropQueue(Host host,QObject* parent):QObject(parent),impl_(std::make_unique<Impl>()){
     if(!host.canBegin||!host.canAdvance||!host.managing||!host.project||!host.review||!host.imageTarget||!host.image||!host.cancelImage||!host.error)throw std::invalid_argument("Incomplete workspace drop host");
@@ -51,15 +51,18 @@ void WorkspaceDropQueue::drain(){
         if(!p.running){
             if(p.pending.empty())return;
             if(!p.host.canBegin()){p.retry.start();return;}
-            p.running=std::move(p.pending.front());p.pending.pop_front();p.index=0;p.cancelled=false;p.host.managing(true);
+            p.running=std::move(p.pending.front());p.pending.pop_front();p.index=0;p.cancelled=false;p.host.managing(true);p.reviewed={};
+            try { if(p.host.reviewBatch&&!p.host.reviewBatch(p.running->paths,p.reviewed))p.cancelled=true; }
+            catch(const std::exception& error){p.cancelled=true;p.host.error(p.running->paths.join(", "),QString::fromUtf8(error.what()));}
         }
         if(p.cancelled||p.index>=p.running->paths.size()){finish();if(p.completing)return;continue;}
         if(!p.host.canAdvance()){p.retry.start();return;}
         const auto path=p.running->paths[p.index++];
         try{
             if(QFileInfo(path).suffix().compare("comp",Qt::CaseInsensitive)==0){p.host.project(path);continue;}
-            RawSettings settings;
+            RawSettings settings=p.reviewed;
             if(!p.host.review(path,settings)){p.cancelled=true;continue;}
+            if(p.host.standalone){auto handled=p.host.standalone(path,settings);if(handled){p.cancelled=!*handled;continue;}}
             auto* target=p.host.imageTarget(p.running->destination,p.running->hasDestination);if(!target)continue;
             p.waiting=target;p.waitingActive=true;
             p.host.image(target,path,p.running->point,p.running->lifetime,settings);

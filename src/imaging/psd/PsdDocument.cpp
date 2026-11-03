@@ -1,4 +1,5 @@
 #include "PsdDocument.h"
+#include "imaging/cmyk.h"
 #include "PsdText.h"
 #include "core/DeepImage.h"
 #include "core/Document.h"
@@ -602,8 +603,27 @@ std::string convertVectorShape(Layer& layer, const std::vector<uint8_t>& fill, c
     return {};
 }
 
-bool readMerged(Reader& in, int width, int height, int depth, int channels, Layer& layer, std::string& report) {
+uint64_t cmykRasterBytes(int width,int height){
+    return uint64_t((width+Raster::tileSide-1)/Raster::tileSide)*uint64_t((height+Raster::tileSide-1)/Raster::tileSide)*sizeof(Raster::Tile);
+}
+void convertInks(CmykTransform& color,int width,std::vector<uint8_t>& c,std::vector<uint8_t>& m,std::vector<uint8_t>& y,const std::vector<uint8_t>& k,
+                 std::vector<uint16_t>& c16,std::vector<uint16_t>& m16,std::vector<uint16_t>& y16,const std::vector<uint16_t>& k16){
+    const auto count=c.size();if(!count||m.size()!=count||y.size()!=count||k.size()!=count)throw std::runtime_error("Incomplete CMYK PSD channels");
+    const bool deep=!c16.empty();if(deep&&(c16.size()!=count||m16.size()!=count||y16.size()!=count||k16.size()!=count))throw std::runtime_error("Incomplete 16-bit CMYK PSD channels");
+    std::array<uint16_t,4096> ink{};std::array<uint16_t,3072> rgb{};
+    for(size_t first=0;first<count;first+=1024){const auto n=std::min(size_t(1024),count-first);
+        for(size_t i=0;i<n;++i){const auto p=first+i;ink[i*4]=uint16_t(65535-(deep?c16[p]:unsigned(c[p])*257));ink[i*4+1]=uint16_t(65535-(deep?m16[p]:unsigned(m[p])*257));ink[i*4+2]=uint16_t(65535-(deep?y16[p]:unsigned(y[p])*257));ink[i*4+3]=uint16_t(65535-(deep?k16[p]:unsigned(k[p])*257));}
+        color.toRgb(std::span(ink).first(n*4),std::span(rgb).first(n*3));
+        for(size_t i=0;i<n;++i){const auto p=first+i;const int x=int(p%size_t(width)),row=int(p/size_t(width));
+            if(deep){c16[p]=rgb[i*3];m16[p]=rgb[i*3+1];y16[p]=rgb[i*3+2];}
+            c[p]=ditherChannel(rgb[i*3],x,row);m[p]=ditherChannel(rgb[i*3+1],x,row);y[p]=ditherChannel(rgb[i*3+2],x,row);
+        }
+    }
+}
+
+bool readMerged(Reader& in, int width, int height, int depth, int channels, Layer& layer, std::string& report,CmykTransform* color,bool mergedTransparency) {
     if (in.at + 2 > in.size) return false;
+    if (color && uint64_t(width)*height*(depth==16?27u:9u)+cmykRasterBytes(width,height)+sizeof(Raster::Tile)>1200000000ULL) throw std::runtime_error("CMYK PSD exceeds the decode memory budget");
     auto compression = in.u16();
     if (compression > 1) throw std::runtime_error("Unsupported PSD compression");
     const int planes = std::max(int(channels), 3);
@@ -618,8 +638,9 @@ bool readMerged(Reader& in, int width, int height, int depth, int channels, Laye
     auto plane = [&](int index, std::vector<uint16_t>* samples) { return decodeChannel(in, uint64_t(width), uint64_t(height), 0, 0, width, height, compression, depth, in.size - in.at, rows.empty() ? nullptr : &rows, index * height, samples); };
     auto red = plane(0, depth == 16 ? &red16 : nullptr); auto green = plane(1, depth == 16 ? &green16 : nullptr); auto blue = plane(2, depth == 16 ? &blue16 : nullptr);
     std::vector<uint8_t> alpha;
-    if (channels >= 4) {
-        try { alpha = plane(3, depth == 16 ? &alpha16 : nullptr); }
+    if(color){std::vector<uint16_t> key16;auto key=plane(3,depth==16?&key16:nullptr);convertInks(*color,width,red,green,blue,key,red16,green16,blue16,key16);}
+    if ((!color&&channels>=4)||(color&&mergedTransparency&&channels>=5)) {
+        try { alpha = plane(color?4:3, depth == 16 ? &alpha16 : nullptr); }
         catch (const std::exception&) {
             report += "Merged image transparency could not be read.\n";
             return false;
@@ -630,25 +651,37 @@ bool readMerged(Reader& in, int width, int height, int depth, int channels, Laye
     return true;
 }
 }
-PsdImport readPsd(const std::filesystem::path& path) {
+PsdImport readPsd(const std::filesystem::path& path,CmykProfilePtr fallback) {
     std::ifstream file(path, std::ios::binary); if (!file) throw std::runtime_error("Cannot open PSD");
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), {}); return readPsd(bytes.data(), bytes.size());
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), {}); return readPsd(bytes.data(), bytes.size(),std::move(fallback));
 }
-PsdImport readPsd(const uint8_t* bytes, size_t size) {
+PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
     Reader in{bytes, size}; if (in.ascii(4) != "8BPS") throw std::runtime_error("Not a PSD");
     auto version = in.u16(); if (version != 1 && version != 2) throw std::runtime_error("Unsupported PSD version"); in.psb = version == 2; in.skip(6);
     auto channels = in.u16(); auto height = in.u32(); auto width = in.u32(); auto depth = in.u16(); auto mode = in.u16();
-    if (mode == 4) throw std::runtime_error("CMYK PSD files are not supported");
+    const bool cmyk=mode==4;
     if (channels > 56) throw std::runtime_error("PSD channel count exceeds 56");
-    if (channels < 3 || (depth != 8 && depth != 16) || mode != 3) throw std::runtime_error("Only 8-bit or 16-bit RGB PSD files are supported");
+    if (channels < (cmyk?4:3) || (depth != 8 && depth != 16) || (mode != 3 && !cmyk)) throw std::runtime_error("Only 8-bit or 16-bit RGB/CMYK PSD files are supported");
     if (!width || !height || width > 30000 || height > 30000 || uint64_t(width) * height > 100000000) throw std::runtime_error("PSD exceeds the canvas limit");
-    in.skip(in.u32()); in.skip(in.u32());
-    PsdImport result; result.document.id = newId(); result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report; std::vector<std::string> warnings;
+    in.skip(in.u32());
+    const auto resourceLength=in.u32();in.need(resourceLength);
+    Reader resources{in.data+in.at,resourceLength};in.skip(resourceLength);
+    CmykProfilePtr profile;
+    if(cmyk){while(resources.at<resources.size){
+        if(resources.ascii(4)!="8BIM")throw std::runtime_error("Invalid PSD resource signature");
+        const auto id=resources.u16();const auto name=resources.u8();resources.skip(name);if((name+1)%2)resources.skip(1);
+        const auto length=resources.u32();resources.need(length);
+        if(id==1039){if(profile)throw std::runtime_error("Duplicate PSD ICC profile");profile=makeCmykProfile(std::span(resources.data+resources.at,length),"Embedded CMYK profile");}
+        resources.skip(length);if(length%2)resources.skip(1);
+    }if(!profile)profile=std::move(fallback);if(!profile)throw MissingCmykProfile();}
+    std::unique_ptr<CmykTransform> color;if(profile)color=std::make_unique<CmykTransform>(profile);
+    PsdImport result; result.document.cmykProfile=profile; result.document.id = newId(); result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report; std::vector<std::string> warnings;
     if (depth == 16) report += "16-bit channels were preserved.\n";
-    auto section = in.wide(); auto sectionEnd = in.at + size_t(std::min<uint64_t>(section, in.size > in.at ? in.size - in.at : 0));
+    bool mergedTransparency=false;
+    auto section = in.wide();if(cmyk&&section>in.size-in.at)throw std::runtime_error("Truncated CMYK layer section"); auto sectionEnd = in.at + size_t(std::min<uint64_t>(section, in.size > in.at ? in.size - in.at : 0));
     if (section) {
         try {
-            auto info = in.wide(); auto infoAt = in.at; auto infoEnd = infoAt + size_t(std::min<uint64_t>(info, in.size > infoAt ? in.size - infoAt : 0));
+            auto info = in.wide();if(cmyk&&(in.at>sectionEnd||info>sectionEnd-in.at))throw std::runtime_error("Invalid CMYK layer info length"); auto infoAt = in.at; auto infoEnd = infoAt + size_t(std::min<uint64_t>(info, in.size > infoAt ? in.size - infoAt : 0));
             bool depthLayers = false;
             // Photoshop stores 16-bit layer records in the Lr16 block when the standard layer info is empty.
             if (depth == 16) {
@@ -673,13 +706,13 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
             }
             if (!depthLayers && info) in.at = infoAt;
             if (depthLayers || info) {
-            auto count = std::abs(in.i16()); if (count > 256) throw std::runtime_error("Too many PSD layers");
+            const auto signedCount=in.i16();mergedTransparency=signedCount<0;auto count = std::abs(signedCount); if (count > 256) throw std::runtime_error("Too many PSD layers");
             struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name; bool group{}, closer{}, visible{true}, hasMask{}; int maskTop{}, maskLeft{}, maskBottom{}, maskRight{}; uint8_t maskFlags{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::vector<uint8_t> typeTool, fill, solidFill, geometry, strokeData, vectorPath; };
             std::vector<Record> records;
             for (int i = 0; i < count; ++i) {
                 Record record; record.top = in.i32(); record.left = in.i32(); record.bottom = in.i32(); record.right = in.i32();
                 auto channelCount = in.u16(); if (channelCount > 16) throw std::runtime_error("Too many PSD channels");
-                for (int c = 0; c < channelCount; ++c) { auto id = in.i16(); auto length = in.wide(); record.channels.push_back({id, length}); }
+                for (int c = 0; c < channelCount; ++c) { auto id = in.i16(); auto length = in.wide();if(cmyk&&std::any_of(record.channels.begin(),record.channels.end(),[id](const auto& channel){return channel.first==id;}))throw std::runtime_error("Duplicate CMYK PSD channel"); record.channels.push_back({id, length}); }
                 if (in.ascii(4) != "8BIM") throw std::runtime_error("Invalid PSD blend signature"); record.blend = blendOf(in.ascii(4), report);
                 record.opacity = in.u8(); in.u8(); record.visible = (in.u8() & 0x02) == 0; in.u8(); auto extra = in.u32(); auto extraEnd = in.at + extra;
                 if (extraEnd > in.size) extraEnd = in.size;
@@ -714,6 +747,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 in.at = extraEnd; records.push_back(std::move(record));
             }
             std::vector<std::string> folders;
+            uint64_t retainedPixels=0,retainedMaskPixels=0,retainedBytes=0;
             for (auto& record : records) {
                 // A shape's solid fill may be stored as a SoCo block, whose payload lacks the "SoCo" prefix that the vscg form carries.
                 // Only a layer with vector geometry is a shape, so a plain solid-colour fill layer keeps its existing handling.
@@ -766,24 +800,36 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                     report += (record.name.empty() ? "Layer" : record.name) + " is outside the document canvas and was skipped.\n";
                 else if (!record.group && !record.closer && !sourceFits && !cropFits && !hasVectorData && record.typeTool.empty())
                     report += (record.name.empty() ? "Layer" : record.name) + " has no visible pixels within the supported limits and was skipped.\n";
-                std::vector<uint8_t> red, green, blue, alpha, maskPlane;
-                std::vector<uint16_t> red16, green16, blue16, alpha16;
+                if(cmyk&&!record.group&&!record.closer&&hasVisibleLayer&&(sourceFits||cropFits)) {
+                    const uint64_t maskPixels=maskFits?uint64_t(decodeMaskWidth)*uint64_t(decodeMaskHeight):0;
+                    if(decodedPixels>100000000-retainedPixels||maskPixels>100000000-retainedMaskPixels)
+                        throw std::runtime_error("CMYK PSD exceeds the project pixel budget");
+                    // Four inks plus alpha, optional deep planes and the installed RGB image coexist.
+                    const auto tileBytes=cmykRasterBytes(decodeWidth,decodeHeight);
+                    const uint64_t working=retainedBytes+decodedPixels*(depth==16?27u:9u)+tileBytes+sizeof(Raster::Tile)+maskPixels*2;
+                    if(working>1200000000ULL)throw std::runtime_error("CMYK PSD exceeds the decode memory budget");
+                    retainedPixels+=decodedPixels;retainedMaskPixels+=maskPixels;retainedBytes+=tileBytes+decodedPixels*(depth==16?8u:0u)+maskPixels;
+                }
+                std::vector<uint8_t> red, green, blue, alpha, maskPlane,key;
+                std::vector<uint16_t> red16, green16, blue16, alpha16,key16;
                 for (auto [id, length] : record.channels) {
                     auto start = in.at;
+                    if(cmyk&&(length<2||start>sectionEnd||length>sectionEnd-start))throw std::runtime_error("Invalid CMYK PSD channel length");
                     try {
                         uint16_t compression = length >= 2 ? in.u16() : 0;
                         const size_t packed = length >= 2 ? size_t(length - 2) : 0;
                         if (!record.group && !record.closer && maskFits && id == -2)
                             maskPlane = decodeChannel(in, uint64_t(maskSourceWidth), uint64_t(maskSourceHeight), decodeMaskLeft, decodeMaskTop, decodeMaskWidth, decodeMaskHeight, compression, int(depth), packed);
-                        else if ((sourceFits || cropFits) && hasVisibleLayer && !record.group && !record.closer && (id == 0 || id == 1 || id == 2 || id == -1)) {
+                        else if ((sourceFits || cropFits) && hasVisibleLayer && !record.group && !record.closer && (id == 0 || id == 1 || id == 2 || id == -1 || (cmyk && id == 3))) {
                             std::vector<uint16_t> samples;
                             auto plane = decodeChannel(in, uint64_t(sourceWidth), uint64_t(sourceHeight), decodeLeft, decodeTop, decodeWidth, decodeHeight, compression, int(depth), packed, nullptr, 0, depth == 16 ? &samples : nullptr);
                             if (id == 0) { red = std::move(plane); red16 = std::move(samples); }
                             else if (id == 1) { green = std::move(plane); green16 = std::move(samples); }
                             else if (id == 2) { blue = std::move(plane); blue16 = std::move(samples); }
+                            else if(id==3){key=std::move(plane);key16=std::move(samples);}
                             else { alpha = std::move(plane); alpha16 = std::move(samples); }
                         }
-                    } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded (" + error.what() + ").\n"; }
+                    } catch (const std::exception& error) { if(cmyk)throw; report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded (" + error.what() + ").\n"; }
                     const size_t end = start > in.size || length > in.size - start ? in.size : start + size_t(length);
                     in.at = end;
                 }
@@ -791,6 +837,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 if (record.closer) { if (!folders.empty()) folders.pop_back(); continue; }
                 if (!record.group && !hasVisibleLayer && !hasVectorData && record.typeTool.empty()) continue;
                 if (!record.group && !sourceFits && !cropFits && !hasVectorData && record.typeTool.empty()) continue;
+                if(color&&!record.group&&!record.closer&&hasVisibleLayer)convertInks(*color,decodeWidth,red,green,blue,key,red16,green16,blue16,key16);
                 Layer layer; layer.id = newId(); layer.name = record.name.empty() ? "Layer" : record.name; layer.opacity = record.opacity / 255.; layer.blend = record.group ? Blend::Normal : record.blend; layer.group = record.group; layer.visible = record.visible;
                 layer.transform = record.group
                     ? Transform{double(record.left), double(record.top), double(std::max<int64_t>(sourceWidth, 1)), double(std::max<int64_t>(sourceHeight, 1))}
@@ -801,8 +848,8 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                 if (record.group) folders.push_back(layer.id);
                 else if ((sourceFits || cropFits) && red.size() == size_t(decodedPixels) && green.size() == red.size() && blue.size() == red.size()) installImage(layer, decodeWidth, decodeHeight, red, green, blue, alpha, red16, green16, blue16, alpha16);
                 std::string shapeReason;
-                if (!record.group && !record.closer && !record.fill.empty()) shapeReason = convertVectorShape(layer, record.fill, record.geometry, record.vectorPath, record.strokeData, result.document.width, result.document.height);
-                if (!layer.raster && !record.group) { if (auto painted = rasterizeRoundedRect(record.fill, record.geometry, record.strokeData)) { layer.raster = std::move(painted->raster); layer.transform = painted->transform; } }
+                if (!cmyk && !record.group && !record.closer && !record.fill.empty()) shapeReason = convertVectorShape(layer, record.fill, record.geometry, record.vectorPath, record.strokeData, result.document.width, result.document.height);
+                if (!cmyk && !layer.raster && !record.group) { if (auto painted = rasterizeRoundedRect(record.fill, record.geometry, record.strokeData)) { layer.raster = std::move(painted->raster); layer.transform = painted->transform; } }
                 if (!shapeReason.empty()) warnings.push_back(layer.name + (layer.raster ? " stays as pixels: " : " could not be imported: ") + shapeReason + ".");
                 const size_t decodedMaskPixels = size_t(decodeMaskWidth) * size_t(decodeMaskHeight);
                 if (maskFits && maskPlane.size() == decodedMaskPixels) {
@@ -815,13 +862,15 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
                             : Transform{double(record.maskLeft), double(record.maskTop), double(maskSourceWidth), double(maskSourceHeight)};
                     layer.mask = std::move(mask);
                 }
-                if (!record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); } if (imported.editable) { if (layer.raster) layer.text = imported.text; else { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; } } } }
+                if(cmyk&&!record.group&&(hasVectorData||!record.typeTool.empty()))warnings.push_back(layer.name+": CMYK text/vector content remains rasterized.");
+                if (!cmyk && !record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); } if (imported.editable) { if (layer.raster) layer.text = imported.text; else { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; } } } }
                 if (layer.group || layer.raster || layer.text || layer.mask) result.document.layers.push_back(std::move(layer));
-                } catch (const std::exception& error) { report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(sourceWidth) + "x" + std::to_string(sourceHeight) + "): " + error.what() + "\n"; }
+                } catch (const std::exception& error) { if(cmyk)throw; report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(sourceWidth) + "x" + std::to_string(sourceHeight) + "): " + error.what() + "\n"; }
             }
             in.at = std::max(in.at, infoEnd);
             }
         } catch (const std::exception& error) {
+            if(cmyk)throw;
             report += std::string("Layer records were skipped: ") + error.what() + "\n";
             result.document.layers.clear();
             warnings.clear();
@@ -832,7 +881,7 @@ PsdImport readPsd(const uint8_t* bytes, size_t size) {
     if (!hasImage) {
         result.document.layers.clear();
         Layer merged;
-        try { if (readMerged(in, int(width), int(height), int(depth), int(channels), merged, report) && merged.raster) { result.document.layers = {std::move(merged)}; report += "Imported the merged image.\n"; } }
+        try { if (readMerged(in, int(width), int(height), int(depth), int(channels), merged, report,color.get(),mergedTransparency) && merged.raster) { result.document.layers = {std::move(merged)}; report += "Imported the merged image.\n"; } }
         catch (const std::exception& error) { report += std::string("Merged image was skipped: ") + error.what() + "\n"; }
     }
     if (result.document.layers.empty()) throw std::runtime_error(report.empty() ? "PSD contains no supported image" : report);

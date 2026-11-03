@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "imaging/cmyk.h"
 #include "AppLogging.h"
 #include "PropertyControls.h"
 #include "StaWorker.h"
@@ -25,6 +26,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QColorDialog>
+#include <QFileDialog>
 #include <QBuffer>
 #include <QTemporaryDir>
 #include <QSaveFile>
@@ -161,7 +163,7 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     return *path;
 }
 // The Format combo's entries, in order. The index is also what the export tests select.
-enum class ExportKind {Png,Jpeg,Pdf,Exr};
+enum class ExportKind {Png,Jpeg,Pdf,Tiff,Exr};
 QString withExportSuffix(QString path,ExportKind kind){
     QFileInfo info(path);
     const auto suffix=info.suffix().toLower();
@@ -169,19 +171,21 @@ QString withExportSuffix(QString path,ExportKind kind){
     case ExportKind::Jpeg:if(suffix=="jpg"||suffix=="jpeg")return path;break;
     case ExportKind::Png:if(suffix=="png")return path;break;
     case ExportKind::Pdf:if(suffix=="pdf")return path;break;
+    case ExportKind::Tiff:if(suffix=="tif"||suffix=="tiff")return path;break;
     case ExportKind::Exr:if(suffix=="exr")return path;break;
     }
     const auto stem=info.completeBaseName().isEmpty()?QStringLiteral("Untitled"):info.completeBaseName();
-    const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":kind==ExportKind::Exr?".exr":".png";
+    const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":kind==ExportKind::Tiff?".tif":kind==ExportKind::Exr?".exr":".png";
     return QDir::cleanPath(QDir(info.path()).filePath(stem+extension));
 }
 QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested){
     static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
     static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
     static const wchar_t pdfFilter[]=L"PDF\0*.pdf\0All files\0*.*\0";
+    static const wchar_t tiffFilter[]=L"TIFF\0*.tif;*.tiff\0All files\0*.*\0";
     static const wchar_t exrFilter[]=L"OpenEXR image\0*.exr\0\0";
-    const wchar_t* filter=kind==ExportKind::Exr?exrFilter:kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:pngFilter;
-    const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":kind==ExportKind::Exr?L"exr":L"png";
+    const wchar_t* filter=kind==ExportKind::Exr?exrFilter:kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:kind==ExportKind::Tiff?tiffFilter:pngFilter;
+    const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":kind==ExportKind::Tiff?L"tif":kind==ExportKind::Exr?L"exr":L"png";
     auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,L"Export Image",defaultExtension);
     if(path.isEmpty())return {};
     return withExportSuffix(path,kind);
@@ -238,18 +242,19 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     host.project=[this](const QString& path){loadProjectDirectory(path);};
     auto hdrPrepared=std::make_shared<ui::PreparedImages>();
     host.review=[this,hdrPrepared](const QString& path,ui::RawSettings& settings){hdrPrepared->clear();return ui::reviewRawImports(this,{nativePath(path)},settings)&&ui::prepareHdrImports(this,{nativePath(path)},*hdrPrepared);};
+    host.reviewBatch=[this](const QStringList& paths,ui::RawSettings& settings){return reviewCmykImports(paths,settings);};
+    host.standalone=[this](const QString& path,const ui::RawSettings& settings)->std::optional<bool>{const auto ext=QFileInfo(path).suffix().toLower();if(ext!="psd"&&ext!="psb")return {};auto profile=settings.cmykProfiles.find(nativePath(path));return importPhotoshop(path,profile==settings.cmykProfiles.end()?nullptr:profile->second)!=PhotoshopResult::Cancelled;};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
         QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);
+        // A captured destination that was closed takes its images with it; they must not land in another document.
         auto* target=hasDestination?project(captured):&addEmptyProject();
-        if(!target)target=current()?current():&addEmptyProject();
+        if(!target)return nullptr;
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==target){tabs_->setCurrentIndex(int(i));break;}
         return target->canvas;
     };
     host.image=[this,project,hdrPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
-        auto ext=QFileInfo(path).suffix().toLower();
-        if(ext=="psd"||ext=="psb"){importPhotoshop(path);if(workspaceDrops_)workspaceDrops_->imageFinished(canvas,false);return;}
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
-        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.prepared=std::move(*hdrPrepared);
+        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.cmykProfiles=settings.cmykProfiles;batch.prepared=std::move(*hdrPrepared);
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
@@ -266,12 +271,12 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     QStringList images;
     for(const auto& path:paths){
         const auto ext=QFileInfo(path).suffix().toLower();
-        if(ext=="psd"||ext=="psb")importPhotoshop(path);
+        if(ext=="psd"||ext=="psb"){auto profile=rawSettings.cmykProfiles.find(nativePath(path));if(importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second)==PhotoshopResult::Cancelled)return;}
         else images.append(path);
     }
     if(images.isEmpty())return;
     ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
-    batch.rawAdjustments=rawSettings;batch.prepared=prepared;
+    batch.rawAdjustments=rawSettings;batch.cmykProfiles=rawSettings.cmykProfiles;batch.prepared=prepared;
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -473,9 +478,10 @@ void MainWindow::openPath(const QString&path){
         refresh(false,false);
         if(!accepted)return;
     }
+    if(!reviewCmykImports({path},rawSettings))return;
+    if(photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);return;}
     ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,{nativePath(path)},prepared))return;
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
-    if(photoshop){importPhotoshop(path);return;}
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared);
 }
@@ -511,8 +517,9 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
     // The RAW review precedes every PSD import, so cancelling it leaves the whole batch unimported.
     ui::RawSettings rawSettings;
     if(!ui::reviewRawImports(this,files,rawSettings))return;
+    if(!reviewCmykImports(paths,rawSettings))return;
     ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,files,prepared))return;
-    for(const auto& path:photoshop){if(importPhotoshop(path)&&!destination)target=current();}
+    for(const auto& path:photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));const auto result=importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);if(result==PhotoshopResult::Cancelled)return;if(result==PhotoshopResult::Imported&&!destination)target=current();}
     if(images.isEmpty())return;
     queueImageImports(images,target,{},rawSettings,prepared);
 }
@@ -591,17 +598,18 @@ bool confirmPhotoshopWarnings(QWidget* parent,const QString& file,const std::vec
     return message.clickedButton()==proceed;
 }
 }
-bool MainWindow::importPhotoshop(const QString& path){
+MainWindow::PhotoshopResult MainWindow::importPhotoshop(const QString& path,CmykProfilePtr fallback){
     try{
-        auto imported=imaging::readPsd(nativePath(path));
-        if(!imported.warnings.empty()&&!confirmPhotoshopWarnings(this,QFileInfo(path).fileName(),imported.warnings))return false;
+        auto imported=imaging::readPsd(nativePath(path),std::move(fallback));
+        if(!imported.warnings.empty()&&!confirmPhotoshopWarnings(this,QFileInfo(path).fileName(),imported.warnings))return PhotoshopResult::Cancelled;
+        applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
         auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
         if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
         refresh();project.canvas->fit();
-        return true;
+        return PhotoshopResult::Imported;
     }catch(const std::exception& error){
         QMessageBox::critical(this,"Import PSD",error.what());
-        return false;
+        return PhotoshopResult::Failed;
     }
 }
 void MainWindow::importImage(){interruptPointer();startNativeImport(this,userDownloadsDirectory(),current()?current()->canvas:nullptr);}
@@ -660,8 +668,13 @@ void MainWindow::exportImage(){
     struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
     QTemporaryDir temp;if(!temp.isValid())throw std::runtime_error("Cannot create image export storage");
     QDialog dialog(this);dialog.setObjectName("imageExportDialog");dialog.setWindowTitle("Export Image");QFormLayout layout(&dialog);
-    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF","OpenEXR"});layout.addRow("Format",&format);
+    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF","TIFF","OpenEXR"});layout.addRow("Format",&format);
     const auto kind=[&]{return ExportKind(format.currentIndex());};
+    // OpenEXR keeps linear float pixels and ignores the output profile, so CMYK is offered for the other formats only.
+    const auto cmykAllowed=[&]{return kind()!=ExportKind::Png&&kind()!=ExportKind::Exr;};
+    QComboBox colorMode;colorMode.setObjectName("exportColorMode");colorMode.addItems({"RGB","CMYK"});layout.addRow("Color mode",&colorMode);
+    CmykProfilePtr outputProfile=snapshot.cmykProfile;
+    QPushButton profileButton(outputProfile?QString::fromStdString(outputProfile->name):"Choose CMYK profile…");profileButton.setObjectName("exportCmykProfile");layout.addRow("Profile",&profileButton);
     // PDF only: the page holds the canvas resampled by this factor, at the document's resolution, so it prints that much larger or smaller.
     QComboBox scale;scale.setObjectName("exportScale");for(const int percent:{25,50,75,100,200})scale.addItem(QString("%1%").arg(percent),percent/100.);scale.setCurrentIndex(3);layout.addRow("Scale",&scale);
     QLabel pageSize;pageSize.setObjectName("exportPageSize");layout.addRow("Page",&pageSize);
@@ -687,11 +700,12 @@ void MainWindow::exportImage(){
     auto changed=[&]{++generation;cancel->store(true);readyPath.clear();buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();};
     start=[&]{
         if(running||closed)return;
+        if(colorMode.currentIndex()==1&&cmykAllowed()&&!outputProfile){bytesLabel.setText("Choose a CMYK output profile");return;}
         running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);percent->store(0);
-        imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:kind()==ExportKind::Exr?imaging::ImageFormat::Exr:imaging::ImageFormat::Pdf;options.jpegQuality=quality.value()/100.;
+        imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:kind()==ExportKind::Tiff?imaging::ImageFormat::Tiff:kind()==ExportKind::Exr?imaging::ImageFormat::Exr:imaging::ImageFormat::Pdf;options.cmykProfile=colorMode.currentIndex()==1&&cmykAllowed()?outputProfile:nullptr;options.jpegQuality=quality.value()/100.;
         if(kind()==ExportKind::Pdf)options.scale=scale.currentData().toDouble();
         options.matteR=uint8_t(matteColor.red());options.matteG=uint8_t(matteColor.green());options.matteB=uint8_t(matteColor.blue());options.cancelled=[flag=cancel]{return flag->load();};
-        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":kind()==ExportKind::Exr?"exr":"pdf"));
+        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":kind()==ExportKind::Tiff?"tif":kind()==ExportKind::Exr?"exr":"pdf"));
         watcher.setFuture(QtConcurrent::run([snapshot,path,options,percent]{Prepared out;out.path=path;try{out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});}catch(const imaging::ExportCancelled&){out.cancelled=true;}catch(const std::exception&e){out.error=QString::fromUtf8(e.what());}return out;}));
     };
     connect(&watcher,&QFutureWatcher<Prepared>::finished,&dialog,[&]{
@@ -708,7 +722,9 @@ void MainWindow::exportImage(){
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
-    auto applyKind=[&]{quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf);layout.setRowVisible(&matte,kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
+    auto applyKind=[&]{const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
+    connect(&colorMode,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
+    connect(&profileButton,&QPushButton::clicked,&dialog,[&]{const auto path=QFileDialog::getOpenFileName(&dialog,"CMYK output profile",{},"ICC profiles (*.icc *.icm)");if(path.isEmpty())return;try{auto profile=imaging::readCmykProfile(nativePath(path));outputProfile=std::move(profile);profileButton.setText(QString::fromStdString(outputProfile->name));changed();}catch(const std::exception& error){QMessageBox::critical(&dialog,"CMYK profile",error.what());}});
     connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&scale,&QComboBox::currentIndexChanged,&dialog,[&]{showPageSize();changed();});
     connect(&quality,&QSlider::valueChanged,&dialog,changed);
@@ -721,7 +737,7 @@ void MainWindow::exportImage(){
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     const auto chosen=kind();
     if(chosen==ExportKind::Jpeg)settings.setValue("jpegExportQuality",quality.value()/100.);
-    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(chosen==ExportKind::Png?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Exr?".exr":".pdf");
+    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(chosen==ExportKind::Png?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Tiff?".tif":chosen==ExportKind::Exr?".exr":".pdf");
     const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
     QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;

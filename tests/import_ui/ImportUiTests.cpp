@@ -1,4 +1,6 @@
 #include "ui/ImportActions.h"
+#include "../cmyk/Fixtures.h"
+#include <QSettings>
 #include "ui/WorkspaceDropQueue.h"
 #include "ui/RawImportDialog.h"
 #include "ui/PropertyControls.h"
@@ -147,7 +149,7 @@ PsdFixtureLayer solidPackBitsPsdLayer(int left,int top,int width,int height,uint
 }
 // Runs the RAW review with a stub developer, answering the modal dialog once its preview is ready.
 // The real LibRaw development is covered by migration.contract; this checks only the review flow.
-bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,std::map<std::filesystem::path,imaging::RawAdjustments>& settings){
+bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,ui::RawSettings& settings){
     const ui::RawImportDialog::Developer stub=[](const std::filesystem::path&,const imaging::ImportOptions&,std::uint32_t){
         imaging::RawDevelopment developed;
         developed.image.image={2,2,8,std::vector<std::uint8_t>(16,255)};
@@ -426,7 +428,7 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
     test("raw review records an edited exposure and leaves untouched files as shot",[&]{
         QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
         const std::filesystem::path raw(temporary.filePath("edited.dng").toStdWString());
-        std::map<std::filesystem::path,imaging::RawAdjustments> settings;
+        ui::RawSettings settings;
         require(reviewRaw(raw,true,true,settings),"Accepted RAW review returned cancel");
         require(settings.count(raw)&&settings[raw].exposure&&*settings[raw].exposure==1.0,"Edited exposure was not recorded");
         require(!settings[raw].kelvin&&!settings[raw].tint&&!settings[raw].noiseReduction,"Untouched RAW settings were recorded");
@@ -437,13 +439,13 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
     test("raw review cancel adds nothing to the batch",[&]{
         QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
         const std::filesystem::path raw(temporary.filePath("cancelled.cr2").toStdWString());
-        std::map<std::filesystem::path,imaging::RawAdjustments> settings;
+        ui::RawSettings settings;
         require(!reviewRaw(raw,true,false,settings),"Cancelled RAW review reported acceptance");
         require(settings.empty(),"Cancelled RAW review recorded settings");
     });
     test("raw review skips non-RAW files without a dialog",[&]{
         QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
-        std::map<std::filesystem::path,imaging::RawAdjustments> settings;
+        ui::RawSettings settings;
         const auto png=std::filesystem::path(temporary.filePath("plain.png").toStdWString());
         require(ui::reviewRawImports(nullptr,{png},settings,imaging::developRaw),"Non-RAW file was blocked by the RAW review");
         require(settings.empty(),"Non-RAW file recorded RAW settings");
@@ -608,6 +610,17 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         auto* layers=w.findChild<QTreeWidget*>();require(layers,"Layer tree absent");
         QStringList names;for(QTreeWidgetItemIterator it(layers);*it;++it)names<<(*it)->text(0);
         require(names.join("|").contains("Gradient")&&names.join("|").contains("Plain"),"Continued PSD import did not show both layers");
+    });
+    test("cmyk_missing_profile_cancel_all_entry_points",[&]{
+        QSettings settings;const auto oldBytes=settings.value("cmyk/fallbackBytes"),oldName=settings.value("cmyk/fallbackName");settings.remove("cmyk/fallbackBytes");settings.remove("cmyk/fallbackName");
+        struct Restore{std::function<void()> run;~Restore(){run();}} restore{[&]{if(oldBytes.isValid())settings.setValue("cmyk/fallbackBytes",oldBytes);if(oldName.isValid())settings.setValue("cmyk/fallbackName",oldName);}};
+        const auto bytes=cmyk_test::psd();const auto file=temporary.filePath("unprofiled-cmyk.psd");QFile output(file);require(output.open(QIODevice::WriteOnly),"CMYK fixture write");output.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()));output.close();
+        for(int entry=0;entry<3;++entry){MainWindow window(true);auto& project=window.addProject(document());const auto before=project.document;auto* tabs=window.findChild<QTabWidget*>();require(tabs,"Missing tabs");const int tabCount=tabs->count();bool asked=false;
+            QTimer timer;timer.setInterval(10);QObject::connect(&timer,&QTimer::timeout,&window,[&]{if(auto* message=window.findChild<QMessageBox*>("missingCmykProfile")){asked=true;message->done(QMessageBox::Cancel);}});timer.start();
+            if(entry==0)window.openPath(file);else if(entry==1)window.importSelectedImages({first,file},project.canvas);else window.receiveDropPaths({first,file},project.canvas,{});
+            // A cancelled drop batch never creates an ImportQueue, so wait only for the drop review.
+            if(entry==2)until([&]{auto*d=ui::WorkspaceDropQueue::find(&window);return !d||d->idle();});timer.stop();require(asked&&project.document==before&&project.history.undoCount()==0&&tabs->count()==tabCount,"CMYK cancellation changed document/history/tabs or imported earlier RGB file");
+        }
     });
     test("hdr_explicit_batch_preserves_pixels_and_one_history_entry",[&]{
         QTemporaryDir directory;auto exr=directory.filePath("bright.exr");auto pixels=makeDeep(8,4);for(int y=0;y<4;++y)for(int x=0;x<8;++x)pixels->setPixel(x,y,{2,1,.5f,1});imaging::encodeExr(path(exr),*pixels);

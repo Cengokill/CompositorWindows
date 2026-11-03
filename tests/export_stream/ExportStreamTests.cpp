@@ -46,7 +46,7 @@ void row_failure_atomic(){
  QTemporaryDir temp;auto target=path(temp,"failure.png");original(target);auto before=bytes(target);
  rejects([&]{encodeRowsAtomic(target,30,200,[](uint32_t y,uint32_t,std::span<uint8_t> data,size_t){if(y)throw std::runtime_error("injected row failure");std::fill(data.begin(),data.end(),0);});});REQUIRE(bytes(target)==before);
  rejects([&]{encodeRowsAtomic(target,1,1,[](uint32_t,uint32_t,std::span<uint8_t> data,size_t){data[0]=255;data[1]=data[2]=data[3]=0;});});REQUIRE(bytes(target)==before);
- for(auto format:{ImageFormat::Tiff,ImageFormat::Pdf,ImageFormat(999)}){ExportOptions option;option.format=format;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),option);});}
+ for(auto format:{ImageFormat::Exr,ImageFormat::Pdf,ImageFormat(999)}){ExportOptions option;option.format=format;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),option);});}
  for(double dpi:{0.,-1.,std::numeric_limits<double>::infinity()}){ExportOptions option;option.dpi=dpi;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),option);});}
  ExportOptions nan;nan.jpegQuality=std::numeric_limits<double>::quiet_NaN();rejects([&]{encodeRowsAtomic(target,10,10,pattern(),nan);});
  auto invalid=StreamExportLimits{};invalid.maxBufferBytes=10;rejects([&]{encodeRowsAtomic(target,10,10,pattern(),{},invalid);});

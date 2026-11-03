@@ -7,6 +7,7 @@ namespace compositor::imaging {
 // Each call owns a COM apartment if needed; safe on initialized STA/MTA worker threads.
 class WicCodec {
 public:
+    static CmykProfilePtr sourceCmykProfile(const std::filesystem::path&,CmykProfilePtr fallback={});
     static DecodedImage decode(const std::filesystem::path&,const ImportOptions& = {});
     static void encode(const std::filesystem::path&,const RgbaImage&,const ExportOptions& = {});
     static RgbaImage decodeProjectRgbaPng(const std::filesystem::path&,const ImportOptions& = {});

@@ -224,7 +224,7 @@ void RawImportDialog::setStatus(const QString& text, bool failed) {
 }
 
 bool reviewRawImports(QWidget* parent, const std::vector<std::filesystem::path>& files,
-                      std::map<std::filesystem::path, imaging::RawAdjustments>& settings, RawImportDialog::Developer developer) {
+                      RawSettings& settings, RawImportDialog::Developer developer) {
     for (const auto& file : files) {
         if (!imaging::isRawFileExtension(file)) continue;
         RawImportDialog dialog(file, developer, parent);

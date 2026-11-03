@@ -33,6 +33,7 @@ struct ImportBatch {
     // stricter workspace guard before they can begin.
     enum class Origin { Deferred, Explicit };
     Origin origin{Origin::Deferred};
+    std::map<std::filesystem::path,CmykProfilePtr> cmykProfiles;
     PreparedImages prepared;
 };
 struct ImportResult {

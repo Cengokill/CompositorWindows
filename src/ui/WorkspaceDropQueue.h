@@ -33,6 +33,9 @@ public:
         std::function<void(QObject*,const QString&,std::optional<Point>,std::shared_ptr<void>,const RawSettings&)> image;
         std::function<void(QObject*)> cancelImage;
         std::function<void(const QString&,const QString&)> error;
+        // A standalone document import runs before creating an image destination. false means Cancel.
+        std::function<std::optional<bool>(const QString&,const RawSettings&)> standalone;
+        std::function<bool(const QStringList&,RawSettings&)> reviewBatch;
     };
     explicit WorkspaceDropQueue(Host,QObject* parent=nullptr);
     ~WorkspaceDropQueue() override;

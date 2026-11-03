@@ -12,6 +12,8 @@
 #include <QWidget>
 #include <QPointer>
 #include <QTimer>
+#include <QFutureWatcher>
+#include <atomic>
 #include <functional>
 #include <unordered_map>
 #include <d3d11.h>
@@ -78,7 +80,7 @@ private:
     std::optional<TextCaretOverlay> textOverlay_;
     std::shared_ptr<const Raster> textRasterSource_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> textBitmap_;
-    void drawTextOverlay();
+    void drawTextOverlay(bool pixelsOnly=false,bool decorationsOnly=false);
     std::optional<editing::Rect> cropOverlay_;
     std::optional<double> snapGuideX_,snapGuideY_;
     editing::LayoutGrid layoutGrid_;
@@ -151,6 +153,22 @@ private:
     void synchronizeViewport();
     void watchPresentationWindow();
     void resetPresentationResources();
+    struct ProofResult { std::vector<float> lookup;std::string hash;QString error;bool cancelled{}; };
+    QFutureWatcher<ProofResult> proofWatcher_;
+    CmykProfilePtr proofProfile_;
+    std::shared_ptr<std::atomic_bool> proofCancelled_;
+    std::vector<float> proofLut_;
+    std::string proofLutHash_;
+    QString proofFailure_;
+    bool proofEnabled_{},proofConnected_{},proofApplied_{};
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> proofScene_;
+    Microsoft::WRL::ComPtr<ID2D1Effect> proofEffect_;
+    Microsoft::WRL::ComPtr<ID2D1Image> proofDestination_;
+    void startCmykLookup();
+    void shutdownCmykProof();
+    void resetCmykResources();
+    bool beginCmykProof();
+    void finishCmykProof(D2D1_RECT_F);
     void preparePresentation();
     HRESULT finishPresentation();
 public:
@@ -255,6 +273,9 @@ public:
     void setDisplayProfileOverride(std::optional<std::filesystem::path>);
     void setPresentationBudget(uint64_t bytes);
     void refreshDisplayProfile();
+    void setCmykProof(CmykProfilePtr,bool enabled);
+    bool cmykProofReady()const{return proofEnabled_&&!proofLut_.empty()&&proofFailure_.isEmpty();}
+    QString cmykProofError()const{return proofFailure_;}
     QString presentationProfileHash()const{return QString::fromStdString(displayProfile_.sha256);}
     QString presentationDiagnostic()const{return presentationDiagnostic_;}
     bool presentationConvertsColor()const{return bool(presentationEffect_);}
