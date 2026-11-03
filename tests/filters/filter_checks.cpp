@@ -145,6 +145,12 @@ void testRgbSplit(){
     Settings glow;glow.bloomGlow=true;glow.bloomAmount=80;glow.bloomRadius=8;
     auto glowBloom=runPixels(Kind::Bloom,*bright,glow,1,0);
     require(filterBloom->rgba()!=bright->rgba()&&glowBloom->rgba()!=bright->rgba()&&filterBloom->rgba()!=glowBloom->rgba(),"Bloom filter and Bloom / Glow kernels stay distinct");
+    bloom.bloomThreshold=0;bloom.bloom=20;
+    auto lowBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    bloom.bloom=80;auto highBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    require(lowBloom->rgba()!=highBloom->rgba(),"Bloom strength affects zero-threshold output");
+    bloom.bloomThreshold=.000001;auto nearZeroBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);
+    require(highBloom->rgba()==nearZeroBloom->rgba(),"Bloom is continuous at zero threshold");
 }
 void testPreviewAndFailure(){
     auto q=request(Kind::LensCorrection,Raster::filled(3001,17,{100,100,100,255}));q.preview=true;q.settings.distortion=10;auto preview=apply(q);require(preview.raster->width==2048&&preview.raster->height==11&&near(preview.previewScale,2048./3001)&&preview.transform==q.transform,"2048 preview source scale");q.kind=Kind::AddNoise;preview=apply(q);require(preview.raster->width==3001&&preview.previewScale==1,"noise preview remains full resolution");

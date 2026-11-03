@@ -25,6 +25,8 @@ struct Settings {
     bool rgbSplitRadial{};
     std::optional<Point> rgbSplitCenter;
     double rgbSplitReach{1000};
+    // Document coordinates of the working grid, used to keep jitter tile-stable.
+    double rgbSplitOriginX{},rgbSplitOriginY{},rgbSplitUnitsPerPixel{1};
     Settings normalized() const;
 };
 struct PixelRect {int x{},y{},width{},height{};bool operator==(const PixelRect&) const=default;};

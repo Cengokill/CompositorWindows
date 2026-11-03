@@ -174,7 +174,8 @@ template<class T> std::vector<T> rgbSplit(const std::vector<T>& source,int w,int
         for(int x=0;x<w;++x){
             const double px=x+.5,py=y+.5;
             const double ax=s.rgbSplitRadial?(px-center.x)/reach:dx,ay=s.rgbSplitRadial?(py-center.y)/reach:dy;
-            const float jitter=float(std::fmod(std::sin(px*12.9898+py*78.233)*43758.5453,1.));
+            const double docX=s.rgbSplitOriginX+px*s.rgbSplitUnitsPerPixel,docY=s.rgbSplitOriginY+py*s.rgbSplitUnitsPerPixel;
+            const float jitter=float(std::fmod(std::sin(docX*12.9898+docY*78.233)*43758.5453,1.));
             float color[3]{},alpha[3]{},total[3]{};
             for(int i=0;i<spectral;++i){
                 const float t=spectral==1?0.f:(float(i)+jitter)/float(spectral)*2.f-1.f;
@@ -203,7 +204,7 @@ void bloom(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,const
     const double amount=s.bloomGlow?s.bloomAmount:s.bloom,radius=s.bloomGlow?s.bloomRadius:8,threshold=s.bloomGlow?0.:s.bloomThreshold;
     if(amount<=0)return;
     std::vector<std::uint8_t> bright=pixels;
-    if(threshold>0){
+    if(!s.bloomGlow){
         bright.assign(pixels.size(),0);
         for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;unsigned a=pixels[i+3];if(!a)continue;double yb=(.2126*pixels[i]+.7152*pixels[i+1]+.0722*pixels[i+2])/a;if(yb<=threshold)continue;double gain=std::clamp((yb-threshold)/(1-threshold),0.,1.)*amount/100;for(int c=0;c<4;++c)bright[i+c]=byte(pixels[i+c]*gain);}
     }

@@ -89,6 +89,7 @@ std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> sour
   filter.progressiveFrom=s.progressiveFrom;filter.progressiveTo=s.progressiveTo;filter.progressiveRadial=s.progressiveRadial;filter.progressiveInverted=s.progressiveInverted;
   filter.bloomGlow=s.kind==13;filter.bloomAmount=s.bloomAmount;filter.bloomRadius=s.bloomRadius;filter.bloom=s.bloomAmount;
   filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=std::max(1.,s.rgbSplitReach/region.unitsPerPixel);
+  filter.rgbSplitOriginX=region.originX;filter.rgbSplitOriginY=region.originY;filter.rgbSplitUnitsPerPixel=region.unitsPerPixel;
   auto map=[&](Point p){return Point{(p.x-region.originX)/region.unitsPerPixel,(p.y-region.originY)/region.unitsPerPixel};};
   if(s.progressiveStart)filter.progressiveStart=map(*s.progressiveStart);if(s.progressiveEnd)filter.progressiveEnd=map(*s.progressiveEnd);
   if(s.rgbSplitCenter)filter.rgbSplitCenter=map(*s.rgbSplitCenter);
@@ -122,6 +123,7 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
         filter.progressiveFrom=s.progressiveFrom;filter.progressiveTo=s.progressiveTo;filter.progressiveRadial=s.progressiveRadial;filter.progressiveInverted=s.progressiveInverted;
         filter.bloomGlow=s.kind==13;filter.bloomAmount=s.bloomAmount;filter.bloomRadius=s.bloomRadius;
         filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=std::max(1.,s.rgbSplitReach/region.unitsPerPixel);
+        filter.rgbSplitOriginX=region.originX;filter.rgbSplitOriginY=region.originY;filter.rgbSplitUnitsPerPixel=region.unitsPerPixel;
         auto map=[&](Point p){return Point{(p.x-region.originX)/region.unitsPerPixel,(p.y-region.originY)/region.unitsPerPixel};};
         if(s.progressiveStart)filter.progressiveStart=map(*s.progressiveStart);if(s.progressiveEnd)filter.progressiveEnd=map(*s.progressiveEnd);
         if(s.rgbSplitCenter)filter.rgbSplitCenter=map(*s.rgbSplitCenter);

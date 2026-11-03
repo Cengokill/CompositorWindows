@@ -39,7 +39,18 @@ void blank_culling(){Document d;d.width=d.height=30000;Layer l;l.id=newId();l.ra
 
 void lod_offscreen_invalidation(){auto d=document(768,64);d.width=2304;d.layers[0].transform.width=2304;CompositeCache cache;auto left=cache.renderViewport(d,0,0,512,64,2,1,3);auto right=cache.renderViewport(d,1536,0,512,64,2,1,3);std::vector<Pixel> blue(256*64,{0,0,255,255});d.layers[0].raster=d.layers[0].raster->replacing(512,0,256,64,blue.data(),256);auto leftAfter=cache.renderViewport(d,0,0,512,64,2,1,3);REQUIRE(leftAfter.raster->tiles[0]==left.raster->tiles[0]);auto rightAfter=cache.renderViewport(d,1536,0,512,64,2,1,3);REQUIRE(rightAfter.unitsPerPixel==2&&rightAfter.raster->tiles[0]!=right.raster->tiles[0]&&rightAfter.raster->pixel(0,0).b==191);}
 void blur_adjustment_tile_seam(){Document d;d.id=newId();d.width=512;d.height=32;Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,32,{255,0,0,255});image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};Layer blur;blur.id=newId();blur.adjustmentJson=effects::defaultAdjustmentJson("Gaussian Blur");blur.transform={0,0,512,32};d.layers={image,blur};auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);REQUIRE(tiled->pixel(255,16)==full->pixel(255,16)&&tiled->pixel(256,16)==full->pixel(256,16));REQUIRE(tiled->pixel(256,16).a>200);}
-void rgb_split_adjustment_tile_seam(){Document d;d.id=newId();d.width=512;d.height=32;Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,32,{200,40,20,255});image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};Layer split;split.id=newId();auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("RGB Split"))).object();auto layer=json["filterLayerSettings"].toObject();layer["rgbSplitDistance"]=18;layer["rgbSplitCenter"]=QJsonArray{256,16};json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();split.transform={0,0,512,32};d.layers={image,split};auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);REQUIRE(tiled->pixel(255,16)==full->pixel(255,16)&&tiled->pixel(256,16)==full->pixel(256,16));}
+void rgb_split_adjustment_tile_seam(){
+    Document d;d.id=newId();d.width=512;d.height=32;
+    std::vector<Pixel> pixels(512*32);
+    for(int y=0;y<32;++y)for(int x=0;x<512;++x)
+        pixels[std::size_t(y)*512+x]={std::uint8_t((x*17+y*3)%256),std::uint8_t((x*7+y*19)%256),std::uint8_t((x*13+y*11)%256),255};
+    Layer image;image.id=newId();image.opacity=1;image.raster=Raster::filled(512,32,{})->replacing(0,0,512,32,pixels.data(),512);image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};
+    Layer split;split.id=newId();auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("RGB Split"))).object();auto layer=json["filterLayerSettings"].toObject();layer["rgbSplitDistance"]=18;layer["rgbSplitBlur"]=8;layer["rgbSplitCenter"]=QJsonArray{256,16};
+    for(bool radial:{false,true}){
+        layer["rgbSplitRadial"]=radial;json["filterLayerSettings"]=layer;split.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();split.transform={0,0,512,32};d.layers={image,split};
+        auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);equal(*tiled,*full);
+    }
+}
 Layer solid(const char* id,int width,int height,Pixel color,Transform transform){Layer layer;layer.id=id;layer.opacity=1;layer.raster=Raster::filled(width,height,color);layer.transform=transform;return layer;}
 void partial_metadata_damage(){
     Document d;d.id=newId();d.width=768;d.height=256;
