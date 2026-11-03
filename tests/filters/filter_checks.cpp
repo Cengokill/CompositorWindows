@@ -58,6 +58,15 @@ void testProgressive(){
     require(!apply(q).changed,"zero progressive blur is identity");
     q.settings.progressiveTo=5;q.settings.progressiveStart=Point{58,68};q.settings.progressiveEnd=Point{82,68};
     auto result=apply(q);require(result.changed&&result.sourceBounds.width>96&&result.sourceBounds.height>96,"progressive blur grows bounds");
+    auto canvas=request(Kind::ProgressiveBlur,image(48,32,[](int,int){return Pixel{40,80,120,255};}));
+    canvas.settings.progressiveTo=8;canvas.canvasWidth=48;canvas.canvasHeight=32;canvas.transform={0,0,48,32};
+    auto clamped=apply(canvas);
+    require(clamped.sourceBounds==PixelRect{0,0,48,32}&&clamped.raster->pixel(0,0).a==255&&clamped.raster->pixel(47,31).a==255,"canvas-filling layer keeps edge pixels without padding");
+    auto leftEdge=request(Kind::ProgressiveBlur,image(32,24,[](int,int){return Pixel{40,80,120,255};}));
+    leftEdge.settings.progressiveTo=8;leftEdge.canvasWidth=64;leftEdge.canvasHeight=48;leftEdge.transform={0,12,32,24};
+    auto sided=apply(leftEdge);
+    require(canvasTouchingSides(leftEdge.transform,32,24,64,48).left&&sided.sourceBounds.x==0&&sided.sourceBounds.width>32,"only the canvas-touching side stays unpadded");
+    require(sided.raster->pixel(0,0).a==255,"left canvas edge stays opaque");
     auto translated=q;translated.transform={40,70,96,96,37,true,false};
     const auto start=translated.transform.fromUnit({.5,.5}),end=translated.transform.fromUnit({.75,.5});
     translated.settings.progressiveStart=start;translated.settings.progressiveEnd=end;

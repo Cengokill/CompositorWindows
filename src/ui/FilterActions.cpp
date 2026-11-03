@@ -52,8 +52,8 @@ std::optional<Transform> paddedPlacement(const filters::Request& job){
     const int width=job.source->width,height=job.source->height;
     filters::PixelRect bounds{0,0,width,height};
     if(job.kind==filters::Kind::GaussianBlur||job.kind==filters::Kind::MotionBlur||job.kind==filters::Kind::ProgressiveBlur){
-        const int margin=int(std::ceil(std::max(job.retainedBlurMargin,filters::blurMargin(job.kind,job.settings))));
-        bounds={-margin,-margin,width+2*margin,height+2*margin};
+        bounds=filters::blurWorkingBounds(job.kind,job.settings,width,height,job.retainedBlurMargin,
+            filters::canvasTouchingSides(job.transform,width,height,job.canvasWidth,job.canvasHeight));
     }else if(job.kind==filters::Kind::ContentAwareFill&&job.selection&&job.selection->coverage){
         const auto box=editing::coverageBounds(*job.selection->coverage);
         if(!box.empty()){
@@ -109,6 +109,7 @@ filters::Request buildFilterRequest(EditorProject& project,const Document& befor
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
     request.transform=layer.raster?layer.transform:Transform{0,0,double(before.width),double(before.height)};
+    request.canvasWidth=before.width;request.canvasHeight=before.height;
     request.seed=QRandomGenerator::global()->generate();request.selection=filterSelection(before,layer,kind);
     if(kind==filters::Kind::Dither&&request.settings.ditherLevels<=0)request.settings.ditherLevels=4;
     if(kind==filters::Kind::Vignette&&request.settings.vignette==0)request.settings.vignette=40;

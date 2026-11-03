@@ -20,6 +20,9 @@ struct Settings {
     Settings normalized() const;
 };
 struct PixelRect {int x{},y{},width{},height{};bool operator==(const PixelRect&) const=default;};
+// Layer pixel sides that sit on the canvas edge. Blurs carry those edge pixels
+// onward instead of fading into a transparent exterior.
+struct LayerSides {bool left{},right{},top{},bottom{};};
 // Selection coverage is already mapped to original source pixels. Origin permits
 // a selection to extend outside the original grid for Content-Aware Fill.
 struct SourceSelection {std::shared_ptr<const GrayRaster> coverage;int originX{},originY{};};
@@ -40,6 +43,7 @@ struct Request {
     CameraRawView cameraRawView;
     Limits limits;
     std::shared_ptr<const DeepImage> deepSource;
+    int canvasWidth{},canvasHeight{};
 };
 struct Result {
     std::shared_ptr<const Raster> raster;Transform transform;
@@ -53,10 +57,12 @@ struct Result {
 std::uint64_t estimatedWorkingBytes(int width,int height,std::uint64_t bytesPerPixel=24);
 double blurMargin(Kind,const Settings&);
 bool supportsHdr(Kind);
+LayerSides canvasTouchingSides(const Transform&,int sourceWidth,int sourceHeight,int canvasWidth,int canvasHeight);
+PixelRect blurWorkingBounds(Kind,const Settings&,int width,int height,double retainedBlurMargin,LayerSides);
 // The direct PixelFilter.run boundary: supplied image is already padded/scaled;
 // optional coverage must match that grid. Output retains dimensions.
-std::shared_ptr<const Raster> runPixels(Kind,const Raster&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {});
-std::shared_ptr<const DeepImage> runDeepPixels(Kind,const DeepImage&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {},const CameraRawSettings& = {},const CameraRawView& = {});
+std::shared_ptr<const Raster> runPixels(Kind,const Raster&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {},LayerSides={});
+std::shared_ptr<const DeepImage> runDeepPixels(Kind,const DeepImage&,const Settings&,double scale,std::uint32_t seed,const GrayRaster* selection=nullptr,const Limits& = {},const CameraRawSettings& = {},const CameraRawView& = {},LayerSides={});
 // The FilterEdit boundary: grow, prepare preview, run, selection blend, final trim.
 Result apply(const Request&);
 // Reposition a cropped/expanded source grid without moving retained pixels.
