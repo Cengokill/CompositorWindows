@@ -231,9 +231,10 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"){
+        const bool filterLike=kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
+        if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"||filterLike){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
-            const bool logarithmic=label=="Gamma"||label=="Size";const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
+            const bool logarithmic=filterLike?((label=="Radius"||label=="Distance"||label=="Amount")&&lo>0):(label=="Gamma"||label=="Size");const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
             slider->setValue(position(spin->value()));slider->setDefaultValue(position(fallback));slider->setMinimumWidth(170);spin->setFixedWidth(82);rowLayout->addWidget(slider,1);rowLayout->addWidget(spin);form.addRow(label,row);
             if(kind=="Hue/Saturation"){
