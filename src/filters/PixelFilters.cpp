@@ -28,7 +28,7 @@ std::size_t count(int w,int h,const Limits& l,std::uint64_t bytesPerPixel=24){
 void checkSelection(const GrayRaster& m){if(m.width<1||m.height<1||m.width>30000||m.height>30000||std::uint64_t(m.width)*m.height>100000000||m.pixels.size()!=std::size_t(m.width)*m.height)throw std::runtime_error("Invalid source selection storage");}
 bool empty(const GrayRaster& m){return std::none_of(m.pixels.begin(),m.pixels.end(),[](auto p){return p!=0;});}
 double normalized(double value,double low,double high,double fallback){return std::isfinite(value)?std::clamp(value,low,high):fallback;}
-void kindCheck(Kind k){switch(k){case Kind::GaussianBlur:case Kind::MotionBlur:case Kind::AddNoise:case Kind::LensCorrection:case Kind::ContentAwareFill:case Kind::Vignette:case Kind::Bloom:case Kind::TonalContrast:case Kind::Dither:case Kind::Scanlines:case Kind::CameraRaw:return;}throw std::runtime_error("Unsupported filter kind");}
+void kindCheck(Kind k){switch(k){case Kind::GaussianBlur:case Kind::MotionBlur:case Kind::AddNoise:case Kind::LensCorrection:case Kind::ContentAwareFill:case Kind::Vignette:case Kind::Bloom:case Kind::TonalContrast:case Kind::Dither:case Kind::Scanlines:case Kind::CameraRaw:case Kind::ProgressiveBlur:return;}throw std::runtime_error("Unsupported filter kind");}
 graphics::Rgba8View view(std::vector<std::uint8_t>& v,int w,int h){return {v,std::uint32_t(w),std::uint32_t(h),std::size_t(w)*4};}
 std::uint8_t byte(double x){return std::uint8_t(std::clamp(std::floor(x+.5),0.,255.));}
 std::vector<double> gaussianWeights(double sigma){int radius=std::max(1,int(std::ceil(sigma*3)));std::vector<double> weights(std::size_t(radius)*2+1);double total=0;for(int t=-radius;t<=radius;++t)total+=(weights[t+radius]=std::exp(-double(t*t)/(2*sigma*sigma)));for(auto& weight:weights)weight/=total;return weights;}
@@ -38,6 +38,59 @@ template<class T> std::vector<T> gaussian(const std::vector<T>& source,int w,int
     // Transparent exterior. Float intermediate prevents repeated 8-bit quantization.
     for(int c=0;c<4;++c){for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=std::max(-r,-x);k<=std::min(r,w-1-x);++k)sum+=source[(std::size_t(y)*w+x+k)*4+c]*weights[k+r];pass[std::size_t(y)*w+x]=float(sum);}}
         for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=std::max(-r,-y);k<=std::min(r,h-1-y);++k)sum+=pass[std::size_t(y+k)*w+x]*weights[k+r];output[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum);}}}
+    return output;
+}
+// Three sliding box passes approximate a Gaussian in linear time per pixel.
+template<class T> std::vector<T> fastGaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits){
+    if(sigma<.15)return source;
+    constexpr int passes=3;
+    const double ideal=std::sqrt(12*sigma*sigma/passes+1);
+    int small=std::max(1,int(std::floor(ideal)));if((small&1)==0)--small;
+    const int large=small+2;
+    const int nSmall=std::clamp(int(std::lround((12*sigma*sigma-passes*small*small-4*passes*small-3*passes)/(-4.*small-4))),0,passes);
+    std::vector<float> a(source.begin(),source.end()),b(source.size());
+    auto pass=[&](bool horizontal,int radius){
+        const int lines=horizontal?h:w,length=horizontal?w:h;
+        const float divisor=float(radius*2+1);
+        for(int line=0;line<lines;++line){cancel(limits);
+            for(int c=0;c<4;++c){double sum=0;
+                auto idx=[&](int pos){return (std::size_t(horizontal?line:pos)*w+(horizontal?pos:line))*4+c;};
+                for(int k=0;k<=std::min(radius,length-1);++k)sum+=a[idx(k)];
+                for(int pos=0;pos<length;++pos){b[idx(pos)]=float(sum/divisor);const int remove=pos-radius,add=pos+radius+1;if(remove>=0)sum-=a[idx(remove)];if(add<length)sum+=a[idx(add)];}
+            }
+        }
+        a.swap(b);
+    };
+    for(int i=0;i<passes;++i){const int radius=((i<nSmall?small:large)-1)/2;pass(true,radius);pass(false,radius);}
+    std::vector<T> output(source.size());for(std::size_t i=0;i<source.size();++i)output[i]=blurValue<T>(a[i]);return output;
+}
+// Interpolate a small Gaussian scale space in variance. Each level is built
+// from the original so a spatially varying radius does not smear the mask.
+template<class T> std::vector<T> progressive(const std::vector<T>& source,int w,int h,const Settings& s,double scale,const Limits& limits){
+    const double strongest=std::max(s.progressiveFrom,s.progressiveTo)*scale;
+    if(strongest<=0)return source;
+    const Point start=s.progressiveStart.value_or(Point{w/2.,0}),end=s.progressiveEnd.value_or(Point{w/2.,double(h)});
+    double dx=end.x-start.x,dy=end.y-start.y,len2=dx*dx+dy*dy;
+    if(len2<1){dx=0;dy=1;len2=1;}
+    const double from=s.progressiveInverted?s.progressiveTo:s.progressiveFrom;
+    const double to=s.progressiveInverted?s.progressiveFrom:s.progressiveTo;
+    constexpr int levels=20;
+    auto output=source,lower=source;
+    for(int level=1;level<=levels;++level){
+        cancel(limits);
+        const double high=strongest*std::pow(double(level)/levels,2),low=strongest*std::pow(double(level-1)/levels,2);
+        auto upper=fastGaussian(source,w,h,high,limits);
+        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){
+            const double px=x+.5-start.x,py=y+.5-start.y;
+            const double t=std::clamp(s.progressiveRadial?std::hypot(px,py)/std::sqrt(len2):(px*dx+py*dy)/len2,0.,1.);
+            const double radius=(from+(to-from)*t)*scale;
+            if(radius<low||radius>high||(level>1&&radius==low))continue;
+            const double weight=(radius*radius-low*low)/(high*high-low*low);
+            const auto i=(std::size_t(y)*w+x)*4;
+            for(int c=0;c<4;++c)output[i+c]=blurValue<T>(lower[i+c]+(upper[i+c]-double(lower[i+c]))*weight);
+        }}
+        lower=std::move(upper);
+    }
     return output;
 }
 template<class T> double sample(const std::vector<T>& p,int w,int h,double x,double y,int channel){
@@ -55,6 +108,7 @@ bool finishingIdentity(Kind kind,const Settings& s){
     case Kind::Dither:return s.ditherLevels<=0;
     case Kind::Scanlines:return s.scanline==0&&s.scanlineGlow==0;
     case Kind::CameraRaw:return false;
+    case Kind::ProgressiveBlur:return s.progressiveFrom==0&&s.progressiveTo==0;
     default:return false;
     }
 }
@@ -119,19 +173,20 @@ std::shared_ptr<const Raster> resize(const Raster& source,PixelRect bounds,int w
 }
 PixelRect coverageBounds(const SourceSelection& selected){const auto&m=*selected.coverage;int loX=m.width,loY=m.height,hiX=0,hiY=0;for(int y=0;y<m.height;++y)for(int x=0;x<m.width;++x)if(m.pixel(x,y)){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}return {selected.originX+loX,selected.originY+loY,hiX-loX,hiY-loY};}
 }
-Settings Settings::normalized()const{auto out=*this;out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);return out;}
+Settings Settings::normalized()const{auto out=*this;out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);for(auto* point:{&out.progressiveStart,&out.progressiveEnd})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
 bool supportsHdr(Kind kind){return kind!=Kind::LensCorrection&&kind!=Kind::ContentAwareFill&&kind!=Kind::Bloom&&kind!=Kind::TonalContrast&&kind!=Kind::Scanlines;}
-double blurMargin(Kind kind,const Settings& raw){kindCheck(kind);auto s=raw.normalized();return kind==Kind::GaussianBlur?s.radius*3+2:kind==Kind::MotionBlur?s.distance/2+2:0;}
+double blurMargin(Kind kind,const Settings& raw){kindCheck(kind);auto s=raw.normalized();return kind==Kind::GaussianBlur?s.radius*3+2:kind==Kind::MotionBlur?s.distance/2+2:kind==Kind::ProgressiveBlur?std::max(s.progressiveFrom,s.progressiveTo)*3+2:0;}
 Transform placedGrid(const Transform& placed,int originalWidth,int originalHeight,PixelRect rect){
     if(!placed.valid()||originalWidth<1||originalHeight<1||rect.width<1||rect.height<1)throw std::runtime_error("Invalid filter placement");auto out=placed;out.width=rect.width*placed.width/originalWidth;out.height=rect.height*placed.height/originalHeight;auto middle=placed.fromUnit({(rect.x+rect.width/2.)/originalWidth,(rect.y+rect.height/2.)/originalHeight});out.x=middle.x-out.width/2;out.y=middle.y-out.height/2;if(!out.valid())throw std::runtime_error("Expanded filter transform exceeds document limits");return out;
 }
 std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Settings& raw,double scale,std::uint32_t seed,const GrayRaster* selection,const Limits& limits){
-    kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>1)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
+    kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?96:kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>1)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
     if(kind==Kind::ContentAwareFill&&!selection)throw std::runtime_error("Content-Aware Fill needs a selection");const auto s=raw.normalized();auto original=source.rgba();cancel(limits);const int w=source.width,h=source.height;if(finishingIdentity(kind,s))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);auto result=original;cancel(limits);
     if(selection&&empty(*selection))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);
     switch(kind){
         case Kind::GaussianBlur:result=gaussian(original,w,h,s.radius*scale,limits);break;
         case Kind::MotionBlur:result=motion(original,w,h,s.distance*scale/std::sqrt(12.),s.angle,limits);break;
+        case Kind::ProgressiveBlur:result=progressive(original,w,h,s,scale,limits);break;
         case Kind::AddNoise:graphics::addNoise(view(result,w,h),float(s.amount),s.gaussian,s.monochromatic,seed,limits.cancelled);break;
         case Kind::LensCorrection:graphics::lensDistort(graphics::readOnly(view(original,w,h)),view(result,w,h),s.distortion/100*.35,limits.cancelled);break;
         case Kind::ContentAwareFill:{graphics::ConstGray8View mask{selection->pixels,std::uint32_t(w),std::uint32_t(h),std::size_t(w)};if(!graphics::contentFill(view(result,w,h),mask,limits.cancelled))throw std::runtime_error("Not enough unselected opaque pixels to synthesize a fill");break;}
@@ -147,7 +202,7 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
 }
 std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source,const Settings& raw,double scale,uint32_t seed,const GrayRaster* selection,const Limits& limits,const CameraRawSettings& cameraRaw,const CameraRawView& cameraView){
     if(!source.valid())throw std::runtime_error("Invalid HDR filter source");
-    count(source.width,source.height,limits,64);cancel(limits);const auto settings=raw.normalized();
+    count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?160:64);cancel(limits);const auto settings=raw.normalized();
     if(selection&&(selection->width!=source.width||selection->height!=source.height||!selection->validStorage()))throw std::runtime_error("HDR selection must match source grid");
     if(!supportsHdr(kind))throw std::runtime_error("Convert the HDR layer to SDR before this spatial filter");
     std::shared_ptr<const DeepImage> result;
@@ -158,11 +213,11 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
         if(rawSettings.geometry.adjusts()||rawSettings.optics.distortionK(1)!=0||rawSettings.optics.removeChromaticAberration||rawSettings.detail.adjusts()||rawSettings.glow!=0||rawSettings.texture!=0||rawSettings.clarity!=0)throw std::runtime_error("Convert HDR to 16-Bit before spatial Camera Raw corrections");
         if(rawSettings.exposure!=0){auto image=makeDeep(source.width,source.height);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);if(p[3]>0)for(int c=0;c<3;++c)p[c]=float(linearToSrgb(srgbToLinear(p[c]/p[3])*std::pow(2.,rawSettings.exposure))*p[3]);image->setPixel(x,y,p);}}exposed=image;colorSource=image.get();rawSettings.exposure=0;}
     }
-    if(kind==Kind::GaussianBlur||kind==Kind::MotionBlur){
+    if(kind==Kind::GaussianBlur||kind==Kind::MotionBlur||kind==Kind::ProgressiveBlur){
         std::vector<float> input(size_t(source.width)*source.height*4);
         for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);std::copy(p.begin(),p.end(),input.begin()+(size_t(y)*source.width+x)*4);}}
-        auto output=kind==Kind::GaussianBlur?gaussian(input,source.width,source.height,settings.radius*scale,limits):motion(input,source.width,source.height,settings.distance*scale/std::sqrt(12.),settings.angle,limits);
-        auto image=makeDeep(source.width,source.height);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto i=(size_t(y)*source.width+x)*4;image->setPixel(x,y,{output[i],output[i+1],output[i+2],std::clamp(output[i+3],0.f,1.f)});}}result=image;
+        auto output=kind==Kind::GaussianBlur?gaussian(input,source.width,source.height,settings.radius*scale,limits):kind==Kind::ProgressiveBlur?progressive(input,source.width,source.height,settings,scale,limits):motion(input,source.width,source.height,settings.distance*scale/std::sqrt(12.),settings.angle,limits);
+        auto image=makeDeep(source.width,source.height,source.format);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto i=(size_t(y)*source.width+x)*4;image->setPixel(x,y,{output[i],output[i+1],output[i+2],std::clamp(output[i+3],0.f,1.f)});}}result=image;
     }else{
         auto normal=normalizeDeep(*colorSource,limits.cancelled);std::shared_ptr<const Raster> changed;
         if(kind==Kind::CameraRaw)changed=renderCameraRaw(*normal.raster,rawSettings,cameraView,nullptr,limits.cancelled).raster;
@@ -178,21 +233,33 @@ Result apply(const Request& request){
     kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>1002)throw std::runtime_error("Invalid retained blur margin");
     Result result{request.source,request.transform,{0,0,original.width,original.height},1,false,{}};auto settings=request.settings.normalized();if(request.selection){if(!request.selection->coverage)throw std::runtime_error("Present selection must have coverage");checkSelection(*request.selection->coverage);if(std::abs(std::int64_t(request.selection->originX))>30000||std::abs(std::int64_t(request.selection->originY))>30000)throw std::runtime_error("Source selection origin exceeds supported extent");if(empty(*request.selection->coverage))return result;}
     if(request.kind==Kind::ContentAwareFill&&!request.selection)throw std::runtime_error("Content-Aware Fill needs a selection");if(request.kind==Kind::LensCorrection&&settings.distortion==0)return result;if(finishingIdentity(request.kind,settings))return result;
-    PixelRect bounds{0,0,original.width,original.height};const bool spreads=request.kind==Kind::GaussianBlur||request.kind==Kind::MotionBlur;
+    PixelRect bounds{0,0,original.width,original.height};const bool spreads=request.kind==Kind::GaussianBlur||request.kind==Kind::MotionBlur||request.kind==Kind::ProgressiveBlur;
     if(spreads){int margin=int(std::ceil(std::max(request.retainedBlurMargin,blurMargin(request.kind,settings))));bounds={-margin,-margin,original.width+2*margin,original.height+2*margin};}
     if(request.kind==Kind::ContentAwareFill){auto selection=coverageBounds(*request.selection);int loX=std::min(0,selection.x),loY=std::min(0,selection.y);bounds={loX,loY,std::max(original.width,selection.x+selection.width)-loX,std::max(original.height,selection.y+selection.height)-loY};}
     gateSize(bounds.width,bounds.height);
-    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=request.kind==Kind::CameraRaw&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
+    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=(request.kind==Kind::CameraRaw||request.kind==Kind::ProgressiveBlur)&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
+    if(request.kind==Kind::ProgressiveBlur){
+        const int w=factor<1?std::max(1,int(bounds.width*factor)):bounds.width;
+        const int h=factor<1?std::max(1,int(bounds.height*factor)):bounds.height;
+        count(w,h,request.limits,request.deepSource?160:96);
+    }
     std::shared_ptr<const Raster> working;
     if(factor<1){int w=std::max(1,int(bounds.width*factor)),h=std::max(1,int(bounds.height*factor));factor=double(w)/bounds.width;working=resize(original,bounds,w,h,request.limits);}
     else{count(bounds.width,bounds.height,request.limits,request.kind==Kind::ContentAwareFill?32:24);working=request.source;
         if(bounds!=PixelRect{0,0,original.width,original.height}){std::vector<std::uint8_t> pixels(std::size_t(bounds.width)*bounds.height*4);for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=original.pixel(x,y);auto i=(std::size_t(y-bounds.y)*bounds.width+x-bounds.x)*4;pixels[i]=p.r;pixels[i+1]=p.g;pixels[i+2]=p.b;pixels[i+3]=p.a;}}working=Raster::fromRgba(bounds.width,bounds.height,pixels.data(),std::size_t(bounds.width)*4);}}
     std::optional<GrayRaster> selected;if(request.selection){const auto& input=*request.selection;selected=GrayRaster{working->width,working->height,std::vector<std::uint8_t>(std::size_t(working->width)*working->height)};for(int y=0;y<working->height;++y)for(int x=0;x<working->width;++x){int sx=int(std::floor(bounds.x+(x+.5)*bounds.width/working->width))-input.originX,sy=int(std::floor(bounds.y+(y+.5)*bounds.height/working->height))-input.originY;selected->pixels[std::size_t(y)*working->width+x]=input.coverage->pixel(sx,sy);}}
+    if(request.kind==Kind::ProgressiveBlur){
+        // The public settings are in document coordinates; kernels receive the
+        // corresponding coordinates in the padded, possibly reduced grid.
+        auto map=[&](Point p){auto u=placed.toUnit(p);return Point{u.x*working->width,u.y*working->height};};
+        settings.progressiveStart=map(settings.progressiveStart.value_or(request.transform.fromUnit({.5,0})));
+        settings.progressiveEnd=map(settings.progressiveEnd.value_or(request.transform.fromUnit({.5,1})));
+    }
     std::shared_ptr<const DeepImage> deepOutput;
-    if(request.deepSource&&request.deepSource->isHdr()){
+    if(request.deepSource&&(request.deepSource->isHdr()||request.kind==Kind::ProgressiveBlur)){
         if(!request.deepSource->valid()||request.deepSource->width!=original.width||request.deepSource->height!=original.height)throw std::runtime_error("HDR filter source grid changed");
         count(working->width,working->height,request.limits,80);
-        auto prepared=makeDeep(working->width,working->height);
+        auto prepared=makeDeep(working->width,working->height,request.deepSource->format);
         for(int y=0;y<prepared->height;++y){cancel(request.limits);for(int x=0;x<prepared->width;++x){const int sx=bounds.x+int((int64_t(2*x+1)*bounds.width)/(2*prepared->width)),sy=bounds.y+int((int64_t(2*y+1)*bounds.height)/(2*prepared->height));prepared->setPixel(x,y,request.deepSource->pixel(sx,sy));}}
         auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
         deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,request.cameraRaw,view);
@@ -206,7 +273,7 @@ Result apply(const Request& request){
     if(deepOutput&&bounds==PixelRect{0,0,original.width,original.height}&&deepOutput->width==request.deepSource->width&&deepOutput->height==request.deepSource->height&&deepOutput->samples==request.deepSource->samples){result.deep=request.deepSource;return result;}
     auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,selected?&*selected:nullptr,request.limits);
     if(spreads&&!request.preview){int loX=output->width,loY=output->height,hiX=0,hiY=0;for(int y=0;y<output->height;++y){cancel(request.limits);for(int x=0;x<output->width;++x)if(deepOutput?deepOutput->pixel(x,y)[3]>0:output->pixel(x,y).a!=0){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
-        if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}if(deepOutput){auto crop=makeDeep(w,h);for(int y=0;y<h;++y)for(int x=0;x<w;++x)crop->setPixel(x,y,deepOutput->pixel(x+loX,y+loY));deepOutput=crop;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
+        if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}if(deepOutput){auto crop=makeDeep(w,h,deepOutput->format);for(int y=0;y<h;++y)for(int x=0;x<w;++x)crop->setPixel(x,y,deepOutput->pixel(x+loX,y+loY));deepOutput=crop;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
     }
     cancel(request.limits);result.deep=deepOutput;result.raster=output;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=true;result.implementation=spreads?"analytic software kernel; Mac raster comparison pending":"pinned upstream C algorithm";return result;
 }

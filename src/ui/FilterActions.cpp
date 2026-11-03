@@ -51,7 +51,7 @@ std::optional<filters::SourceSelection> filterSelection(const Document&doc,const
 std::optional<Transform> paddedPlacement(const filters::Request& job){
     const int width=job.source->width,height=job.source->height;
     filters::PixelRect bounds{0,0,width,height};
-    if(job.kind==filters::Kind::GaussianBlur||job.kind==filters::Kind::MotionBlur){
+    if(job.kind==filters::Kind::GaussianBlur||job.kind==filters::Kind::MotionBlur||job.kind==filters::Kind::ProgressiveBlur){
         const int margin=int(std::ceil(std::max(job.retainedBlurMargin,filters::blurMargin(job.kind,job.settings))));
         bounds={-margin,-margin,width+2*margin,height+2*margin};
     }else if(job.kind==filters::Kind::ContentAwareFill&&job.selection&&job.selection->coverage){
@@ -104,7 +104,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
 }
-QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter"};}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
@@ -164,7 +164,7 @@ class FilterPanel final:public ui::EditPanelSession {
     std::shared_ptr<const Document> completedPreview_;
     std::optional<Document> committed_;
     uint64_t version_{},runningVersion_{};
-    bool pending_{},closed_{},committing_{},refine_{};
+    bool pending_{},closed_{},committing_{},refine_{},progressiveDragging_{};
     static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     void retire(){if(closed_&&!worker_.isRunning())deleteLater();}
     void change(){
@@ -189,7 +189,12 @@ class FilterPanel final:public ui::EditPanelSession {
     // guidePoint stores y as 1-unit.y. Drawing uses that inverse so the segment stays on the sampled pixels.
     Point guideDocument(double x,double y)const{return original_.transform.fromUnit({x,1-y});}
     void syncGuideOverlay(){
-        auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas||!raw_)return;
+        auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas)return;
+        if(request_.kind==filters::Kind::ProgressiveBlur){
+            if(request_.settings.progressiveStart&&request_.settings.progressiveEnd)canvas->setCameraRawGuides({{*request_.settings.progressiveStart,*request_.settings.progressiveEnd}});
+            return;
+        }
+        if(!raw_)return;
         const auto guides=raw_->guideOverlay();
         std::vector<std::pair<Point,Point>> lines;lines.reserve(guides.size());
         for(const auto& guide:guides)lines.push_back({guideDocument(guide.startX,guide.startY),guideDocument(guide.endX,guide.endY)});
@@ -209,6 +214,7 @@ class FilterPanel final:public ui::EditPanelSession {
         cancelled_=std::make_shared<std::atomic_bool>(false);
         auto job=request_;job.preview=!committing_;job.limits.cancelled=[token=cancelled_]{return token->load();};
         if(job.kind==filters::Kind::CameraRaw&&job.preview){job.previewMaxEdge=refine_?2048:1024;job.cameraRawView.scopeLimit=refine_?0:512;}
+        if(job.kind==filters::Kind::ProgressiveBlur&&job.preview)job.previewMaxEdge=512;
         status_.setText(committing_?"Applying filter…":"Updating preview…");
         worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_]{
             FilterOutput out;out.full=!job.preview;
@@ -247,7 +253,7 @@ public:
         debounce_.setSingleShot(true);debounce_.setInterval(120);
         const filters::Settings factory{};
         auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
-            auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"?1:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
+            auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"?1:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
             auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=label=="Radius"||label=="Distance"||label=="Amount";
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
@@ -269,6 +275,15 @@ public:
         case filters::Kind::Dither:break;
         case filters::Kind::Scanlines:number("Strength",request_.settings.scanline,0,100,1,factory.scanline);number("Glow",request_.settings.scanlineGlow,0,100,1,factory.scanlineGlow);break;
         case filters::Kind::CameraRaw:break;
+        case filters::Kind::ProgressiveBlur:{
+            number("From",request_.settings.progressiveFrom,0,250,1,factory.progressiveFrom);
+            number("To",request_.settings.progressiveTo,0,250,1,factory.progressiveTo);
+            auto* radial=new QCheckBox("Radial");radial->setChecked(request_.settings.progressiveRadial);fields_.addRow(radial);
+            auto* invert=new QCheckBox("Invert");invert->setChecked(request_.settings.progressiveInverted);fields_.addRow(invert);
+            connect(radial,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.progressiveRadial=value;change();});
+            connect(invert,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.progressiveInverted=value;change();});
+            break;
+        }
         }
         if(cameraRaw){
             layout_.removeItem(&fields_);raw_=new ui::CameraRawPanel(request_.cameraRaw.normalized(),&dialog_);raw_->edited=[this]{change();};
@@ -309,6 +324,7 @@ public:
         });
         connect(&buttons_,&QDialogButtonBox::rejected,&dialog_,&QDialog::reject);
         connect(&dialog_,&QDialog::finished,this,[this](int answer){finish(answer);});
+        syncGuideOverlay();
         if(cameraRaw){auto* dock=new DockFollow(&dialog_,parent->window());parent->window()->installEventFilter(dock);dialog_.setFixedWidth(440);start();dialog_.show();dock->place();}
         else{dialog_.resize(430,220);if(auto found=positions().find(request_.kind);found!=positions().end())dialog_.move(found->second);start();dialog_.show();}
         dialog_.raise();dialog_.activateWindow();
@@ -320,6 +336,9 @@ public:
     bool committing()const override{return committing_;}
     void cancel()override{if(!closed_&&!committing_)dialog_.reject();}
     bool samplePress(Point point,double,Qt::KeyboardModifiers)override{
+        if(request_.kind==filters::Kind::ProgressiveBlur&&!closed_&&!committing_){
+            progressiveDragging_=true;request_.settings.progressiveStart=point;request_.settings.progressiveEnd=point;syncGuideOverlay();change();return true;
+        }
         if(!raw_||closed_||committing_||raw_->tool()==ui::CameraRawPanel::Tool::None)return false;
         dragKind_=raw_->tool();
         if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->beginGuide(x,y);syncGuideOverlay();}
@@ -329,6 +348,7 @@ public:
         return true;
     }
     bool sampleMove(Point point,double,Qt::KeyboardModifiers,bool finish)override{
+        if(progressiveDragging_){request_.settings.progressiveEnd=point;syncGuideOverlay();change();if(finish){progressiveDragging_=false;dialog_.activateWindow();}return true;}
         if(dragKind_==ui::CameraRawPanel::Tool::None)return false;
         if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->dragGuide(x,y);if(finish)raw_->endGuide();syncGuideOverlay();}
         else if(dragKind_==ui::CameraRawPanel::Tool::Curve||dragKind_==ui::CameraRawPanel::Tool::Mixer)raw_->dragTarget(viewY(point));
@@ -370,6 +390,7 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     if(layer->deep&&layer->deep->isHdr()&&!filters::supportsHdr(kind))throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
     const auto before=*p->document;const auto original=*layer;
     auto request=buildFilterRequest(*p,before,original,kind);
+    if(kind==filters::Kind::ProgressiveBlur&&!repeating){request.settings.progressiveStart=request.transform.fromUnit({.5,0});request.settings.progressiveEnd=request.transform.fromUnit({.5,1});}
     if(repeating){
         if(ui::LastFilterJob::find(this,p))return;
         const auto action=names[kindIndex].toStdString();
