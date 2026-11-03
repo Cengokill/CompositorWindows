@@ -13,13 +13,14 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
 namespace compositor::effects {
 namespace {
 using RGB=std::array<double,3>;
-constexpr std::array<const char*,12> kinds{"Hue/Saturation","Levels","Curves","Exposure","Gradient Map","Grain","Invert","Black & White","Color Balance","Gaussian Blur","Motion Blur","Add Noise"};
+constexpr std::array<const char*,15> kinds{"Hue/Saturation","Levels","Curves","Exposure","Gradient Map","Grain","Invert","Black & White","Color Balance","Gaussian Blur","Motion Blur","Add Noise","Progressive Blur","Bloom / Glow","RGB Split"};
 constexpr std::array<const char*,7> ranges{"Master","Reds","Yellows","Greens","Cyans","Blues","Magentas"};
 [[noreturn]] void bad(){throw std::invalid_argument("Malformed or unsupported adjustment settings");}
 QString text(std::string_view s){return QString::fromUtf8(s.data(),qsizetype(s.size()));}
@@ -46,8 +47,12 @@ struct Settings {
  double bwReds{40},bwYellows{60},bwGreens{40},bwCyans{60},bwBlues{20},bwMagentas{80};
  double shadowCR{},shadowMG{},shadowYB{},midCR{},midMG{},midYB{},highCR{},highMG{},highYB{};
  double blurRadius{},blurAngle{},blurDistance{},noiseAmount{};bool noiseGaussian{},noiseMono{};
- bool identity()const{switch(kind){case 0:return !colorize&&std::all_of(hsv.begin(),hsv.end(),[](auto c){return c.zero();});case 1:return std::all_of(levels.begin(),levels.end(),[](auto l){return l.identity();});case 2:return std::all_of(curves.begin(),curves.end(),[](const auto&c){return c.identity();});case 3:return exposure==0&&offset==0&&gamma==1;case 5:return amount==0;case 8:return shadowCR==0&&shadowMG==0&&shadowYB==0&&midCR==0&&midMG==0&&midYB==0&&highCR==0&&highMG==0&&highYB==0;case 9:return blurRadius==0;case 10:return blurDistance==0;case 11:return noiseAmount==0;default:return false;}}
+ double progressiveFrom{},progressiveTo{20};std::optional<Point> progressiveStart,progressiveEnd;bool progressiveRadial{},progressiveInverted{};
+ double bloomAmount{40},bloomRadius{24};
+ double rgbSplitDistance{10},rgbSplitBlur{},rgbSplitAngle{};bool rgbSplitRadial{};std::optional<Point> rgbSplitCenter;double rgbSplitReach{1000};
+ bool identity()const{switch(kind){case 0:return !colorize&&std::all_of(hsv.begin(),hsv.end(),[](auto c){return c.zero();});case 1:return std::all_of(levels.begin(),levels.end(),[](auto l){return l.identity();});case 2:return std::all_of(curves.begin(),curves.end(),[](const auto&c){return c.identity();});case 3:return exposure==0&&offset==0&&gamma==1;case 5:return amount==0;case 8:return shadowCR==0&&shadowMG==0&&shadowYB==0&&midCR==0&&midMG==0&&midYB==0&&highCR==0&&highMG==0&&highYB==0;case 9:return blurRadius==0;case 10:return blurDistance==0;case 11:return noiseAmount==0;case 12:return progressiveFrom==0&&progressiveTo==0;case 13:return bloomAmount==0;case 14:return rgbSplitDistance==0&&rgbSplitBlur==0;default:return false;}}
 };
+std::optional<Point> optionalPoint(const QJsonObject&o,const char*k){if(missing(o,k))return {};auto v=o[k];if(v.isArray()){auto a=array(v);if(a.size()!=2)bad();return Point{number(a[0]),number(a[1])};}auto p=object(v);return Point{number(p["x"]),number(p["y"])};}
 Settings settings(const QJsonObject&o){Settings s;s.kind=named(o["kind"],kinds);s.hsv[0]=hsvChange(o);s.colorize=boolean(o["colorize"]);auto l=object(o["levels"]);channel(l["channel"]);auto la=array(l["ranges"]);if(la.size()!=4)bad();for(int i=0;i<4;++i)s.levels[i]=level(la[i]);auto c=object(o["curves"]);channel(c["channel"]);auto ca=array(c["channels"]);if(ca.size()!=4)bad();for(int i=0;i<4;++i)s.curves[i]=curve(ca[i]);
  if(!missing(o,"hsvSettings")){auto h=object(o["hsvSettings"]);s.selectedRange=named(h["range"],ranges);s.colorize=boolean(h["colorize"]);s.invertRange=boolean(h["invertRange"]);s.hsv={};auto values=array(h["adjustments"]);if(values.size()%2)bad();for(qsizetype i=0;i<values.size();i+=2)s.hsv[named(values[i],ranges)]=hsvChange(values[i+1]);auto bands=array(h["bands"]);if(bands.size()%2)bad();for(qsizetype i=0;i<bands.size();i+=2){auto b=object(bands[i+1]);s.bands[named(bands[i],ranges)]={number(b["falloffStart"]),number(b["rangeStart"]),number(b["rangeEnd"]),number(b["falloffEnd"])};}}
  if(!missing(o,"exposureSettings")){auto e=object(o["exposureSettings"]);s.exposure=number(e["exposure"],-20,20);s.offset=number(e["offset"],-.5,.5);s.gamma=number(e["gamma"],.01,9.99);}
@@ -56,7 +61,9 @@ Settings settings(const QJsonObject&o){Settings s;s.kind=named(o["kind"],kinds);
  if(!missing(o,"blackWhiteSettings")){auto g=object(o["blackWhiteSettings"]);s.bwReds=number(g["reds"],-200,300);s.bwYellows=number(g["yellows"],-200,300);s.bwGreens=number(g["greens"],-200,300);s.bwCyans=number(g["cyans"],-200,300);s.bwBlues=number(g["blues"],-200,300);s.bwMagentas=number(g["magentas"],-200,300);}
  if(!missing(o,"colorBalanceSettings")){auto g=object(o["colorBalanceSettings"]);auto tone=[&](const char* name,double& cr,double& mg,double& yb){auto t=object(g[name]);cr=number(t["cyanRed"],-100,100);mg=number(t["magentaGreen"],-100,100);yb=number(t["yellowBlue"],-100,100);};tone("shadows",s.shadowCR,s.shadowMG,s.shadowYB);tone("midtones",s.midCR,s.midMG,s.midYB);tone("highlights",s.highCR,s.highMG,s.highYB);}
  if(!missing(o,"filterSettings")){auto g=object(o["filterSettings"]);s.blurRadius=number(g["radius"],0,250);s.blurAngle=number(g["angle"],-90,90);s.blurDistance=number(g["distance"],0,2000);s.noiseAmount=number(g["amount"],0,400);s.noiseGaussian=boolean(g["gaussian"]);s.noiseMono=boolean(g["monochromatic"]);if(!missing(g,"seed")){auto seed=number(g["seed"],0,4294967295.);if(std::trunc(seed)!=seed)bad();s.seed=uint32_t(seed);}}
- else if(s.kind==9)s.blurRadius=8;else if(s.kind==10)s.blurDistance=16;else if(s.kind==11)s.noiseAmount=20;return s;
+ else if(s.kind==9)s.blurRadius=8;else if(s.kind==10)s.blurDistance=16;else if(s.kind==11)s.noiseAmount=20;
+ if(!missing(o,"filterLayerSettings")){auto g=object(o["filterLayerSettings"]);if(!missing(g,"progressiveFrom"))s.progressiveFrom=number(g["progressiveFrom"],0,250);if(!missing(g,"progressiveTo"))s.progressiveTo=number(g["progressiveTo"],0,250);s.progressiveStart=optionalPoint(g,"progressiveStart");s.progressiveEnd=optionalPoint(g,"progressiveEnd");if(!missing(g,"progressiveRadial"))s.progressiveRadial=boolean(g["progressiveRadial"]);if(!missing(g,"progressiveInverted"))s.progressiveInverted=boolean(g["progressiveInverted"]);if(!missing(g,"bloomAmount"))s.bloomAmount=number(g["bloomAmount"],0,100);if(!missing(g,"bloomRadius"))s.bloomRadius=number(g["bloomRadius"],1,150);if(!missing(g,"rgbSplitDistance"))s.rgbSplitDistance=number(g["rgbSplitDistance"],0,200);if(!missing(g,"rgbSplitBlur"))s.rgbSplitBlur=number(g["rgbSplitBlur"],0,400);if(!missing(g,"rgbSplitAngle"))s.rgbSplitAngle=number(g["rgbSplitAngle"],-180,180);if(!missing(g,"rgbSplitRadial"))s.rgbSplitRadial=boolean(g["rgbSplitRadial"]);s.rgbSplitCenter=optionalPoint(g,"rgbSplitCenter");if(!missing(g,"rgbSplitReach"))s.rgbSplitReach=number(g["rgbSplitReach"],1,100000);}
+ return s;
 }
 RGB toHSL(RGB c){auto hi=*std::max_element(c.begin(),c.end()),lo=*std::min_element(c.begin(),c.end()),light=(hi+lo)/2,delta=hi-lo;if(!(delta>0))return {0,0,light};auto sat=delta/(1-std::abs(2*light-1));double hue;if(hi==c[0])hue=(c[1]-c[2])/delta;else if(hi==c[1])hue=(c[2]-c[0])/delta+2;else hue=(c[0]-c[1])/delta+4;hue*=60;if(hue<0)hue+=360;return {hue,std::min(1.,sat),light};}
 RGB toRGB(RGB hsl){auto[h,s,l]=hsl;if(!(s>0))return {l,l,l};auto chroma=(1-std::abs(2*l-1))*s,sector=h/60,second=chroma*(1-std::abs(std::fmod(sector,2.)-1)),base=l-chroma/2;RGB c{};switch(int(sector)){case 0:c={chroma,second,0};break;case 1:c={second,chroma,0};break;case 2:c={0,chroma,second};break;case 3:c={0,second,chroma};break;case 4:c={second,0,chroma};break;default:c={chroma,0,second};}for(auto&v:c)v=std::clamp(v+base,0.,1.);return c;}
@@ -68,9 +75,9 @@ Pixel sampleCube(Pixel pixel,const std::vector<std::array<float,3>>&v){if(!pixel
 std::array<float,768> tables(const Settings&s){std::array<float,768> out{};for(int c=0;c<3;++c)for(int i=0;i<256;++i){double result;if(s.kind==1)result=s.levels[0].apply(s.levels[c+1].apply(i/255.));else if(s.kind==2)result=s.curves[0].value(s.curves[c+1].value(i))/255.;else{double encoded=i/255.,linear=encoded<=.04045?encoded/12.92:std::pow((encoded+.055)/1.055,2.4);linear=std::pow(std::max(0.,linear*std::pow(2.,s.exposure)+s.offset),1/s.gamma);result=linear<=.0031308?linear*12.92:1.055*std::pow(linear,1/2.4)-.055;}out[c*256+i]=float(std::clamp(result,0.,1.));}return out;}
 std::array<uint8_t,768> gradient(const Settings&s){auto dark=s.reverse?s.highlights:s.shadows,light=s.reverse?s.shadows:s.highlights;std::array<uint8_t,768> out{};for(int i=0;i<256;++i)for(int c=0;c<3;++c)out[i*3+c]=byte((dark[c]+(light[c]-dark[c])*i/255.)*255);return out;}
 }
-std::string defaultAdjustmentJson(std::string_view kind){named(text(kind),kinds);QJsonObject range{{"black",0},{"white",255},{"gamma",1},{"outputBlack",0},{"outputWhite",255}};QJsonArray ls,cs;for(int i=0;i<4;++i){ls.append(range);cs.append(QJsonArray{QJsonObject{{"x",0},{"y",0}},QJsonObject{{"x",255},{"y",255}}});}return QJsonDocument(QJsonObject{{"kind",text(kind)},{"hue",0},{"saturation",0},{"lightness",0},{"colorize",false},{"levels",QJsonObject{{"channel","RGB"},{"ranges",ls}}},{"curves",QJsonObject{{"channel","RGB"},{"channels",cs}}}}).toJson(QJsonDocument::Compact).toStdString();}
+std::string defaultAdjustmentJson(std::string_view kind){named(text(kind),kinds);QJsonObject range{{"black",0},{"white",255},{"gamma",1},{"outputBlack",0},{"outputWhite",255}};QJsonArray ls,cs;for(int i=0;i<4;++i){ls.append(range);cs.append(QJsonArray{QJsonObject{{"x",0},{"y",0}},QJsonObject{{"x",255},{"y",255}}});}QJsonObject o{{"kind",text(kind)},{"hue",0},{"saturation",0},{"lightness",0},{"colorize",false},{"levels",QJsonObject{{"channel","RGB"},{"ranges",ls}}},{"curves",QJsonObject{{"channel","RGB"},{"channels",cs}}}};if(kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split")o["filterLayerSettings"]=QJsonObject{{"progressiveFrom",0},{"progressiveTo",20},{"progressiveRadial",false},{"progressiveInverted",false},{"bloomAmount",40},{"bloomRadius",24},{"rgbSplitDistance",10},{"rgbSplitBlur",0},{"rgbSplitAngle",0},{"rgbSplitRadial",false},{"rgbSplitReach",1000}};return QJsonDocument(o).toJson(QJsonDocument::Compact).toStdString();}
 void validateAdjustmentJson(std::string_view json){settings(parse(json));}
-int adjustmentPadding(std::string_view json){const auto s=settings(parse(json));return s.kind==9?int(std::ceil(s.blurRadius*3+2)):s.kind==10?int(std::ceil(s.blurDistance+2)):0;}
+int adjustmentPadding(std::string_view json){const auto s=settings(parse(json));return s.kind==9?int(std::ceil(s.blurRadius*3+2)):s.kind==10?int(std::ceil(s.blurDistance+2)):s.kind==12?int(std::ceil(std::max(s.progressiveFrom,s.progressiveTo)*3+2)):s.kind==13?int(std::ceil(s.bloomRadius*3+2)):s.kind==14?int(std::ceil((s.rgbSplitDistance+s.rgbSplitBlur)*(s.rgbSplitRadial?2:1)+2)):0;}
 std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region,const std::function<bool()>& cancelled){
  auto cancel=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};cancel();
  if(!source||source->width<1||source->height<1||source->width>30000||source->height>30000||uint64_t(source->width)*source->height>100000000)throw std::invalid_argument("Invalid source raster");
@@ -78,7 +85,15 @@ std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> sour
  if(selection&&(selection->width!=source->width||selection->height!=source->height||selection->pixels.size()!=size_t(source->width)*source->height))throw std::invalid_argument("Selection must match source pixel grid");
  if(!std::isfinite(region.originX)||!std::isfinite(region.originY)||!std::isfinite(region.unitsPerPixel)||region.unitsPerPixel<=0)throw std::invalid_argument("Invalid adjustment region");auto s=settings(parse(json));
  if(s.identity()||(selection&&std::none_of(selection->pixels.begin(),selection->pixels.end(),[](auto v){return v!=0;})))return source;
- if(s.kind>=9){filters::Settings filter;filter.radius=s.blurRadius>0?s.blurRadius:1;filter.angle=s.blurAngle;filter.distance=s.blurDistance>0?s.blurDistance:1;filter.amount=s.noiseAmount>0?s.noiseAmount:.1;filter.gaussian=s.noiseGaussian;filter.monochromatic=s.noiseMono;auto kind=s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:filters::Kind::AddNoise;return filters::runPixels(kind,*source,filter,1,s.seed,selection);}
+ if(s.kind>=9){filters::Settings filter;filter.radius=s.blurRadius>0?s.blurRadius:1;filter.angle=s.blurAngle;filter.distance=s.blurDistance>0?s.blurDistance:1;filter.amount=s.noiseAmount>0?s.noiseAmount:.1;filter.gaussian=s.noiseGaussian;filter.monochromatic=s.noiseMono;
+  filter.progressiveFrom=s.progressiveFrom;filter.progressiveTo=s.progressiveTo;filter.progressiveRadial=s.progressiveRadial;filter.progressiveInverted=s.progressiveInverted;
+  filter.bloomGlow=s.kind==13;filter.bloomAmount=s.bloomAmount;filter.bloomRadius=s.bloomRadius;filter.bloom=s.bloomAmount;
+  filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=std::max(1.,s.rgbSplitReach/region.unitsPerPixel);
+  auto map=[&](Point p){return Point{(p.x-region.originX)/region.unitsPerPixel,(p.y-region.originY)/region.unitsPerPixel};};
+  if(s.progressiveStart)filter.progressiveStart=map(*s.progressiveStart);if(s.progressiveEnd)filter.progressiveEnd=map(*s.progressiveEnd);
+  if(s.rgbSplitCenter)filter.rgbSplitCenter=map(*s.rgbSplitCenter);
+  auto kind=s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:s.kind==11?filters::Kind::AddNoise:s.kind==12?filters::Kind::ProgressiveBlur:s.kind==13?filters::Kind::Bloom:filters::Kind::RgbSplit;
+  filters::Limits limits;limits.cancelled=cancelled;return filters::runPixels(kind,*source,filter,1,s.seed,selection,limits);}
  std::vector<std::array<float,3>> colors;if(s.kind==0)colors=cube(s);std::array<float,768> lut{};if(s.kind>=1&&s.kind<=3)lut=tables(s);std::array<uint8_t,768> gradientLut{};if(s.kind==4)gradientLut=gradient(s);
  cancel();auto result=std::make_shared<Raster>(*source);bool any=false;const int columns=(source->width+255)/256;
  for(int ty=0;ty<source->height;ty+=256)for(int tx=0;tx<source->width;tx+=256){cancel();int w=std::min(256,source->width-tx),h=std::min(256,source->height-ty);size_t index=size_t(ty/256)*columns+tx/256;auto original=source->tiles[index];
@@ -104,7 +119,23 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
     if(selection&&(selection->width!=source->width||selection->height!=source->height||!selection->validStorage()))throw std::runtime_error("HDR selection must match source grid");
     auto s=settings(parse(json));if(s.identity())return source;
     if(s.kind>=9){filters::Settings filter;filter.radius=s.blurRadius;filter.angle=s.blurAngle;filter.distance=s.blurDistance;filter.amount=s.noiseAmount;filter.gaussian=s.noiseGaussian;filter.monochromatic=s.noiseMono;
-        filters::Limits limits;limits.cancelled=cancelled;return filters::runDeepPixels(s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:filters::Kind::AddNoise,*source,filter,1,s.seed,selection,limits);}
+        filter.progressiveFrom=s.progressiveFrom;filter.progressiveTo=s.progressiveTo;filter.progressiveRadial=s.progressiveRadial;filter.progressiveInverted=s.progressiveInverted;
+        filter.bloomGlow=s.kind==13;filter.bloomAmount=s.bloomAmount;filter.bloomRadius=s.bloomRadius;
+        filter.rgbSplitDistance=s.rgbSplitDistance;filter.rgbSplitBlur=s.rgbSplitBlur;filter.rgbSplitAngle=s.rgbSplitAngle;filter.rgbSplitRadial=s.rgbSplitRadial;filter.rgbSplitReach=std::max(1.,s.rgbSplitReach/region.unitsPerPixel);
+        auto map=[&](Point p){return Point{(p.x-region.originX)/region.unitsPerPixel,(p.y-region.originY)/region.unitsPerPixel};};
+        if(s.progressiveStart)filter.progressiveStart=map(*s.progressiveStart);if(s.progressiveEnd)filter.progressiveEnd=map(*s.progressiveEnd);
+        if(s.rgbSplitCenter)filter.rgbSplitCenter=map(*s.rgbSplitCenter);
+        auto kind=s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:s.kind==11?filters::Kind::AddNoise:s.kind==12?filters::Kind::ProgressiveBlur:s.kind==13?filters::Kind::Bloom:filters::Kind::RgbSplit;
+        if(!filters::supportsHdr(kind)&&source->isHdr())throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
+        filters::Limits limits;limits.cancelled=cancelled;
+        if(!filters::supportsHdr(kind)){
+            auto raster=rasterFromDeep(*source);auto changed=filters::runPixels(kind,*raster,filter,1,s.seed,selection,limits);
+            if(changed==raster)return source;
+            auto image=makeDeep(changed->width,changed->height,source->format);
+            for(int y=0;y<changed->height;++y){cancel();for(int x=0;x<changed->width;++x){auto p=changed->pixel(x,y);image->setPixel(x,y,{p.a?p.r/255.f:0.f,p.a?p.g/255.f:0.f,p.a?p.b/255.f:0.f,p.a/255.f});}}
+            return image;
+        }
+        return filters::runDeepPixels(kind,*source,filter,1,s.seed,selection,limits);}
     // Exposure is evaluated in scene-linear light. Other bounded color kernels
     // see per-pixel normalized highlights, then their brightness is restored.
     if(s.kind!=3&&s.kind!=1&&s.kind!=2){

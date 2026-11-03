@@ -5,18 +5,26 @@
 #include <optional>
 #include <string>
 namespace compositor::filters {
-enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur };
+enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit };
 struct Settings {
     double radius{1},angle{0},distance{10},amount{10},distortion{0};
     bool gaussian{},monochromatic{};
     double vignette{},vignetteMidpoint{.5},vignetteFeather{.5};
     bool vignetteRound{true};
     double bloom{},bloomThreshold{.6},tonal{};
+    // Bloom / Glow adjustment: Mac amount/radius. Distinct from the Windows Bloom
+    // filter's strength/threshold pair, which keeps its previous pixel behavior.
+    double bloomAmount{40},bloomRadius{24};
+    bool bloomGlow{};
     int ditherLevels{},ditherStyle{};
     double scanline{},scanlineGlow{};
     double progressiveFrom{},progressiveTo{20};
     std::optional<Point> progressiveStart,progressiveEnd;
     bool progressiveRadial{},progressiveInverted{};
+    double rgbSplitDistance{10},rgbSplitBlur{},rgbSplitAngle{};
+    bool rgbSplitRadial{};
+    std::optional<Point> rgbSplitCenter;
+    double rgbSplitReach{1000};
     Settings normalized() const;
 };
 struct PixelRect {int x{},y{},width{},height{};bool operator==(const PixelRect&) const=default;};

@@ -51,7 +51,7 @@ std::optional<filters::SourceSelection> filterSelection(const Document&doc,const
 std::optional<Transform> paddedPlacement(const filters::Request& job){
     const int width=job.source->width,height=job.source->height;
     filters::PixelRect bounds{0,0,width,height};
-    if(job.kind==filters::Kind::GaussianBlur||job.kind==filters::Kind::MotionBlur||job.kind==filters::Kind::ProgressiveBlur){
+    if(job.kind==filters::Kind::GaussianBlur||job.kind==filters::Kind::MotionBlur||job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit){
         bounds=filters::blurWorkingBounds(job.kind,job.settings,width,height,job.retainedBlurMargin,
             filters::canvasTouchingSides(job.transform,width,height,job.canvasWidth,job.canvasHeight));
     }else if(job.kind==filters::Kind::ContentAwareFill&&job.selection&&job.selection->coverage){
@@ -109,7 +109,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
 }
-QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur"};}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
@@ -170,7 +170,7 @@ class FilterPanel final:public ui::EditPanelSession {
     std::shared_ptr<const Document> completedPreview_;
     std::optional<Document> committed_;
     uint64_t version_{},runningVersion_{};
-    bool pending_{},closed_{},committing_{},refine_{},progressiveDragging_{};
+    bool pending_{},closed_{},committing_{},refine_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
     static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     void retire(){if(closed_&&!worker_.isRunning())deleteLater();}
     void change(){
@@ -200,6 +200,12 @@ class FilterPanel final:public ui::EditPanelSession {
             if(request_.settings.progressiveStart&&request_.settings.progressiveEnd)canvas->setCameraRawGuides({{*request_.settings.progressiveStart,*request_.settings.progressiveEnd}});
             return;
         }
+        if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitRadial){
+            const Point c=request_.settings.rgbSplitCenter.value_or(original_.transform.fromUnit({.5,.5}));
+            canvas->setCameraRawGuides({{{c.x-12,c.y},{c.x+12,c.y}},{{c.x,c.y-12},{c.x,c.y+12}}});
+            return;
+        }
+        if(request_.kind==filters::Kind::RgbSplit){canvas->setCameraRawGuides({});return;}
         if(!raw_)return;
         const auto guides=raw_->guideOverlay();
         std::vector<std::pair<Point,Point>> lines;lines.reserve(guides.size());
@@ -220,7 +226,7 @@ class FilterPanel final:public ui::EditPanelSession {
         cancelled_=std::make_shared<std::atomic_bool>(false);
         auto job=request_;job.preview=!committing_;job.limits.cancelled=[token=cancelled_]{return token->load();};
         if(job.kind==filters::Kind::CameraRaw&&job.preview){job.previewMaxEdge=refine_?2048:1024;job.cameraRawView.scopeLimit=refine_?0:512;}
-        if(job.kind==filters::Kind::ProgressiveBlur&&job.preview)job.previewMaxEdge=512;
+        if((job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit)&&job.preview)job.previewMaxEdge=512;
         status_.setText(committing_?"Applying filter…":"Updating preview…");
         worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_]{
             FilterOutput out;out.full=!job.preview;
@@ -233,7 +239,28 @@ class FilterPanel final:public ui::EditPanelSession {
     }
     void finish(int answer){
         if(closed_)return;closed_=true;cancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)positions()[request_.kind]=dialog_.pos();
-        try{if(answer==QDialog::Accepted&&committed_&&host_.commit){
+        try{if(splitLayers_&&host_.commit){
+            if(!original_.raster)throw std::runtime_error("RGB Split to Layers needs an image layer");
+            Document next=before_;
+            auto found=std::find_if(next.layers.begin(),next.layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
+            if(found==next.layers.end())throw std::runtime_error("Completed filter target is missing");
+            const auto& source=*original_.raster;
+            auto channel=[&](int index,const char* name){
+                std::vector<std::uint8_t> pixels(std::size_t(source.width)*source.height*4);
+                for(int y=0;y<source.height;++y)for(int x=0;x<source.width;++x){
+                    const auto p=source.pixel(x,y);const auto i=(std::size_t(y)*source.width+x)*4;
+                    const std::uint8_t value=index==3?p.a:index==0?p.r:index==1?p.g:p.b;
+                    if(index==3){pixels[i]=pixels[i+1]=pixels[i+2]=value;pixels[i+3]=255;}
+                    else{pixels[i]=pixels[i+1]=pixels[i+2]=value;pixels[i+3]=p.a;}
+                }
+                Layer layer=original_;layer.id=newId();layer.name=name;layer.raster=Raster::fromRgba(source.width,source.height,pixels.data(),std::size_t(source.width)*4);layer.deep.reset();layer.shapeJson.clear();layer.text.reset();
+                return layer;
+            };
+            const auto at=found-next.layers.begin()+1;
+            next.layers.insert(next.layers.begin()+at,{channel(0,"Red"),channel(1,"Green"),channel(2,"Blue"),channel(3,"Alpha")});
+            validateDocument(next);
+            host_.commit({std::move(next),original_.id,false,{},true});
+        }else if(answer==QDialog::Accepted&&committed_&&host_.commit){
             auto found=std::find_if(committed_->layers.begin(),committed_->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
             if(found==committed_->layers.end())throw std::runtime_error("Completed filter target is missing");
             auto job=request_;job.preview=false;job.limits.cancelled={};
@@ -261,7 +288,7 @@ public:
         auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
             auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"?1:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
             auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
-            const bool logarithmic=label=="Radius"||label=="Distance"||label=="Amount";
+            const bool logarithmic=(label=="Radius"||label=="Distance"||label=="Amount")&&low>0;
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
             slider->setValue(position(spin->value()));slider->setDefaultValue(position(fallback));layout->addWidget(slider,1);layout->addWidget(spin);fields_.addRow(label,row);
@@ -288,6 +315,19 @@ public:
             auto* invert=new QCheckBox("Invert");invert->setChecked(request_.settings.progressiveInverted);fields_.addRow(invert);
             connect(radial,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.progressiveRadial=value;change();});
             connect(invert,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.progressiveInverted=value;change();});
+            break;
+        }
+        case filters::Kind::RgbSplit:{
+            number("Distance",request_.settings.rgbSplitDistance,0,200,1,factory.rgbSplitDistance);
+            number("Blur",request_.settings.rgbSplitBlur,0,400,1,factory.rgbSplitBlur);
+            number("Angle",request_.settings.rgbSplitAngle,-180,180,1,factory.rgbSplitAngle);
+            auto* radial=new QCheckBox("Radial");radial->setObjectName("rgbSplitRadial");radial->setChecked(request_.settings.rgbSplitRadial);fields_.addRow(radial);
+            connect(radial,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.rgbSplitRadial=value;syncGuideOverlay();change();});
+            auto* split=new QPushButton("Split to Layers");split->setObjectName("rgbSplitToLayers");fields_.addRow(split);
+            connect(split,&QPushButton::clicked,&dialog_,[this]{
+                if(closed_||committing_)return;
+                splitLayers_=true;cancelled_->store(true);debounce_.stop();dialog_.reject();
+            });
             break;
         }
         }
@@ -317,6 +357,7 @@ public:
                 auto rendered=raw_->rendered();if(rememberRaw_)rememberRaw_(rendered);if(rendered.isIdentity()){dialog_.reject();return;}
                 request_.cameraRaw=rendered;request_.cameraRawView={};
             }else if(request_.kind==filters::Kind::LensCorrection&&request_.settings.distortion==0){dialog_.reject();return;}
+            else if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitDistance==0&&request_.settings.rgbSplitBlur==0){dialog_.reject();return;}
             if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
             if(!raw_&&remember_)remember_(request_.settings.normalized());committing_=true;apply_->setEnabled(false);buttons_.button(QDialogButtonBox::Cancel)->setEnabled(false);
             for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
@@ -345,6 +386,9 @@ public:
         if(request_.kind==filters::Kind::ProgressiveBlur&&!closed_&&!committing_){
             progressiveDragging_=true;request_.settings.progressiveStart=point;request_.settings.progressiveEnd=point;syncGuideOverlay();change();return true;
         }
+        if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitRadial&&!closed_&&!committing_){
+            rgbDragging_=true;request_.settings.rgbSplitCenter=point;syncGuideOverlay();change();return true;
+        }
         if(!raw_||closed_||committing_||raw_->tool()==ui::CameraRawPanel::Tool::None)return false;
         dragKind_=raw_->tool();
         if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->beginGuide(x,y);syncGuideOverlay();}
@@ -355,6 +399,7 @@ public:
     }
     bool sampleMove(Point point,double,Qt::KeyboardModifiers,bool finish)override{
         if(progressiveDragging_){request_.settings.progressiveEnd=point;syncGuideOverlay();change();if(finish){progressiveDragging_=false;dialog_.activateWindow();}return true;}
+        if(rgbDragging_){request_.settings.rgbSplitCenter=point;syncGuideOverlay();change();if(finish){rgbDragging_=false;dialog_.activateWindow();}return true;}
         if(dragKind_==ui::CameraRawPanel::Tool::None)return false;
         if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->dragGuide(x,y);if(finish)raw_->endGuide();syncGuideOverlay();}
         else if(dragKind_==ui::CameraRawPanel::Tool::Curve||dragKind_==ui::CameraRawPanel::Tool::Mixer)raw_->dragTarget(viewY(point));
@@ -397,6 +442,7 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     const auto before=*p->document;const auto original=*layer;
     auto request=buildFilterRequest(*p,before,original,kind);
     if(kind==filters::Kind::ProgressiveBlur&&!repeating){request.settings.progressiveStart=request.transform.fromUnit({.5,0});request.settings.progressiveEnd=request.transform.fromUnit({.5,1});}
+    if(kind==filters::Kind::RgbSplit&&!repeating){request.settings.rgbSplitCenter=request.transform.fromUnit({.5,.5});request.settings.rgbSplitReach=std::max(1.,std::hypot(request.transform.width,request.transform.height)/2);}
     if(repeating){
         if(ui::LastFilterJob::find(this,p))return;
         const auto action=names[kindIndex].toStdString();

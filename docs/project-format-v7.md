@@ -56,7 +56,7 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 15
+## Windows reader through version 16
 
 The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–15 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
@@ -70,6 +70,7 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 13 | A layer image stored as 16-bit RGBA PNG, or an HDR RGB/RGBA image stored as `<UUID>.exr`. EXR assets use scene-linear FLOAT channels with ZIP compression; the working pixels are extended-sRGB half floats. Masks stay 8-bit PNG. A lower version containing either deep representation is rejected. Documents with only 8-bit images stay on their previous version. |
 | 14 | A rectangle or ellipse shape with a `stroke` object: `width` 0.1–500, and `red`, `green`, `blue` 0–1. The stroke is drawn inside the layer bounds. A lower version that carries a `stroke` is rejected, so an older reader never drops the outline silently. Shapes without a stroke stay on their previous version. |
 | 15 | A document CMYK profile, stored as `cmyk.icc` with its name and SHA-256 digest in `cmykProfile` (details below). |
+| 16 | Progressive Blur, Bloom / Glow, and RGB Split adjustment layers, stored with optional `filterLayerSettings`. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
 
@@ -77,11 +78,19 @@ Blend names keep the original 13, then append `Linear Burn`, `Linear Dodge`, `So
 
 Additive fields do not raise the version by themselves: `effects`, base `text` without runs, and a line `shape` (`lineWidth`, `start`, `end`). A `stroke` on a rectangle or ellipse is version 14, as listed above. Hidden effects keep their parameters. `colorRuns` and `fontRuns` use UTF-16 code-unit `location` and `length`. A text object without `boxSize` is point text, left aligned, with tracking 0 and leading 0 (automatic, 120% of the font size). `alignment` is `Left`, `Center`, or `Right`. `boxSize` is `{width, height}` in layer pixels, each side from 16 to 30000. `tracking` is −100 to 1000 and `leading` is 0 to 5000. `fontStyle` on the text object or a font run names an installed variant; `Regular` and `Normal` are omitted. These paragraph fields are written only when they differ from those defaults, and only then does the document become version 12. A lower version that still carries them is rejected. Guides are `{id, horizontal, position}` and are separate from the transient transform snap lines. Mac exchange of these fields remains unverified.
 
-HDR asset preflight validates the EXR header and cumulative image budget before decoding. The regular-file, reparse-point and encoded 512 MiB asset checks also apply to EXR. The writer uses the existing stage/journal/backup transaction; an EXR codec failure cannot replace the destination package. Versions 1–15 remain supported, and HDR alone writes v13. The earlier Windows PNG-only v13 reader rejects `.exr` filenames instead of silently showing an SDR substitute. Upstream's EXR-from-v13 rule was checked at `1ea5eabac52108cc8a57846117290b0f5fdfc365`; this extension does not claim support for upstream's later format versions or verified Mac exchange.
+HDR asset preflight validates the EXR header and cumulative image budget before decoding. The regular-file, reparse-point and encoded 512 MiB asset checks also apply to EXR. The writer uses the existing stage/journal/backup transaction; an EXR codec failure cannot replace the destination package. Versions 1–16 remain supported, and HDR alone writes v13. The earlier Windows PNG-only v13 reader rejects `.exr` filenames instead of silently showing an SDR substitute. Upstream's EXR-from-v13 rule was checked at `1ea5eabac52108cc8a57846117290b0f5fdfc365`; this extension does not claim support for upstream's later format versions or verified Mac exchange.
+
+## Windows filter adjustment layers (version 16)
+
+Progressive Blur, Bloom / Glow, and RGB Split adjustment layers write version 16. Older documents remain on the lowest version that can represent them. A manifest below version 16 that carries those kinds or a `filterLayerSettings` object is rejected. Gaussian Blur, Motion Blur, and Add Noise stay on version 9.
+
+`filterLayerSettings` is an object. Numeric ranges: `progressiveFrom`/`progressiveTo` 0–250, `bloomAmount` 0–100, `bloomRadius` 1–150, `rgbSplitDistance` 0–200, `rgbSplitBlur` 0–400, `rgbSplitAngle` −180–180, `rgbSplitReach` 1–100000. Booleans: `progressiveRadial`, `progressiveInverted`, `rgbSplitRadial`. Document points `progressiveStart`, `progressiveEnd`, and `rgbSplitCenter` may be omitted, or stored as `[x, y]` or `{x, y}`.
+
+Bloom / Glow uses amount and radius. The destructive **Filters > Bloom** command keeps the earlier Windows strength/threshold pair; those fields are not `filterLayerSettings`. RGB Split and Bloom / Glow do not run on HDR pixels. Reciprocal Mac v16 exchange has not been verified.
 
 ## Windows CMYK profile extension (version 15)
 
-A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–15. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
+A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–16. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
 
 The optional top-level `cmykProfile` object contains `file` (exactly `cmyk.icc`), `name` (nonempty, at most 1024 characters), and `sha256` (64 lowercase hexadecimal digits). The ICC bytes live in that regular file at the package root, are limited to 16 MiB, and must match the digest. The profile must describe a CMYK output device with XYZ or Lab PCS and support both RGB conversion directions. Invalid, missing, oversized, mismatched or reparse-point assets fail loading before image decoding. A manifest below version 15 carrying this field is rejected. A version 15 manifest may omit it.
 

@@ -16,6 +16,7 @@ struct EditPanelResult {
     bool maskSelected{};
     // Optional pixel-filter merge carries the CURRENT owned mask after rendering.
     std::function<Layer(const Layer&)> mergeLayer;
+    bool replaceDocument{};
 };
 struct EditPanelHost {
     QPointer<QWidget> canvas;

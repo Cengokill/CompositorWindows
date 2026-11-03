@@ -1,4 +1,5 @@
 #include "AdjustmentDialog.h"
+#include "NativeCanvas.h"
 #include "DocumentPreview.h"
 #include "LevelsPreviewHistogram.h"
 #include "AdjustmentAdvancedControls.h"
@@ -139,7 +140,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     Document original;
     std::string active;
     QString kind;
-    bool live{},existing{},modal{},committing_{},closed_{},targetDragging_{},loadingSettings_{};
+    bool live{},existing{},modal{},committing_{},closed_{},targetDragging_{},loadingSettings_{},progressiveDragging_{},rgbDragging_{};
     double targetAnchor_{};
     AdjustmentDialogOptions options;
     Object settings;
@@ -176,7 +177,31 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         if(!modal)positions()[kind_]=dialog.pos();
         try{if(answer==QDialog::Accepted&&completed&&(!host_.valid||host_.valid())&&host_.commit)host_.commit({std::move(completed->document),std::move(completed->active),false});}
         catch(const std::exception& error){if(host_.error)host_.error(QString::fromUtf8(error.what()));}
+        if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data()))canvas->setCameraRawGuides({});
         if(host_.preview)host_.preview({});if(host_.closed)host_.closed();host_={};retire();
+    }
+    static QJsonArray jsonPoint(Point p){return QJsonArray{p.x,p.y};}
+    static Point readPoint(const QJsonValue& value,Point fallback){
+        if(value.isArray()&&value.toArray().size()==2)return {value.toArray()[0].toDouble(),value.toArray()[1].toDouble()};
+        if(value.isObject())return {value.toObject()["x"].toDouble(),value.toObject()["y"].toDouble()};
+        return fallback;
+    }
+    Object filterLayer(){auto o=settings["filterLayerSettings"].toObject();if(o.isEmpty()){o=Object{{"progressiveFrom",0},{"progressiveTo",20},{"progressiveRadial",false},{"progressiveInverted",false},{"bloomAmount",40},{"bloomRadius",24},{"rgbSplitDistance",10},{"rgbSplitBlur",0},{"rgbSplitAngle",0},{"rgbSplitRadial",false},{"rgbSplitReach",1000}};settings["filterLayerSettings"]=o;}return o;}
+    void writeFilterLayer(Object o){settings["filterLayerSettings"]=o;}
+    void syncGuideOverlay(){
+        auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas)return;
+        if(kind!="Progressive Blur"&&kind!="RGB Split"){canvas->setCameraRawGuides({});return;}
+        const auto layer=filterLayer();
+        if(kind=="Progressive Blur"){
+            canvas->setCameraRawGuides({{readPoint(layer["progressiveStart"],{original.width/2.,original.height*.35}),readPoint(layer["progressiveEnd"],{original.width/2.,double(original.height)})}});
+            return;
+        }
+        if(kind=="RGB Split"&&layer["rgbSplitRadial"].toBool()){
+            const auto c=readPoint(layer["rgbSplitCenter"],{original.width/2.,original.height/2.});
+            canvas->setCameraRawGuides({{{c.x-12,c.y},{c.x+12,c.y}},{{c.x,c.y-12},{c.x,c.y+12}}});
+            return;
+        }
+        canvas->setCameraRawGuides({});
     }
     void initialize(const QString& requestedKind){
     if(existing){auto it=std::find_if(original.layers.begin(),original.layers.end(),[&](const Layer&l){return l.id==active;});if(it==original.layers.end())throw std::runtime_error("Adjustment layer no longer exists");settings=QJsonDocument::fromJson(QByteArray::fromStdString(it->adjustmentJson)).object();}
@@ -187,6 +212,13 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     if(kind=="Grain"&&!settings.contains("grainSettings"))settings["grainSettings"]=Object{{"amount",25},{"size",1.5},{"roughness",50},{"seed",0}};
     if(kind=="Color Balance"&&!settings.contains("colorBalanceSettings")){const Object zero{{"cyanRed",0},{"magentaGreen",0},{"yellowBlue",0}};settings["colorBalanceSettings"]=Object{{"shadows",zero},{"midtones",zero},{"highlights",zero}};}
     if(kind=="Black & White"&&!settings.contains("blackWhiteSettings"))settings["blackWhiteSettings"]=Object{{"reds",40},{"yellows",60},{"greens",40},{"cyans",60},{"blues",20},{"magentas",80}};
+    if((kind=="Gaussian Blur"||kind=="Motion Blur"||kind=="Add Noise")&&!settings.contains("filterSettings"))settings["filterSettings"]=Object{{"radius",kind=="Gaussian Blur"?8.:0.},{"angle",0},{"distance",kind=="Motion Blur"?16.:0.},{"amount",kind=="Add Noise"?20.:0.},{"gaussian",false},{"monochromatic",false}};
+    if((kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split")&&!settings.contains("filterLayerSettings")){
+        Object layer{{"progressiveFrom",0},{"progressiveTo",20},{"progressiveRadial",false},{"progressiveInverted",false},{"bloomAmount",40},{"bloomRadius",24},{"rgbSplitDistance",10},{"rgbSplitBlur",0},{"rgbSplitAngle",0},{"rgbSplitRadial",false},{"rgbSplitReach",std::max(1.,std::hypot(original.width,original.height)/2)}};
+        if(kind=="Progressive Blur"){layer["progressiveStart"]=jsonPoint({original.width/2.,original.height*.35});layer["progressiveEnd"]=jsonPoint({original.width/2.,double(original.height)});}
+        if(kind=="RGB Split")layer["rgbSplitCenter"]=jsonPoint({original.width/2.,original.height/2.});
+        settings["filterLayerSettings"]=layer;
+    }
     dialog.mayReject=[this]{return !committing_;};dialog.setObjectName("adjustmentDialog");dialog.setWindowTitle(kind);dialog.resize(840,560);
     layout.addWidget(&fields);
     preview.documentWidth=original.width;preview.documentHeight=original.height;preview.setMinimumSize(400,300);preview.setAlignment(Qt::AlignCenter);rightLayout.addWidget(&preview,1);status.setWordWrap(true);rightLayout.addWidget(&status);
@@ -309,6 +341,31 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         preview.onClick=[controls,colorAt](Point point){if(controls->sampleMode())if(auto color=colorAt(point))controls->applySample(*color);};
         preview.onBeginDrag=[controls,colorAt](Point point){if(!controls->targeting())return false;if(auto color=colorAt(point))return controls->beginTarget(*color);return false;};
         preview.onDrag=[controls](double delta,bool hue){controls->dragTarget(delta,hue);};preview.onEndDrag=[controls]{controls->endTarget();};
+    }else if(kind=="Gaussian Blur"){
+        property("filterSettings","radius","Radius",8,0,250,1);
+    }else if(kind=="Motion Blur"){
+        property("filterSettings","angle","Angle",0,-90,90,1);property("filterSettings","distance","Distance",16,0,2000,1);
+    }else if(kind=="Add Noise"){
+        property("filterSettings","amount","Amount",20,0,400,1);
+        auto* gaussian=flag("Gaussian",settings["filterSettings"].toObject()["gaussian"].toBool(),[&](bool v){auto o=settings["filterSettings"].toObject();o["gaussian"]=v;settings["filterSettings"]=o;});
+        auto* mono=flag("Monochromatic",settings["filterSettings"].toObject()["monochromatic"].toBool(),[&](bool v){auto o=settings["filterSettings"].toObject();o["monochromatic"]=v;settings["filterSettings"]=o;});
+        reloadControls.push_back([this,gaussian,mono]{const auto o=settings["filterSettings"].toObject();gaussian->setChecked(o["gaussian"].toBool());mono->setChecked(o["monochromatic"].toBool());});
+    }else if(kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split"){
+        auto layer=filterLayer();
+        if(kind=="Progressive Blur"){
+            property("filterLayerSettings","progressiveFrom","From",0,0,250,1);property("filterLayerSettings","progressiveTo","To",20,0,250,1);
+            auto* radial=flag("Radial",layer["progressiveRadial"].toBool(),[&](bool v){auto o=filterLayer();o["progressiveRadial"]=v;writeFilterLayer(o);syncGuideOverlay();});
+            auto* invert=flag("Invert",layer["progressiveInverted"].toBool(),[&](bool v){auto o=filterLayer();o["progressiveInverted"]=v;writeFilterLayer(o);});
+            reloadControls.push_back([this,radial,invert]{const auto o=filterLayer();radial->setChecked(o["progressiveRadial"].toBool());invert->setChecked(o["progressiveInverted"].toBool());syncGuideOverlay();});
+        }else if(kind=="Bloom / Glow"){
+            property("filterLayerSettings","bloomAmount","Amount",40,0,100,1);property("filterLayerSettings","bloomRadius","Radius",24,1,150,1);
+        }else{
+            property("filterLayerSettings","rgbSplitDistance","Distance",10,0,200,1);property("filterLayerSettings","rgbSplitBlur","Blur",0,0,400,1);property("filterLayerSettings","rgbSplitAngle","Angle",0,-180,180,1);
+            auto* radial=flag("Radial",layer["rgbSplitRadial"].toBool(),[&](bool v){auto o=filterLayer();o["rgbSplitRadial"]=v;writeFilterLayer(o);syncGuideOverlay();});
+            radial->setObjectName("rgbSplitRadial");
+            reloadControls.push_back([this,radial]{radial->setChecked(filterLayer()["rgbSplitRadial"].toBool());syncGuideOverlay();});
+        }
+        syncGuideOverlay();
     }
     start=[this]{if(closing)return;if(watcher.isRunning()){pending=true;previewCancelled->store(true);return;}pending=false;previewCancelled=std::make_shared<std::atomic_bool>(false);runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked(),full=committing_;status.setText(full?"Applying adjustment…":"Updating preview…");watcher.setFuture(QtConcurrent::run([original=original,active=active,json,live=live,existing=existing,insertedId=insertedId,showPreview,full,previewCancelled=previewCancelled]{return makePreview(original,active,json,live,existing,insertedId,showPreview,full,[previewCancelled]{return previewCancelled->load();});}));};
     QObject::connect(&debounce,&QTimer::timeout,&dialog,start);
@@ -319,6 +376,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         if(!live){
             const auto exposure=settings["exposureSettings"].toObject(),grain=settings["grainSettings"].toObject();
             if((kind=="Exposure"&&exposure.value("exposure").toDouble()==0&&exposure.value("offset").toDouble()==0&&exposure.value("gamma").toDouble(1)==1)||(kind=="Grain"&&grain.value("amount").toDouble(25)==0)){dialog.reject();return;}
+            const auto layer=settings["filterLayerSettings"].toObject();
+            if((kind=="Progressive Blur"&&layer.value("progressiveFrom").toDouble()==0&&layer.value("progressiveTo").toDouble()==0)||(kind=="Bloom / Glow"&&layer.value("bloomAmount").toDouble()==0)||(kind=="RGB Split"&&layer.value("rgbSplitDistance").toDouble()==0&&layer.value("rgbSplitBlur").toDouble()==0)){dialog.reject();return;}
             if(options.onApply)options.onApply(encoded(settings));
         }
         committing_=true;apply->setEnabled(false);buttons.button(QDialogButtonBox::Cancel)->setEnabled(false);fields.setEnabled(false);previewEnabled.setEnabled(false);debounce.stop();
@@ -335,6 +394,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         status.setStyleSheet("color: #989ba3; font-size: 11px;");status.setMinimumHeight(16);
         dialog.resize(dialog.sizeHint());if(auto found=positions().find(kind_);found!=positions().end())dialog.move(found->second);
     }
+    syncGuideOverlay();
     start();dialog.show();dialog.raise();dialog.activateWindow();
     if(auto* first=dialog.findChild<QDoubleSpinBox*>())first->setFocus(Qt::ActiveWindowFocusReason);
     else previewEnabled.setFocus(Qt::ActiveWindowFocusReason);
@@ -344,7 +404,7 @@ public:
     AdjustmentPanel(QWidget* parent,const Document& input,const std::string& id,const QString& requestedKind,bool isLive,bool isExisting,const AdjustmentDialogOptions& initial,ui::EditPanelHost host,bool compatibility)
         :EditPanelSession(parent,requestedKind=="Levels"?Kind::Levels:requestedKind=="Hue/Saturation"?Kind::Hue:Kind::Filter,isLive,std::move(host)),
         original(input),active(id),live(isLive),existing(isExisting),modal(compatibility),options(initial),dialog(parent),layout(&dialog),form(&fields),rightLayout(&right),previewEnabled("Preview"),buttons(QDialogButtonBox::Apply|QDialogButtonBox::Cancel){initialize(requestedKind);kind_=kind=="Levels"?Kind::Levels:kind=="Hue/Saturation"?Kind::Hue:Kind::Filter;}
-    ~AdjustmentPanel()override{closing=true;previewCancelled->store(true);histogramCancelled->store(true);QObject::disconnect(&watcher,nullptr,&dialog,nullptr);QObject::disconnect(&histogramWatcher,nullptr,&dialog,nullptr);watcher.waitForFinished();histogramWatcher.waitForFinished();}
+    ~AdjustmentPanel()override{if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data()))canvas->setCameraRawGuides({});closing=true;previewCancelled->store(true);histogramCancelled->store(true);QObject::disconnect(&watcher,nullptr,&dialog,nullptr);QObject::disconnect(&histogramWatcher,nullptr,&dialog,nullptr);watcher.waitForFinished();histogramWatcher.waitForFinished();}
     QDialog* panel()const override{return const_cast<AdjustmentWindow*>(&dialog);}
     bool committing()const override{return committing_;}
     void cancel()override{if(!committing_&&!closed_)dialog.reject();}
@@ -364,14 +424,18 @@ public:
         // debounced worker revision and eventual Apply/history transaction.
         settings=std::move(next);
         {QScopedValueRollback<bool> loading(loadingSettings_,true);for(const auto& reload:reloadControls)reload();QSignalBlocker block(previewEnabled);previewEnabled.setChecked(previewState);}
-        changed();return true;
+        syncGuideOverlay();changed();return true;
     }
     bool samplePress(Point point,double viewX,Qt::KeyboardModifiers)override{
         if(closed_||committing_)return false;
+        if(kind=="Progressive Blur"){auto o=filterLayer();o["progressiveStart"]=jsonPoint(point);o["progressiveEnd"]=jsonPoint(point);writeFilterLayer(o);progressiveDragging_=true;syncGuideOverlay();changed();return true;}
+        if(kind=="RGB Split"&&filterLayer()["rgbSplitRadial"].toBool()){auto o=filterLayer();o["rgbSplitCenter"]=jsonPoint(point);writeFilterLayer(o);rgbDragging_=true;syncGuideOverlay();changed();return true;}
         if((levelsControls&&levelsControls->sampleMode())||(hueControls&&hueControls->sampleMode())){if(preview.onClick)preview.onClick(point);dialog.activateWindow();return true;}
         if(hueControls&&hueControls->targeting()&&preview.onBeginDrag&&preview.onBeginDrag(point)){targetDragging_=true;targetAnchor_=viewX;return true;}return false;
     }
-    bool sampleMove(Point,double viewX,Qt::KeyboardModifiers modifiers,bool finish)override{
+    bool sampleMove(Point point,double viewX,Qt::KeyboardModifiers modifiers,bool finish)override{
+        if(progressiveDragging_){auto o=filterLayer();o["progressiveEnd"]=jsonPoint(point);writeFilterLayer(o);syncGuideOverlay();changed();if(finish){progressiveDragging_=false;dialog.activateWindow();}return true;}
+        if(rgbDragging_){auto o=filterLayer();o["rgbSplitCenter"]=jsonPoint(point);writeFilterLayer(o);syncGuideOverlay();changed();if(finish){rgbDragging_=false;dialog.activateWindow();}return true;}
         if(!targetDragging_)return false;if(preview.onDrag)preview.onDrag(viewX-targetAnchor_,modifiers.testFlag(Qt::ControlModifier));if(finish){targetDragging_=false;if(preview.onEndDrag)preview.onEndDrag();}return true;
     }
 };

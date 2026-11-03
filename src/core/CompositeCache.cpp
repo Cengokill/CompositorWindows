@@ -158,10 +158,16 @@ double jsonField(const std::string& json,std::size_t from,const char* key,double
 int spatialMargin(const Document& doc){
     int margin=0;
     for(const auto& layer:doc.layers){const auto& json=layer.adjustmentJson;if(!layer.visible||json.empty())continue;
-        const bool gaussian=json.find("\"Gaussian Blur\"")!=std::string::npos,motion=json.find("\"Motion Blur\"")!=std::string::npos;if(!gaussian&&!motion)continue;
+        const bool gaussian=json.find("\"Gaussian Blur\"")!=std::string::npos,motion=json.find("\"Motion Blur\"")!=std::string::npos;
+        const bool progressive=json.find("\"Progressive Blur\"")!=std::string::npos,glow=json.find("\"Bloom / Glow\"")!=std::string::npos,rgb=json.find("\"RGB Split\"")!=std::string::npos;
+        if(!gaussian&&!motion&&!progressive&&!glow&&!rgb)continue;
         const auto settings=json.find("\"filterSettings\"");
+        const auto layerSettings=json.find("\"filterLayerSettings\"");
         if(gaussian){const double radius=settings==std::string::npos?8:jsonField(json,settings,"radius",8);if(radius>0)margin+=int(std::ceil(radius*3+2));}
-        if(motion){const double distance=settings==std::string::npos?16:jsonField(json,settings,"distance",16);if(distance>0)margin+=int(std::ceil(distance/2+2));}}
+        if(motion){const double distance=settings==std::string::npos?16:jsonField(json,settings,"distance",16);if(distance>0)margin+=int(std::ceil(distance/2+2));}
+        if(progressive){const double from=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"progressiveFrom",0),to=layerSettings==std::string::npos?20:jsonField(json,layerSettings,"progressiveTo",20);margin+=int(std::ceil(std::max(from,to)*3+2));}
+        if(glow){const double radius=layerSettings==std::string::npos?24:jsonField(json,layerSettings,"bloomRadius",24);margin+=int(std::ceil(radius*3+2));}
+        if(rgb){const double distance=layerSettings==std::string::npos?10:jsonField(json,layerSettings,"rgbSplitDistance",10),blur=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"rgbSplitBlur",0);const bool radial=layerSettings!=std::string::npos&&json.find("\"rgbSplitRadial\":true",layerSettings)!=std::string::npos;margin+=int(std::ceil((distance+blur)*(radial?2:1)+2));}}
     return std::clamp(margin,0,2048);
 }
 Tile cropTile(const Raster& raster,int ox,int oy,int w,int h){auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<h;++y)for(int x=0;x<w;++x)tile->pixels[std::size_t(y)*Raster::tileSide+x]=raster.pixel(ox+x,oy+y);return tile;}
