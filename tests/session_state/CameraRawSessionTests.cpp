@@ -2,6 +2,7 @@
 #include "RememberedSettingsTests.cpp"
 #undef main
 #include "filters/CameraRaw.h"
+#include "ui/ImportCommit.h"
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDoubleSpinBox>
@@ -128,6 +129,30 @@ void cancel_keeps() {
     const auto before = f.a->document;
     rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog, "Exposure")->setValue(1); }, false);
     require(f.a->document == before && f.a->history.undoCount() == 0 && f.a->toolState.filterSettings.cameraRaw.exposure == 0, "Cancel does not remember or change pixels");
+}
+void raw_import_history() {
+    Fixture f;
+    f.a->history.byteLimit=0;
+    const auto original=f.a->document;
+    ui::ImportResult result;result.before={f.a->document,f.a->active};result.after=result.before;
+    Layer layer=result.after.document->layers.front();layer.id=newId();
+    auto deep=makeDeep(40,20,DeepImage::Format::Unorm16);
+    for(size_t i=0;i<deep->samples.size();i+=4){deep->samples[i]=deep->samples[i+1]=deep->samples[i+2]=128*257;deep->samples[i+3]=65535;}
+    layer.deep=std::move(deep);
+    result.after.document->layers.push_back(layer);result.after.active=layer.id;
+    result.imported=1;result.importedDeepRaw=true;
+    ui::commitPreparedImport(*f.a,result);f.select(f.b);f.select(f.a);
+    const auto imported=f.a->document;
+    rawModal(f, [](QDialog&) {}, false);
+    f.trigger("edit.undo");require(f.a->document==original,"undo did not remove RAW import");
+    f.trigger("edit.redo");require(f.a->document==imported,"redo did not restore RAW import");
+    rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog,"Exposure")->setValue(1); }, true);
+    const auto filtered=f.a->document;
+    require(filtered!=imported&&f.a->history.undoCount()==2,"RAW filter did not create a separate history entry");
+    f.trigger("edit.undo");require(f.a->document==imported,"first undo did not remove the filter");
+    f.trigger("edit.undo");require(f.a->document==original,"second undo did not remove the import");
+    f.trigger("edit.redo");require(f.a->document==imported,"redo did not restore the import");
+    f.trigger("edit.redo");require(f.a->document==filtered,"redo did not restore the filter");
 }
 void hidden_group() {
     Fixture f;
@@ -400,7 +425,7 @@ void guided_lines() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();

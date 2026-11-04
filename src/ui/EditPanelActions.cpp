@@ -2,6 +2,7 @@
 #include "EditPanelSession.h"
 #include <QDialog>
 #include <QStatusBar>
+#include <QTimer>
 
 namespace compositor {
 namespace {
@@ -91,7 +92,12 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
                 catch(const std::exception& error){if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}statusBar()->showMessage(QString::fromUtf8(error.what()));}
                 state->livePending=false;
             }
-            owner->effectPreview.reset();if(current()==owner){refresh();owner->canvas->setFocus();}
+            owner->effectPreview.reset();if(current()==owner){
+                refresh();
+                // The docked Camera Raw tool often covers Transform fields. Closing it
+                // can restore focus there; wait a tick so canvas undo/redo keep the keys.
+                QTimer::singleShot(0,this,[this,token=QPointer<NativeCanvas>(owner->canvas)]{if(token)token->setFocus();});
+            }
         }
     };
     host.error=[this](const QString& message){statusBar()->showMessage(message);};

@@ -205,7 +205,8 @@ ui::ImportQueue* MainWindow::ensureImportQueue(){
     ui::ImportQueue::Host host;
     host.snapshot=[project](QObject* target)->std::optional<ui::ImportState>{auto*p=project(target);if(!p)return {};return ui::ImportState{p->document,p->active};};
     host.blocked=[this,project](QObject* target){auto*p=project(target);if(!p||p->projectBusy)return true;if(workspaceDrops_&&workspaceDrops_->waitingFor(target))return false;return !canSwitchProjects()||stroke_||retouch_||transformSession_||drawingOriginal_||cropDraft_||movingSelection_||selectionGesture_.active();};
-    host.blockedRequest=[project,deferred=host.blocked](QObject* target,const ui::ImportBatch& batch){
+    host.blockedRequest=[this,project,deferred=host.blocked](QObject* target,const ui::ImportBatch& batch){
+        if(batch.openCameraRaw&&(editPanel_||(project(target)!=current()&&!canSwitchProjects())))return true;
         if(batch.origin==ui::ImportBatch::Origin::Explicit){auto*p=project(target);return !p||p->projectBusy;}
         return deferred(target);
     };
@@ -222,12 +223,22 @@ ui::ImportQueue* MainWindow::ensureImportQueue(){
         const bool first=ui::commitPreparedImport(*p,result);
         p->composite.reset();refresh();if(first&&p->document){p->canvas->setDocumentSize(p->document->width,p->document->height);p->canvas->fit();}
     };
-    host.completed=[this](QObject* target,const ui::ImportResult& result){
+    host.completed=[this,project](QObject* target,const ui::ImportResult& result){
         if(target&&!result.errors.empty()){auto errors=target->property("imageImportErrors").toStringList();errors.append(result.errors);target->setProperty("imageImportErrors",errors);}
         if(result.cancelled)statusBar()->showMessage("Image import cancelled",5000);
         else if(result.imported)statusBar()->showMessage(QString("Imported %1 image(s)").arg(result.imported),5000);
         QTimer::singleShot(0,this,[this]{if(!importQueue_||!importQueue_->idle())return;QStringList errors;for(const auto&p:projects_){errors.append(p->canvas->property("imageImportErrors").toStringList());p->canvas->setProperty("imageImportErrors",{});}if(errors.isEmpty())return;auto*message=new QMessageBox(QMessageBox::Warning,"Import Images","Some images could not be imported.",QMessageBox::Ok,this);message->setObjectName("imageImportErrors");message->setDetailedText(errors.join("\n\n"));message->setAttribute(Qt::WA_DeleteOnClose);message->setWindowModality(Qt::WindowModal);message->show();});
         if(workspaceDrops_)workspaceDrops_->imageFinished(target,result.cancelled);
+        if(result.changed()&&!result.cameraRawLayer.empty()){
+            auto* p=project(target);
+            if(p&&current()==p&&p->document){
+                const auto found=std::find_if(p->document->layers.begin(),p->document->layers.end(),[&](const Layer& layer){return layer.id==result.cameraRawLayer;});
+                if(found!=p->document->layers.end()){
+                    p->active=found->id;p->selected={found->id};p->maskSelected=false;refresh();
+                    runFilter(int(filters::Kind::CameraRaw));
+                }
+            }
+        }
     };
     importQueue_=new ui::ImportQueue(std::move(host),this);return importQueue_;
 }
@@ -236,11 +247,11 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     auto project=[this](QObject* target)->EditorProject*{for(auto& item:projects_)if(item->canvas==target)return item.get();return nullptr;};
     ui::WorkspaceDropQueue::Host host;
     host.canBegin=[this]{return !closingWindow_&&canSwitchProjects()&&(!importQueue_||importQueue_->idle());};
-    host.canAdvance=[this]{return !QApplication::activeModalWidget()&&(!importQueue_||importQueue_->idle());};
+    host.canAdvance=[this]{return !editPanel_&&!QApplication::activeModalWidget()&&(!importQueue_||importQueue_->idle());};
     host.managing=[this](bool active){managingProjectOpen_=active;refresh(false,false);};
     host.project=[this](const QString& path){loadProjectDirectory(path);};
     auto hdrPrepared=std::make_shared<ui::PreparedImages>();
-    host.review=[this,hdrPrepared](const QString& path,ui::RawSettings& settings){hdrPrepared->clear();return ui::reviewRawImports(this,{nativePath(path)},settings)&&ui::prepareHdrImports(this,{nativePath(path)},*hdrPrepared);};
+    host.review=[this,hdrPrepared](const QString& path,ui::RawSettings& settings){hdrPrepared->clear();return ui::reviewRawImports(this,{nativePath(path)},settings)&&ui::prepareHdrImports(this,{nativePath(path)},*hdrPrepared)&&ui::prepareCameraRawImport(this,settings.openCameraRaw,settings,*hdrPrepared);};
     host.reviewBatch=[this](const QStringList& paths,ui::RawSettings& settings){return reviewCmykImports(paths,settings);};
     host.standalone=[this](const QString& path,const ui::RawSettings& settings)->std::optional<bool>{const auto ext=QFileInfo(path).suffix().toLower();if(ext!="psd"&&ext!="psb")return {};auto profile=settings.cmykProfiles.find(nativePath(path));return importPhotoshop(path,profile==settings.cmykProfiles.end()?nullptr:profile->second)!=PhotoshopResult::Cancelled;};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
@@ -253,7 +264,7 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     };
     host.image=[this,project,hdrPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
-        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.cmykProfiles=settings.cmykProfiles;batch.prepared=std::move(*hdrPrepared);
+        ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.cmykProfiles=settings.cmykProfiles;batch.prepared=std::move(*hdrPrepared);batch.openCameraRaw=settings.openCameraRaw;
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
@@ -275,7 +286,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     }
     if(images.isEmpty())return;
     ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
-    batch.rawAdjustments=rawSettings;batch.cmykProfiles=rawSettings.cmykProfiles;batch.prepared=prepared;
+    batch.rawAdjustments=rawSettings;batch.cmykProfiles=rawSettings.cmykProfiles;batch.prepared=prepared;batch.openCameraRaw=rawSettings.openCameraRaw;
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -284,6 +295,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refreshCropControls();
     if(transformSession_)applyTransformSession();
     if(!target)target=&addEmptyProject();
+    if(rawSettings.openCameraRaw&&editPanel_)statusBar()->showMessage("Finish or cancel the current edit to import the image and open Camera Raw.");
     ensureImportQueue()->enqueue(target->canvas,std::move(batch));
 }
 EditorProject* MainWindow::dropDestinationAt(QPoint location,std::optional<Point>& point){
@@ -479,7 +491,7 @@ void MainWindow::openPath(const QString&path){
     }
     if(!reviewCmykImports({path},rawSettings))return;
     if(photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);return;}
-    ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,{nativePath(path)},prepared))return;
+    ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,{nativePath(path)},prepared)||!ui::prepareCameraRawImport(this,rawSettings.openCameraRaw,rawSettings,prepared))return;
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
     auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared);
@@ -517,7 +529,7 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
     ui::RawSettings rawSettings;
     if(!ui::reviewRawImports(this,files,rawSettings))return;
     if(!reviewCmykImports(paths,rawSettings))return;
-    ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,files,prepared))return;
+    ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,files,prepared)||!ui::prepareCameraRawImport(this,rawSettings.openCameraRaw,rawSettings,prepared))return;
     for(const auto& path:photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));const auto result=importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);if(result==PhotoshopResult::Cancelled)return;if(result==PhotoshopResult::Imported&&!destination)target=current();}
     if(images.isEmpty())return;
     queueImageImports(images,target,{},rawSettings,prepared);

@@ -133,6 +133,16 @@ std::vector<std::uint8_t> srgbLookup(double gain) {
     return lookup;
 }
 
+std::vector<std::uint16_t> srgbLookup16(double gain) {
+    std::vector<std::uint16_t> lookup(65536);
+    for (std::size_t v = 0; v < lookup.size(); ++v) {
+        const double linear = std::clamp(v / 65535.0 * gain, 0.0, 1.0);
+        const double encoded = linear <= 0.0031308 ? 12.92 * linear : 1.055 * std::pow(linear, 1 / 2.4) - 0.055;
+        lookup[v] = static_cast<std::uint16_t>(std::lround(std::clamp(encoded, 0.0, 1.0) * 65535));
+    }
+    return lookup;
+}
+
 void validateSettings(const RawAdjustments& raw) {
     if ((raw.exposure && (!std::isfinite(*raw.exposure) || std::abs(*raw.exposure) > kRawExposureLimitEv)) ||
         (raw.kelvin && (*raw.kelvin < kRawKelvinMin || *raw.kelvin > kRawKelvinMax)) ||
@@ -195,22 +205,37 @@ RawDevelopment developRaw(const std::filesystem::path& path, const ImportOptions
     checkedBytes(width, height, 3, options, 2);
 
     const auto lookup = srgbLookup(settings.exposure ? std::pow(2.0, *settings.exposure) : 1.0);
+    const auto lookup16 = previewMaxSide ? std::vector<std::uint16_t>{} : srgbLookup16(settings.exposure ? std::pow(2.0, *settings.exposure) : 1.0);
     const auto* samples = reinterpret_cast<const std::uint16_t*>(processed->data);
     DecodedImage decoded;
     decoded.image.width = width;
     decoded.image.height = height;
     decoded.image.stride = std::size_t(width) * 4;
+    std::shared_ptr<DeepImage> deep;
+    if (!previewMaxSide) {
+        // Include the RGB16 LibRaw output, RGBA8 preview and RGBA16 layer in the budget.
+        const auto pixels = std::uint64_t(width) * height;
+        if (pixels > options.maxWorkingBytes / 18) throw std::runtime_error("RAW image exceeds the import memory budget");
+        deep = makeDeep(int(width), int(height), DeepImage::Format::Unorm16);
+    }
     decoded.image.pixels.assign(decoded.image.stride * height, 255);
     for (std::uint32_t y = 0; y < height; ++y) {
+        checkCancelled(options);
         const auto* in = samples + std::size_t(y) * width * 3;
         auto* out = decoded.image.pixels.data() + std::size_t(y) * decoded.image.stride;
         for (std::uint32_t x = 0; x < width; ++x) {
             out[x * 4 + 0] = lookup[in[x * 3 + 0]];
             out[x * 4 + 1] = lookup[in[x * 3 + 1]];
             out[x * 4 + 2] = lookup[in[x * 3 + 2]];
+            if (deep) {
+                auto* pixel = deep->at(int(x), int(y));
+                for (int channel = 0; channel < 3; ++channel) pixel[channel] = lookup16[in[x * 3 + channel]];
+                pixel[3] = 65535;
+            }
         }
     }
     checkCancelled(options);
+    decoded.deep = std::move(deep);
     decoded.metadata.originalOrientation = 1; // LibRaw already applied the EXIF rotation.
     decoded.metadata.profileStatus = ProfileStatus::DeclaredSrgb;
     decoded.metadata.decoder = "LibRaw";

@@ -16,6 +16,8 @@ namespace compositor::ui {
 using PreparedImages=std::map<std::filesystem::path,std::shared_ptr<const imaging::DecodedImage>>;
 // Decode HDR files once, before callers commit gestures or create tabs.
 bool prepareHdrImports(QWidget*,const std::vector<std::filesystem::path>&,PreparedImages&);
+bool prepareCameraRawImport(QWidget*, const std::optional<std::filesystem::path>&,
+                            const std::map<std::filesystem::path, imaging::RawAdjustments>&, PreparedImages&);
 struct ImportState {
     std::optional<Document> document;
     std::string active;
@@ -35,6 +37,7 @@ struct ImportBatch {
     Origin origin{Origin::Deferred};
     std::map<std::filesystem::path,CmykProfilePtr> cmykProfiles;
     PreparedImages prepared;
+    std::optional<std::filesystem::path> openCameraRaw;
 };
 struct ImportResult {
     ImportState before, after;
@@ -42,6 +45,8 @@ struct ImportResult {
     std::vector<std::string> expandedGroups;
     size_t imported{};
     bool cancelled{};
+    std::string cameraRawLayer;
+    bool importedDeepRaw{};
     bool changed() const { return !cancelled && imported != 0; }
 };
 using ImportDecoder=std::function<imaging::DecodedImage(const std::filesystem::path&,const imaging::ImportOptions&)>;

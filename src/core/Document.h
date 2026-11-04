@@ -262,6 +262,8 @@ class History {
     void applyTrim(TrimPlan) noexcept;
 public:
     size_t entryLimit{100},byteLimit{256*1024*1024};
+    // A session may retain a small number of essential steps above the byte budget.
+    size_t minimumEntries{};
     void begin(std::string name,const std::optional<Document>& doc,const std::string& active);
     void end(const std::optional<Document>& doc,const std::string& active);
     std::optional<Snapshot> cancel() noexcept;

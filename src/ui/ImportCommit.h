@@ -1,6 +1,7 @@
 #pragma once
 #include "MainWindow.h"
 #include "ImportActions.h"
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -16,12 +17,18 @@ inline bool commitPreparedImport(EditorProject& project,const ImportResult& resu
     std::vector<std::string> selected{active};
     auto collapsed=project.collapsedGroups;
     for(const auto& id:result.expandedGroups)collapsed.erase(id);
-    project.history.begin("Import Images",project.document,project.active);
+    // A developed RAW and its filtered version can each exceed the normal history budget.
+    // Retain import and filter steps even when their snapshots exceed that soft limit.
+    const auto previousMinimum=project.history.minimumEntries;
+    if(result.importedDeepRaw)project.history.minimumEntries=std::max(previousMinimum,size_t{2});
+    try{project.history.begin("Import Images",project.document,project.active);}
+    catch(...){project.history.minimumEntries=previousMinimum;throw;}
     try{
         project.document=std::move(document);
         project.active=std::move(active);
         project.history.end(project.document,project.active);
     }catch(...){
+        project.history.minimumEntries=previousMinimum;
         if(auto snapshot=project.history.cancel()){
             project.document=std::move(snapshot->document);
             project.active=std::move(snapshot->activeLayer);

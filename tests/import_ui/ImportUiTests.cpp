@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QLabel>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressDialog>
@@ -39,6 +40,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -149,7 +151,7 @@ PsdFixtureLayer solidPackBitsPsdLayer(int left,int top,int width,int height,uint
 }
 // Runs the RAW review with a stub developer, answering the modal dialog once its preview is ready.
 // The real LibRaw development is covered by migration.contract; this checks only the review flow.
-bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,ui::RawSettings& settings){
+bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,ui::RawSettings& settings,bool cameraRaw=false){
     const ui::RawImportDialog::Developer stub=[](const std::filesystem::path&,const imaging::ImportOptions&,std::uint32_t){
         imaging::RawDevelopment developed;
         developed.image.image={2,2,8,std::vector<std::uint8_t>(16,255)};
@@ -168,7 +170,7 @@ bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,u
         poll.stop();
         if(!accept){QTest::keyClick(dialog,Qt::Key_Escape);return;}
         if(editExposure)dialog->findChild<QSlider*>("rawExposureSlider")->setValue(100);
-        button->click();
+        if(cameraRaw)dialog->findChild<QPushButton*>("rawCameraRawButton")->click();else button->click();
     });
     QTimer watchdog;watchdog.setSingleShot(true);watchdog.setInterval(15000);
     QObject::connect(&watchdog,&QTimer::timeout,[&]{timedOut=true;poll.stop();if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->reject();});
@@ -442,6 +444,88 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         ui::RawSettings settings;
         require(!reviewRaw(raw,true,false,settings),"Cancelled RAW review reported acceptance");
         require(settings.empty(),"Cancelled RAW review recorded settings");
+    });
+    test("raw review records the camera raw handoff",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        const std::filesystem::path raw(temporary.filePath("camera.dng").toStdWString());
+        ui::RawSettings settings;
+        require(reviewRaw(raw,true,true,settings,true),"Camera Raw review was not accepted");
+        require(settings.openCameraRaw&&*settings.openCameraRaw==raw&&settings[raw].exposure==1.0,"Camera Raw choice or settings were not preserved");
+    });
+    test("raw review permits only one camera raw handoff per batch",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        const std::filesystem::path firstRaw(temporary.filePath("first.dng").toStdWString());
+        const std::filesystem::path secondRaw(temporary.filePath("second.dng").toStdWString());
+        const ui::RawImportDialog::Developer stub=[](const std::filesystem::path&,const imaging::ImportOptions&,std::uint32_t){
+            imaging::RawDevelopment result;result.image.image={2,2,8,std::vector<std::uint8_t>(16,255)};
+            result.capabilities={true,true,2000,12000};result.asShot={0.0,5000};return result;
+        };
+        int reviewed=0;bool secondDisabled=false,timedOut=false;
+        QTimer poll;poll.setInterval(10);
+        QObject::connect(&poll,&QTimer::timeout,[&]{
+            auto* dialog=QApplication::activeModalWidget();
+            if(!dialog||dialog->objectName()!="rawImportDialog")return;
+            auto* import=dialog->findChild<QPushButton*>("rawImportButton");
+            auto* camera=dialog->findChild<QPushButton*>("rawCameraRawButton");
+            if(!import||!camera||!import->isEnabled())return;
+            if(reviewed++==0)camera->click();else {auto* notice=dialog->findChild<QLabel*>("rawCameraRawBatchNotice");secondDisabled=!camera->isEnabled()&&notice&&notice->isVisible();import->click();}
+        });
+        QTimer watchdog;watchdog.setSingleShot(true);watchdog.setInterval(15000);
+        QObject::connect(&watchdog,&QTimer::timeout,[&]{timedOut=true;poll.stop();if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->reject();});
+        ui::RawSettings settings;poll.start();watchdog.start();
+        const auto accepted=ui::reviewRawImports(nullptr,{firstRaw,secondRaw},settings,stub);
+        poll.stop();watchdog.stop();
+        require(!timedOut&&accepted&&reviewed==2&&secondDisabled,"The second RAW review did not explain and enforce the one-image limit");
+        require(settings.openCameraRaw&&*settings.openCameraRaw==firstRaw&&settings.count(secondRaw),"The first Camera Raw choice was overwritten");
+    });
+    test("camera raw handoff tracks the correct imported layer",[&]{
+        ui::ImportBatch batch;batch.files={path(first),path(second)};batch.openCameraRaw=path(first);
+        auto result=ui::prepareImportBatch({},batch);
+        require(result.imported==2&&result.after.document&&result.cameraRawLayer==result.after.document->layers[0].id,"Handoff selected a different layer in a mixed batch");
+        require(result.cameraRawLayer!=result.after.active,"Test did not cover a non-final layer");
+    });
+    test("camera raw import waits for an existing filter panel",[&]{
+        const char* fixture=std::getenv("COMPOSITOR_RAW_FIXTURE");
+        if(!fixture||!*fixture){std::cout<<"SKIP camera raw import panel interaction: COMPOSITOR_RAW_FIXTURE is not set\n";return;}
+        const QString raw=QString::fromLocal8Bit(fixture);
+        require(QFileInfo::exists(raw),"COMPOSITOR_RAW_FIXTURE does not exist");
+        MainWindow w(true);auto& project=w.addProject(document());w.show();QApplication::processEvents();
+        w.importSelectedImages({first},project.canvas);finish(w);
+        QAction* gaussian=nullptr;QAction* import=nullptr;
+        for(auto* action:w.findChildren<QAction*>()){
+            const auto id=action->property("commandId").toString();
+            if(id=="filter.gaussian")gaussian=action;else if(id=="file.import")import=action;
+        }
+        require(gaussian&&gaussian->isEnabled()&&import,"Filter or import command unavailable");
+        gaussian->trigger();QApplication::processEvents();
+        QPointer<QDialog> original;
+        for(auto* panel:w.findChildren<QDialog*>("filterPanel"))if(panel->isVisible())original=panel;
+        require(original&&import->isEnabled(),"Existing filter panel or File > Import unavailable");
+        bool selected=false;
+        QTimer poll;poll.setInterval(10);
+        QObject::connect(&poll,&QTimer::timeout,&w,[&]{
+            auto* dialog=QApplication::activeModalWidget();
+            if(!dialog||dialog->objectName()!="rawImportDialog"||selected)return;
+            auto* button=dialog->findChild<QPushButton*>("rawCameraRawButton");
+            if(button&&button->isEnabled()){selected=true;button->click();}
+        });
+        w.setProperty("testNativeImportPaths",QStringList{raw});poll.start();import->trigger();
+        QElapsedTimer elapsed;elapsed.start();
+        auto* queue=ui::ImportQueue::find(&w);
+        while((!selected||queue->idle())&&elapsed.elapsed()<30000)QTest::qWait(10);
+        poll.stop();
+        require(selected&&!queue->idle()&&original&&original->isVisible(),"Camera Raw request was not queued behind the existing panel");
+        require(project.document&&project.document->layers.size()==1,"Import started before the existing edit was closed");
+        original->reject();
+        elapsed.restart();QDialog* camera=nullptr;
+        while(elapsed.elapsed()<30000&&!camera){
+            QTest::qWait(10);
+            for(auto* panel:w.findChildren<QDialog*>("filterPanel"))
+                if(panel!=original&&panel->isVisible()&&panel->windowTitle()=="Camera Raw Filter")camera=panel;
+        }
+        require(camera&&queue->idle(),"Queued import did not open Camera Raw after closing the existing panel");
+        require(project.document&&project.document->layers.size()==2&&project.active==project.document->layers.back().id,"Camera Raw did not target the imported layer");
+        camera->reject();QApplication::processEvents();
     });
     test("raw review skips non-RAW files without a dialog",[&]{
         QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
