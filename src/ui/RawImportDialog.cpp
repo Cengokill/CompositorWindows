@@ -103,6 +103,12 @@ void RawImportDialog::build() {
     importButton_->setEnabled(false);
     importButton_->setDefault(true);
     buttons->addButton(importButton_, QDialogButtonBox::AcceptRole);
+    cameraRawButton_ = new QPushButton("Camera Raw…");
+    cameraRawButton_->setObjectName("rawCameraRawButton");
+    cameraRawButton_->setToolTip("Import, then open the Camera Raw Filter");
+    cameraRawButton_->setEnabled(false);
+    buttons->addButton(cameraRawButton_, QDialogButtonBox::ActionRole);
+    connect(cameraRawButton_, &QPushButton::clicked, this, [this] { opensCameraRaw_ = true; accept(); });
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     panel->addWidget(buttons);
@@ -170,6 +176,7 @@ void RawImportDialog::finishPreview() {
     }
     if (!result.developed) {
         importButton_->setEnabled(false);
+        cameraRawButton_->setEnabled(false);
         setStatus(result.error, true);
         return;
     }
@@ -179,6 +186,7 @@ void RawImportDialog::finishPreview() {
     preview_->setPixmap(QPixmap::fromImage(picture.copy()).scaled(preview_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
     if (!initialized_) initializeControls(developed);
     importButton_->setEnabled(true);
+    cameraRawButton_->setEnabled(true);
     setStatus(QString(), false);
 }
 
@@ -230,6 +238,7 @@ bool reviewRawImports(QWidget* parent, const std::vector<std::filesystem::path>&
         RawImportDialog dialog(file, developer, parent);
         if (dialog.exec() != QDialog::Accepted) return false;
         settings[file] = dialog.settings();
+        if (dialog.opensCameraRaw()) settings.openCameraRaw = file;
     }
     return true;
 }

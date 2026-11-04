@@ -149,7 +149,7 @@ PsdFixtureLayer solidPackBitsPsdLayer(int left,int top,int width,int height,uint
 }
 // Runs the RAW review with a stub developer, answering the modal dialog once its preview is ready.
 // The real LibRaw development is covered by migration.contract; this checks only the review flow.
-bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,ui::RawSettings& settings){
+bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,ui::RawSettings& settings,bool cameraRaw=false){
     const ui::RawImportDialog::Developer stub=[](const std::filesystem::path&,const imaging::ImportOptions&,std::uint32_t){
         imaging::RawDevelopment developed;
         developed.image.image={2,2,8,std::vector<std::uint8_t>(16,255)};
@@ -168,7 +168,7 @@ bool reviewRaw(const std::filesystem::path& file,bool editExposure,bool accept,u
         poll.stop();
         if(!accept){QTest::keyClick(dialog,Qt::Key_Escape);return;}
         if(editExposure)dialog->findChild<QSlider*>("rawExposureSlider")->setValue(100);
-        button->click();
+        if(cameraRaw)dialog->findChild<QPushButton*>("rawCameraRawButton")->click();else button->click();
     });
     QTimer watchdog;watchdog.setSingleShot(true);watchdog.setInterval(15000);
     QObject::connect(&watchdog,&QTimer::timeout,[&]{timedOut=true;poll.stop();if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->reject();});
@@ -442,6 +442,19 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
         ui::RawSettings settings;
         require(!reviewRaw(raw,true,false,settings),"Cancelled RAW review reported acceptance");
         require(settings.empty(),"Cancelled RAW review recorded settings");
+    });
+    test("raw review records the camera raw handoff",[&]{
+        QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");
+        const std::filesystem::path raw(temporary.filePath("camera.dng").toStdWString());
+        ui::RawSettings settings;
+        require(reviewRaw(raw,true,true,settings,true),"Camera Raw review was not accepted");
+        require(settings.openCameraRaw&&*settings.openCameraRaw==raw&&settings[raw].exposure==1.0,"Camera Raw choice or settings were not preserved");
+    });
+    test("camera raw handoff tracks the correct imported layer",[&]{
+        ui::ImportBatch batch;batch.files={path(first),path(second)};batch.openCameraRaw=path(first);
+        auto result=ui::prepareImportBatch({},batch);
+        require(result.imported==2&&result.after.document&&result.cameraRawLayer==result.after.document->layers[0].id,"Handoff selected a different layer in a mixed batch");
+        require(result.cameraRawLayer!=result.after.active,"Test did not cover a non-final layer");
     });
     test("raw review skips non-RAW files without a dialog",[&]{
         QTemporaryDir temporary;require(temporary.isValid(),"Temporary directory failed");

@@ -681,6 +681,11 @@ static void raw_development_contract() {
     if (!fixture) { std::cout << "SKIP raw_development codec checks: COMPOSITOR_RAW_FIXTURE is not set\n"; return; }
     const auto raw = std::filesystem::path(QString::fromUtf8(fixture).toStdWString());
     const auto asShot = imaging::developRaw(raw, {});
+    check(asShot.image.deep && asShot.image.deep->valid() && !asShot.image.deep->isHdr(), "RAW import did not preserve 16-bit pixels");
+    check(asShot.image.deep->width == int(asShot.image.image.width) && asShot.image.deep->height == int(asShot.image.image.height), "RAW 16-bit dimensions");
+    bool finerThanEightBit=false;
+    for(std::size_t i=0;i<asShot.image.deep->samples.size();i+=4)for(int c=0;c<3;++c)if(asShot.image.deep->samples[i+c]%257!=0){finerThanEightBit=true;break;}
+    check(finerThanEightBit,"RAW 16-bit samples were expanded from 8-bit values");
     const auto& caps = asShot.capabilities;
     std::cout << "RAW caps temperature=" << caps.temperature << " tint=" << caps.tint << " kelvin=" << caps.minKelvin << ".." << caps.maxKelvin
               << " asShot K=" << asShot.asShot.kelvin << " tint=" << asShot.asShot.tint << '\n';

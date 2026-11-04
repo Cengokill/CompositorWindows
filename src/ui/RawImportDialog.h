@@ -24,6 +24,7 @@ class TrackSlider;
 // Settings accepted per file. A file without an entry imports as shot.
 struct RawSettings : std::map<std::filesystem::path, imaging::RawAdjustments> {
     std::map<std::filesystem::path,CmykProfilePtr> cmykProfiles;
+    std::optional<std::filesystem::path> openCameraRaw;
 };
 
 // Reviews RAW development before any document change. Previews run on a worker through the
@@ -35,6 +36,7 @@ public:
     ~RawImportDialog() override;
     // Settings for the full-resolution import. Controls the decoder cannot change stay unset (as shot).
     imaging::RawAdjustments settings() const { return adjustments_; }
+    bool opensCameraRaw() const { return opensCameraRaw_; }
 
 protected:
     void reject() override;
@@ -59,6 +61,7 @@ private:
     imaging::RawAdjustments adjustments_;
     bool initialized_{};
     bool running_{};
+    bool opensCameraRaw_{};
     std::uint64_t generation_{};
     QFutureWatcher<Result> watcher_;
     QTimer* editTimer_{};
@@ -75,6 +78,7 @@ private:
     TrackSlider* noise_{};
     QCheckBox* lensCorrection_{};
     QPushButton* importButton_{};
+    QPushButton* cameraRawButton_{};
 };
 
 // Reviews each RAW file in order and records accepted settings. Cancelling any review

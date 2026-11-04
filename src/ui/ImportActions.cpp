@@ -43,6 +43,26 @@ bool prepareHdrImports(QWidget* parent,const std::vector<std::filesystem::path>&
     progress.exec();cancelled->store(cancelled->load()||watcher.isRunning());watcher.waitForFinished();
     if(cancelled->load())return false;auto result=watcher.result();if(!result.error.isEmpty()){QMessageBox message(QMessageBox::Critical,"Import HDR Image",result.error,QMessageBox::Ok,parent);message.setProperty("studioChrome",true);message.exec();return false;}prepared=std::move(result.images);return true;
 }
+bool prepareCameraRawImport(QWidget* parent,const std::optional<std::filesystem::path>& path,
+                            const std::map<std::filesystem::path,imaging::RawAdjustments>& settings,PreparedImages& prepared){
+    if(!path)return true;
+    struct Result {std::shared_ptr<const imaging::DecodedImage> image;QString error;};
+    QProgressDialog progress("Developing RAW image…","Cancel",0,0,parent);
+    progress.setProperty("studioChrome",true);progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);progress.setAutoClose(false);progress.setAutoReset(false);
+    auto cancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<Result> watcher;
+    QObject::connect(&progress,&QProgressDialog::canceled,&progress,[cancelled]{cancelled->store(true);});
+    QObject::connect(&watcher,&QFutureWatcher<Result>::finished,&progress,&QDialog::accept);
+    auto entry=settings.find(*path);auto adjustments=entry==settings.end()?imaging::RawAdjustments{}:entry->second;
+    watcher.setFuture(QtConcurrent::run([path=*path,adjustments,cancelled]{Result result;try{
+        imaging::ImportOptions options;options.raw=adjustments;options.cancelled=[cancelled]{return cancelled->load();};
+        result.image=std::make_shared<const imaging::DecodedImage>(imaging::decodeRaw(path,options));
+    }catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}return result;}));
+    progress.exec();cancelled->store(cancelled->load()||watcher.isRunning());watcher.waitForFinished();
+    if(cancelled->load())return false;
+    auto result=watcher.result();if(!result.error.isEmpty()){QMessageBox message(QMessageBox::Critical,"Import RAW Image",result.error,QMessageBox::Ok,parent);message.setProperty("studioChrome",true);message.exec();return false;}
+    prepared[*path]=std::move(result.image);return true;
+}
 ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const ImportDecoder& decode,imaging::ImportOptions options){
     if(!decode)throw std::invalid_argument("Image decoder is required");
     if(state.document)validateDocument(*state.document);
@@ -80,14 +100,14 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             layer.transform={std::floor(center.x-layer.raster->width/2.),std::floor(center.y-layer.raster->height/2.),double(layer.raster->width),double(layer.raster->height)};
             for(const auto& active:document.layers)if(active.id==result.after.active){layer.parentId=active.group?active.id:active.parentId;break;}
             if(!layer.parentId.empty())result.expandedGroups.push_back(layer.parentId);
-            result.after.active=layer.id;document.layers.push_back(std::move(layer));++result.imported;
+            result.after.active=layer.id;if(batch.openCameraRaw&&*batch.openCameraRaw==path)result.cameraRawLayer=layer.id;document.layers.push_back(std::move(layer));++result.imported;
         }catch(const std::exception& error){
             if(cancelled()){result.cancelled=true;break;}
             result.errors.append(QString::fromStdWString(path.filename().wstring())+": "+QString::fromUtf8(error.what()));
         }
     }
     if(cancelled())result.cancelled=true;
-    if(result.cancelled){result.after=result.before;result.imported=0;result.expandedGroups.clear();result.errors.clear();}
+    if(result.cancelled){result.after=result.before;result.imported=0;result.cameraRawLayer.clear();result.expandedGroups.clear();result.errors.clear();}
     if(result.after.document)validateDocument(*result.after.document);
     return result;
 }
@@ -105,9 +125,9 @@ ImportQueue::ImportQueue(Host host,QObject* parent,ImportDecoder decoder):QObjec
     connect(&impl_->watcher,&QFutureWatcher<ImportResult>::finished,this,[this]{
         auto& p=*impl_;if(!p.running)return;p.finishing=true;auto request=std::move(*p.running);p.running.reset();
         auto result=p.watcher.result();
-        if(p.cancellation->load()){result.cancelled=true;result.after=result.before;result.imported=0;result.errors.clear();}
+        if(p.cancellation->load()){result.cancelled=true;result.after=result.before;result.imported=0;result.cameraRawLayer.clear();result.errors.clear();}
         if(request.target){
-            if(result.changed())try{p.host.commit(request.target,result);}catch(const std::exception& error){result.imported=0;result.after=result.before;result.errors.append(QString::fromUtf8(error.what()));}
+            if(result.changed())try{p.host.commit(request.target,result);}catch(const std::exception& error){result.imported=0;result.cameraRawLayer.clear();result.after=result.before;result.errors.append(QString::fromUtf8(error.what()));}
             p.host.busy(request.target,false);p.host.completed(request.target,result);
         }
         p.cancellation.reset();p.finishing=false;QTimer::singleShot(0,this,[this]{drain();});
