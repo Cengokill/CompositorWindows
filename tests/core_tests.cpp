@@ -22,6 +22,19 @@ tests["mask_and_hidden_clip"]=[]{Document d;d.width=2;d.height=1;Layer base;base
 tests["history_save_noop_redo"]=[]{History h;std::optional<Document>d=Document{};h.begin("Add",d,"");Layer l;l.id="a";d->layers.push_back(l);h.end(d,"a");h.markSaved();h.begin("Rename",d,"a");d->layers[0].name="Changed";h.end(d,"a");require(h.modified(),"dirty");d=h.undo()->document;require(!h.modified()&&h.canRedo(),"saved revision");h.begin("No-op",d,"a");h.end(d,"a");require(h.canRedo(),"no-op discarded redo");d=h.redo()->document;require(d->layers[0].name=="Changed"&&h.modified(),"redo snapshot");};
 tests["history_nested_cancel"]=[]{History h;std::optional<Document>d=Document{};h.begin("Outer",d,"");h.begin("Inner",d,"");d->width=9;h.end(d,"");require(!h.canUndo(),"nested transaction active");h.end(d,"");require(h.undoCount()==1&&h.undoName()=="Outer","one entry");h.begin("Cancel",d,"");d->width=5;d=h.cancel()->document;require(d->width==9&&h.undoCount()==1,"cancel restored");};
 tests["history_unique_retention"]=[]{History h;h.byteLimit=0;h.entryLimit=2;std::optional<Document>d=Document{};Layer l;l.id="a";l.raster=Raster::filled(1,1);d->layers={l};for(int i=0;i<3;++i){h.begin("Rename",d,"a");d->layers[0].name=std::to_string(i);h.end(d,"a");}require(h.undoCount()==2&&h.retainedBytes(d)==0,"shared raster counted");h.begin("Delete",d,"a");d->layers.clear();h.end(d,"");require(h.undoCount()==0,"retention limit");};
+tests["history_raw_large_steps"]=[]{
+    History h;h.byteLimit=0;h.minimumEntries=2;std::optional<Document> d;
+    Document imported;imported.width=1;imported.height=1;Layer l;l.id="raw";l.raster=Raster::filled(1,1,{100,100,100,255});imported.layers={l};
+    h.begin("Import",d,"");d=imported;h.end(d,"raw");
+    d=h.undo()->document;require(!d&&h.canRedo(),"oversized import was discarded on undo");
+    d=h.redo()->document;require(d&&d->layers[0].raster==l.raster,"oversized import could not be redone");
+    h.begin("Filter",d,"raw");d->layers[0].raster=Raster::filled(1,1,{150,150,150,255});h.end(d,"raw");
+    require(h.undoCount()==2,"oversized filter removed the import history");
+    d=h.undo()->document;require(d&&d->layers[0].raster==l.raster,"first undo did not restore the imported pixels");
+    d=h.undo()->document;require(!d,"second undo did not remove the import");
+    d=h.redo()->document;require(d&&d->layers[0].raster==l.raster,"redo did not restore import");
+    d=h.redo()->document;require(d&&d->layers[0].raster->pixel(0,0).r==150,"redo did not restore filter");
+};
 tests["selection_absent_empty"]=[]{Document a,b;b.selection=Selection{std::make_shared<GrayRaster>()};require(a!=b,"absent and empty collapsed");};
 tests["reject_invalid_document"]=[]{Document d;d.width=30001;bool rejected=false;try{validateDocument(d);}catch(...){rejected=true;}require(rejected,"dimension accepted");d.width=1;Layer l;l.id="a";l.parentId="a";l.group=true;d.layers={l};rejected=false;try{validateDocument(d);}catch(...){rejected=true;}require(rejected,"cycle accepted");};
 tests["wide_narrow_image"]=[]{auto r=Raster::filled(30000,1,{1,2,3,255});require(r->pixel(29999,0)==Pixel{1,2,3,255},"wide raster");};

@@ -100,7 +100,9 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             layer.transform={std::floor(center.x-layer.raster->width/2.),std::floor(center.y-layer.raster->height/2.),double(layer.raster->width),double(layer.raster->height)};
             for(const auto& active:document.layers)if(active.id==result.after.active){layer.parentId=active.group?active.id:active.parentId;break;}
             if(!layer.parentId.empty())result.expandedGroups.push_back(layer.parentId);
-            result.after.active=layer.id;if(batch.openCameraRaw&&*batch.openCameraRaw==path)result.cameraRawLayer=layer.id;document.layers.push_back(std::move(layer));++result.imported;
+            result.after.active=layer.id;if(batch.openCameraRaw&&*batch.openCameraRaw==path)result.cameraRawLayer=layer.id;
+            if(decoded.deep&&imaging::isRawFileExtension(path))result.importedDeepRaw=true;
+            document.layers.push_back(std::move(layer));++result.imported;
         }catch(const std::exception& error){
             if(cancelled()){result.cancelled=true;break;}
             result.errors.append(QString::fromStdWString(path.filename().wstring())+": "+QString::fromUtf8(error.what()));

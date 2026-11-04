@@ -46,6 +46,7 @@ struct ImportResult {
     size_t imported{};
     bool cancelled{};
     std::string cameraRawLayer;
+    bool importedDeepRaw{};
     bool changed() const { return !cancelled && imported != 0; }
 };
 using ImportDecoder=std::function<imaging::DecodedImage(const std::filesystem::path&,const imaging::ImportOptions&)>;

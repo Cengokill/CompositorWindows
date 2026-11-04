@@ -267,7 +267,8 @@ size_t History::retainedBytes(const std::optional<Document>& doc,std::span<const
 }
 History::TrimPlan History::planTrim(const std::optional<Document>& doc,std::span<const Entry> past,std::span<const Entry> future) const {
     TrimPlan plan;
-    while (past.size()+future.size()>entryLimit || retainedBytes(doc,past,future)>byteLimit) {
+    while (past.size()+future.size()>entryLimit ||
+           (past.size()+future.size()>minimumEntries && retainedBytes(doc,past,future)>byteLimit)) {
         if (!past.empty()) { ++plan.past; past=past.subspan(1); }
         else if (!future.empty()) { ++plan.future; future=future.subspan(1); }
         else break;
