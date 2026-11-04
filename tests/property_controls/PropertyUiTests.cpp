@@ -73,6 +73,15 @@ void cameraRawAlignment(){
     const int width=labels.front()->minimumWidth();
     for(auto* label:labels)require(label->minimumWidth()==width&&label->maximumWidth()==width,"camera raw label columns must share one width");
 }
+void cameraRawMixerSlidersTravel(){
+    compositor::ui::CameraRawPanel panel(compositor::filters::CameraRawSettings{});panel.resize(440,1200);panel.show();QApplication::processEvents();
+    auto* hue=sliderNamed(panel,"Hue slider");auto* luminance=sliderNamed(panel,"Luminance slider");
+    require(hue->isVisible()&&luminance->isVisible(),"mixer Hue/Luminance sliders missing");
+    hue->setValue(2500);luminance->setValue(7500);
+    require(hue->value()==2500&&luminance->value()==7500,"mixer Hue/Luminance sliders snapped to end or center");
+    const int x=hue->width()>80?hue->width()/4:20;QTest::mouseClick(hue,Qt::LeftButton,{},QPoint(x,hue->height()/2));QApplication::processEvents();
+    require(hue->value()>1200&&hue->value()<3800,"Hue slider track press only reached an end or the center");
+}
 void cameraRawTrackAnchors(){
     compositor::ui::CameraRawPanel panel(compositor::filters::CameraRawSettings{});panel.resize(440,900);panel.show();QApplication::processEvents();
     auto* temperature=sliderNamed(panel,"Temperature slider");require(temperature->isVisible(),"temperature slider must be visible");
@@ -84,4 +93,4 @@ void cameraRawTrackAnchors(){
     require(low.pixel(low.width()-11,y)==mid.pixel(mid.width()-11,y),"track end colour moved with the knob");
 }
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"transform_typing",transformTyping},{"opacity_track_history",opacityTrack},{"brush_field_focus",brushField},{"slider_double_click",sliderDoubleClick},{"camera_raw_alignment",cameraRawAlignment},{"camera_raw_track_anchors",cameraRawTrackAnchors},{"opacity_double_click_history",opacityDoubleClick}};try{require(argc==2&&cases.contains(argv[1]),"provide named property UI case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"transform_typing",transformTyping},{"opacity_track_history",opacityTrack},{"brush_field_focus",brushField},{"slider_double_click",sliderDoubleClick},{"camera_raw_alignment",cameraRawAlignment},{"camera_raw_mixer_sliders",cameraRawMixerSlidersTravel},{"camera_raw_track_anchors",cameraRawTrackAnchors},{"opacity_double_click_history",opacityDoubleClick}};try{require(argc==2&&cases.contains(argv[1]),"provide named property UI case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}

@@ -190,6 +190,10 @@ bool MainWindow::beginRetouch(Point point,Qt::KeyboardModifiers modifiers) {
         QMessageBox confirmation(QMessageBox::Question,"Convert to 8-Bit",heal?"Spot Healing uses an 8-bit kernel. Convert this 16-bit layer to 8-bit before retouching? This conversion can be undone.":"This canvas is too large for 16-bit retouch working buffers. Convert this layer to 8-bit first? This conversion can be undone.",QMessageBox::Ok|QMessageBox::Cancel,this);
         confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
         if(confirmation.exec()!=QMessageBox::Ok)return true;
+        const auto id=layer->id;
+        edit("Convert to 8-Bit",[&](Document& document){for(auto& item:document.layers)if(item.id==id)item.deep.reset();});
+        project=current();layer=active();
+        if(!project||!project->document||!layer||layer->id!=id)return true;
     }
     QString fallback;
     try {
@@ -205,7 +209,7 @@ bool MainWindow::beginRetouch(Point point,Qt::KeyboardModifiers modifiers) {
         }
         if(settings.mode==retouch::Mode::Clone&&settings.sampleAllLayers){sources.allLayersSource=retouch::compositeSource(document);sources.compositeDocument=document;}
         const auto selection=selected?selected->coverage:nullptr;
-        auto working=original;if(convert)working.deep.reset();
+        auto working=original;
         auto session=std::make_unique<retouch::RetouchSession>(working,document.width,document.height,settings,sources,selection,brushGpu_,mask,remainingPixels);
         if(!session->begin(start))return true;
         if(start!=point)session->append(point);

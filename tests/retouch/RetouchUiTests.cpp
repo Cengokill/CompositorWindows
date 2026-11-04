@@ -35,9 +35,17 @@ int main(int argc,char** argv){
     test("ui_deep_heal_conversion_cancel",[]{
         auto document=example();auto deep=makeDeep(80,40,DeepImage::Format::Unorm16);for(int y=0;y<40;++y)for(int x=0;x<80;++x)deep->setPixel(x,y,{.3f,.4f,.5f,1.f});document.layers[0].deep=deep;document.layers[0].raster=rasterFromDeep(*deep);
         MainWindow window(true);auto& project=window.addProject(document);tool(window,"retouchHeal");tip(window);
-        bool answered=false;QTimer confirmation;confirmation.setInterval(5);QObject::connect(&confirmation,&QTimer::timeout,&window,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){answered=true;confirmation.stop();box->button(QMessageBox::Ok)->click();}});confirmation.start();
-        down(project,{40,20});confirmation.stop();require(answered,"16-bit healing conversion prompt missing");project.canvas->pointerCancel();require(project.document==document&&project.history.undoCount()==0,"Cancelled healing lost deep pixels or changed history");
-        target(project).visible=false;const auto hidden=project.document;answered=false;confirmation.start();down(project,{40,20});confirmation.stop();require(!answered&&project.document==hidden&&project.history.undoCount()==0,"Hidden healing target prompted or was converted");
+        auto answer=[&](QMessageBox::StandardButton choice){bool answered=false;QTimer confirmation;confirmation.setInterval(5);QObject::connect(&confirmation,&QTimer::timeout,&window,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){answered=true;confirmation.stop();box->button(choice)->click();}});confirmation.start();down(project,{40,20});confirmation.stop();return answered;};
+        require(answer(QMessageBox::Cancel),"16-bit healing conversion prompt missing");
+        require(project.document==document&&project.history.undoCount()==0,"Declined conversion changed the document");
+        require(answer(QMessageBox::Ok),"Accepted conversion prompt missing");
+        project.canvas->pointerCancel();
+        require(!target(project).deep&&project.history.undoCount()==1&&project.history.undoName()=="Convert to 8-Bit","Accepted conversion did not persist as one undo step");
+        bool answered=false;QTimer confirmation;confirmation.setInterval(5);QObject::connect(&confirmation,&QTimer::timeout,&window,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){answered=true;confirmation.stop();box->reject();}});confirmation.start();
+        down(project,{40,20});confirmation.stop();
+        require(!answered,"Converted layer prompted again before healing");
+        project.canvas->pointerCancel();
+        target(project).visible=false;const auto hidden=project.document;answered=false;confirmation.start();down(project,{40,20});confirmation.stop();require(!answered&&project.document==hidden&&project.history.undoCount()==1,"Hidden healing target prompted or was converted");
     });
     test("ui_clone_source_alignment_history_cancel",[]{
         MainWindow window(true);auto& project=window.addProject(example());tool(window,"retouchClone");tip(window);
