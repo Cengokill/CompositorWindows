@@ -273,6 +273,11 @@ void run() {
         auto graded = renderCameraRaw(*deep, stop, {}, nullptr);
         require(graded && graded->format == DeepImage::Format::Unorm16 && graded->at(0, 0)[0] != graded->at(1, 0)[0], "Camera Raw exposure collapsed 16-bit neighbors");
         require(graded->at(0, 0)[0] > 10001, "Camera Raw exposure ignored retained samples");
+        auto hdr = makeDeep(1, 1, DeepImage::Format::HalfFloat);
+        hdr->setPixel(0, 0, {2.f, 1.f, .5f, 1.f});
+        CameraRawSettings hdrColor; hdrColor.saturation = -25;
+        auto hdrGraded = renderCameraRaw(*hdr, hdrColor, {}, nullptr);
+        require(hdrGraded->pixel(0, 0)[0] > 1.f, "Camera Raw clipped HDR highlights during color grading");
         CameraRawSettings mixer; mixer.mixer.saturation[0] = 40;
         require(cameraRawNeedsEightBit(mixer), "mixer must be classified as 8-bit");
         bool refused = false; try { renderCameraRaw(*deep, mixer, {}, nullptr); } catch (const std::exception&) { refused = true; }

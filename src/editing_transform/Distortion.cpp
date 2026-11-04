@@ -70,9 +70,20 @@ Layer distortLayer(const Layer& original,const Transform& draft,const Corners& c
     if(!original.raster||original.group)throw std::invalid_argument("Distortion requires image pixels");auto imageOptions=options;imageOptions.trim=options.longestSide==0;auto warped=warpRaster(original.raster,draft,c,imageOptions);auto result=original;result.raster=warped.raster;result.deep.reset();result.transform=warped.transform;
     if(original.deep&&original.deep->valid()){
         auto deep=makeDeep(result.raster->width,result.raster->height,original.deep->format);
+        const auto g=geometry(draft,c,imageOptions);
         for(int y=0;y<deep->height;++y){cancel(options.cancelled);for(int x=0;x<deep->width;++x){
-            const auto unit=result.transform.toUnit({result.transform.x+x+.5,result.transform.y+y+.5});
-            deep->setPixel(x,y,graphics::sampleWidePixels(original.deep->width,original.deep->height,[&](int px,int py){return original.deep->pixel(px,py);},imageUnit(unit,draft),Transform::Sampling::Smooth));
+            const int xx=x+int(warped.crop.x),yy=y+int(warped.crop.y);
+            const auto at=[&](double dx,double dy){return g.inverse.map({g.placed.x+(xx+dx)/g.factor,g.placed.y+(yy+dy)/g.factor});};
+            const auto sample=[&](Point unit){return graphics::sampleWidePixels(original.deep->width,original.deep->height,[&](int px,int py){return original.deep->pixel(px,py);},imageUnit(unit,draft),Transform::Sampling::Smooth);};
+            const auto middle=at(.5,.5);
+            WidePixel value{};
+            if(inside(at(0,0))&&inside(at(1,0))&&inside(at(1,1))&&inside(at(0,1))) value=sample(middle);
+            else {
+                unsigned hits=0;
+                for(int sy=0;sy<4;++sy)for(int sx=0;sx<4;++sx){const auto unit=at((sx+.5)/4,(sy+.5)/4);if(inside(unit)){++hits;const auto p=sample(unit);for(int channel=0;channel<4;++channel)value[channel]+=p[channel]/16.f;}}
+                if(hits==16&&inside(middle))value=sample(middle);
+            }
+            deep->setPixel(x,y,value);
         }}
         result.deep=deep;result.raster=rasterFromDeep(*deep);
     }

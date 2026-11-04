@@ -916,7 +916,10 @@ std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const 
                 float a = pixels[i + 3];
                 if (!(a > 0)) continue;
                 double r = pixels[i] / a, g = pixels[i + 1] / a, b = pixels[i + 2] / a;
+                const double highlightScale = source.isHdr() ? std::max({1., r, g, b}) : 1.;
+                r /= highlightScale; g /= highlightScale; b /= highlightScale;
                 gradeStraight(r, g, b, settings);
+                r *= highlightScale; g *= highlightScale; b *= highlightScale;
                 if (view.clipping == 1) {
                     r = r >= 254.5 / 255 ? 1 : 0;
                     g = g >= 254.5 / 255 ? 1 : 0;

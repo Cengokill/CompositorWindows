@@ -450,15 +450,15 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     if(repeating&&!canRunFilterKind(*p,kind))return;
     if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
     if(layer->deep&&layer->deep->isHdr()&&!filters::supportsHdr(kind))throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
-    if(layer->deep&&layer->deep->valid()&&!layer->deep->isHdr()&&(kind==filters::Kind::LensCorrection||kind==filters::Kind::ContentAwareFill)){
+    const bool convert=layer->deep&&layer->deep->valid()&&!layer->deep->isHdr()&&(kind==filters::Kind::LensCorrection||kind==filters::Kind::ContentAwareFill);
+    if(convert){
         QMessageBox confirmation(QMessageBox::Question,"Convert to 8-Bit","This filter uses an 8-bit kernel. Convert this 16-bit layer to 8-bit first? This conversion can be undone.",QMessageBox::Ok|QMessageBox::Cancel,this);
         confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
         if(confirmation.exec()!=QMessageBox::Ok)return;
-        const auto id=layer->id;edit("Convert to 8-Bit",[&](Document& document){for(auto& item:document.layers)if(item.id==id)item.deep.reset();});
-        layer=active();if(!layer)return;
     }
     const auto before=*p->document;const auto original=*layer;
     auto request=buildFilterRequest(*p,before,original,kind);
+    if(convert)request.deepSource.reset();
     if(kind==filters::Kind::ProgressiveBlur&&!repeating){request.settings.progressiveStart=request.transform.fromUnit({.5,0});request.settings.progressiveEnd=request.transform.fromUnit({.5,1});}
     if(kind==filters::Kind::RgbSplit&&!repeating){request.settings.rgbSplitCenter=request.transform.fromUnit({.5,.5});request.settings.rgbSplitReach=std::max(1.,std::hypot(request.transform.width,request.transform.height)/2);}
     if(repeating){
