@@ -32,7 +32,7 @@ struct RawSettings : std::map<std::filesystem::path, imaging::RawAdjustments> {
 class RawImportDialog final : public QDialog {
 public:
     using Developer = std::function<imaging::RawDevelopment(const std::filesystem::path&, const imaging::ImportOptions&, std::uint32_t previewMaxSide)>;
-    explicit RawImportDialog(const std::filesystem::path& file, Developer developer = imaging::developRaw, QWidget* parent = nullptr);
+    explicit RawImportDialog(const std::filesystem::path& file, Developer developer = imaging::developRaw, QWidget* parent = nullptr, bool cameraRawAvailable = true);
     ~RawImportDialog() override;
     // Settings for the full-resolution import. Controls the decoder cannot change stay unset (as shot).
     imaging::RawAdjustments settings() const { return adjustments_; }
@@ -62,6 +62,7 @@ private:
     bool initialized_{};
     bool running_{};
     bool opensCameraRaw_{};
+    bool cameraRawAvailable_{};
     std::uint64_t generation_{};
     QFutureWatcher<Result> watcher_;
     QTimer* editTimer_{};

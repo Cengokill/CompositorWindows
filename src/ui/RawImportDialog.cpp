@@ -25,8 +25,8 @@ constexpr int kTintMin = -int(imaging::kRawTintLimit), kTintMax = int(imaging::k
 constexpr int kNoiseMin = 0, kNoiseMax = int(imaging::kRawNoiseLimit);
 }
 
-RawImportDialog::RawImportDialog(const std::filesystem::path& file, Developer developer, QWidget* parent)
-    : QDialog(parent), file_(file), developer_(std::move(developer)), cancelled_(std::make_shared<std::atomic_bool>(false)) {
+RawImportDialog::RawImportDialog(const std::filesystem::path& file, Developer developer, QWidget* parent, bool cameraRawAvailable)
+    : QDialog(parent), file_(file), developer_(std::move(developer)), cancelled_(std::make_shared<std::atomic_bool>(false)), cameraRawAvailable_(cameraRawAvailable) {
     setWindowTitle("RAW Development – " + QString::fromStdWString(file_.filename().wstring()));
     setObjectName("rawImportDialog");
     setModal(true);
@@ -105,7 +105,13 @@ void RawImportDialog::build() {
     buttons->addButton(importButton_, QDialogButtonBox::AcceptRole);
     cameraRawButton_ = new QPushButton("Camera Raw…");
     cameraRawButton_->setObjectName("rawCameraRawButton");
-    cameraRawButton_->setToolTip("Import, then open the Camera Raw Filter");
+    cameraRawButton_->setToolTip(cameraRawAvailable_ ? "Import, then open the Camera Raw Filter" : "Only one image per batch can open Camera Raw. An earlier image was already selected.");
+    if (!cameraRawAvailable_) {
+        auto* notice = new QLabel("Camera Raw is already selected for another image in this batch. You can import this image normally.");
+        notice->setObjectName("rawCameraRawBatchNotice");
+        notice->setWordWrap(true);
+        panel->addWidget(notice);
+    }
     cameraRawButton_->setEnabled(false);
     buttons->addButton(cameraRawButton_, QDialogButtonBox::ActionRole);
     connect(cameraRawButton_, &QPushButton::clicked, this, [this] { opensCameraRaw_ = true; accept(); });
@@ -186,7 +192,7 @@ void RawImportDialog::finishPreview() {
     preview_->setPixmap(QPixmap::fromImage(picture.copy()).scaled(preview_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
     if (!initialized_) initializeControls(developed);
     importButton_->setEnabled(true);
-    cameraRawButton_->setEnabled(true);
+    cameraRawButton_->setEnabled(cameraRawAvailable_);
     setStatus(QString(), false);
 }
 
@@ -235,7 +241,7 @@ bool reviewRawImports(QWidget* parent, const std::vector<std::filesystem::path>&
                       RawSettings& settings, RawImportDialog::Developer developer) {
     for (const auto& file : files) {
         if (!imaging::isRawFileExtension(file)) continue;
-        RawImportDialog dialog(file, developer, parent);
+        RawImportDialog dialog(file, developer, parent, !settings.openCameraRaw.has_value());
         if (dialog.exec() != QDialog::Accepted) return false;
         settings[file] = dialog.settings();
         if (dialog.opensCameraRaw()) settings.openCameraRaw = file;

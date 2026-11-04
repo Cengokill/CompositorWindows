@@ -205,7 +205,8 @@ ui::ImportQueue* MainWindow::ensureImportQueue(){
     ui::ImportQueue::Host host;
     host.snapshot=[project](QObject* target)->std::optional<ui::ImportState>{auto*p=project(target);if(!p)return {};return ui::ImportState{p->document,p->active};};
     host.blocked=[this,project](QObject* target){auto*p=project(target);if(!p||p->projectBusy)return true;if(workspaceDrops_&&workspaceDrops_->waitingFor(target))return false;return !canSwitchProjects()||stroke_||retouch_||transformSession_||drawingOriginal_||cropDraft_||movingSelection_||selectionGesture_.active();};
-    host.blockedRequest=[project,deferred=host.blocked](QObject* target,const ui::ImportBatch& batch){
+    host.blockedRequest=[this,project,deferred=host.blocked](QObject* target,const ui::ImportBatch& batch){
+        if(batch.openCameraRaw&&(editPanel_||(project(target)!=current()&&!canSwitchProjects())))return true;
         if(batch.origin==ui::ImportBatch::Origin::Explicit){auto*p=project(target);return !p||p->projectBusy;}
         return deferred(target);
     };
@@ -294,6 +295,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refreshCropControls();
     if(transformSession_)applyTransformSession();
     if(!target)target=&addEmptyProject();
+    if(rawSettings.openCameraRaw&&editPanel_)statusBar()->showMessage("Finish or cancel the current edit to import the image and open Camera Raw.");
     ensureImportQueue()->enqueue(target->canvas,std::move(batch));
 }
 EditorProject* MainWindow::dropDestinationAt(QPoint location,std::optional<Point>& point){
