@@ -1,7 +1,9 @@
 #include "filters/CameraRaw.h"
 #include "filters/PixelFilters.h"
 #include "core/DeepImage.h"
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <limits>
@@ -33,6 +35,45 @@ __declspec(noinline) bool didChange(const std::shared_ptr<const Raster>& source,
 }
 int chroma(Pixel pixel) { return std::max(pixel.r, std::max(pixel.g, pixel.b)) - std::min(pixel.r, std::min(pixel.g, pixel.b)); }
 bool gray(Pixel pixel) { return pixel.r == pixel.g && pixel.g == pixel.b; }
+// Reproduces the deterministic seven-octave landscape from upstream
+// CompositorTests/CameraRawTests.swift at 735c2cc23c0efe7c2c2f85a66741b253e053cf2b.
+std::vector<double> shadowField(int w, int h, std::uint64_t seed) {
+    std::vector<double> out(std::size_t(w) * h); double amplitude = 1, total = 0;
+    for (int octave = 0; octave < 7; ++octave) {
+        const int cell = std::max(1, std::max(w, h) >> (octave + 2));
+        const int gw = w / cell + 2, gh = h / cell + 2;
+        std::vector<double> grid(std::size_t(gw) * gh);
+        for (double& v : grid) { seed = seed * 6364136223846793005ULL + 1442695040888963407ULL; v = double(seed >> 11) / double(1ULL << 53); }
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            const double fx = double(x) / cell, fy = double(y) / cell;
+            const int xx = int(fx), yy = int(fy); const double tx = fx - xx, ty = fy - yy;
+            const double top = grid[yy * gw + xx] * (1 - tx) + grid[yy * gw + xx + 1] * tx;
+            const double bottom = grid[(yy + 1) * gw + xx] * (1 - tx) + grid[(yy + 1) * gw + xx + 1] * tx;
+            out[std::size_t(y) * w + x] += amplitude * (top * (1 - ty) + bottom * ty);
+        }
+        total += amplitude; amplitude *= .6;
+    }
+    for (double& v : out) v /= total;
+    return out;
+}
+std::shared_ptr<const Raster> shadowLandscape(int w) {
+    const int h = w * 2 / 3; const auto clouds = shadowField(w, h, 1), lay = shadowField(w, h, 2);
+    return image(w, h, [&](int x, int y) {
+        const auto i = std::size_t(y) * w + x;
+        const double horizon = h * (.5 + .25 * (lay[x] - .5));
+        const double sky = 140 + 80 * (1 - y / horizon) + 60 * (clouds[i] - .5);
+        const double ground = 4 + 70 * std::pow(clouds[i], 2.2) + 20 * (lay[i] - .5);
+        const auto v = std::uint8_t(std::clamp(std::lround(y < horizon ? sky : ground), 0L, 255L));
+        return Pixel{v, v, v, 255};
+    });
+}
+double shadowBandMean(const Raster& raster, bool top) {
+    double sum = 0; const int rows = raster.height / 5;
+    for (int y = 0; y < rows; ++y) for (int x = 0; x < raster.width; ++x)
+        sum += raster.pixel(x, top ? y : raster.height - 1 - y).g;
+    return sum / (rows * raster.width);
+}
+
 }
 void run() {
         auto gray128 = solid(4, 4, {128, 128, 128, 200});
@@ -72,13 +113,70 @@ void run() {
         auto shadowTone = solid(2, 2, {40, 40, 40, 255});
         tonal = {};
         tonal.shadows = 100;
-        require(rendered(*shadowTone, tonal).r > 40 && rendered(*mid, tonal).r == 128, "shadows +100 opens a dark tone");
+        require(rendered(*shadowTone, tonal).r > 40, "shadows +100 opens a dark tone");
         tonal = {};
         tonal.blacks = -100;
         require(rendered(*shadowTone, tonal).r < 40, "blacks -100 crushes a dark tone");
         clips.clipping = 2;
         require(paint(solid(2, 2, {0, 0, 0, 255}), {}, clips)->pixel(0, 0) == Pixel{0, 0, 0, 255}, "shadow clip view is black on a crushed pixel");
         require(paint(mid, {}, clips)->pixel(0, 0) == Pixel{255, 255, 255, 255}, "shadow clip view is white on mid gray");
+
+        // Reference means and tolerances are from the upstream Photoshop fixture,
+        // not a claim that Photoshop was run in this test environment.
+        for (int width : {600, 1200}) {
+            auto landscape = shadowLandscape(width);
+            for (double amount : {100., 50., -100.}) {
+                CameraRawSettings local; local.shadows = amount;
+                auto out = paint(landscape, local);
+                const double target = width == 1200 ? (amount == 100 ? 59.0 : amount == 50 ? 34.9 : 4.2)
+                                                    : (amount == 100 ? 51.0 : amount == 50 ? 32.2 : 5.5);
+                const double tolerance = width == 600 && amount == 100 ? 10 : 4;
+                require(std::abs(shadowBandMean(*out, false) - target) <= tolerance, "adaptive shadows diverge from upstream ground fixture");
+                const double sky = amount == 100 ? 205.9 : amount == 50 ? 205.3 : 203.6;
+                require(std::abs(shadowBandMean(*out, true) - sky) <= 2, "adaptive shadows diverge from upstream sky fixture");
+            }
+        }
+        auto landscape = shadowLandscape(600);
+        CameraRawSettings adaptive; adaptive.shadows = 100;
+        auto openedLandscape = paint(landscape, adaptive);
+        auto flatDark = solid(600, 400, {20, 20, 20, 255});
+        require(shadowBandMean(*openedLandscape, false) - shadowBandMean(*landscape, false) >
+                rendered(*flatDark, adaptive).r - 20 + 10, "surrounding sky must affect the shadow lift");
+        CameraRawView reduced; reduced.scale = .5;
+        auto scaledSmall = paint(landscape, adaptive, reduced);
+        auto ordinarySmall = paint(landscape, adaptive);
+        require(std::abs(shadowBandMean(*scaledSmall, false) - shadowBandMean(*ordinarySmall, false)) > 1,
+                "preview must select the coefficient set for the original layer size");
+        Request previewRequest; previewRequest.kind = Kind::CameraRaw;
+        previewRequest.source = shadowLandscape(1200); previewRequest.cameraRaw = adaptive;
+        previewRequest.preview = true; previewRequest.previewMaxEdge = 600;
+        auto reducedResult = apply(previewRequest);
+        previewRequest.preview = false; auto fullResult = apply(previewRequest);
+        require(reducedResult.raster->width == 600 && fullResult.raster->width == 1200 &&
+                std::abs(shadowBandMean(*reducedResult.raster, false) - shadowBandMean(*fullResult.raster, false)) < 4,
+                "production preview and full render must use the original layer size");
+        auto selectedSource = shadowLandscape(600);
+        GrayRaster selection{600, 400, std::vector<std::uint8_t>(600 * 400)};
+        for (int y = 200; y < 400; ++y) for (int x = 0; x < 600; ++x) selection.pixels[std::size_t(y) * 600 + x] = 255;
+        auto selected = renderCameraRaw(*selectedSource, adaptive, {}, &selection);
+        require(selected.raster->pixel(50, 20) == selectedSource->pixel(50, 20) &&
+                selected.raster->pixel(50, 350) != selectedSource->pixel(50, 350), "adaptive shadows must honor selection coverage");
+        bool cancelled = false;
+        int polls = 0;
+        try { renderCameraRaw(*selectedSource, adaptive, {}, nullptr, [&] { return ++polls > 8; }); }
+        catch (const std::exception&) { cancelled = true; }
+        require(cancelled, "adaptive shadows must stop a cancelled render");
+        auto ramp = image(256, 1, [](int x, int) { const auto v = std::uint8_t(x); return Pixel{v, v, v, 255}; });
+        for (double amount : {-100., 100.}) {
+            CameraRawSettings rampSettings; rampSettings.shadows = amount;
+            auto adjusted = paint(ramp, rampSettings);
+            for (int x = 1; x < 256; ++x)
+                require(adjusted->pixel(x, 0).r >= adjusted->pixel(x - 1, 0).r, "adaptive shadows must preserve ramp order");
+            require(adjusted->pixel(0, 0).r <= 2 && adjusted->pixel(255, 0).r >= 253, "adaptive shadows must preserve ramp endpoints");
+        }
+        auto translucent = solid(4, 4, {20, 20, 20, 100});
+        auto translucentOut = paint(translucent, adaptive);
+        require(translucentOut->pixel(0, 0).a == 100 && translucentOut->pixel(0, 0).r <= 100, "adaptive shadows preserve premultiplied alpha");
 
         CameraRawSettings color;
         color.temperature = 100;
@@ -278,6 +376,18 @@ void run() {
         CameraRawSettings hdrColor; hdrColor.saturation = -25;
         auto hdrGraded = renderCameraRaw(*hdr, hdrColor, {}, nullptr);
         require(hdrGraded->pixel(0, 0)[0] > 1.f, "Camera Raw clipped HDR highlights during color grading");
+        CameraRawSettings adaptiveDeep; adaptiveDeep.shadows = 100;
+        auto deepShadows = renderCameraRaw(*deep, adaptiveDeep, {}, nullptr);
+        require(deepShadows && deepShadows->format == DeepImage::Format::Unorm16 &&
+                deepShadows->at(0, 0)[0] != deepShadows->at(1, 0)[0], "adaptive shadows preserve distinct 16-bit samples");
+        auto hdrShadows = renderCameraRaw(*hdr, adaptiveDeep, {}, nullptr);
+        require(hdrShadows && hdrShadows->pixel(0, 0)[0] > 1.f, "adaptive shadows preserve HDR highlight range");
+        Request shadowRequest; shadowRequest.kind = Kind::CameraRaw; shadowRequest.source = rasterFromDeep(*deep);
+        shadowRequest.deepSource = deep; shadowRequest.cameraRaw = adaptiveDeep;
+        require(apply(shadowRequest).deep != nullptr, "adaptive shadows apply retains 16-bit data");
+        shadowRequest.limits.maxWorkingBytes = 1;
+        bool budgetRejected = false; try { apply(shadowRequest); } catch (const std::exception&) { budgetRejected = true; }
+        require(budgetRejected, "adaptive shadows must respect the working memory budget");
         CameraRawSettings mixer; mixer.mixer.saturation[0] = 40;
         require(cameraRawNeedsEightBit(mixer), "mixer must be classified as 8-bit");
         bool refused = false; try { renderCameraRaw(*deep, mixer, {}, nullptr); } catch (const std::exception&) { refused = true; }

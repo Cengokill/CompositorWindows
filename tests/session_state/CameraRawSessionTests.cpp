@@ -127,8 +127,8 @@ void commit_during_refinement() {
 void cancel_keeps() {
     Fixture f;
     const auto before = f.a->document;
-    rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog, "Exposure")->setValue(1); }, false);
-    require(f.a->document == before && f.a->history.undoCount() == 0 && f.a->toolState.filterSettings.cameraRaw.exposure == 0, "Cancel does not remember or change pixels");
+    rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog, "Exposure")->setValue(1); field<QDoubleSpinBox>(dialog, "Shadows")->setValue(100); }, false);
+    require(f.a->document == before && f.a->history.undoCount() == 0 && f.a->toolState.filterSettings.cameraRaw.exposure == 0 && f.a->toolState.filterSettings.cameraRaw.shadows == 0, "Cancel does not remember or change pixels");
 }
 void raw_import_history() {
     Fixture f;
@@ -146,9 +146,10 @@ void raw_import_history() {
     rawModal(f, [](QDialog&) {}, false);
     f.trigger("edit.undo");require(f.a->document==original,"undo did not remove RAW import");
     f.trigger("edit.redo");require(f.a->document==imported,"redo did not restore RAW import");
-    rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog,"Exposure")->setValue(1); }, true);
+    rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog,"Exposure")->setValue(1); field<QDoubleSpinBox>(dialog,"Shadows")->setValue(100); }, true);
     const auto filtered=f.a->document;
     require(filtered!=imported&&f.a->history.undoCount()==2,"RAW filter did not create a separate history entry");
+    require(filtered->layers.back().deep && filtered->layers.back().deep->format == DeepImage::Format::Unorm16, "adaptive shadows must retain the imported RAW layer's 16-bit samples");
     f.trigger("edit.undo");require(f.a->document==imported,"first undo did not remove the filter");
     f.trigger("edit.undo");require(f.a->document==original,"second undo did not remove the import");
     f.trigger("edit.redo");require(f.a->document==imported,"redo did not restore the import");

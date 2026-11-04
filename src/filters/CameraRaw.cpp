@@ -1,4 +1,5 @@
 #include "CameraRaw.h"
+#include "CameraRawShadows.h"
 #include "effects_tools/CurveMath.h"
 extern "C" {
 #include "graphics/upstream/AdjustPixels.h"
@@ -274,8 +275,20 @@ std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, 
     stop();
     if (settings.adjustsLight() || settings.adjustsColor() || clip) {
         const auto gains = settings.gains();
-        adjust_camera_raw(bytes, w, h, stride, gains.red, gains.green, gains.blue, settings.exposure, settings.contrast, settings.highlights,
-                          settings.shadows, settings.whites, settings.blacks, settings.vibrance, settings.saturation, view.clipping);
+        if (settings.shadows == 0) {
+            adjust_camera_raw(bytes, w, h, stride, gains.red, gains.green, gains.blue, settings.exposure, settings.contrast, settings.highlights,
+                              0, settings.whites, settings.blacks, settings.vibrance, settings.saturation, view.clipping);
+        } else {
+            // The adaptive pass must see the image after the earlier light stages.
+            adjust_camera_raw(bytes, w, h, stride, gains.red, gains.green, gains.blue, settings.exposure, settings.contrast, settings.highlights,
+                              0, 0, 0, 0, 0, 0);
+            std::vector<float> working(pixels.size());
+            for (std::size_t i = 0; i < pixels.size(); ++i) working[i] = pixels[i] / 255.f;
+            applyAdaptiveShadows(working, w, h, settings.shadows, scale, cancelled);
+            for (std::size_t i = 0; i < pixels.size(); ++i) pixels[i] = std::uint8_t(std::lround(std::clamp(working[i], 0.f, 1.f) * 255));
+            adjust_camera_raw(bytes, w, h, stride, 1, 1, 1, 0, 0, 0, 0, settings.whites, settings.blacks,
+                              settings.vibrance, settings.saturation, view.clipping);
+        }
     }
     stop();
     const bool paintColor = !clip && !mask && (settings.curve.adjusts() || settings.mixer.adjusts() || settings.grading.adjusts() || view.visualizePointColor >= 0);
@@ -739,16 +752,19 @@ bool cameraRawNeedsEightBit(const CameraRawSettings& incoming) {
     const auto settings = incoming.normalized();
     return settings.mixer.adjusts() || settings.grading.adjusts() || settings.adjustsEffects() || settings.detail.adjusts() || settings.optics.adjusts();
 }
-void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& settings) {
+enum class GradeStage { All, BeforeShadows, AfterShadows };
+void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& settings, GradeStage stage = GradeStage::All) {
     const auto gains = settings.gains();
     const double light = std::exp2(settings.exposure);
     const double contrastScale = 1 + settings.contrast / 100;
-    r = std::clamp(compositor::srgbToLinear(r) * gains.red * light, 0., 1.);
-    g = std::clamp(compositor::srgbToLinear(g) * gains.green * light, 0., 1.);
-    b = std::clamp(compositor::srgbToLinear(b) * gains.blue * light, 0., 1.);
-    r = std::clamp(0.5 + (compositor::linearToSrgb(r) - 0.5) * contrastScale, 0., 1.);
-    g = std::clamp(0.5 + (compositor::linearToSrgb(g) - 0.5) * contrastScale, 0., 1.);
-    b = std::clamp(0.5 + (compositor::linearToSrgb(b) - 0.5) * contrastScale, 0., 1.);
+    if (stage != GradeStage::AfterShadows) {
+        r = std::clamp(compositor::srgbToLinear(r) * gains.red * light, 0., 1.);
+        g = std::clamp(compositor::srgbToLinear(g) * gains.green * light, 0., 1.);
+        b = std::clamp(compositor::srgbToLinear(b) * gains.blue * light, 0., 1.);
+        r = std::clamp(0.5 + (compositor::linearToSrgb(r) - 0.5) * contrastScale, 0., 1.);
+        g = std::clamp(0.5 + (compositor::linearToSrgb(g) - 0.5) * contrastScale, 0., 1.);
+        b = std::clamp(0.5 + (compositor::linearToSrgb(b) - 0.5) * contrastScale, 0., 1.);
+    }
     auto rec = [&] { return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
     auto scaleLum = [&](double target) {
         target = std::clamp(target, 0., 1.);
@@ -775,8 +791,9 @@ void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& set
     };
     auto whites = [&](double y, double amount) { return y <= 0.75 ? y : std::clamp(0.75 + (y - 0.75) * (1 + amount), 0., 1.); };
     auto blacks = [&](double y, double amount) { return y >= 0.25 ? y : std::clamp(0.25 + (y - 0.25) * (1 - amount), 0., 1.); };
-    scaleLum(highlights(rec(), settings.highlights / 100));
-    scaleLum(shadows(rec(), settings.shadows / 100));
+    if (stage != GradeStage::AfterShadows) scaleLum(highlights(rec(), settings.highlights / 100));
+    if (stage == GradeStage::All) scaleLum(shadows(rec(), settings.shadows / 100));
+    if (stage == GradeStage::BeforeShadows) return;
     scaleLum(whites(rec(), settings.whites / 100));
     scaleLum(blacks(rec(), settings.blacks / 100));
     const double vibrance = settings.vibrance / 100, saturation = settings.saturation / 100;
@@ -909,6 +926,28 @@ std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const 
     }
     const bool grade = settings.adjustsLight() || settings.adjustsColor() || settings.curve.adjusts() || view.clipping;
     if (grade) {
+        const bool adaptive = settings.shadows != 0;
+        // HDR normalization matches the existing grade path; preserve the original
+        // per-pixel scale while the spatial operation works on normalized values.
+        std::vector<float> hdrScales;
+        if (adaptive && source.isHdr()) hdrScales.resize(std::size_t(source.width) * source.height, 1.f);
+        if (adaptive) {
+            for (int y = 0; y < source.height; ++y) {
+                stop();
+                for (int x = 0; x < source.width; ++x) {
+                    const auto i = (std::size_t(y) * source.width + x) * 4;
+                    const float alpha = pixels[i + 3];
+                    if (!(alpha > 0)) continue;
+                    double r = pixels[i] / alpha, g = pixels[i + 1] / alpha, b = pixels[i + 2] / alpha;
+                    const double highlightScale = source.isHdr() ? std::max({1., r, g, b}) : 1.;
+                    if (!hdrScales.empty()) hdrScales[i / 4] = float(highlightScale);
+                    r /= highlightScale; g /= highlightScale; b /= highlightScale;
+                    gradeStraight(r, g, b, settings, GradeStage::BeforeShadows);
+                    pixels[i] = float(r * alpha); pixels[i + 1] = float(g * alpha); pixels[i + 2] = float(b * alpha);
+                }
+            }
+            applyAdaptiveShadows(pixels, source.width, source.height, settings.shadows, view.scale, cancelled);
+        }
         for (int y = 0; y < source.height; ++y) {
             stop();
             for (int x = 0; x < source.width; ++x) {
@@ -916,9 +955,10 @@ std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const 
                 float a = pixels[i + 3];
                 if (!(a > 0)) continue;
                 double r = pixels[i] / a, g = pixels[i + 1] / a, b = pixels[i + 2] / a;
-                const double highlightScale = source.isHdr() ? std::max({1., r, g, b}) : 1.;
-                r /= highlightScale; g /= highlightScale; b /= highlightScale;
-                gradeStraight(r, g, b, settings);
+                const double highlightScale = adaptive ? (hdrScales.empty() ? 1. : hdrScales[i / 4])
+                                                       : (source.isHdr() ? std::max({1., r, g, b}) : 1.);
+                if (!adaptive) { r /= highlightScale; g /= highlightScale; b /= highlightScale; }
+                gradeStraight(r, g, b, settings, adaptive ? GradeStage::AfterShadows : GradeStage::All);
                 r *= highlightScale; g *= highlightScale; b *= highlightScale;
                 if (view.clipping == 1) {
                     r = r >= 254.5 / 255 ? 1 : 0;
