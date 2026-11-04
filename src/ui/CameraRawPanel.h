@@ -58,7 +58,6 @@ private:
     bool curveParametric_{true};
     int mixerTab_{};
     int mixerFamily_{};
-    double pointScratch_{};
     filters::CameraRawSettings targetStart_;
     double targetY_{};
     double targetTone_{};

@@ -662,16 +662,18 @@ void CameraRawPanel::build() {
         spin->setRange(low, high);
         spin->setDecimals(decimals);
         spin->setSingleStep(std::pow(10, -std::min(decimals, 1)));
-        spin->setValue(*field);
+        if (field) spin->setValue(*field);
         spin->setAccessibleName(name);
         spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
         spin->setAlignment(Qt::AlignCenter);
         spin->setFixedWidth(72);
         slider->setRange(0, 10000);
+        slider->setSingleStep(1);
+        slider->setPageStep(100);
         slider->setAccessibleName(name + " slider");
         applyTrackColors(slider, gradient);
         const auto position = [low, high](double value) { return int(std::lround((value - low) / (high - low) * 10000)); };
-        slider->setValue(position(*field));
+        slider->setValue(position(field ? *field : fallback));
         slider->setDefaultValue(position(fallback));
         line->addWidget(label);
         line->addWidget(slider, stacked ? 0 : 1);
@@ -684,15 +686,17 @@ void CameraRawPanel::build() {
             spin->setValue(std::round(next * factor) / factor);
         });
         connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), slider, [slider, position](double value) { QSignalBlocker block(slider); slider->setValue(position(value)); });
-        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, field, balance](double value) {
-            if (writing_) return;
-            *field = value;
-            if (balance) settings_.whiteBalance = filters::CameraRawWhiteBalance::Custom;
-            publish();
-        });
+        if (field) {
+            connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, field, balance](double value) {
+                if (writing_) return;
+                *field = value;
+                if (balance) settings_.whiteBalance = filters::CameraRawWhiteBalance::Custom;
+                publish();
+            });
+            sync_.push_back([spin, slider, field, position] { QSignalBlocker a(*spin), b(slider); spin->setValue(*field); slider->setValue(position(*field)); });
+        }
         connect(slider, &QSlider::sliderPressed, this, [this, alt] { draggingAlt_ = alt; altDown_ = QApplication::keyboardModifiers().testFlag(Qt::AltModifier); if (alt && edited) edited(); });
         connect(slider, &QSlider::sliderReleased, this, [this] { draggingAlt_ = 0; if (edited) edited(); });
-        sync_.push_back([spin, slider, field, position] { QSignalBlocker a(*spin), b(slider); spin->setValue(*field); slider->setValue(position(*field)); });
         return spin;
     };
     auto addSection = [this](QVBoxLayout* parent, const QString& title, const QString& id, bool expanded, bool* shown, const std::function<bool()>& adjusts) {
@@ -871,9 +875,9 @@ void CameraRawPanel::build() {
         swatches->addWidget(swatch);
     }
     colorLayout->addLayout(swatches);
-    auto* familyHue = addSlider(colorLayout, "Hue", &settings_.mixer.hue[0], -100, 100, 0, 0, 0, {}, false);
-    auto* familySat = addSlider(colorLayout, "Saturation", &settings_.mixer.saturation[0], -100, 100, 0, 0, 0, {}, false);
-    auto* familyLum = addSlider(colorLayout, "Luminance", &settings_.mixer.luminance[0], -100, 100, 0, 0, 0, {}, false);
+    auto* familyHue = addSlider(colorLayout, "Hue", nullptr, -100, 100, 0, 0, 0, {}, false);
+    auto* familySat = addSlider(colorLayout, "Saturation", nullptr, -100, 100, 0, 0, 0, {}, false);
+    auto* familyLum = addSlider(colorLayout, "Luminance", nullptr, -100, 100, 0, 0, 0, {}, false);
     mixer->addWidget(colorHost);
     tabHost->hide();
     auto* pointHost = new QWidget;
@@ -884,9 +888,9 @@ void CameraRawPanel::build() {
     pointList->setObjectName("cameraRawPoints");
     pointList->setAccessibleName("Point Color");
     pointLayout->addWidget(pointList);
-    auto* pointHue = addSlider(pointLayout, "Hue Shift", &pointScratch_, -100, 100, 0, 0, 0, {}, false);
-    auto* pointSat = addSlider(pointLayout, "Saturation Shift", &pointScratch_, -100, 100, 0, 0, 0, {}, false);
-    auto* pointLum = addSlider(pointLayout, "Luminance Shift", &pointScratch_, -100, 100, 0, 0, 0, {}, false);
+    auto* pointHue = addSlider(pointLayout, "Hue Shift", nullptr, -100, 100, 0, 0, 0, {}, false);
+    auto* pointSat = addSlider(pointLayout, "Saturation Shift", nullptr, -100, 100, 0, 0, 0, {}, false);
+    auto* pointLum = addSlider(pointLayout, "Luminance Shift", nullptr, -100, 100, 0, 0, 0, {}, false);
     auto* visualize = new QCheckBox("Visualize");
     visualize->setObjectName("cameraRawVisualize");
     visualize->setAccessibleName("Visualize");
@@ -913,13 +917,13 @@ void CameraRawPanel::build() {
     });
     connect(familyGroup, &QButtonGroup::idClicked, this, [this, familyHue, familySat, familyLum](int id) {
         mixerFamily_ = id;
-        QSignalBlocker a(familyHue), b(familySat), c(familyLum);
+        writing_ = true;
         familyHue->setValue(settings_.mixer.hue[size_t(mixerFamily_)]);
         familySat->setValue(settings_.mixer.saturation[size_t(mixerFamily_)]);
         familyLum->setValue(settings_.mixer.luminance[size_t(mixerFamily_)]);
+        writing_ = false;
     });
     auto retarget = [this](QDoubleSpinBox* spin, double* base) {
-        QObject::disconnect(spin, nullptr, nullptr, nullptr);
         connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, base](double value) {
             if (writing_) return;
             base[mixerFamily_] = value;
@@ -930,7 +934,6 @@ void CameraRawPanel::build() {
     retarget(familySat, settings_.mixer.saturation.data());
     retarget(familyLum, settings_.mixer.luminance.data());
     auto bindPoint = [this](QDoubleSpinBox* spin, double filters::CameraRawPointColor::* member) {
-        QObject::disconnect(spin, nullptr, nullptr, nullptr);
         connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, member](double value) {
             if (writing_ || pointIndex_ < 0 || pointIndex_ >= int(settings_.mixer.points.size())) return;
             settings_.mixer.points[size_t(pointIndex_)].*member = value;
@@ -947,7 +950,6 @@ void CameraRawPanel::build() {
         if (edited) edited();
     });
     sync_.push_back([this, familyHue, familySat, familyLum, pointList, pointHue, pointSat, pointLum, visualize] {
-        QSignalBlocker a(familyHue), b(familySat), c(familyLum);
         familyHue->setValue(settings_.mixer.hue[size_t(mixerFamily_)]);
         familySat->setValue(settings_.mixer.saturation[size_t(mixerFamily_)]);
         familyLum->setValue(settings_.mixer.luminance[size_t(mixerFamily_)]);

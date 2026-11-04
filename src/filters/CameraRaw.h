@@ -192,4 +192,6 @@ struct CameraRawRender {
 };
 // Grade, then selection blend, then preview-only paint. Scope is the grade before that paint.
 CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {});
+std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {});
+bool cameraRawNeedsEightBit(const CameraRawSettings&);
 }

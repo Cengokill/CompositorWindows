@@ -29,7 +29,7 @@ struct GrowingBrushSnapshot::Impl {
     Transform base;
     BrushSourceRect extent,crop;
     int baseWidth{},baseHeight{},phaseX{},phaseY{};
-    bool mask{},changed{};
+    bool mask{},changed{},widePaint{};
     PaintedMap tiles;
     std::map<BrushTileKey,std::shared_ptr<const BrushTile>> hdrCoverage;
     BrushSessionSettings hdrSettings;
@@ -131,7 +131,7 @@ std::shared_ptr<const LayerRenderPreview> GrowingBrushSnapshot::renderPreview()c
         };
         return source;};
     preview->damageComparedWith=[state](const LayerRenderPreview* previous)->std::optional<std::vector<LayerRenderPreview::Damage>>{
-        if(state->original.deep&&state->original.deep->isHdr())return std::nullopt;
+        if(state->widePaint)return std::nullopt;
         if(!previous)return {}; // First preview/cancel also changes source-edge clipping.
         if(previous&&(previous->lineage!=state->counters||previous->layer.id!=state->original.id))return {};
         auto prior=previous?std::static_pointer_cast<const Impl>(previous->identity):std::shared_ptr<const Impl>{};
@@ -165,7 +165,7 @@ std::shared_ptr<const LayerRenderPreview> GrowingBrushSnapshot::renderPreview()c
         // The image handle marks a visible image for graph/culling validation;
         // all reads are overridden below. Blank virtual canvases allocate one tile.
         if(!preview->layer.raster)preview->layer.raster=Raster::filled(1,1);
-        if(state->original.deep&&state->original.deep->isHdr())preview->deepImage=[state,bounds](Point unit,Transform::Sampling sampling){return sampleWidePixels(bounds.width,bounds.height,[&](int x,int y){return state->pixelHdr(bounds.x+x,bounds.y+y);},unit,sampling);};
+        if(state->widePaint)preview->deepImage=[state,bounds](Point unit,Transform::Sampling sampling){return sampleWidePixels(bounds.width,bounds.height,[&](int x,int y){return state->pixelHdr(bounds.x+x,bounds.y+y);},unit,sampling);};
         preview->image=[state,bounds](Point unit,Transform::Sampling sampling){return sampleRasterPixels(bounds.width,bounds.height,[&](int x,int y){return state->pixel(bounds.x+x,bounds.y+y);},unit,sampling);};
         auto source=rawSource();source->rgba=[state,bounds](int x,int y){return state->pixel(bounds.x+x,bounds.y+y);};source->readRow=readRow;preview->imageSource=std::move(source);
         if(preview->layer.mask&&!preview->layer.mask->placement&&bounds!=BrushSourceRect{0,0,state->baseWidth,state->baseHeight}){
@@ -188,14 +188,14 @@ Layer GrowingBrushSnapshot::previewLayer(double x,double y,double width,double h
     const int w=int((uint64_t(rect.width)+step-1)/step),h=int((uint64_t(rect.height)+step-1)/step);auto sourcePoint=[&](int px,int py){return Point{rect.x+(px+.5)*rect.width/w,rect.y+(py+.5)*rect.height/h};};
     if(impl_->mask){const uint8_t exterior=impl_->maskExterior();auto mask=std::make_shared<GrayRaster>(GrayRaster{w,h,std::vector<uint8_t>(size_t(w)*h)});for(int py=0;py<h;++py)for(int px=0;px<w;++px){auto p=sourcePoint(px,py);mask->pixels[size_t(py)*w+px]=impl_->pixel(int(p.x),int(p.y)).r;}layer.mask->raster=std::move(mask);layer.mask->placement=placement;layer.mask->previewExterior=exterior;if(layer.group||!layer.adjustmentJson.empty()){layer.transform=placement;layer.mask->placement.reset();}return layer;}
     layer.transform=placement;layer.deep.reset();if(step==1)layer.raster=impl_->materialize(rect);else{auto raster=std::make_shared<Raster>(*Raster::filled(w,h));int columns=(w+255)/256;for(size_t index=0;index<raster->tiles.size();++index){auto tile=std::make_shared<Raster::Tile>();int tx=int(index%columns)*256,ty=int(index/columns)*256;for(int row=0;row<std::min(256,h-ty);++row)for(int col=0;col<std::min(256,w-tx);++col){auto p=sourcePoint(tx+col,ty+row);tile->pixels[size_t(row)*256+col]=impl_->pixel(int(std::floor(p.x)),int(std::floor(p.y)));}raster->tiles[index]=std::move(tile);++impl_->counters->materialized;}layer.raster=std::move(raster);}
-    if(impl_->original.deep&&impl_->original.deep->isHdr()){auto deep=makeDeep(w,h);for(int py=0;py<h;++py)for(int px=0;px<w;++px){auto p=sourcePoint(px,py);deep->setPixel(px,py,impl_->pixelHdr(int(std::floor(p.x)),int(std::floor(p.y))));}layer.deep=deep;layer.raster=rasterFromDeep(*deep);}
+    if(impl_->widePaint){auto deep=makeDeep(w,h,impl_->original.deep->format);for(int py=0;py<h;++py)for(int px=0;px<w;++px){auto p=sourcePoint(px,py);deep->setPixel(px,py,impl_->pixelHdr(int(std::floor(p.x)),int(std::floor(p.y))));}layer.deep=deep;layer.raster=rasterFromDeep(*deep);}
     if(layer.mask&&!layer.mask->placement){const auto& original=*layer.mask->raster;auto mask=std::make_shared<GrayRaster>(GrayRaster{w,h,std::vector<uint8_t>(size_t(w)*h,255)});for(int py=0;py<h;++py)for(int px=0;px<w;++px){auto p=sourcePoint(px,py);if(p.x>=0&&p.y>=0&&p.x<impl_->baseWidth&&p.y<impl_->baseHeight)mask->pixels[size_t(py)*w+px]=original.pixel(int(p.x*original.width/impl_->baseWidth),int(p.y*original.height/impl_->baseHeight));}layer.mask->raster=std::move(mask);}return layer;
 }
 Layer GrowingBrushSnapshot::materializeLayer()const{
     auto layer=impl_->original;if(layer.mask)layer.mask->previewExterior.reset();if(!impl_->changed)return layer;auto bounds=impl_->crop;budget(bounds,100000000);
     if(impl_->mask){auto gray=std::make_shared<GrayRaster>();gray->width=bounds.width;gray->height=bounds.height;const auto origin=impl_->alignment();gray->samplingOriginX=int(origin.x)-bounds.x;gray->samplingOriginY=int(origin.y)-bounds.y;gray->pixels.resize(size_t(gray->width)*gray->height);for(int y=0;y<gray->height;++y)for(int x=0;x<gray->width;++x)gray->pixels[size_t(y)*gray->width+x]=impl_->pixel(bounds.x+x,bounds.y+y).r;layer.mask->raster=std::move(gray);return layer;}
-    if(impl_->original.deep&&impl_->original.deep->isHdr()&&uint64_t(bounds.width)*bounds.height*24>1200000000)throw std::runtime_error("HDR paint exceeds working memory budget");
-    layer.raster=impl_->materialize(bounds);layer.deep.reset();if(impl_->original.deep&&impl_->original.deep->isHdr()){auto deep=makeDeep(bounds.width,bounds.height);for(int y=0;y<bounds.height;++y)for(int x=0;x<bounds.width;++x)deep->setPixel(x,y,impl_->pixelHdr(bounds.x+x,bounds.y+y));layer.deep=deep;layer.raster=rasterFromDeep(*deep);}layer.transform=impl_->placed();layer.shapeJson.clear();
+    if(impl_->widePaint&&uint64_t(bounds.width)*bounds.height*24>1200000000)throw std::runtime_error("Deep paint exceeds working memory budget");
+    layer.raster=impl_->materialize(bounds);layer.deep.reset();if(impl_->widePaint){auto deep=makeDeep(bounds.width,bounds.height,impl_->original.deep->format);for(int y=0;y<bounds.height;++y)for(int x=0;x<bounds.width;++x)deep->setPixel(x,y,impl_->pixelHdr(bounds.x+x,bounds.y+y));layer.deep=deep;layer.raster=rasterFromDeep(*deep);}layer.transform=impl_->placed();layer.shapeJson.clear();
     if(layer.mask&&!layer.mask->placement&&bounds!=BrushSourceRect{0,0,impl_->baseWidth,impl_->baseHeight}){const auto& original=*layer.mask->raster;auto mask=std::make_shared<GrayRaster>();mask->width=bounds.width;mask->height=bounds.height;mask->samplingOriginX=(original.width==impl_->baseWidth?original.samplingOriginX:0)-bounds.x;mask->samplingOriginY=(original.height==impl_->baseHeight?original.samplingOriginY:0)-bounds.y;mask->pixels.assign(size_t(mask->width)*mask->height,255);for(int y=0;y<mask->height;++y)for(int x=0;x<mask->width;++x){int sx=bounds.x+x,sy=bounds.y+y;if(sx>=0&&sy>=0&&sx<impl_->baseWidth&&sy<impl_->baseHeight)mask->pixels[size_t(y)*mask->width+x]=original.pixel(int((sx+.5)*original.width/impl_->baseWidth),int((sy+.5)*original.height/impl_->baseHeight));}layer.mask->raster=std::move(mask);}
     return layer;
 }
@@ -218,7 +218,7 @@ struct GrowingBrushSession::Impl {
     Impl(Layer layer,BrushSessionSettings value,int cw,int ch,std::shared_ptr<D3D11BrushCoverage> gpu,std::shared_ptr<const GrayRaster> selected,bool mask,uint64_t pixelBudget,GrowingTileCompositor compose):settings(value),accelerator(std::move(gpu)),selection(std::move(selected)),limit(pixelBudget),compositor(std::move(compose)){
         if(!layer.transform.valid()||cw<1||ch<1||cw>30000||ch>30000||pixelBudget<1||pixelBudget>100000000||(!mask&&(layer.group||!layer.adjustmentJson.empty()))||mask&&(!layer.mask||!layer.mask->raster))throw std::invalid_argument("Invalid growing brush target");
         if(!std::isfinite(value.radius)||value.radius<.5||value.radius>(compositor?1002:1000)||!std::isfinite(value.hardness)||value.hardness<0||value.hardness>1||!std::isfinite(value.opacity)||value.opacity<.01||value.opacity>1)throw std::invalid_argument("Invalid growing brush settings");
-        auto initial=std::make_shared<GrowingBrushSnapshot::Impl>();initial->original=std::move(layer);initial->mask=mask;initial->counters=std::make_shared<Counters>();initial->base=mask?initial->original.mask->placement.value_or(initial->original.transform):initial->original.transform;
+        auto initial=std::make_shared<GrowingBrushSnapshot::Impl>();initial->original=std::move(layer);initial->mask=mask;initial->widePaint=!mask&&!compositor&&bool(initial->original.deep);initial->counters=std::make_shared<Counters>();initial->base=mask?initial->original.mask->placement.value_or(initial->original.transform):initial->original.transform;
         auto original=initial->original.raster;bool placed=mask&&initial->original.mask->placement.has_value();initial->baseWidth=placed?initial->original.mask->raster->width:original?original->width:int(std::round(initial->original.transform.width));initial->baseHeight=placed?initial->original.mask->raster->height:original?original->height:int(std::round(initial->original.transform.height));
         int w=initial->baseWidth,h=initial->baseHeight;if(w<1||h<1||w>30000||h>30000)throw std::invalid_argument("Invalid growing brush source grid");
         // A mask edit budgets its own grid. The unchanged image remains subject
@@ -297,7 +297,7 @@ struct GrowingBrushSession::Impl {
                 if(differs)next->tiles[item.key]={std::move(output),r>l?BrushSourceRect{item.x+l,item.y+t,r-l,b-t}:BrushSourceRect{}};else next->tiles.erase(item.key);pixelsChanged=true;
             }
         }
-        if(state->original.deep&&state->original.deep->isHdr()&&!state->mask&&!compositor){next->hdrCoverage=nextCoverage;pixelsChanged=true;}
+        if(state->widePaint){next->hdrCoverage=nextCoverage;pixelsChanged=true;}
         if(pixelsChanged){next->changed=!next->tiles.empty()||!next->hdrCoverage.empty();BrushSourceRect bounds=next->mask||next->original.raster?BrushSourceRect{0,0,next->baseWidth,next->baseHeight}:BrushSourceRect{};if(!next->mask)for(const auto& [key,tile]:next->tiles){(void)key;bounds=unite(bounds,tile.alpha);}next->crop=bounds.empty()?nextAllocated.value_or(BrushSourceRect{0,0,next->baseWidth,next->baseHeight}):bounds;budget(next->crop,limit);next->placed();}
         coverage.swap(nextCoverage);tailKeys.swap(nextTail);allocated=nextAllocated;metrics.coverage.settledSegments+=settled.size();metrics.coverage.touchedTiles=coverage.size();metrics.coverage.coverageStorageBytes=0;for(const auto& [key,tile]:coverage){(void)key;metrics.coverage.coverageStorageBytes+=tile->permanent.size()*sizeof(float)+tile->preview.size();}
         if(pixelsChanged){state=std::move(next);published=std::shared_ptr<const GrowingBrushSnapshot>(new GrowingBrushSnapshot(state));++metrics.snapshots;++metrics.coverage.publishedSnapshots;}

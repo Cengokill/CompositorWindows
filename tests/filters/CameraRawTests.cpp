@@ -1,5 +1,6 @@
 #include "filters/CameraRaw.h"
 #include "filters/PixelFilters.h"
+#include "core/DeepImage.h"
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -265,6 +266,26 @@ void run() {
         request.seed = 9;
         auto applied = apply(request);
         require(applied.implementation == "camera raw" && applied.changed && applied.cameraRawScope && applied.raster->pixel(0, 0).r > 165, "apply runs the camera raw grade and returns a scope");
+        auto deep = makeDeep(4, 1, DeepImage::Format::Unorm16);
+        deep->at(0, 0)[0] = 10001; deep->at(1, 0)[0] = 10031; deep->at(2, 0)[0] = 10001; deep->at(3, 0)[0] = 50021;
+        for (int x = 0; x < 4; ++x) { deep->at(x, 0)[1] = 20003; deep->at(x, 0)[2] = 30007; deep->at(x, 0)[3] = 65535; }
+        CameraRawSettings stop; stop.exposure = 1;
+        auto graded = renderCameraRaw(*deep, stop, {}, nullptr);
+        require(graded && graded->format == DeepImage::Format::Unorm16 && graded->at(0, 0)[0] != graded->at(1, 0)[0], "Camera Raw exposure collapsed 16-bit neighbors");
+        require(graded->at(0, 0)[0] > 10001, "Camera Raw exposure ignored retained samples");
+        auto hdr = makeDeep(1, 1, DeepImage::Format::HalfFloat);
+        hdr->setPixel(0, 0, {2.f, 1.f, .5f, 1.f});
+        CameraRawSettings hdrColor; hdrColor.saturation = -25;
+        auto hdrGraded = renderCameraRaw(*hdr, hdrColor, {}, nullptr);
+        require(hdrGraded->pixel(0, 0)[0] > 1.f, "Camera Raw clipped HDR highlights during color grading");
+        CameraRawSettings mixer; mixer.mixer.saturation[0] = 40;
+        require(cameraRawNeedsEightBit(mixer), "mixer must be classified as 8-bit");
+        bool refused = false; try { renderCameraRaw(*deep, mixer, {}, nullptr); } catch (const std::exception&) { refused = true; }
+        require(refused, "16-bit mixer Camera Raw did not require conversion");
+        Request eight; eight.kind = Kind::CameraRaw; eight.source = rasterFromDeep(*deep); eight.deepSource = deep; eight.cameraRaw = mixer; eight.preview = true;
+        require(apply(eight).changed && !apply(eight).deep, "mixer preview must not claim 16-bit precision");
+        eight.preview = false; refused = false; try { apply(eight); } catch (const std::exception&) { refused = true; }
+        require(refused, "mixer apply kept a silent 16-bit container");
         std::cout << "PASS camera raw\n";
 }
 int main() {

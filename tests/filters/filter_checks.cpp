@@ -97,6 +97,21 @@ void testNoise(){
     auto original=gray->rgba();graphics::addNoise(view(original,32,8),10,true,true,7);require(original==mono->rgba(),"noise equals upstream C bytes");
     require(runPixels(Kind::AddNoise,*gray,s,1,8)->rgba()!=mono->rgba(),"different seed changes pattern");
 }
+void testDeepBlur(){
+    auto deep=makeDeep(32,16,DeepImage::Format::Unorm16);
+    for(int y=0;y<16;++y)for(int x=0;x<32;++x){auto p=deep->at(x,y);p[0]=uint16_t(x<16?10001:10031);p[1]=20003;p[2]=30007;p[3]=65535;}
+    auto original=deep->samples;
+    for(auto kind:{Kind::GaussianBlur,Kind::MotionBlur}){
+        auto q=request(kind,rasterFromDeep(*deep));q.deepSource=deep;q.settings.radius=2;q.settings.distance=8;
+        q.canvasWidth=32;q.canvasHeight=16;q.transform={0,0,32,16};
+        auto result=apply(q);require(result.changed&&result.deep&&result.deep->format==DeepImage::Format::Unorm16,"blur retains 16-bit pixels");
+        const auto value=result.deep->at(16,8)[0];require(value>10001&&value<10031,"blur uses original sub-byte detail");
+        require(deep->samples==original,"blur changed source pixels");
+    }
+    auto lens=request(Kind::LensCorrection,rasterFromDeep(*deep));lens.deepSource=deep;lens.settings.distortion=-40;
+    fails([&]{apply(lens);},"16-bit lens apply must require conversion");
+    lens.preview=true;require(apply(lens).changed&&!apply(lens).deep,"16-bit lens preview must not claim deep precision");
+}
 void testLens(){
     auto source=image(40,30,[](int x,int y){int quadrant=(x>=20)+(y>=15)*2;return Pixel{std::uint8_t(quadrant*85),128,std::uint8_t(255-quadrant*85),255};});Settings s;auto neutral=runPixels(Kind::LensCorrection,*source,s,1,0);require(neutral->rgba()==source->rgba(),"lens zero exact identity");
     s.distortion=100;auto barrel=runPixels(Kind::LensCorrection,*source,s,1,0);require(barrel->pixel(0,0).a==255&&barrel->pixel(39,29).a==255,"source barrel corners");
@@ -189,5 +204,5 @@ int benchmark(){
     }return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

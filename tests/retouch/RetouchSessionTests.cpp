@@ -1,4 +1,5 @@
 #include "retouch/RetouchSession.h"
+#include "core/DeepImage.h"
 #include "graphics/PixelAlgorithms.h"
 #include <cmath>
 #include <functional>
@@ -50,6 +51,33 @@ int main(int argc,char** argv){
     test("warp_spacing_accumulates_short_events_and_narrow_canvas_safe",[&]{Settings settings;settings.mode=Mode::Liquify;settings.radius=20;settings.hardness=.5;auto original=Raster::filled(1,12,{50,20,10,128});RetouchSession stroke(original,transform(1,12),1,12,settings,{}, {},gpu);stroke.begin({.5,4});require(!stroke.append({.5,4.5}),"Subspacing event advanced");require(stroke.append({.5,5}),"Accumulated spacing not reached");auto result=stroke.commit();for(int y=0;y<12;++y)require(result->pixel(0,y)==original->pixel(0,y),"One-column source guard violated");});
     test("warp_selection_commit_clears_alpha_via_copy",[&]{auto original=raster(40,20,[](int x,int){return x<10?Pixel{}:Pixel{255,0,0,255};});Settings settings;settings.mode=Mode::Smudge;settings.radius=4;settings.hardness=1;settings.opacity=1;auto clip=selection(40,20,[](int x,int){return uint8_t(x<16?255:0);});RetouchSession stroke(original,transform(40,20),40,20,settings,{},clip,gpu);stroke.begin({6,10});stroke.append({12,10});stroke.append({20,10});auto result=stroke.commit();require(result->pixel(12,10).a==0,"Warp copy retained original alpha");require(result->pixel(20,10)==original->pixel(20,10),"Warp selection commit escaped");});
     test("transformed_clone_document_sampling_and_tile_sharing",[&]{auto original=Raster::filled(768,32,{0,0,255,255});auto placement=transform(768,32);placement.x=20;placement.y=10;Sources source;source.currentLayer=Raster::filled(800,64,{255,0,0,255});source.cloneOffset=Point{};Settings settings;settings.radius=4;settings.hardness=1;RetouchSession stroke(original,placement,800,64,settings,source,{},gpu);Raster::resetMaterializationCount();stroke.begin({30,20});auto result=stroke.commit();require(result->pixel(10,10)==Pixel{255,0,0,255},"Document transform sample location");require(result->tiles[1]==original->tiles[1]&&result->tiles[2]==original->tiles[2],"Untouched source tiles not shared");require(Raster::materializationCount()==0,"Retouch called Raster::rgba");});
+    test("deep_clone_sub_byte_difference",[]{Layer layer;layer.id="sub-byte";layer.transform=transform(32,16);auto deep=makeDeep(32,16,DeepImage::Format::Unorm16);for(int y=0;y<16;++y)for(int x=0;x<32;++x){auto p=deep->at(x,y);p[0]=x<16?10000:10001;p[1]=p[2]=0;p[3]=65535;}layer.deep=deep;layer.raster=Raster::filled(32,16,{39,0,0,255});Settings settings;settings.mode=Mode::Clone;settings.radius=3;settings.hardness=1;Sources source;source.cloneOffset=Point{-16,0};RetouchSession stroke(layer,32,16,settings,source);stroke.begin({24,8});auto snapshot=stroke.commitSnapshot();require(snapshot->changed(),"Sub-byte clone discarded");auto result=stroke.committedLayer();require(result.deep->at(24,8)[0]==10000,"Sub-byte clone sample lost");});
     test("retouch_invalid_lifecycle_and_missing_sources",[]{auto original=Raster::filled(16,16,{255,0,0,255});Settings settings;RetouchSession missing(original,transform(16,16),16,16,settings);bool refused=false;try{missing.begin({8,8});}catch(const std::invalid_argument&){refused=true;}require(refused,"Clone missing source not refused");settings.sampleAllLayers=true;Sources sources;sources.cloneOffset=Point{};RetouchSession allMissing(original,transform(16,16),16,16,settings,sources);refused=false;try{allMissing.begin({8,8});}catch(const std::invalid_argument&){refused=true;}require(refused,"Missing all-layer sample not refused");settings.mode=Mode::Liquify;RetouchSession cancelled(original,transform(16,16),16,16,settings);cancelled.cancel();refused=false;try{cancelled.begin({8,8});}catch(const std::logic_error&){refused=true;}require(refused,"Cancelled session restarted");});
+    test("unorm16_clone_blur_smudge_liquify_and_heal_conversion",[&]{
+        Layer layer;layer.id="deep";layer.transform=transform(32,16);auto deep=makeDeep(32,16,DeepImage::Format::Unorm16);
+        for(int y=0;y<16;++y)for(int x=0;x<32;++x){auto p=deep->at(x,y);p[0]=uint16_t(x<16?10001:50021);p[1]=20003;p[2]=30007;p[3]=65535;}
+        layer.deep=deep;layer.raster=rasterFromDeep(*deep);
+        auto deepAt=[&](const Layer& result,int sx,int sy){const int x=int(std::lround(result.transform.x));const int y=int(std::lround(result.transform.y));const int px=sx-x,py=sy-y;require(result.deep&&px>=0&&py>=0&&px<result.deep->width&&py<result.deep->height,"deep sample outside committed crop");return result.deep->at(px,py)[0];};
+        auto retains=[&](const Layer& result,int sx,int sy,uint16_t value){const int x=int(std::lround(result.transform.x));const int y=int(std::lround(result.transform.y));const int px=sx-x,py=sy-y;if(!result.deep||px<0||py<0||px>=result.deep->width||py>=result.deep->height)return;require(result.deep->at(px,py)[0]==value,"unpainted 16-bit pixel changed");};
+        Settings clone;clone.radius=4;clone.hardness=1;Sources source;source.cloneOffset=Point{-16,0};
+        RetouchSession stamp(layer,32,16,clone,source,{},gpu);
+        require(stamp.begin({24,8}),"clone did not begin");
+        require(stamp.commitSnapshot()->changed(),"clone no-op");
+        auto cloned=stamp.committedLayer();
+        require(cloned.deep&&cloned.deep->format==DeepImage::Format::Unorm16,"clone dropped 16-bit pixels");
+        require(deepAt(cloned,24,8)==10001,"clone copied 8-bit quantized pixels");
+        retains(cloned,0,8,10001);
+        Settings blur;blur.mode=Mode::Blur;blur.radius=8;blur.hardness=1;
+        RetouchSession soften(layer,32,16,blur,{},{},gpu);soften.begin({16,8});require(soften.commitSnapshot()->changed(),"blur no-op");auto blurredLayer=soften.committedLayer();
+        retains(blurredLayer,0,8,10001);
+        require(deepAt(blurredLayer,16,8)>10001&&deepAt(blurredLayer,16,8)<50021,"blur ignored 16-bit source");
+        for(Mode mode:{Mode::Smudge,Mode::Liquify}){Settings warp;warp.mode=mode;warp.radius=4;warp.hardness=1;warp.opacity=.5;
+            RetouchSession stroke(layer,32,16,warp,{},{},gpu);stroke.begin({14,8});stroke.append({18,8});require(stroke.commitSnapshot()->changed(),"warp no-op");auto warped=stroke.committedLayer();
+            retains(warped,0,8,10001);
+            require(deepAt(warped,16,8)!=10001&&deepAt(warped,16,8)!=50021,"warp quantized through 8-bit");}
+        RetouchSession cancelled(layer,32,16,blur,{},{},gpu);cancelled.begin({16,8});require(cancelled.cancelSnapshot()->materializeLayer()==layer,"blur cancel mutated the layer");
+        bool refused=false;try{Settings heal;heal.mode=Mode::HealProximity;RetouchSession stroke(layer,32,16,heal);}catch(const std::runtime_error&){refused=true;}
+        require(refused,"16-bit healing accepted a silent 8-bit kernel");
+    });
     std::cout<<"{\"suite\":\"retouch\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"warp\":"<<(gpu?"true":"false")<<"}\n";return failed?1:0;
 }

@@ -68,6 +68,25 @@ GrayWarp warpGray(std::shared_ptr<const GrayRaster> source,const Transform& orig
 }
 Layer distortLayer(const Layer& original,const Transform& draft,const Corners& c,WarpOptions options){
     if(!original.raster||original.group)throw std::invalid_argument("Distortion requires image pixels");auto imageOptions=options;imageOptions.trim=options.longestSide==0;auto warped=warpRaster(original.raster,draft,c,imageOptions);auto result=original;result.raster=warped.raster;result.deep.reset();result.transform=warped.transform;
+    if(original.deep&&original.deep->valid()){
+        auto deep=makeDeep(result.raster->width,result.raster->height,original.deep->format);
+        const auto g=geometry(draft,c,imageOptions);
+        for(int y=0;y<deep->height;++y){cancel(options.cancelled);for(int x=0;x<deep->width;++x){
+            const int xx=x+int(warped.crop.x),yy=y+int(warped.crop.y);
+            const auto at=[&](double dx,double dy){return g.inverse.map({g.placed.x+(xx+dx)/g.factor,g.placed.y+(yy+dy)/g.factor});};
+            const auto sample=[&](Point unit){return graphics::sampleWidePixels(original.deep->width,original.deep->height,[&](int px,int py){return original.deep->pixel(px,py);},imageUnit(unit,draft),Transform::Sampling::Smooth);};
+            const auto middle=at(.5,.5);
+            WidePixel value{};
+            if(inside(at(0,0))&&inside(at(1,0))&&inside(at(1,1))&&inside(at(0,1))) value=sample(middle);
+            else {
+                unsigned hits=0;
+                for(int sy=0;sy<4;++sy)for(int sx=0;sx<4;++sx){const auto unit=at((sx+.5)/4,(sy+.5)/4);if(inside(unit)){++hits;const auto p=sample(unit);for(int channel=0;channel<4;++channel)value[channel]+=p[channel]/16.f;}}
+                if(hits==16&&inside(middle))value=sample(middle);
+            }
+            deep->setPixel(x,y,value);
+        }}
+        result.deep=deep;result.raster=rasterFromDeep(*deep);
+    }
     if(original.mask&&original.mask->raster){const auto& mask=*original.mask;auto maskOptions=options;maskOptions.trim=false;
         if(mask.linked&&!mask.placement){auto moved=warpGray(mask.raster,draft,c,0,maskOptions);result.mask->raster=moved.raster==mask.raster?mask.raster:cropGray(*moved.raster,warped.crop);}
         else if(mask.linked&&mask.placement){auto placed=following(*mask.placement,original.transform,draft);const auto carried=carriedCorners(placed,draft,c);if(usableCorners(carried)){auto moved=warpGray(mask.raster,placed,carried,graphics::cachedMaskBackground(mask.raster),maskOptions);result.mask->raster=moved.raster;result.mask->placement=moved.transform;}}

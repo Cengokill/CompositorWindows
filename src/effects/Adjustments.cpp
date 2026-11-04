@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -146,31 +147,56 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
         auto kind=s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:s.kind==11?filters::Kind::AddNoise:s.kind==12?filters::Kind::ProgressiveBlur:s.kind==13?filters::Kind::Bloom:filters::Kind::RgbSplit;
         if(!filters::supportsHdr(kind)&&source->isHdr())throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
         filters::Limits limits;limits.cancelled=cancelled;
-        if(!filters::supportsHdr(kind)){
-            auto raster=rasterFromDeep(*source);auto changed=filters::runPixels(kind,*raster,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);
-            if(changed==raster)return source;
-            auto image=makeDeep(changed->width,changed->height,source->format);
-            for(int y=0;y<changed->height;++y){cancel();for(int x=0;x<changed->width;++x){auto p=changed->pixel(x,y);image->setPixel(x,y,{p.a?p.r/255.f:0.f,p.a?p.g/255.f:0.f,p.a?p.b/255.f:0.f,p.a/255.f});}}
-            return image;
-        }
         return filters::runDeepPixels(kind,*source,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);}
-    // Exposure is evaluated in scene-linear light. Other bounded color kernels
-    // see per-pixel normalized highlights, then their brightness is restored.
-    if(s.kind!=3&&s.kind!=1&&s.kind!=2){
+    // HDR highlights stay on the normalized 8-bit operators. Unorm16 keeps the
+    // retained samples and evaluates the same formulas in floating light.
+    if(source->isHdr()&&s.kind!=1&&s.kind!=2&&s.kind!=3){
         auto normal=normalizeDeep(*source,cancelled);auto changed=applyAdjustment(normal.raster,json,nullptr,region,cancelled);
         if(changed==normal.raster)return source;
         auto result=restoreDeep(*changed,normal.scales,cancelled);
         if(!selection)return result;
         auto mixed=std::make_shared<DeepImage>(*result);for(int y=0;y<source->height;++y){cancel();for(int x=0;x<source->width;++x){const auto old=source->pixel(x,y);auto p=result->pixel(x,y);float amount=selection->pixel(x,y)/255.f;for(int c=0;c<4;++c)p[c]=old[c]+(p[c]-old[c])*amount;mixed->setPixel(x,y,p);}}return mixed;
     }
+    std::vector<std::array<float,3>> colors;if(s.kind==0)colors=cube(s);
     auto output=std::make_shared<DeepImage>(*source);bool changed=false;
+    const double rw=s.bwReds+s.bwYellows*.5+s.bwMagentas*.5,gw=s.bwGreens+s.bwYellows*.5+s.bwCyans*.5,bw=s.bwBlues+s.bwCyans*.5+s.bwMagentas*.5;
+    double bwMix=rw+gw+bw;if(!(std::abs(bwMix)>1e-6))bwMix=1;
     for(int y=0;y<source->height;++y){cancel();for(int x=0;x<source->width;++x){auto p=source->pixel(x,y),out=p;if(!(p[3]>0))continue;const double amount=selection?selection->pixel(x,y)/255.:1.;if(amount==0)continue;
         const double peak=std::max({1.,double(p[0]/p[3]),double(p[1]/p[3]),double(p[2]/p[3])});
-        for(int c=0;c<3;++c){const double straight=p[c]/p[3];double value;
-            if(s.kind==3)value=linearToSrgb(std::pow(std::max(0.,srgbToLinear(straight)*std::pow(2.,s.exposure)+s.offset),1/s.gamma));
-            else {value=std::clamp(straight/peak,0.,1.);value=s.kind==1?s.levels[0].apply(s.levels[c+1].apply(value)):s.curves[0].value(s.curves[c+1].value(value*255))/255.;value*=peak;}
-            out[c]=float(p[c]+(value*p[3]-p[c])*amount);
+        RGB rgb{p[0]/p[3],p[1]/p[3],p[2]/p[3]};
+        if(s.kind==0){
+            std::array<double,3> u{std::clamp(rgb[0]*32,0.,32.),std::clamp(rgb[1]*32,0.,32.),std::clamp(rgb[2]*32,0.,32.)};
+            std::array<int,3> lower{};RGB f{};for(int c=0;c<3;++c){lower[c]=std::min(31,int(u[c]));f[c]=u[c]-lower[c];}
+            RGB mapped{};for(int b=0;b<2;++b)for(int g=0;g<2;++g)for(int r=0;r<2;++r){auto weight=(r?f[0]:1-f[0])*(g?f[1]:1-f[1])*(b?f[2]:1-f[2]);auto&entry=colors[size_t((lower[2]+b)*33*33+(lower[1]+g)*33+lower[0]+r)];for(int c=0;c<3;++c)mapped[c]+=entry[c]*weight;}
+            rgb=mapped;
+        }else if(s.kind==4){
+            auto dark=s.reverse?s.highlights:s.shadows,light=s.reverse?s.shadows:s.highlights;
+            const double yv=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+            for(int c=0;c<3;++c)rgb[c]=dark[c]+(light[c]-dark[c])*yv;
+        }else if(s.kind==5){
+            const double px=region.originX+(x+.5)*region.unitsPerPixel,py=region.originY+(y+.5)*region.unitsPerPixel;
+            const auto cell=[&](double axis){return std::llround(std::floor(axis/std::max(.5,s.size)));};
+            uint32_t h=s.seed^uint32_t(cell(px)*747796405u)^uint32_t(cell(py)*2891336453u);
+            h=h*1664525u+1013904223u;const double n=((h>>8)&255)/255.;
+            const double grain=(n-.5)*s.amount/50.*(s.roughness/100.*.5+.5);
+            for(int c=0;c<3;++c)rgb[c]=std::clamp(rgb[c]+grain,0.,1.);
+        }else if(s.kind==7){
+            const double gray=std::clamp((rgb[0]*rw+rgb[1]*gw+rgb[2]*bw)/bwMix,0.,1.);rgb={gray,gray,gray};
+        }else if(s.kind==8){
+            const double l=.3*rgb[0]+.59*rgb[1]+.11*rgb[2];
+            auto tone=[&](double shadow,double mid,double high){double sw=std::clamp(1-l*2,0.,1.),hw=std::clamp(l*2-1,0.,1.),mw=std::clamp(1-sw-hw,0.,1.);return (shadow*sw+mid*mw+high*hw)/100;};
+            rgb[0]=std::clamp(rgb[0]+tone(s.shadowCR,s.midCR,s.highCR),0.,1.);
+            rgb[1]=std::clamp(rgb[1]+tone(s.shadowMG,s.midMG,s.highMG),0.,1.);
+            rgb[2]=std::clamp(rgb[2]-tone(s.shadowYB,s.midYB,s.highYB),0.,1.);
+        }else{
+            for(int c=0;c<3;++c){const double straight=rgb[c];double value;
+                if(s.kind==6)value=1-straight;
+                else if(s.kind==3)value=linearToSrgb(std::pow(std::max(0.,srgbToLinear(straight)*std::pow(2.,s.exposure)+s.offset),1/s.gamma));
+                else {value=std::clamp(straight/peak,0.,1.);value=s.kind==1?s.levels[0].apply(s.levels[c+1].apply(value)):s.curves[0].value(s.curves[c+1].value(value*255))/255.;value*=peak;}
+                rgb[c]=value;
+            }
         }
+        for(int c=0;c<3;++c)out[c]=float(p[c]+(rgb[c]*p[3]-p[c])*amount);
         if(out!=p){output->setPixel(x,y,out);changed=true;}
     }}cancel();return changed?std::shared_ptr<const DeepImage>(output):source;
 }

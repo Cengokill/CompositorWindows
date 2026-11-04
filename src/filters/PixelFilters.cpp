@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <numbers>
 #include <type_traits>
@@ -235,6 +236,79 @@ void dither(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,std:
         const auto v=byte(quant*a);pixels[i]=pixels[i+1]=pixels[i+2]=v;
     }
 }
+std::vector<float> floatsOf(const DeepImage& source,const Limits& limits){
+    std::vector<float> out(size_t(source.width)*source.height*4);
+    for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);std::copy(p.begin(),p.end(),out.begin()+(size_t(y)*source.width+x)*4);}}
+    return out;
+}
+std::shared_ptr<const DeepImage> deepFromFloats(const DeepImage& proto,const std::vector<float>& pixels,const Limits& limits){
+    auto image=makeDeep(proto.width,proto.height,proto.format);
+    for(int y=0;y<proto.height;++y){cancel(limits);for(int x=0;x<proto.width;++x){auto i=(size_t(y)*proto.width+x)*4;image->setPixel(x,y,{pixels[i],pixels[i+1],pixels[i+2],std::clamp(pixels[i+3],0.f,1.f)});}}
+    return image;
+}
+float hashNoise(uint32_t seed,int x,int y){
+    uint32_t h=seed^uint32_t(x)*747796405u^uint32_t(y)*2891336453u;h=h*1664525u+1013904223u;return float((h>>8)&0xffffff)/float(1<<24);
+}
+void addNoiseFloat(std::vector<float>& pixels,int w,int h,const Settings& s,uint32_t seed,const Limits& limits){
+    const float amount=float(s.amount/400.);
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(size_t(y)*w+x)*4;float a=pixels[i+3];if(!(a>0))continue;
+        float n=s.gaussian?hashNoise(seed,x,y)+hashNoise(seed^0x9e3779b9,x,y)-1.f:hashNoise(seed,x,y)*2.f-1.f;
+        if(s.monochromatic){for(int c=0;c<3;++c)pixels[i+c]=std::clamp(pixels[i+c]+n*amount*a,0.f,a);}
+        else for(int c=0;c<3;++c){float nc=hashNoise(seed^uint32_t(c+1)*2246822519u,x,y)*2.f-1.f;pixels[i+c]=std::clamp(pixels[i+c]+nc*amount*a,0.f,a);}
+    }}
+}
+void vignetteFloat(std::vector<float>& pixels,int w,int h,const Settings& s){
+    const double strength=s.vignette/100;
+    for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+        double dx=(x+.5-w/2.)/(w/2.),dy=(y+.5-h/2.)/(h/2.);
+        double d=s.vignetteRound?std::hypot(dx,dy):std::max(std::abs(dx),std::abs(dy));
+        double t=s.vignetteFeather<=0?(d>s.vignetteMidpoint?1:0):std::clamp((d-s.vignetteMidpoint)/s.vignetteFeather,0.,1.);
+        t*=strength;auto i=(size_t(y)*w+x)*4;float a=pixels[i+3];
+        if(!(a>0)){pixels[i]=pixels[i+1]=pixels[i+2]=0;pixels[i+3]=float(t);continue;}
+        for(int c=0;c<3;++c)pixels[i+c]=float(pixels[i+c]*(1-t));
+    }
+}
+void bloomFloat(std::vector<float>& pixels,int w,int h,const Settings& s,double scale,const Limits& limits){
+    const double amount=s.bloomGlow?s.bloomAmount:s.bloom,radius=s.bloomGlow?s.bloomRadius*scale:8,threshold=s.bloomGlow?0.:s.bloomThreshold;
+    if(amount<=0)return;
+    auto bright=pixels;
+    if(!s.bloomGlow){
+        std::fill(bright.begin(),bright.end(),0.f);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto i=(size_t(y)*w+x)*4;float a=pixels[i+3];if(!(a>0))continue;double yb=(.2126*pixels[i]+.7152*pixels[i+1]+.0722*pixels[i+2])/a;if(yb<=threshold)continue;double gain=std::clamp((yb-threshold)/(1-threshold),0.,1.)*amount/100;for(int c=0;c<4;++c)bright[i+c]=float(pixels[i+c]*gain);}
+    }
+    auto blurred=gaussian(bright,w,h,radius,limits);
+    const double mix=s.bloomGlow?amount/50:1;
+    for(size_t i=0;i<pixels.size();i+=4){float a=std::clamp(pixels[i+3]+float(blurred[i+3]*mix),0.f,1.f);for(int c=0;c<3;++c)pixels[i+c]=std::min(a,pixels[i+c]+float(blurred[i+c]*mix));pixels[i+3]=a;}
+}
+void tonalFloat(std::vector<float>& pixels,int w,int h,const Settings& s,const Limits& limits){
+    auto blurred=gaussian(pixels,w,h,2.5,limits);double gain=s.tonal/100;
+    for(size_t i=0;i<pixels.size();i+=4)if(pixels[i+3]>0)for(int c=0;c<3;++c)pixels[i+c]=std::clamp(pixels[i+c]+float((pixels[i+c]-blurred[i+c])*gain),0.f,pixels[i+3]);
+}
+void ditherFloat(std::vector<float>& pixels,int w,int h,const Settings& s,uint32_t seed){
+    static constexpr int bayer[4][4]={{0,8,2,10},{12,4,14,6},{3,11,1,9},{15,7,13,5}};
+    static constexpr uint8_t glyphs[5][4]={{0,0,0,0},{0,0,0,2},{0,2,0,8},{2,5,5,2},{15,15,15,15}};
+    const int levels=std::max(2,s.ditherLevels);const double steps=double(levels-1);
+    for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+        auto i=(size_t(y)*w+x)*4;float a=pixels[i+3];if(!(a>0))continue;
+        const double luma=std::clamp((.2126*pixels[i]+.7152*pixels[i+1]+.0722*pixels[i+2])/a,0.,1.);
+        double quant=0;
+        if(s.ditherStyle==2){int band=std::min(4,int(luma*5));uint8_t row=glyphs[band][(y&3)];quant=((row>>(x&3))&1)?1.:0.;}
+        else{
+            const double threshold=s.ditherStyle==1?double(((seed*1664525u+1013904223u+uint32_t(x)*747796405u+uint32_t(y)*2891336453u)>>16)&255)/255.:(bayer[y&3][x&3]+.5)/16.;
+            const double scaled=luma*steps;const int base=int(std::floor(scaled));
+            quant=std::clamp(base+(scaled-base>=threshold?1:0),0,levels-1)/steps;
+        }
+        const float v=float(quant*a);pixels[i]=pixels[i+1]=pixels[i+2]=v;
+    }
+}
+void scanlinesFloat(std::vector<float>& pixels,int w,int h,const Settings& s,const Limits& limits){
+    auto source=pixels;double dark=s.scanline/100,glow=s.scanlineGlow/100;
+    graphics::runParallelBatch(size_t(h),0,[&](size_t row){cancel(limits);int y=int(row);
+        for(int x=0;x<w;++x){auto i=(size_t(y)*w+x)*4;for(int c=0;c<4;++c)pixels[i+c]=source[i+c];
+            if(y%2&&dark>0)for(int c=0;c<3;++c)pixels[i+c]=float(pixels[i+c]*(1-dark));
+            if(glow>0&&y>0&&y+1<h){auto above=(size_t(y-1)*w+x)*4,below=(size_t(y+1)*w+x)*4;for(int c=0;c<3;++c)pixels[i+c]=std::min(pixels[i+3],pixels[i+c]+float((source[above+c]+source[below+c])*.5*glow));}
+        }});
+}
 void scanlines(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,const Limits& limits){
     auto source=pixels;double dark=s.scanline/100,glow=s.scanlineGlow/100;
     graphics::runParallelBatch(std::size_t(h),0,[&](std::size_t row){cancel(limits);int y=int(row);
@@ -320,27 +394,26 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
     if(!source.valid())throw std::runtime_error("Invalid HDR filter source");
     count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?160:64);cancel(limits);const auto settings=raw.normalized();
     if(selection&&(selection->width!=source.width||selection->height!=source.height||!selection->validStorage()))throw std::runtime_error("HDR selection must match source grid");
-    if(!supportsHdr(kind))throw std::runtime_error("Convert the HDR layer to SDR before this spatial filter");
+    if(source.isHdr()&&!supportsHdr(kind))throw std::runtime_error("Convert the HDR layer to SDR before this spatial filter");
+    if(kind==Kind::LensCorrection||kind==Kind::ContentAwareFill)throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
     std::shared_ptr<const DeepImage> result;
-    std::shared_ptr<const DeepImage> exposed;
-    const DeepImage* colorSource=&source;
     auto rawSettings=cameraRaw.normalized();
     if(kind==Kind::CameraRaw){
-        if(rawSettings.geometry.adjusts()||rawSettings.optics.distortionK(1)!=0||rawSettings.optics.removeChromaticAberration||rawSettings.detail.adjusts()||rawSettings.glow!=0||rawSettings.texture!=0||rawSettings.clarity!=0)throw std::runtime_error("Convert HDR to 16-Bit before spatial Camera Raw corrections");
-        if(rawSettings.exposure!=0){auto image=makeDeep(source.width,source.height);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);if(p[3]>0)for(int c=0;c<3;++c)p[c]=float(linearToSrgb(srgbToLinear(p[c]/p[3])*std::pow(2.,rawSettings.exposure))*p[3]);image->setPixel(x,y,p);}}exposed=image;colorSource=image.get();rawSettings.exposure=0;}
-    }
-    if(kind==Kind::GaussianBlur||kind==Kind::MotionBlur||kind==Kind::ProgressiveBlur){
-        std::vector<float> input(size_t(source.width)*source.height*4);
-        for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto p=source.pixel(x,y);std::copy(p.begin(),p.end(),input.begin()+(size_t(y)*source.width+x)*4);}}
-        auto output=kind==Kind::GaussianBlur?gaussian(input,source.width,source.height,settings.radius*scale,limits,clamp):kind==Kind::ProgressiveBlur?progressive(input,source.width,source.height,settings,scale,limits,clamp):motion(input,source.width,source.height,settings.distance*scale/std::sqrt(12.),settings.angle,limits,clamp);
-        auto image=makeDeep(source.width,source.height,source.format);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto i=(size_t(y)*source.width+x)*4;image->setPixel(x,y,{output[i],output[i+1],output[i+2],std::clamp(output[i+3],0.f,1.f)});}}result=image;
+        result=renderCameraRaw(source,rawSettings,cameraView,nullptr,limits.cancelled);
+    }else if(kind==Kind::GaussianBlur||kind==Kind::MotionBlur||kind==Kind::ProgressiveBlur||kind==Kind::RgbSplit){
+        auto input=floatsOf(source,limits);
+        auto output=kind==Kind::GaussianBlur?gaussian(input,source.width,source.height,settings.radius*scale,limits,clamp):kind==Kind::ProgressiveBlur?progressive(input,source.width,source.height,settings,scale,limits,clamp):kind==Kind::RgbSplit?rgbSplit(input,source.width,source.height,settings,scale,limits,clamp):motion(input,source.width,source.height,settings.distance*scale/std::sqrt(12.),settings.angle,limits,clamp);
+        result=deepFromFloats(source,output,limits);
     }else{
-        auto normal=normalizeDeep(*colorSource,limits.cancelled);std::shared_ptr<const Raster> changed;
-        if(kind==Kind::CameraRaw)changed=renderCameraRaw(*normal.raster,rawSettings,cameraView,nullptr,limits.cancelled).raster;
-        else changed=runPixels(kind,*normal.raster,settings,scale,seed,nullptr,limits,clamp);
-        if(!changed)throw std::runtime_error("HDR filter returned no pixels");
-        if(changed==normal.raster&&!exposed)return std::make_shared<DeepImage>(source);
-        result=changed==normal.raster&&exposed?exposed:restoreDeep(*changed,normal.scales,limits.cancelled);
+        auto pixels=floatsOf(source,limits);
+        if(kind==Kind::AddNoise)addNoiseFloat(pixels,source.width,source.height,settings,seed,limits);
+        else if(kind==Kind::Vignette)vignetteFloat(pixels,source.width,source.height,settings);
+        else if(kind==Kind::Bloom)bloomFloat(pixels,source.width,source.height,settings,scale,limits);
+        else if(kind==Kind::TonalContrast)tonalFloat(pixels,source.width,source.height,settings,limits);
+        else if(kind==Kind::Dither)ditherFloat(pixels,source.width,source.height,settings,seed);
+        else if(kind==Kind::Scanlines)scanlinesFloat(pixels,source.width,source.height,settings,limits);
+        else throw std::runtime_error("Unsupported deep filter kind");
+        result=deepFromFloats(source,pixels,limits);
     }
     if(selection){auto mixed=std::make_shared<DeepImage>(*result);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto a=source.pixel(x,y),b=result->pixel(x,y);float amount=selection->pixel(x,y)/255.f;for(int c=0;c<4;++c)b[c]=a[c]+(b[c]-a[c])*amount;mixed->setPixel(x,y,b);}}result=mixed;}
     return result;
@@ -379,7 +452,10 @@ Result apply(const Request& request){
         }
     }
     std::shared_ptr<const DeepImage> deepOutput;
-    if(request.deepSource&&(request.deepSource->isHdr()||request.kind==Kind::ProgressiveBlur)){
+    const bool eightBitOnly=request.kind==Kind::LensCorrection||request.kind==Kind::ContentAwareFill||(request.kind==Kind::CameraRaw&&cameraRawNeedsEightBit(request.cameraRaw));
+    if(!request.preview&&request.deepSource&&request.deepSource->valid()&&!request.deepSource->isHdr()&&eightBitOnly)
+        throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
+    if(request.deepSource&&!eightBitOnly){
         if(!request.deepSource->valid()||request.deepSource->width!=original.width||request.deepSource->height!=original.height)throw std::runtime_error("HDR filter source grid changed");
         count(working->width,working->height,request.limits,80);
         auto prepared=makeDeep(working->width,working->height,request.deepSource->format);

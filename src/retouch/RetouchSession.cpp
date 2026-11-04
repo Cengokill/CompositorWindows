@@ -1,13 +1,16 @@
 // Source: CloneStamp.swift, BlurTool.swift, SmudgeLiquify.swift, BrushStroke.heal.
 // Copyright (c) 2026 Wonder Assembly LLC; MIT license in LICENSE.
 #include "RetouchSession.h"
+#include "core/DeepImage.h"
 #include "graphics/PixelAlgorithms.h"
 #include "graphics/RasterSampling.h"
 #include "graphics/SamplingSource.h"
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 
 namespace compositor::retouch {
@@ -18,6 +21,8 @@ bool healing(Mode mode){return mode==Mode::HealContentAware||mode==Mode::HealCre
 bool warp(Mode mode){return mode==Mode::Smudge||mode==Mode::Liquify;}
 Pixel over(Pixel base,Pixel source,double amount){const double remain=1-source.a/255.*amount;return {byte(source.r*amount+base.r*remain),byte(source.g*amount+base.g*remain),byte(source.b*amount+base.b*remain),byte(source.a*amount+base.a*remain)};}
 Pixel lerp(Pixel base,Pixel source,double amount){return {byte(base.r+(source.r-base.r)*amount),byte(base.g+(source.g-base.g)*amount),byte(base.b+(source.b-base.b)*amount),byte(base.a+(source.a-base.a)*amount)};}
+WidePixel overW(WidePixel base,WidePixel source,double amount){const double remain=1-source[3]*amount;return {float(source[0]*amount+base[0]*remain),float(source[1]*amount+base[1]*remain),float(source[2]*amount+base[2]*remain),float(source[3]*amount+base[3]*remain)};}
+WidePixel lerpW(WidePixel base,WidePixel source,double amount){return {float(base[0]+(source[0]-base[0])*amount),float(base[1]+(source[1]-base[1])*amount),float(base[2]+(source[2]-base[2])*amount),float(base[3]+(source[3]-base[3])*amount)};}
 void validSize(int w,int h){if(w<1||h<1||w>30000||h>30000||uint64_t(w)*h>100000000)throw std::invalid_argument("Retouch dimensions exceed budget");}
 void validCanvas(int w,int h){if(w<1||h<1||w>30000||h>30000)throw std::invalid_argument("Invalid retouch canvas dimensions");}
 void validRaster(const Raster& image){validSize(image.width,image.height);if(image.tiles.size()!=size_t((image.width+255)/256)*size_t((image.height+255)/256))throw std::invalid_argument("Invalid retouch tile array");for(auto&tile:image.tiles)if(!tile)throw std::invalid_argument("Missing retouch tile");}
@@ -40,6 +45,16 @@ std::shared_ptr<const Raster> gaussian(const Raster& source,double sigma,bool cl
         for(int y=0;y<h;++y)for(int x=0;x<w;++x){double value=0;for(int k=-r;k<=r;++k){int yy=y+k;if(clampEdges)yy=std::clamp(yy,0,h-1);if(yy>=0&&yy<h)value+=scratch[size_t(yy)*w+x]*kernel[size_t(k+r)];}output[size_t(y)*w+x].*channel=byte(value);}
     }
     return fromPixels(output,w,h);
+}
+std::vector<WidePixel> gaussianWide(const std::vector<WidePixel>& source,int w,int h,double sigma,bool clampEdges,Metrics& metrics){
+    const int r=int(std::ceil(sigma*3));const size_t n=size_t(w)*h;
+    std::vector<double> kernel(size_t(r)*2+1);double total=0;for(int i=-r;i<=r;++i){double weight=std::exp(-double(i*i)/(2*sigma*sigma));kernel[size_t(i+r)]=weight;total+=weight;}for(auto& v:kernel)v/=total;
+    std::vector<float> scratch(n);std::vector<WidePixel> output(n);metrics.gaussianScratchPixels=n;metrics.workingBufferPixels+=n;
+    for(int c=0;c<4;++c){
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){double value=0;for(int k=-r;k<=r;++k){int xx=x+k;if(clampEdges)xx=std::clamp(xx,0,w-1);if(xx>=0&&xx<w)value+=source[size_t(y)*w+xx][c]*kernel[size_t(k+r)];}scratch[size_t(y)*w+x]=float(value);}
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){double value=0;for(int k=-r;k<=r;++k){int yy=y+k;if(clampEdges)yy=std::clamp(yy,0,h-1);if(yy>=0&&yy<h)value+=scratch[size_t(yy)*w+x]*kernel[size_t(k+r)];}output[size_t(y)*w+x][c]=float(value);}
+    }
+    return output;
 }
 using PixelReader=std::function<Pixel(int,int)>;
 // The immutable base grid is evaluated only where a stroke asks for pixels.
@@ -128,6 +143,13 @@ struct RetouchSession::Impl {
     std::unique_ptr<graphics::BrushSession> coverage;
     std::shared_ptr<graphics::D3D11BrushCoverage> accelerator;
     std::vector<Pixel> working,liquifyScratch;
+    bool wide{};
+    std::vector<WidePixel> wideWorking,wideSample,wideLiquify;
+    std::optional<Layer> committed;
+    std::optional<Document> compositeDocument;
+    mutable std::mutex compositeMutex;
+    mutable std::map<size_t,std::pair<std::shared_ptr<const DeepImage>,uint64_t>> compositeTiles;
+    mutable uint64_t compositeTick{};
     mutable int dirtyX0{},dirtyY0{},dirtyX1{},dirtyY1{};
     mutable bool dirtyAny{},warpPreviewShown{};
     mutable std::shared_ptr<const Raster> denseRaster;
@@ -156,7 +178,10 @@ struct RetouchSession::Impl {
         if(!mask&&layer.deep&&layer.deep->isHdr())throw std::runtime_error("Convert HDR to 16-Bit before retouching");
         if(mask&&options.mode!=Mode::Blur)throw std::invalid_argument("Only Blur supports mask retouch");
         if(!mask&&!layer.raster&&(options.mode==Mode::Blur||warp(options.mode)))throw std::invalid_argument("Blur and warp require image pixels");
-        originalLayer=std::move(layer);maskTarget=mask;if(mask)originalMask=originalLayer.mask->raster;else original=originalLayer.raster;
+        originalLayer=std::move(layer);maskTarget=mask;wide=!mask&&originalLayer.deep&&originalLayer.deep->valid()&&!originalLayer.deep->isHdr();if(mask)originalMask=originalLayer.mask->raster;else original=originalLayer.raster;
+        if(wide&&healing(settings.mode))throw std::runtime_error("Convert this 16-bit layer to 8-bit before Spot Healing");
+        if(wide&&uint64_t(w)*h>=25000000)throw std::runtime_error("Convert this 16-bit layer to 8-bit before retouching a canvas this large");
+        if(wide&&sources.compositeDocument)compositeDocument=sources.compositeDocument;
         published=original;graphics::BrushSessionSettings brush;brush.radius=warp(settings.mode)?std::max(1.,settings.radius)+2:settings.radius;brush.hardness=warp(settings.mode)?1:settings.hardness;brush.opacity=1;
         growing=std::make_unique<graphics::GrowingBrushSession>(originalLayer,brush,w,h,accelerator,selection,mask,budget,tileCompositor());
     }
@@ -180,6 +205,47 @@ struct RetouchSession::Impl {
     Pixel sampleAt(Point doc)const{
         if(sparseSample)return graphics::sampleRasterPixels(width,height,sparseSample,{doc.x/width,doc.y/height},Transform::Sampling::Smooth);
         return graphics::sampleRaster(*sample,{doc.x/width,doc.y/height},Transform::Sampling::Smooth);
+    }
+    WidePixel sampleGrid(const std::vector<WidePixel>& grid,Point doc)const{
+        if(doc.x<0||doc.y<0||doc.x>=width||doc.y>=height||grid.empty())return {};
+        const double xx=doc.x-.5,yy=doc.y-.5;const int x=int(std::floor(xx)),y=int(std::floor(yy));const double fx=xx-x,fy=yy-y;
+        const auto get=[&](int a,int b){return grid[size_t(std::clamp(b,0,height-1))*width+std::clamp(a,0,width-1)];};
+        const auto p00=get(x,y),p10=get(x+1,y),p01=get(x,y+1),p11=get(x+1,y+1);
+        WidePixel out{};for(int c=0;c<4;++c)out[c]=float((1-fy)*((1-fx)*p00[c]+fx*p10[c])+fy*((1-fx)*p01[c]+fx*p11[c]));return out;
+    }
+    WidePixel compositeWide(int x,int y)const{
+        if(!compositeDocument||x<0||y<0||x>=width||y>=height)return {};
+        std::lock_guard lock(compositeMutex);
+        const size_t id=size_t(y/256)*size_t((width+255)/256)+size_t(x/256);auto found=compositeTiles.find(id);
+        if(found==compositeTiles.end()){
+            const int left=x/256*256,top=y/256*256;auto tile=SoftwareRenderer().renderDeep(*compositeDocument,left,top,std::min(256,width-left),std::min(256,height-top));
+            if(compositeTiles.size()==32){auto oldest=std::min_element(compositeTiles.begin(),compositeTiles.end(),[](const auto&a,const auto&b){return a.second.second<b.second.second;});compositeTiles.erase(oldest);}
+            found=compositeTiles.emplace(id,std::make_pair(std::move(tile),++compositeTick)).first;
+        }else found->second.second=++compositeTick;
+        return found->second.first->pixel(x%256,y%256);
+    }
+    WidePixel sampleAtWide(Point doc)const{
+        if(settings.sampleAllLayers&&compositeDocument){
+            const double xx=doc.x-.5,yy=doc.y-.5;const int x=int(std::floor(xx)),y=int(std::floor(yy));const double fx=xx-x,fy=yy-y;
+            const auto get=[&](int a,int b){return compositeWide(std::clamp(a,0,width-1),std::clamp(b,0,height-1));};
+            const auto p00=get(x,y),p10=get(x+1,y),p01=get(x,y+1),p11=get(x+1,y+1);
+            WidePixel out{};for(int c=0;c<4;++c)out[c]=float((1-fy)*((1-fx)*p00[c]+fx*p10[c])+fy*((1-fx)*p01[c]+fx*p11[c]));return out;
+        }
+        return sampleGrid(wideSample,doc);
+    }
+    WidePixel originalDeepAt(int sx,int sy)const{
+        const auto& image=*originalLayer.deep;if(sx<0||sy<0||sx>=image.width||sy>=image.height)return {};
+        return image.pixel(sx,sy);
+    }
+    std::vector<WidePixel> currentSampleWide(){
+        if(!originalLayer.deep||!originalLayer.deep->valid())throw std::logic_error("Missing 16-bit retouch source");
+        const auto& image=*originalLayer.deep;
+        std::vector<WidePixel> output(size_t(width)*height);
+        for(int y=0;y<height;++y)for(int x=0;x<width;++x){
+            const auto unit=transform.toUnit({x+.5,y+.5});
+            output[size_t(y)*width+x]=graphics::sampleWidePixels(image.width,image.height,[&](int px,int py){return image.pixel(px,py);},unit,transform.sampling);
+        }
+        stats.workingBufferPixels+=output.size();return output;
     }
     void noteDirty(int x0,int y0,int x1,int y1){x0=std::clamp(x0,0,width);y0=std::clamp(y0,0,height);x1=std::clamp(x1,0,width);y1=std::clamp(y1,0,height);if(!dirtyAny){dirtyX0=x0;dirtyY0=y0;dirtyX1=x1;dirtyY1=y1;dirtyAny=true;return;}dirtyX0=std::min(dirtyX0,x0);dirtyY0=std::min(dirtyY0,y0);dirtyX1=std::max(dirtyX1,x1);dirtyY1=std::max(dirtyY1,y1);}
     Pixel workingPixel(int x,int y)const{return sparseWorking?sparseWorking->pixel(x,y):working[size_t(y)*width+x];}
@@ -214,13 +280,18 @@ struct RetouchSession::Impl {
         ++stats.documentRasterizations;stats.workingBufferPixels+=output.size();return fromPixels(output,width,height);
     }
     void prepare(){
+        if(wide&&uint64_t(width)*height*16>1200000000)throw std::runtime_error("Deep retouch exceeds working memory budget");
         if(settings.mode==Mode::Clone){
             if(!sources.cloneOffset||!pointValid(*sources.cloneOffset))throw std::invalid_argument("Clone source must be set before painting");
-            if(settings.sampleAllLayers){if(sources.allLayersSource){auto source=sources.allLayersSource;sparseSample=[source](int x,int y){return source->rgba(x,y);};}else sample=sources.allLayers;if(!sample&&!sparseSample)throw std::invalid_argument("All-layer clone requires a frozen composite sample");}
+            if(settings.sampleAllLayers){
+                if(wide&&!compositeDocument)throw std::runtime_error("Convert this 16-bit layer to 8-bit before sampling all layers with Clone Stamp");
+                if(sources.allLayersSource){auto source=sources.allLayersSource;sparseSample=[source](int x,int y){return source->rgba(x,y);};}else sample=sources.allLayers;if(!sample&&!sparseSample)throw std::invalid_argument("All-layer clone requires a frozen composite sample");
+            }
+            else if(wide){wideSample=currentSampleWide();sample=currentSample();}
             else if(sparseCanvas||sources.currentLayerSource)sparseSample=currentReader();else sample=currentSample();
         }
-        else if(settings.mode==Mode::Blur){const double sigma=settings.blurRadius>0?std::clamp(settings.blurRadius,.1,250.):std::clamp(settings.radius*2/10,1.5,30.);if(sparseCanvas){sparseGaussian=std::make_unique<SparseGaussian>(width,height,sigma,maskTarget,currentReader(),stats);sparseSample=[this](int x,int y){return sparseGaussian->pixel(x,y);};}else sample=gaussian(*currentSample(),sigma,maskTarget,stats);}
-        else if(warp(settings.mode)){if(sparseCanvas)sparseWorking=std::make_unique<SparseWorking>(width,height,currentReader());else {working=pixelsOf(*currentSample());stats.workingBufferPixels+=working.size();}}
+        else if(settings.mode==Mode::Blur){const double sigma=settings.blurRadius>0?std::clamp(settings.blurRadius,.1,250.):std::clamp(settings.radius*2/10,1.5,30.);if(wide){wideSample=gaussianWide(currentSampleWide(),width,height,sigma,maskTarget,stats);sample=gaussian(*currentSample(),sigma,maskTarget,stats);}else if(sparseCanvas){sparseGaussian=std::make_unique<SparseGaussian>(width,height,sigma,maskTarget,currentReader(),stats);sparseSample=[this](int x,int y){return sparseGaussian->pixel(x,y);};}else sample=gaussian(*currentSample(),sigma,maskTarget,stats);}
+        else if(warp(settings.mode)){if(wide){wideWorking=currentSampleWide();working=pixelsOf(*currentSample());stats.workingBufferPixels+=working.size();}else if(sparseCanvas)sparseWorking=std::make_unique<SparseWorking>(width,height,currentReader());else {working=pixelsOf(*currentSample());stats.workingBufferPixels+=working.size();}}
         graphics::BrushSessionSettings brush;brush.radius=warp(settings.mode)?std::max(1.,settings.radius)+2:settings.radius;brush.hardness=warp(settings.mode)?1:settings.hardness;brush.opacity=1;
         if(!growing)coverage=std::make_unique<graphics::BrushSession>(original,brush,accelerator,nullptr,graphics::BrushSessionGeometry::forLayer(transform,original->width,original->height,width,height),graphics::BrushSession::Output::CoverageOnly);
     }
@@ -232,6 +303,7 @@ struct RetouchSession::Impl {
         const auto p00=get(x,y),p10=get(x+1,y),p01=get(x,y+1),p11=get(x+1,y+1);
         const auto channel=[&](uint8_t Pixel::*m){return byte((1-fy)*((1-fx)*(p00.*m)+fx*(p10.*m))+fy*((1-fx)*(p01.*m)+fx*(p11.*m)));};return {channel(&Pixel::r),channel(&Pixel::g),channel(&Pixel::b),channel(&Pixel::a)};
     }
+    WidePixel workingSampleWide(Point doc)const{return sampleGrid(wideWorking,doc);}
     void compose(){
         auto result=std::make_shared<Raster>(*published);bool changed=false;const size_t columns=size_t((original->width+255)/256);
         for(const auto& [key,tile]:coverage->coverageTiles()){
@@ -249,20 +321,61 @@ struct RetouchSession::Impl {
     }
     float weight(float u)const{if(u>=1)return 0;const float h=float(std::clamp(settings.hardness,0.,.98));if(u<=h)return 1;const float t=(1-u)/(1-h);return t*t*(3-2*t);}
     void pickup(Point p){const int r=int(std::ceil(std::max(1.,settings.radius))),side=r*2+1,cx=int(std::round(p.x)),cy=int(std::round(p.y));carried.assign(size_t(side)*side,{});
-        for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx){const int x=cx+dx,y=cy+dy;if(x<0||y<0||x>=width||y>=height)continue;const auto c=workingPixel(x,y);carried[size_t(dy+r)*side+dx+r]={float(c.r),float(c.g),float(c.b),float(c.a)};}}
+        for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx){const int x=cx+dx,y=cy+dy;if(x<0||y<0||x>=width||y>=height)continue;
+            if(wide){const auto c=wideWorking[size_t(y)*width+x];carried[size_t(dy+r)*side+dx+r]={c[0]*255.f,c[1]*255.f,c[2]*255.f,c[3]*255.f};}
+            else{const auto c=workingPixel(x,y);carried[size_t(dy+r)*side+dx+r]={float(c.r),float(c.g),float(c.b),float(c.a)};}}}
     void smudge(Point p){const double radius=std::max(1.,settings.radius);const int r=int(std::ceil(radius)),side=2*r+1,cx=int(std::round(p.x)),cy=int(std::round(p.y));noteDirty(cx-r,cy-r,cx+r+1,cy+r+1);
         constexpr std::array<uint8_t Pixel::*,4> channels{&Pixel::r,&Pixel::g,&Pixel::b,&Pixel::a};
         for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx){int x=cx+dx,y=cy+dy;if(x<0||y<0||x>=width||y>=height)continue;float w=weight(std::sqrt(float(dx*dx+dy*dy))/float(radius));if(w<=0)continue;
-            auto& under=editWorking(x,y);auto& color=carried[size_t(dy+r)*side+dx+r];const float keep=float(std::clamp(settings.opacity,0.,1.));for(size_t k=0;k<4;++k){float painted=float(under.*channels[k])+(color[k]-float(under.*channels[k]))*w*keep;under.*channels[k]=byte(painted);color[k]=painted;}}
+            auto& color=carried[size_t(dy+r)*side+dx+r];const float keep=float(std::clamp(settings.opacity,0.,1.));
+            if(wide){auto& under=wideWorking[size_t(y)*width+x];for(size_t k=0;k<4;++k){float painted=under[k]*255.f+(color[k]-under[k]*255.f)*w*keep;under[k]=painted/255.f;color[k]=painted;}auto& preview=editWorking(x,y);for(size_t k=0;k<4;++k)preview.*channels[k]=byte(under[k]*255.f);}
+            else{auto& under=editWorking(x,y);for(size_t k=0;k<4;++k){float painted=float(under.*channels[k])+(color[k]-float(under.*channels[k]))*w*keep;under.*channels[k]=byte(painted);color[k]=painted;}}}
     }
     void push(Point a,Point b){const double radius=std::max(1.,settings.radius);const int r=int(std::ceil(radius)),cx=int(std::round(b.x)),cy=int(std::round(b.y));const float mx=float(b.x-a.x)*float(settings.opacity),my=float(b.y-a.y)*float(settings.opacity);
         const int margin=int(std::ceil(std::max(std::abs(mx),std::abs(my))))+2,x0=std::max(0,cx-r-margin),x1=std::min(width-1,cx+r+margin),y0=std::max(0,cy-r-margin),y1=std::min(height-1,cy+r+margin);
-        if(x0>x1||y0>y1)return;const int cw=x1-x0+1,ch=y1-y0+1;validSize(cw,ch);noteDirty(x0,y0,x1+1,y1+1);liquifyScratch.resize(size_t(cw)*ch);auto& scratch=liquifyScratch;for(int y=0;y<ch;++y)for(int x=0;x<cw;++x)scratch[size_t(y)*cw+x]=workingPixel(x+x0,y+y0);
+        if(x0>x1||y0>y1)return;const int cw=x1-x0+1,ch=y1-y0+1;validSize(cw,ch);noteDirty(x0,y0,x1+1,y1+1);
         constexpr std::array<uint8_t Pixel::*,4> channels{&Pixel::r,&Pixel::g,&Pixel::b,&Pixel::a};
+        if(wide){
+            wideLiquify.resize(size_t(cw)*ch);for(int y=0;y<ch;++y)for(int x=0;x<cw;++x)wideLiquify[size_t(y)*cw+x]=wideWorking[size_t(y+y0)*width+x+x0];
+            for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx){const int x=cx+dx,y=cy+dy;if(x<x0||y<y0||x>x1||y>y1)continue;const float w=weight(std::sqrt(float(dx*dx+dy*dy))/float(radius));if(w<=0)continue;
+                const float sx=std::clamp(float(x-x0)-mx*w,0.f,float(cw-1)),sy=std::clamp(float(y-y0)-my*w,0.f,float(ch-1));const int ix=std::min(cw-2,int(sx)),iy=std::min(ch-2,int(sy));if(ix<0||iy<0)continue;const float fx=sx-float(ix),fy=sy-float(iy);
+                const auto p00=wideLiquify[size_t(iy)*cw+ix],p10=wideLiquify[size_t(iy)*cw+ix+1],p01=wideLiquify[size_t(iy+1)*cw+ix],p11=wideLiquify[size_t(iy+1)*cw+ix+1];auto& out=wideWorking[size_t(y)*width+x];
+                for(int c=0;c<4;++c){const float top=p00[c]+(p10[c]-p00[c])*fx,bottom=p01[c]+(p11[c]-p01[c])*fx;out[c]=top+(bottom-top)*fy;}
+                auto& preview=editWorking(x,y);for(size_t k=0;k<4;++k)preview.*channels[k]=byte(out[k]*255.f);}
+            return;
+        }
+        liquifyScratch.resize(size_t(cw)*ch);auto& scratch=liquifyScratch;for(int y=0;y<ch;++y)for(int x=0;x<cw;++x)scratch[size_t(y)*cw+x]=workingPixel(x+x0,y+y0);
         for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx){const int x=cx+dx,y=cy+dy;if(x<x0||y<y0||x>x1||y>y1)continue;const float w=weight(std::sqrt(float(dx*dx+dy*dy))/float(radius));if(w<=0)continue;
             const float sx=std::clamp(float(x-x0)-mx*w,0.f,float(cw-1)),sy=std::clamp(float(y-y0)-my*w,0.f,float(ch-1));const int ix=std::min(cw-2,int(sx)),iy=std::min(ch-2,int(sy));if(ix<0||iy<0)continue;const float fx=sx-float(ix),fy=sy-float(iy);
             const auto p00=scratch[size_t(iy)*cw+ix],p10=scratch[size_t(iy)*cw+ix+1],p01=scratch[size_t(iy+1)*cw+ix],p11=scratch[size_t(iy+1)*cw+ix+1];auto& out=editWorking(x,y);
             for(auto channel:channels){const float top=float(p00.*channel)+(float(p10.*channel)-float(p00.*channel))*fx,bottom=float(p01.*channel)+(float(p11.*channel)-float(p01.*channel))*fx;out.*channel=byte(top+(bottom-top)*fy);}}
+    }
+    Layer attachWide(Layer layer,const std::shared_ptr<const graphics::GrowingBrushSnapshot>& snapshot){
+        if(!wide||!snapshot||!snapshot->changed()||!originalLayer.deep)return layer;
+        const auto bounds=snapshot->sourceBounds();if(bounds.width<1||bounds.height<1)return layer;
+        if(uint64_t(bounds.width)*bounds.height*24>1200000000)throw std::runtime_error("Deep retouch exceeds working memory budget");
+        auto deep=makeDeep(bounds.width,bounds.height,originalLayer.deep->format);
+        const auto tiles=growing->coverageSnapshot();
+        auto coverageAt=[&](int sx,int sy)->double{
+            for(const auto& item:tiles){
+                if(!item.coverage||sx<item.rect.x||sy<item.rect.y||sx>=item.rect.x+item.rect.width||sy>=item.rect.y+item.rect.height)continue;
+                const size_t index=size_t(sy-item.rect.y)*item.rect.width+size_t(sx-item.rect.x);
+                if(index>=item.coverage->preview.size())continue;
+                return item.coverage->preview[index]/255.;
+            }
+            return 0;
+        };
+        for(int y=0;y<bounds.height;++y)for(int x=0;x<bounds.width;++x){
+            const int sx=bounds.x+x,sy=bounds.y+y;const auto doc=documentPoint(sx,sy);const double amount=coverageAt(sx,sy)*selected(doc);
+            WidePixel next=originalDeepAt(sx,sy);
+            if(amount>0){
+                if(warp(settings.mode))next=lerpW(next,workingSampleWide(doc),amount);
+                else{const auto offset=settings.mode==Mode::Clone?*sources.cloneOffset:Point{};next=overW(next,sampleAtWide({doc.x+offset.x,doc.y+offset.y}),amount*settings.opacity);}
+            }
+            deep->setPixel(x,y,next);
+        }
+        if(bounds.x==0&&bounds.y==0&&*deep==*originalLayer.deep)return originalLayer;
+        layer.deep=deep;layer.raster=rasterFromDeep(*deep);return layer;
     }
     bool appendWarp(Point point){
         if(!last){last=point;if(settings.mode==Mode::Smudge)pickup(point);return true;}
@@ -331,13 +444,14 @@ bool RetouchSession::begin(Point p){auto& s=*impl_;if(s.started||s.finished)thro
     if(warp(s.settings.mode))return s.appendWarp(p);if(s.growing)return s.coverageStarted=s.growing->begin(p);s.coverageStarted=s.coverage->begin(p);s.compose();return s.coverageStarted;}
 bool RetouchSession::append(Point p){auto& s=*impl_;if(!s.started||s.finished)throw std::logic_error("Retouch session is not active");if(!pointValid(p))return false;if(warp(s.settings.mode))return s.appendWarp(p);if(s.growing)return s.growing->append(p);if(!s.coverage->append(p))return false;s.compose();return true;}
 std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::previewSnapshot()const{if(!impl_->growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");return impl_->growing->preview();}
-std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::commitSnapshot(){auto& s=*impl_;if(!s.growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");if(s.finished)return s.growing->preview();if(s.started&&s.coverageStarted){s.growing->flushCoverage();if(healing(s.settings.mode))s.finishGrowingHeal();else if(warp(s.settings.mode))s.growing->recomposeTouched(s.tileCompositor());}auto result=s.growing->commit();s.finished=true;return result;}
-std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::cancelSnapshot(){auto& s=*impl_;if(!s.growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");s.finished=true;s.working.clear();s.sparseWorking.reset();s.carried.clear();return s.growing->cancel();}
+std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::commitSnapshot(){auto& s=*impl_;if(!s.growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");if(s.finished)return s.growing->preview();if(s.started&&s.coverageStarted){s.growing->flushCoverage();if(healing(s.settings.mode))s.finishGrowingHeal();else if(warp(s.settings.mode)||s.wide)s.growing->recomposeTouched(s.tileCompositor(),s.wide);}auto result=s.growing->commit();if(result)s.committed=s.attachWide(result->materializeLayer(),result);s.finished=true;return result;}
+std::shared_ptr<const graphics::GrowingBrushSnapshot> RetouchSession::cancelSnapshot(){auto& s=*impl_;if(!s.growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");s.finished=true;s.working.clear();s.wideWorking.clear();s.wideSample.clear();s.wideLiquify.clear();s.sparseWorking.reset();s.carried.clear();s.committed.reset();return s.growing->cancel();}
+Layer RetouchSession::committedLayer()const{if(impl_->committed)return *impl_->committed;if(!impl_->growing)throw std::logic_error("Snapshot results require a Layer-based retouch session");return impl_->growing->preview()->materializeLayer();}
 std::shared_ptr<const LayerRenderPreview> RetouchSession::livePreview()const{auto& s=*impl_;if(!s.growing)throw std::logic_error("Live layer preview requires a Layer-based retouch session");if(!s.started||s.finished)return {};if(!warp(s.settings.mode))return s.growing->preview()->renderPreview();if(s.sparseWorking)return s.sparseWarpPreview();if(!s.dirtyAny&&s.denseRaster){auto held=std::make_shared<LayerRenderPreview>();held->layer=s.originalLayer;held->layer.raster=s.denseRaster;held->layer.transform={0,0,double(s.width),double(s.height)};held->layer.transform.sampling=Transform::Sampling::Nearest;held->layer.shapeJson.clear();if(held->layer.mask&&!held->layer.mask->placement)held->layer.mask->placement=s.originalLayer.transform;held->identity=s.denseRaster;held->lineage=s.originalLayer.raster;held->imageSource=graphics::samplingSource(s.denseRaster);held->image=[raster=s.denseRaster](Point unit,Transform::Sampling sampling){return graphics::sampleRaster(*raster,unit,sampling);};return held;}const int pad=int(std::ceil(s.settings.radius))+2;const bool first=!s.warpPreviewShown;const LayerRenderPreview::Damage box{double(s.dirtyX0-pad),double(s.dirtyY0-pad),double(s.dirtyX1+pad),double(s.dirtyY1+pad)};if(!s.denseRaster)s.denseRaster=fromPixels(s.working,s.width,s.height);else{auto next=std::make_shared<Raster>(*s.denseRaster);const int columns=(s.width+255)/256,rows=(s.height+255)/256;const int tx0=std::clamp(s.dirtyX0/256,0,std::max(0,columns-1)),tx1=std::clamp(std::max(s.dirtyX1-1,s.dirtyX0)/256,0,std::max(0,columns-1)),ty0=std::clamp(s.dirtyY0/256,0,std::max(0,rows-1)),ty1=std::clamp(std::max(s.dirtyY1-1,s.dirtyY0)/256,0,std::max(0,rows-1));for(int ty=ty0;ty<=ty1;++ty)for(int tx=tx0;tx<=tx1;++tx){const int x0=tx*256,y0=ty*256,tw=std::min(256,s.width-x0),th=std::min(256,s.height-y0);auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<th;++y)std::copy_n(s.working.data()+std::size_t(y0+y)*s.width+x0,tw,tile->pixels.data()+std::size_t(y)*256);next->tiles[std::size_t(ty)*columns+tx]=std::move(tile);}s.denseRaster=std::move(next);}s.dirtyAny=false;s.warpPreviewShown=true;auto raster=s.denseRaster;auto result=std::make_shared<LayerRenderPreview>();result->layer=s.originalLayer;result->layer.raster=raster;result->layer.transform={0,0,double(s.width),double(s.height)};result->layer.transform.sampling=Transform::Sampling::Nearest;result->layer.shapeJson.clear();if(result->layer.mask&&!result->layer.mask->placement)result->layer.mask->placement=s.originalLayer.transform;result->identity=raster;result->lineage=s.originalLayer.raster;result->imageSource=graphics::samplingSource(raster);result->image=[raster](Point unit,Transform::Sampling sampling){return graphics::sampleRaster(*raster,unit,sampling);};result->damageComparedWith=[box,first](const LayerRenderPreview*)->std::optional<std::vector<LayerRenderPreview::Damage>>{if(first)return std::nullopt;return std::vector<LayerRenderPreview::Damage>{box};};return result;}
 std::shared_ptr<const Raster> RetouchSession::preview()const{return impl_->growing?impl_->materialize().raster:impl_->published;}
 std::shared_ptr<const Raster> RetouchSession::warpDocumentPreview()const{auto& s=*impl_;if(s.sparseWorking)throw std::length_error("Materializing a full warp canvas exceeds the raster budget; use livePreview");if(!s.started||!warp(s.settings.mode)||s.working.empty())throw std::logic_error("No active warp document preview");if(s.warpPreviewRevision!=s.stats.warpDabs){s.warpPreview=fromPixels(s.working,s.width,s.height);s.warpPreviewRevision=s.stats.warpDabs;}return s.warpPreview;}
 std::shared_ptr<const Raster> RetouchSession::commit(){auto& s=*impl_;if(s.growing){commitSnapshot();return preview();}if(s.finished)return s.published;if(!s.started||!s.coverageStarted){s.finished=true;return s.published;}s.coverage->commit();if(healing(s.settings.mode))s.finishHeal();else s.compose();s.finished=true;return s.published;}
-std::shared_ptr<const Raster> RetouchSession::cancel(){auto& s=*impl_;if(s.growing){cancelSnapshot();return preview();}s.published=s.original;s.finished=true;s.coverage.reset();s.working.clear();s.sparseWorking.reset();s.carried.clear();return s.original;}
+std::shared_ptr<const Raster> RetouchSession::cancel(){auto& s=*impl_;if(s.growing){cancelSnapshot();return preview();}s.published=s.original;s.finished=true;s.coverage.reset();s.working.clear();s.wideWorking.clear();s.wideSample.clear();s.wideLiquify.clear();s.sparseWorking.reset();s.carried.clear();s.committed.reset();return s.original;}
 std::shared_ptr<const GrayRaster> RetouchSession::previewMask()const{auto& s=*impl_;if(!s.maskTarget)throw std::logic_error("Retouch target is not a mask");if(s.growing)return s.materialize().mask->raster;if(s.published==s.original)return s.originalMask;if(s.grayPreviewOwner==s.published)return s.grayPreview;
     auto gray=std::make_shared<GrayRaster>();gray->width=s.original->width;gray->height=s.original->height;gray->pixels.resize(size_t(gray->width)*gray->height);for(int y=0;y<gray->height;++y)for(int x=0;x<gray->width;++x)gray->pixels[size_t(y)*gray->width+x]=s.published->pixel(x,y).r;s.grayPreview=gray;s.grayPreviewOwner=s.published;return gray;}
 std::shared_ptr<const GrayRaster> RetouchSession::commitMask(){commit();return previewMask();}
