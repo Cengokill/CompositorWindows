@@ -230,6 +230,15 @@ bool dispatchText(QWidget* widget,TextCommand command){
     auto invoke=[&](auto* text){switch(command){case TextCommand::Undo:text->undo();break;case TextCommand::Redo:text->redo();break;case TextCommand::Cut:text->cut();break;case TextCommand::Copy:text->copy();break;case TextCommand::Paste:text->paste();break;case TextCommand::SelectAll:text->selectAll();break;default:break;}};
     if(auto*line=qobject_cast<QLineEdit*>(widget))invoke(line);else if(auto*rich=qobject_cast<QTextEdit*>(widget))invoke(rich);else if(auto*plain=qobject_cast<QPlainTextEdit*>(widget))invoke(plain);return true;
 }
+bool documentHistoryTextCommand(TextCommand command){return command==TextCommand::Undo||command==TextCommand::Redo;}
+TextCommand shortcutTextCommand(const QKeyEvent& e){
+    const auto key=e.key();const auto mods=e.modifiers();
+    if((mods&Qt::ControlModifier)&&(mods&~(Qt::ControlModifier|Qt::ShiftModifier))==Qt::NoModifier){
+        if(key==Qt::Key_Z)return (mods&Qt::ShiftModifier)?TextCommand::Redo:TextCommand::Undo;
+        if(key==Qt::Key_Y&&!(mods&Qt::ShiftModifier))return TextCommand::Redo;
+    }
+    return TextCommand::None;
+}
 }
 const CommandSpec* commandSpec(const QString& menu,const QString& label){const auto m=normalized(menu),l=normalized(label);const auto&items=commandCatalog();auto it=std::find_if(items.begin(),items.end(),[&](const CommandSpec&s){return s.menu==m&&s.label==l;});return it==items.end()?nullptr:&*it;}
 const CommandSpec* commandSpecById(const QString& id){const auto&items=commandCatalog();auto it=std::find_if(items.begin(),items.end(),[&](const CommandSpec&s){return s.id==id;});return it==items.end()?nullptr:&*it;}
@@ -276,13 +285,25 @@ void CommandRegistry::bind(QAction*action,const CommandSpec&spec,std::function<v
 }
 void CommandRegistry::refresh(){
     if(refreshing_||!owner_)return;refreshing_=true;
-    try{const auto state=state_();auto*text=textEditor(QApplication::focusWidget());for(const auto&e:entries_)if(e.action){bool enabled=text&&e.spec.textCommand!=TextCommand::None?textEnabled(text,e.spec.textCommand):commandEnabled(e.spec.gate,state)&&(!e.extra||e.extra(state));e.action->setEnabled(enabled);}}
+    try{
+        const auto state=state_();auto*text=textEditor(QApplication::focusWidget());
+        for(const auto&e:entries_)if(e.action){
+            bool enabled=commandEnabled(e.spec.gate,state)&&(!e.extra||e.extra(state));
+            if(text&&e.spec.textCommand!=TextCommand::None){
+                if(textEnabled(text,e.spec.textCommand))enabled=true;
+                else if(!documentHistoryTextCommand(e.spec.textCommand))enabled=false;
+            }
+            e.action->setEnabled(enabled);
+        }
+    }
     catch(...){refreshing_=false;throw;}refreshing_=false;
 }
 bool CommandRegistry::invokeEntry(size_t index){
     if(index>=entries_.size()||!entries_[index].action)return false;auto entry=entries_[index];
     try{
-    auto*text=textEditor(QApplication::focusWidget());if(dispatchText(text,entry.spec.textCommand)){refresh();return true;}
+    auto*text=textEditor(QApplication::focusWidget());
+    if(text&&documentHistoryTextCommand(entry.spec.textCommand)&&!textEnabled(text,entry.spec.textCommand))text=nullptr;
+    if(dispatchText(text,entry.spec.textCommand)){refresh();return true;}
     const auto state=state_();if(!commandEnabled(entry.spec.gate,state)||(entry.extra&&!entry.extra(state))){refresh();return false;}
     if(prepare_)prepare_(entry.spec.preparation,entry.spec.id);entry.invoke();refresh();return true;
     }catch(const std::exception&error){if(error_){error_(QString::fromUtf8(error.what()));return false;}throw;}
@@ -299,7 +320,19 @@ std::vector<CommandListItem> CommandRegistry::listCommands()const{
 }
 QJsonArray CommandRegistry::manifest()const{QJsonArray result;for(const auto&e:entries_)if(e.action){QJsonArray shortcuts;for(const auto&key:e.action->shortcuts())shortcuts.append(key.toString(QKeySequence::PortableText));result.append(QJsonObject{{"id",e.spec.id},{"object_name",e.action->objectName()},{"menu",e.spec.menu},{"label",e.action->text()},{"shortcuts",shortcuts},{"class",int(e.spec.category)},{"gate",int(e.spec.gate)},{"preparation",int(e.spec.preparation)},{"text_command",int(e.spec.textCommand)},{"source",e.spec.source},{"enabled",e.action->isEnabled()}});}return result;}
 bool CommandRegistry::eventFilter(QObject*object,QEvent*event){
-    if(owner_&&event->type()==QEvent::ShortcutOverride){auto*widget=qobject_cast<QWidget*>(object);auto*focus=QApplication::focusWidget();if(widget&&focus&&(focus==owner_||owner_->isAncestorOf(focus))&&isTextEditingWidget(focus)&&reservesTextShortcut(*static_cast<QKeyEvent*>(event))){event->accept();return true;}}
+    if(owner_&&event->type()==QEvent::ShortcutOverride){
+        auto*widget=qobject_cast<QWidget*>(object);auto*focus=QApplication::focusWidget();
+        auto*ke=static_cast<QKeyEvent*>(event);
+        if(widget&&focus&&(focus==owner_||owner_->isAncestorOf(focus))&&isTextEditingWidget(focus)&&reservesTextShortcut(*ke)){
+            auto*editor=textEditor(focus);auto command=shortcutTextCommand(*ke);
+            if(command!=TextCommand::None&&editor&&!textEnabled(editor,command)){
+                if(documentHistoryTextCommand(command)&&(widget==focus||widget==editor||widget==editor->parentWidget()))
+                    invoke(command==TextCommand::Undo?"edit.undo":"edit.redo");
+                event->accept();return true;
+            }
+            event->accept();return true;
+        }
+    }
     return QObject::eventFilter(object,event);
 }
 namespace {
