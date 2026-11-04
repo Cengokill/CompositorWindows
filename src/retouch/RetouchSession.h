@@ -33,6 +33,8 @@ struct Sources {
     std::optional<Point> cloneOffset;
     // Immutable lazy document grids for canvases larger than the raster budget.
     std::shared_ptr<const graphics::SamplingSource> currentLayerSource,allLayersSource;
+    // Frozen stack used for 16-bit Clone Stamp sampling of all layers.
+    std::optional<Document> compositeDocument;
 };
 // Freeze the layer stack and render requested sample tiles with bounded caching.
 std::shared_ptr<const graphics::SamplingSource> compositeSource(Document);
@@ -58,6 +60,7 @@ public:
     std::shared_ptr<const graphics::GrowingBrushSnapshot> previewSnapshot()const;
     std::shared_ptr<const graphics::GrowingBrushSnapshot> commitSnapshot();
     std::shared_ptr<const graphics::GrowingBrushSnapshot> cancelSnapshot();
+    Layer committedLayer()const;
     // Warp retains the source document-sized preview before selection clipping.
     std::shared_ptr<const LayerRenderPreview> livePreview()const;
     std::shared_ptr<const Raster> preview()const;

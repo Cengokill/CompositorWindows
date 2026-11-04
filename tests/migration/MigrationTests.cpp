@@ -562,6 +562,14 @@ static void deep_contract() {
     check(middle % 257 != 0, "Gradient intermediates collapsed to 8-bit steps");
     auto filled = editing::editLayer(gradient, gradientDoc, editing::PixelEdit::Fill, {255, 0, 0, 255});
     check(filled.deep && filled.deep->at(0, 0)[0] == 65535 && filled.deep->at(0, 0)[1] == 0 && filled.deep->at(0, 0)[3] == 65535, "Fill did not keep 16-bit color");
+    auto inverted = editing::editLayer(distinct.document.layers[0], distinct.document, editing::PixelEdit::Invert, {});
+    check(inverted.deep && inverted.deep->format == DeepImage::Format::Unorm16, "Invert dropped 16-bit pixels");
+    check(inverted.deep->at(0, 0)[0] == uint16_t(65535 - 512) && inverted.deep->at(1, 0)[0] == uint16_t(65535 - 768), "Invert collapsed 16-bit neighbors");
+    Document edited = distinct.document; edited.layers[0] = inverted;
+    const auto editedPath = std::filesystem::path(directory.path().toStdWString()) / L"Edited.comp";
+    store.save(editedPath, edited, inverted.id);
+    auto editedOpened = store.load(editedPath);
+    check(editedOpened.document.layers[0].deep && editedOpened.document.layers[0].deep->samples == inverted.deep->samples, "Edited 16-bit project pixels changed after reopen");
     const auto png = std::filesystem::path(directory.path().toStdWString()) / L"flat.png";
     const auto jpeg = std::filesystem::path(directory.path().toStdWString()) / L"flat.jpg";
     imaging::ExportOptions pngOptions; pngOptions.format = imaging::ImageFormat::Png;
@@ -569,6 +577,10 @@ static void deep_contract() {
     check(pngBitDepth(png) == 16, "PNG export of a 16-bit layer was 8-bit");
     auto exported = imaging::WicCodec::decodeProjectDeepPng(png);
     check(exported && exported->at(0, 0)[0] == distinct.document.layers[0].deep->at(0, 0)[0] && exported->at(1, 0)[0] == distinct.document.layers[0].deep->at(1, 0)[0], "Exported 16-bit pixels changed");
+    const auto editedPng = std::filesystem::path(directory.path().toStdWString()) / L"edited.png";
+    exportDocumentAtomic(editedOpened.document, editedPng, pngOptions);
+    auto editedExport = imaging::WicCodec::decodeProjectDeepPng(editedPng);
+    check(editedExport && editedExport->at(0, 0)[0] == inverted.deep->at(0, 0)[0] && editedExport->at(1, 0)[0] == inverted.deep->at(1, 0)[0], "Exported edited 16-bit pixels changed");
     imaging::ExportOptions jpegOptions; jpegOptions.format = imaging::ImageFormat::Jpeg;
     exportDocumentAtomic(distinct.document, jpeg, jpegOptions);
     QFile jpegFile(QString::fromStdWString(jpeg.wstring())); check(jpegFile.open(QIODevice::ReadOnly), "JPEG export missing");

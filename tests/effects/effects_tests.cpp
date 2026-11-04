@@ -1,4 +1,5 @@
 #include "effects/Adjustments.h"
+#include "core/DeepImage.h"
 #include "filters/PixelFilters.h"
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -66,5 +67,16 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
     for(int x=0;x<3;++x)check(input->pixel(x,0)==original,"Levels changed immutable input");
  }
  else if(test=="levels_upstream_conflict"){auto o=levelSettings(0,changedLevels(0,1,255,255,0));auto result=apply(Raster::filled(1,1,{64,32,0,128}),o)->pixel(0,0);const bool passed=result==Pixel{64,96,128,128};QJsonObject evidence{{"id","SOURCE-TEST-CONFLICT-LEVELS-ALPHA"},{"result",passed?"pass":"fail"},{"source","Levels.swift:80-94 and LevelsPixels.c:3-16"},{"test","LevelsTests.inputClippingGammaOutputInversionAndAlpha"},{"input",QJsonArray{64,32,0,128}},{"expected_upstream_assertion",QJsonArray{64,96,128,128}},{"actual_windows_output",QJsonArray{result.r,result.g,result.b,result.a}},{"mac_reference","blocked_reference"}};std::cout<<QJsonDocument(evidence).toJson(QJsonDocument::Indented).toStdString();return passed?0:1;}
+ else if(test=="unorm16_exposure_and_conversion"){
+    auto deep=makeDeep(3,1,DeepImage::Format::Unorm16);deep->at(0,0)[0]=10001;deep->at(1,0)[0]=10031;deep->at(2,0)[0]=50021;
+    for(int x=0;x<3;++x){deep->at(x,0)[1]=20003;deep->at(x,0)[2]=30007;deep->at(x,0)[3]=65535;}
+    auto o=settings("Exposure");o["exposureSettings"]=QJsonObject{{"exposure",1},{"offset",0},{"gamma",1}};
+    auto graded=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(o),nullptr,{});
+    check(graded&&graded->format==DeepImage::Format::Unorm16,"Exposure dropped 16-bit pixels");
+    check(graded->at(0,0)[0]!=graded->at(1,0)[0]&&graded->at(0,0)[0]>10001,"Exposure quantized 16-bit neighbors");
+    auto lens=settings("RGB Split");auto g=lens["filterLayerSettings"].toObject();g["rgbSplitDistance"]=8;lens["filterLayerSettings"]=g;
+    auto split=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(lens),nullptr,{0,0,1,3,1});
+    check(split&&split->format==DeepImage::Format::Unorm16&&split->samples!=deep->samples,"RGB Split ignored 16-bit pixels");
+ }
  else throw std::runtime_error("Unknown case");std::cout<<"PASS "<<test<<"\n";return 0;
  }catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";return 1;}}

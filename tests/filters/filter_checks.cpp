@@ -108,6 +108,9 @@ void testDeepBlur(){
         const auto value=result.deep->at(16,8)[0];require(value>10001&&value<10031,"blur uses original sub-byte detail");
         require(deep->samples==original,"blur changed source pixels");
     }
+    auto lens=request(Kind::LensCorrection,rasterFromDeep(*deep));lens.deepSource=deep;lens.settings.distortion=-40;
+    fails([&]{apply(lens);},"16-bit lens apply must require conversion");
+    lens.preview=true;require(apply(lens).changed&&!apply(lens).deep,"16-bit lens preview must not claim deep precision");
 }
 void testLens(){
     auto source=image(40,30,[](int x,int y){int quadrant=(x>=20)+(y>=15)*2;return Pixel{std::uint8_t(quadrant*85),128,std::uint8_t(255-quadrant*85),255};});Settings s;auto neutral=runPixels(Kind::LensCorrection,*source,s,1,0);require(neutral->rgba()==source->rgba(),"lens zero exact identity");

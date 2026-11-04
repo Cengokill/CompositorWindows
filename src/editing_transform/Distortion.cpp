@@ -68,6 +68,14 @@ GrayWarp warpGray(std::shared_ptr<const GrayRaster> source,const Transform& orig
 }
 Layer distortLayer(const Layer& original,const Transform& draft,const Corners& c,WarpOptions options){
     if(!original.raster||original.group)throw std::invalid_argument("Distortion requires image pixels");auto imageOptions=options;imageOptions.trim=options.longestSide==0;auto warped=warpRaster(original.raster,draft,c,imageOptions);auto result=original;result.raster=warped.raster;result.deep.reset();result.transform=warped.transform;
+    if(original.deep&&original.deep->valid()){
+        auto deep=makeDeep(result.raster->width,result.raster->height,original.deep->format);
+        for(int y=0;y<deep->height;++y){cancel(options.cancelled);for(int x=0;x<deep->width;++x){
+            const auto unit=result.transform.toUnit({result.transform.x+x+.5,result.transform.y+y+.5});
+            deep->setPixel(x,y,graphics::sampleWidePixels(original.deep->width,original.deep->height,[&](int px,int py){return original.deep->pixel(px,py);},imageUnit(unit,draft),Transform::Sampling::Smooth));
+        }}
+        result.deep=deep;result.raster=rasterFromDeep(*deep);
+    }
     if(original.mask&&original.mask->raster){const auto& mask=*original.mask;auto maskOptions=options;maskOptions.trim=false;
         if(mask.linked&&!mask.placement){auto moved=warpGray(mask.raster,draft,c,0,maskOptions);result.mask->raster=moved.raster==mask.raster?mask.raster:cropGray(*moved.raster,warped.crop);}
         else if(mask.linked&&mask.placement){auto placed=following(*mask.placement,original.transform,draft);const auto carried=carriedCorners(placed,draft,c);if(usableCorners(carried)){auto moved=warpGray(mask.raster,placed,carried,graphics::cachedMaskBackground(mask.raster),maskOptions);result.mask->raster=moved.raster;result.mask->placement=moved.transform;}}

@@ -735,4 +735,220 @@ CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& i
     result.raster = result.changed ? Raster::fromRgba(w, h, display.data(), std::size_t(w) * 4) : nullptr;
     return result;
 }
+bool cameraRawNeedsEightBit(const CameraRawSettings& incoming) {
+    const auto settings = incoming.normalized();
+    return settings.mixer.adjusts() || settings.grading.adjusts() || settings.adjustsEffects() || settings.detail.adjusts() || settings.optics.adjusts();
+}
+void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& settings) {
+    const auto gains = settings.gains();
+    const double light = std::exp2(settings.exposure);
+    const double contrastScale = 1 + settings.contrast / 100;
+    r = std::clamp(compositor::srgbToLinear(r) * gains.red * light, 0., 1.);
+    g = std::clamp(compositor::srgbToLinear(g) * gains.green * light, 0., 1.);
+    b = std::clamp(compositor::srgbToLinear(b) * gains.blue * light, 0., 1.);
+    r = std::clamp(0.5 + (compositor::linearToSrgb(r) - 0.5) * contrastScale, 0., 1.);
+    g = std::clamp(0.5 + (compositor::linearToSrgb(g) - 0.5) * contrastScale, 0., 1.);
+    b = std::clamp(0.5 + (compositor::linearToSrgb(b) - 0.5) * contrastScale, 0., 1.);
+    auto rec = [&] { return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    auto scaleLum = [&](double target) {
+        target = std::clamp(target, 0., 1.);
+        const double y = rec();
+        if (std::abs(target - y) < 1e-8) return;
+        if (y < 1e-8) {
+            if (target > y) r = g = b = target;
+            return;
+        }
+        const double scale = target / y;
+        r = std::clamp(r * scale, 0., 1.);
+        g = std::clamp(g * scale, 0., 1.);
+        b = std::clamp(b * scale, 0., 1.);
+    };
+    auto highlights = [&](double y, double amount) {
+        const double t = std::clamp((y - 0.5) / 0.5, 0., 1.);
+        const double weight = t * t;
+        return amount >= 0 ? std::clamp(y + amount * weight * (1 - y), 0., 1.) : std::clamp(y + amount * weight * (y - 0.5), 0., 1.);
+    };
+    auto shadows = [&](double y, double amount) {
+        const double t = std::clamp((0.5 - y) / 0.5, 0., 1.);
+        const double weight = t * t;
+        return amount >= 0 ? std::clamp(y + amount * weight * (0.5 - y), 0., 1.) : std::clamp(y + amount * weight * y, 0., 1.);
+    };
+    auto whites = [&](double y, double amount) { return y <= 0.75 ? y : std::clamp(0.75 + (y - 0.75) * (1 + amount), 0., 1.); };
+    auto blacks = [&](double y, double amount) { return y >= 0.25 ? y : std::clamp(0.25 + (y - 0.25) * (1 - amount), 0., 1.); };
+    scaleLum(highlights(rec(), settings.highlights / 100));
+    scaleLum(shadows(rec(), settings.shadows / 100));
+    scaleLum(whites(rec(), settings.whites / 100));
+    scaleLum(blacks(rec(), settings.blacks / 100));
+    const double vibrance = settings.vibrance / 100, saturation = settings.saturation / 100;
+    double lum = rec();
+    const double maxc = std::max({r, g, b}), minc = std::min({r, g, b}), chroma = maxc - minc;
+    const double sat = maxc <= 1e-8 ? 0 : chroma / maxc;
+    double hue = 0;
+    if (chroma > 1e-8) {
+        if (r >= g && r >= b) hue = 60 * std::fmod((g - b) / chroma, 6.);
+        else if (g >= r && g >= b) hue = 60 * ((b - r) / chroma + 2);
+        else hue = 60 * ((r - g) / chroma + 4);
+        if (hue < 0) hue += 360;
+    }
+    double skin = 0;
+    if (hue >= 10 && hue <= 50) {
+        skin = hue <= 30 ? (hue - 10) / 20 : (50 - hue) / 20;
+        skin *= std::clamp((sat - 0.15) / 0.35, 0., 1.);
+    }
+    double amount = vibrance * (1 - sat);
+    if (vibrance > 0) amount *= 1 - 0.7 * skin;
+    double factor = 1 + amount;
+    r = std::clamp(lum + (r - lum) * factor, 0., 1.);
+    g = std::clamp(lum + (g - lum) * factor, 0., 1.);
+    b = std::clamp(lum + (b - lum) * factor, 0., 1.);
+    lum = rec();
+    factor = 1 + saturation;
+    r = std::clamp(lum + (r - lum) * factor, 0., 1.);
+    g = std::clamp(lum + (g - lum) * factor, 0., 1.);
+    b = std::clamp(lum + (b - lum) * factor, 0., 1.);
+    if (settings.curve.adjusts()) {
+        auto apply = [&](double tone, const std::vector<Point>& channel) { return curveAt(curveAt(settings.curve.parametric(tone), settings.curve.rgb), channel); };
+        r = apply(r, settings.curve.red);
+        g = apply(g, settings.curve.green);
+        b = apply(b, settings.curve.blue);
+    }
+}
+std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const CameraRawSettings& incoming, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled) {
+    if (!source.valid()) throw std::runtime_error("Invalid Camera Raw source");
+    const auto settings = incoming.normalized();
+    auto stop = [&] { if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled"); };
+    stop();
+    if (source.isHdr() && (settings.geometry.adjusts() || cameraRawNeedsEightBit(settings)))
+        throw std::runtime_error("Convert HDR to 16-Bit before spatial Camera Raw corrections");
+    if (!source.isHdr() && cameraRawNeedsEightBit(settings))
+        throw std::runtime_error("Convert this 16-bit layer to 8-bit before spatial Camera Raw corrections");
+    if (settings.isIdentity() && !viewPaints(view)) return std::make_shared<DeepImage>(source);
+    std::vector<float> pixels(std::size_t(source.width) * source.height * 4);
+    for (int y = 0; y < source.height; ++y) {
+        stop();
+        for (int x = 0; x < source.width; ++x) {
+            auto p = source.pixel(x, y);
+            std::copy(p.begin(), p.end(), pixels.begin() + (std::size_t(y) * source.width + x) * 4);
+        }
+    }
+    if (settings.geometry.adjusts()) {
+        double vertical = settings.geometry.vertical, horizontal = settings.geometry.horizontal, rotate = settings.geometry.rotate;
+        if (settings.geometry.upright == CameraRawUpright::Guided && !settings.geometry.guides.empty()) {
+            const auto& first = settings.geometry.guides.front();
+            const double dx = first.endX - first.startX, dy = first.endY - first.startY;
+            if (std::hypot(dx, dy) > 1e-4) {
+                double angle = std::atan2(dy, dx) * 180 / std::numbers::pi;
+                double guided = -angle;
+                if (guided > 45) guided -= 90;
+                else if (guided < -45) guided += 90;
+                rotate += guided;
+            }
+        }
+        const int w = source.width, h = source.height;
+        const double width = w, height = h;
+        const double strength = settings.geometry.projection == CameraRawProjection::Perspective ? 1 : 0.55;
+        const double v = vertical / 100 * width * 0.18 * strength;
+        const double hz = horizontal / 100 * height * 0.18 * strength;
+        const double aspectScale = 1 + settings.geometry.aspect / 200;
+        const double zoom = 1 + settings.geometry.scale / 100;
+        const double shiftX = settings.geometry.offsetX / 100 * width * 0.15;
+        const double shiftY = settings.geometry.offsetY / 100 * height * 0.15;
+        Point topLeft{-v + shiftX, height + shiftY};
+        Point topRight{width + v + shiftX, height + shiftY};
+        Point bottomRight{width + hz + shiftX, -shiftY};
+        Point bottomLeft{-hz + shiftX, -shiftY};
+        const Point center{width / 2 + shiftX, height / 2 + shiftY};
+        const double radians = rotate * std::numbers::pi / 180, cosine = std::cos(radians), sine = std::sin(radians);
+        auto rotatePoint = [&](Point point) {
+            const double dx = point.x - center.x, dy = point.y - center.y;
+            return Point{center.x + dx * cosine - dy * sine, center.y + dx * sine + dy * cosine};
+        };
+        topLeft = rotatePoint(topLeft);
+        topRight = rotatePoint(topRight);
+        bottomRight = rotatePoint(bottomRight);
+        bottomLeft = rotatePoint(bottomLeft);
+        if (aspectScale != 1) {
+            auto scaled = [&](Point point) { return Point{center.x + (point.x - center.x) * aspectScale, center.y + (point.y - center.y) / aspectScale}; };
+            topLeft = scaled(topLeft);
+            topRight = scaled(topRight);
+            bottomRight = scaled(bottomRight);
+            bottomLeft = scaled(bottomLeft);
+        }
+        if (zoom != 1) {
+            auto zoomed = [&](Point point) { return Point{center.x + (point.x - center.x) * zoom, center.y + (point.y - center.y) * zoom}; };
+            topLeft = zoomed(topLeft);
+            topRight = zoomed(topRight);
+            bottomRight = zoomed(bottomRight);
+            bottomLeft = zoomed(bottomLeft);
+        }
+        auto down = [&](Point point) { return Point{point.x, height - point.y}; };
+        const auto inverse = Homography::fromCorners({down(topLeft), down(topRight), down(bottomRight), down(bottomLeft)}).inverse();
+        if (inverse) {
+            auto previous = pixels;
+            for (int y = 0; y < h; ++y) {
+                stop();
+                for (int x = 0; x < w; ++x) {
+                    const auto unit = inverse->map({x + .5, y + .5});
+                    const double sx = unit.x * width - .5, sy = unit.y * height - .5;
+                    auto i = (std::size_t(y) * w + x) * 4;
+                    if (!std::isfinite(sx) || !std::isfinite(sy)) {
+                        pixels[i] = pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = 0;
+                        continue;
+                    }
+                    const int ix = int(std::floor(sx)), iy = int(std::floor(sy));
+                    const double fx = sx - ix, fy = sy - iy;
+                    auto get = [&](int xx, int yy, int c) {
+                        if (xx < 0 || yy < 0 || xx >= w || yy >= h) return 0.f;
+                        return previous[(std::size_t(yy) * w + xx) * 4 + c];
+                    };
+                    for (int c = 0; c < 4; ++c)
+                        pixels[i + c] = float((get(ix, iy, c) * (1 - fx) + get(ix + 1, iy, c) * fx) * (1 - fy) + (get(ix, iy + 1, c) * (1 - fx) + get(ix + 1, iy + 1, c) * fx) * fy);
+                }
+            }
+        }
+    }
+    const bool grade = settings.adjustsLight() || settings.adjustsColor() || settings.curve.adjusts() || view.clipping;
+    if (grade) {
+        for (int y = 0; y < source.height; ++y) {
+            stop();
+            for (int x = 0; x < source.width; ++x) {
+                auto i = (std::size_t(y) * source.width + x) * 4;
+                float a = pixels[i + 3];
+                if (!(a > 0)) continue;
+                double r = pixels[i] / a, g = pixels[i + 1] / a, b = pixels[i + 2] / a;
+                gradeStraight(r, g, b, settings);
+                if (view.clipping == 1) {
+                    r = r >= 254.5 / 255 ? 1 : 0;
+                    g = g >= 254.5 / 255 ? 1 : 0;
+                    b = b >= 254.5 / 255 ? 1 : 0;
+                } else if (view.clipping == 2) {
+                    const int rc = r <= 0.5 / 255, gc = g <= 0.5 / 255, bc = b <= 0.5 / 255;
+                    if (rc || gc || bc) {
+                        r = rc ? 0 : 1;
+                        g = gc ? 0 : 1;
+                        b = bc ? 0 : 1;
+                    } else r = g = b = 1;
+                }
+                pixels[i] = float(r * a);
+                pixels[i + 1] = float(g * a);
+                pixels[i + 2] = float(b * a);
+            }
+        }
+    }
+    auto image = makeDeep(source.width, source.height, source.format);
+    for (int y = 0; y < source.height; ++y) {
+        stop();
+        for (int x = 0; x < source.width; ++x) {
+            auto i = (std::size_t(y) * source.width + x) * 4;
+            auto p = std::array<float, 4>{pixels[i], pixels[i + 1], pixels[i + 2], std::clamp(pixels[i + 3], 0.f, 1.f)};
+            if (selection) {
+                const float amount = selection->pixel(x, y) / 255.f;
+                auto old = source.pixel(x, y);
+                for (int c = 0; c < 4; ++c) p[c] = old[c] + (p[c] - old[c]) * amount;
+            }
+            image->setPixel(x, y, p);
+        }
+    }
+    return image;
+}
 }

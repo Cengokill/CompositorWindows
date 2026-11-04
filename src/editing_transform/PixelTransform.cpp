@@ -31,6 +31,7 @@ struct PixelTransformSession::Impl {
     bool duplicate{},started{},finished{},dirty{true};
     Rect selectionBox,liftBox;
     std::shared_ptr<const Raster> lifted;
+    std::shared_ptr<const DeepImage> liftedDeep;
     std::shared_ptr<const Raster> cleared;
     std::string temporaryId;
     Transform floatingOriginal,floatingDraft;
@@ -110,6 +111,21 @@ struct PixelTransformSession::Impl {
             image->tiles.push_back(tileUnchanged?source.tiles[key]:std::move(tile));
         }
         auto layer=original;layer.raster=image;layer.deep.reset();layer.transform=sourceExtentTransform(extent);
+        if(original.deep&&original.deep->valid()&&liftedDeep){
+            auto deep=makeDeep(w,h,original.deep->format);
+            for(int y=0;y<h;++y){cancelled(check);for(int x=0;x<w;++x){
+                const int xx=int(extent.x)+x,yy=int(extent.y)+y;const auto doc=toDocument({xx+.5,yy+.5});
+                auto under=original.deep->pixel(xx,yy);if(!duplicate){const float keep=float(1-selected(doc));for(int c=0;c<4;++c)under[c]*=keep;}
+                WidePixel copied{};
+                if(kind==PixelTransformKind::Move){
+                    const double coverageX=std::max(0.,std::min(double(xx+1),target.x+target.width)-std::max(double(xx),target.x)),coverageY=std::max(0.,std::min(double(yy+1),target.y+target.height)-std::max(double(yy),target.y));
+                    if(coverageX*coverageY>0){const Point unit{std::clamp((xx+.5-target.x)/target.width,0.,1.-1e-12),std::clamp((yy+.5-target.y)/target.height,0.,1.-1e-12)};copied=graphics::sampleWidePixels(liftedDeep->width,liftedDeep->height,[&](int px,int py){return liftedDeep->pixel(px,py);},unit,whole?Transform::Sampling::Nearest:Transform::Sampling::Smooth);for(int c=0;c<4;++c)copied[c]*=float(coverageX*coverageY);}
+                }else copied=graphics::sampleWidePixels(liftedDeep->width,liftedDeep->height,[&](int px,int py){return liftedDeep->pixel(px,py);},placedTransform.toUnit(doc),placedTransform.sampling);
+                WidePixel value=under;const double inv=1-copied[3];for(int c=0;c<4;++c)value[c]=float(copied[c]+under[c]*inv);
+                deep->setPixel(x,y,value);
+            }}
+            layer.deep=deep;layer.raster=rasterFromDeep(*deep);
+        }
         if(layer.mask&&!layer.mask->placement&&!sameGrid){const auto& current=*layer.mask->raster;auto grown=std::make_shared<GrayRaster>();grown->width=w;grown->height=h;grown->pixels.resize(size_t(w)*h,255);
             for(int y=0;y<h;++y){cancelled(check);for(int x=0;x<w;++x){const double px=extent.x+x+.5,py=extent.y+y+.5;if(px>=0&&py>=0&&px<source.width&&py<source.height)grown->pixels[size_t(y)*w+x]=byte(graphics::sampleGray(current,{px/source.width,py/source.height},Transform::Sampling::Nearest)*255);}}
             layer.mask->raster=std::move(grown);
@@ -123,7 +139,10 @@ bool PixelTransformSession::begin(CancelCheck check){auto& s=*impl_;if(s.started
     const auto& source=*s.original.raster;
     if(s.kind==PixelTransformKind::Move){s.liftBox=intersected(integral(mapped(s.selectionBox,[&](Point p){return s.toPixels(p);})),{0,0,double(source.width),double(source.height)});if(s.liftBox.width<1||s.liftBox.height<1)return false;
         s.lifted=makeRaster(int(s.liftBox.width),int(s.liftBox.height),[&](int x,int y){const int xx=int(s.liftBox.x)+x,yy=int(s.liftBox.y)+y;return scale(source.pixel(xx,yy),s.selected(s.toDocument({xx+.5,yy+.5})));},check);s.floatingOriginal=s.sourceExtentTransform(s.liftBox);
-    }else{s.liftBox=s.selectionBox;budget(s.liftBox);s.lifted=makeRaster(int(s.liftBox.width),int(s.liftBox.height),[&](int x,int y){const Point doc{s.liftBox.x+x+.5,s.liftBox.y+y+.5};return scale(graphics::sampleRaster(source,s.original.transform.toUnit(doc),s.original.transform.sampling),s.selected(doc));},check);s.floatingOriginal={s.liftBox.x,s.liftBox.y,s.liftBox.width,s.liftBox.height};}
+        if(s.original.deep&&s.original.deep->valid()){auto deep=makeDeep(int(s.liftBox.width),int(s.liftBox.height),s.original.deep->format);for(int y=0;y<deep->height;++y){cancelled(check);for(int x=0;x<deep->width;++x){const int xx=int(s.liftBox.x)+x,yy=int(s.liftBox.y)+y;auto p=s.original.deep->pixel(xx,yy);const float a=float(s.selected(s.toDocument({xx+.5,yy+.5})));for(int c=0;c<4;++c)p[c]*=a;deep->setPixel(x,y,p);}}s.liftedDeep=deep;}
+    }else{s.liftBox=s.selectionBox;budget(s.liftBox);s.lifted=makeRaster(int(s.liftBox.width),int(s.liftBox.height),[&](int x,int y){const Point doc{s.liftBox.x+x+.5,s.liftBox.y+y+.5};return scale(graphics::sampleRaster(source,s.original.transform.toUnit(doc),s.original.transform.sampling),s.selected(doc));},check);s.floatingOriginal={s.liftBox.x,s.liftBox.y,s.liftBox.width,s.liftBox.height};
+        if(s.original.deep&&s.original.deep->valid()){auto deep=makeDeep(int(s.liftBox.width),int(s.liftBox.height),s.original.deep->format);for(int y=0;y<deep->height;++y){cancelled(check);for(int x=0;x<deep->width;++x){const Point doc{s.liftBox.x+x+.5,s.liftBox.y+y+.5};auto p=graphics::sampleWidePixels(s.original.deep->width,s.original.deep->height,[&](int px,int py){return s.original.deep->pixel(px,py);},s.original.transform.toUnit(doc),s.original.transform.sampling);const float a=float(s.selected(doc));for(int c=0;c<4;++c)p[c]*=a;deep->setPixel(x,y,p);}}s.liftedDeep=deep;}
+    }
     s.floatingDraft=s.floatingOriginal;s.started=true;return true;
 }
 bool PixelTransformSession::move(Point offset){auto& s=*impl_;if(!s.started||s.finished)throw std::logic_error("Pixel transform not active");if(!std::isfinite(offset.x)||!std::isfinite(offset.y)||std::abs(offset.x)>1000000||std::abs(offset.y)>1000000)return false;offset={std::round(offset.x),std::round(offset.y)};s.offset=offset;s.floatingDraft=s.floatingOriginal;s.floatingDraft.x+=offset.x;s.floatingDraft.y+=offset.y;s.distortion.reset();s.dirty=true;return true;}
