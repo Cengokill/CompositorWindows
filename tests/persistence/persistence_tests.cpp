@@ -64,6 +64,56 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
  }
  else if(test=="guides_roundtrip"){d.guides.push_back({id(9),true,12.5});d.guides.push_back({id(10),false,4});store.save(p,d,id(2));auto loaded=store.load(p);check(loaded.readVersion==8&&loaded.document.guides.size()==2,"Guide save did not round-trip");check(loaded.document.guides[0]==Guide{id(9),true,12.5}&&loaded.document.guides[1]==Guide{id(10),false,4},"Guide orientation or position changed");auto manifest=json(p/L"manifest.json");auto guides=manifest["guides"].toArray();check(manifest["version"]==8&&guides.size()==2&&guides[0].toObject()["orientation"]=="horizontal"&&guides[1].toObject()["orientation"]=="vertical","Guide manifest shape changed");}
   else if(test=="shape_stroke_roundtrip"){editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,1,0};style.strokeEnabled=true;style.strokeWidth=3;style.strokeRed=1;style.strokeBlue=.5;Document shaped;shaped.id=id(1);shaped.width=20;shaped.height=20;shaped.resolution=72;auto layer=*editing::createShapeLayer({0,0,8,6},style,"Stroke");layer.id=id(2);shaped.layers.push_back(layer);store.save(p,shaped,id(2));auto loaded=store.load(p);check(loaded.readVersion==14&&loaded.document.layers.size()==1&&editing::decodeShapeStyle(loaded.document.layers[0].shapeJson)==style,"Stroked shape did not round-trip as format v14");auto manifest=json(p/L"manifest.json");check(manifest["version"]==14,"Stroked shape did not write format v14");manifest["version"]=13;json(p/L"manifest.json",manifest);rejects([&]{store.load(p);});}
+  else if(test=="shape_smoothing_roundtrip"){
+    ProjectStore actual(makeWicProjectCodec());
+    d.width=120;
+    d.height=100;
+    editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,1,20};
+    const auto ordinary=*editing::createShapeLayer({0,0,100,80},style,"Rounded");
+    style.smoothing=true;
+    d.layers[0]=*editing::createShapeLayer({0,0,100,80},style,"Smooth");
+    const auto active=d.layers[0].id;
+    actual.save(p,d,active);
+    const auto loaded=actual.load(p);
+    check(loaded.readVersion==17&&loaded.activeLayer==active,"Smooth shape did not use format v17");
+    auto reopened=loaded.document.layers[0];
+    check(editing::decodeShapeStyle(reopened.shapeJson)==style,"Smooth style was lost");
+    check(reopened.raster->rgba()==d.layers[0].raster->rgba(),"Reopened shape pixels changed");
+    reopened.transform.width=120;
+    reopened=editing::redrawShape(reopened);
+    check(reopened.raster->rgba()==editing::shapeRaster(style,120,80)->rgba(),"Reopened shape did not resize with smoothing");
+
+    mutate(p,[](auto& manifest){manifest["version"]=16;});
+    rejects([&]{actual.load(p);});
+    actual.save(p,d,active);
+    mutateLayer(p,[](auto& layer){
+        auto shape=layer["shape"].toObject();
+        shape["smoothing"]="true";
+        layer["shape"]=shape;
+    });
+    rejects([&]{actual.load(p);});
+    actual.save(p,d,active);
+    mutateLayer(p,[](auto& layer){
+        auto shape=layer["shape"].toObject();
+        shape["kind"]="Ellipse";
+        layer["shape"]=shape;
+    });
+    rejects([&]{actual.load(p);});
+
+    d.layers[0]=ordinary;
+    actual.save(p,d,ordinary.id);
+    auto legacy=actual.load(p);
+    check(legacy.readVersion==7&&legacy.document.layers[0].raster->rgba()==ordinary.raster->rgba(),"Ordinary shape changed in the old format");
+    mutateLayer(p,[](auto& layer){
+        auto shape=layer["shape"].toObject();
+        shape["smoothing"]=false;
+        layer["shape"]=shape;
+    });
+    legacy=actual.load(p);
+    check(!editing::decodeShapeStyle(legacy.document.layers[0].shapeJson).smoothing,"False enabled smoothing");
+    actual.save(p,legacy.document,legacy.activeLayer);
+    check(actual.load(p).readVersion==7,"False raised the project version");
+  }
   else if(test=="long_image_path"){fs::path deep=root;const auto imageName=fs::path(id(2)+".png");bool longEnough=false;for(int i=0;i<40;++i){if(fs::absolute(deep/L"Saved.comp"/L"images"/imageName).native().size()>=260){longEnough=true;break;}deep/=L"long-path-segment";}check(longEnough,"Could not construct an image path of at least 260 characters");fs::create_directories(imaging::win32FilePath(deep));auto project=deep/L"Saved.comp";ProjectStore actual(makeWicProjectCodec());d.layers[0].raster=Raster::filled(2,2,{9,8,7,255});actual.save(project,d,id(2));auto loaded=actual.load(project);check(loaded.document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"Long-path WIC pixels changed");int entries=0;for(auto& entry:fs::directory_iterator(imaging::win32FilePath(deep))){++entries;check(entry.path().filename()==L"Saved.comp","Long-path save left a recovery directory");}check(entries==1,"Long-path save left recovery files");std::error_code ignored;fs::remove_all(imaging::win32FilePath(root),ignored);}
   else if(test=="long_journal_interrupt"){
     fs::path deep=root;bool longEnough=false;

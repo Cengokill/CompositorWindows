@@ -24,7 +24,7 @@
 namespace compositor {
 class NativeCanvas final:public QWidget {
 public:
-    struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeKind kind;double cornerRadius;Pixel fill;double lineWidth{4};};
+    struct ShapeDraftOverlay {editing::Rect rect;editing::ShapeStyle style;Pixel fill;};
     // `plate` is the moving layer's full painted appearance, shifted with the draft.
     // `front` is the frozen content that must stay above the moving layer.
     struct MovePreview {

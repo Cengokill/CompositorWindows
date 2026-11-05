@@ -25,4 +25,31 @@ void inspector_group_scale_scope(){MainWindow w(true);auto d=fixture();Layer fol
 void inspector_mask_scale_reference(){MainWindow w(true);auto d=fixture();d.layers[0].mask=Mask{std::make_shared<GrayRaster>(GrayRaster{8,4,std::vector<uint8_t>(32,255)}),true,false,Transform{20,12,16,8}};auto&p=w.addProject(d);p.maskSelected=true;moveTool(w);scale(w,100);REQUIRE(p.history.undoCount()==0&&p.document->layers[0].transform==d.layers[0].transform);const auto m=p.document->layers[0].mask->placement;REQUIRE(m&&m->x==-4&&m->y==0&&m->width==64&&m->height==32);action(w,"cancelTransform");REQUIRE(p.document==d);}
 void inspector_floating_scale_reference(){MainWindow w(true);auto d=fixture();auto coverage=std::make_shared<GrayRaster>(GrayRaster{100,80,std::vector<uint8_t>(8000)});for(int y=10;y<18;++y)for(int x=20;x<30;++x)coverage->pixels[size_t(y)*100+x]=255;d.selection=Selection{coverage};auto&p=w.addProject(d);action(w,"freeTransform");REQUIRE(p.document->layers.size()==2);scale(w,200);REQUIRE(p.history.undoCount()==0&&p.document->layers.size()==2);const auto t=p.document->layers[1].transform;REQUIRE(t.x==15&&t.y==6&&t.width==20&&t.height==16);action(w,"cancelTransform");REQUIRE(p.document==d);}
 void inspector_live_rounded_shape(){MainWindow w(true);auto d=fixture();auto shape=editing::createShapeLayer({10,10,22,18},{editing::ShapeKind::Rectangle,1,0,0,6},"Rounded");REQUIRE(shape);shape->id="image";d.layers[0]=*shape;auto&p=w.addProject(d);action(w,"freeTransform");field(w,"Width",44);const auto expected=editing::shapeTransformPreview(d.layers[0],p.document->layers[0].transform);REQUIRE(expected&&p.document->layers[0].raster->width==44);REQUIRE(p.document->layers[0].raster->rgba()==expected->rgba()&&d.layers[0].raster->width==22&&p.history.undoCount()==0);action(w,"cancelTransform");REQUIRE(p.document==d);}
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"inspector_compact_number_display",inspector_compact_number_display},{"inspector_numeric_cancel",inspector_numeric_cancel},{"inspector_multiple_fields_one_apply",inspector_multiple_fields_one_apply},{"inspector_sampling_mask_scope",inspector_sampling_mask_scope},{"inspector_flip_cancel",inspector_flip_cancel},{"inspector_group_scale_scope",inspector_group_scale_scope},{"inspector_mask_scale_reference",inspector_mask_scale_reference},{"inspector_floating_scale_reference",inspector_floating_scale_reference},{"inspector_live_rounded_shape",inspector_live_rounded_shape}};int failed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;return failed?1:0;}
+void inspector_live_smoothed_shape(){
+    MainWindow w(true);
+    auto d=fixture();
+    editing::ShapeStyle style{editing::ShapeKind::Rectangle,1,0,0,16};
+    style.smoothing=true;
+    auto shape=editing::createShapeLayer({10,10,40,60},style,"Smooth");
+    REQUIRE(shape);
+    shape->id="image";
+    d.layers[0]=*shape;
+    auto& p=w.addProject(d);
+    const auto expected=editing::shapeRaster(style,80,60)->rgba();
+    auto ordinary=style;
+    ordinary.smoothing=false;
+    REQUIRE(expected!=editing::shapeRaster(ordinary,80,60)->rgba());
+    action(w,"freeTransform");
+    field(w,"Width",80);
+    REQUIRE(p.document->layers[0].raster->rgba()==expected&&p.history.undoCount()==0);
+    action(w,"cancelTransform");
+    REQUIRE(p.document==d&&p.history.undoCount()==0);
+    action(w,"freeTransform");
+    field(w,"Width",80);
+    action(w,"applyTransform");
+    REQUIRE(p.document->layers[0].raster->rgba()==expected&&p.history.undoCount()==1);
+    REQUIRE(editing::decodeShapeStyle(p.document->layers[0].shapeJson)==style);
+    const auto undo=p.history.undo();
+    REQUIRE(undo&&undo->document==d);
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"inspector_compact_number_display",inspector_compact_number_display},{"inspector_numeric_cancel",inspector_numeric_cancel},{"inspector_multiple_fields_one_apply",inspector_multiple_fields_one_apply},{"inspector_sampling_mask_scope",inspector_sampling_mask_scope},{"inspector_flip_cancel",inspector_flip_cancel},{"inspector_group_scale_scope",inspector_group_scale_scope},{"inspector_mask_scale_reference",inspector_mask_scale_reference},{"inspector_floating_scale_reference",inspector_floating_scale_reference},{"inspector_live_rounded_shape",inspector_live_rounded_shape},{"inspector_live_smoothed_shape",inspector_live_smoothed_shape}};int failed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;return failed?1:0;}
