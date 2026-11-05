@@ -2,6 +2,7 @@
 // 735c2cc23c0efe7c2c2f85a66741b253e053cf2b.
 // Copyright (c) 2026 Wonder Assembly LLC. MIT license.
 #include "CameraRawShadows.h"
+#include "graphics/ParallelBatch.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -20,16 +21,36 @@ void stop(const std::function<bool()>& cancelled) {
 }
 double decode(double v) { return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); }
 double encode(double v) { v = std::clamp(v, 0.0, 1.0); return v <= 0.0031308 ? v * 12.92 : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055; }
-std::array<double, 3> linear(const float* p) {
-    if (!(p[3] > 0)) return {};
+using ByteDecode = std::array<double, 256>;
+float alphaOf(float value) { return value; }
+float alphaOf(std::uint8_t value) { return value / 255.f; }
+std::array<double, 3> linear(const float* p, const ByteDecode&) {
     return {decode(std::clamp(double(p[0] / p[3]), 0., 1.)), decode(std::clamp(double(p[1] / p[3]), 0., 1.)), decode(std::clamp(double(p[2] / p[3]), 0., 1.))};
 }
+std::array<double, 3> linear(const std::uint8_t* p, const ByteDecode& opaque) {
+    if (p[3] == 255) return {opaque[p[0]], opaque[p[1]], opaque[p[2]]};
+    const float alpha = alphaOf(p[3]);
+    auto channel = [alpha](std::uint8_t value) { return decode(std::clamp(double((value / 255.f) / alpha), 0., 1.)); };
+    return {channel(p[0]), channel(p[1]), channel(p[2])};
+}
+float shadowChannel(double linearValue, float alpha, float) { return float(encode(linearValue) * alpha); }
+std::uint8_t shadowChannel(double linearValue, float alpha, std::uint8_t) {
+    const float encoded = float(encode(linearValue) * alpha);
+    return std::uint8_t(std::lround(std::clamp(encoded, 0.f, 1.f) * 255));
+}
 double luminance(const std::array<double, 3>& p) { return 0.2126*p[0] + 0.7152*p[1] + 0.0722*p[2]; }
+int gridScale(int width, int height) {
+    return std::max({1, std::min(width, height) / 384, int(std::ceil(std::sqrt(double(width) * height / 2000000.)))});
+}
+std::uint32_t workerLimit(int width, int height) {
+    return std::uint64_t(width) * height < 128 * 1024 ? 1u : 0u;
+}
 // Edge windows shrink rather than repeating samples, as in the upstream kernel.
-void boxMean(const std::vector<float>& src, std::vector<float>& dst, int w, int h, int radius,
+void boxMean(const std::vector<float>& src, std::vector<float>& dst, std::vector<float>& temp, int w, int h, int radius,
              const std::function<bool()>& cancelled) {
-    std::vector<float> temp(src.size());
-    for (int y=0; y<h; ++y) {
+    const auto workers = workerLimit(w, h);
+    graphics::runParallelBatch(std::size_t(h), workers, [&](std::size_t row) {
+        const int y = int(row);
         stop(cancelled); double sum=0; int lo=0, hi=0;
         for (int x=0; x<w; ++x) {
             const int wantLo=std::max(0,x-radius), wantHi=std::min(w,x+radius+1);
@@ -37,9 +58,10 @@ void boxMean(const std::vector<float>& src, std::vector<float>& dst, int w, int 
             while (lo<wantLo) sum-=src[std::size_t(y)*w+lo++];
             temp[std::size_t(y)*w+x]=float(sum/(hi-lo));
         }
-    }
-    for (int x=0; x<w; ++x) {
-        if (!(x%64)) stop(cancelled);
+    });
+    graphics::runParallelBatch(std::size_t(w), workers, [&](std::size_t column) {
+        const int x = int(column);
+        stop(cancelled);
         double sum=0; int lo=0, hi=0;
         for (int y=0; y<h; ++y) {
             const int wantLo=std::max(0,y-radius), wantHi=std::min(h,y+radius+1);
@@ -47,7 +69,7 @@ void boxMean(const std::vector<float>& src, std::vector<float>& dst, int w, int 
             while (lo<wantLo) sum-=temp[std::size_t(lo++)*w+x];
             dst[std::size_t(y)*w+x]=float(sum/(hi-lo));
         }
-    }
+    });
 }
 std::array<float, perAmount> coefficients(double amount, int set) {
     constexpr std::array<double, 6> values{-100,-50,0,25,50,100};
@@ -62,61 +84,87 @@ std::array<float, perAmount> coefficients(double amount, int set) {
     }
     return out;
 }
-}
-void applyAdaptiveShadows(std::vector<float>& pixels, int width, int height, double amount,
-                          double previewScale, const std::function<bool()>& cancelled) {
-    if (amount==0) return;
-    if (width<1 || height<1 || pixels.size()!=std::size_t(width)*std::size_t(height)*4)
-        throw std::runtime_error("Invalid Camera Raw shadow image");
-    stop(cancelled);
-    const double effectiveScale=std::isfinite(previewScale) && previewScale>0 ? previewScale : 1;
-    const auto coeff=coefficients(amount, std::max(width,height)/effectiveScale>=1020 ? 1 : 0);
-    double total=0, count=0, all=0, allCount=0;
-    auto at=[&](int x,int y) { return pixels.data()+(std::size_t(y)*width+x)*4; };
-    for(int y=0;y<height;++y) {
-        stop(cancelled);
-        for(int x=0;x<width;++x) {
-            const float* p=at(x,y); if (!(p[3]>0)) continue;
-            const double alpha=std::clamp(double(p[3]),0.,1.);
-            double l=luminance(linear(p)); all+=l*alpha; allCount+=alpha;
-            const float g=p[1];
-            if ((x>0 && at(x-1,y)[1]!=g) || (x+1<width && at(x+1,y)[1]!=g) ||
-                (y>0 && at(x,y-1)[1]!=g) || (y+1<height && at(x,y+1)[1]!=g)) { total+=l*alpha; count+=alpha; }
+template<class PixelAt>
+CameraRawShadowAnalysis analyze(int width, int height, const PixelAt& at, const ByteDecode& opaque,
+                                const std::function<bool()>& cancelled) {
+    const int scale = gridScale(width, height);
+    const int w = (width + scale - 1) / scale, h = (height + scale - 1) / scale;
+    const std::size_t cells = std::size_t(w) * h;
+    std::vector<float> low(cells), weight(cells);
+    struct Totals { double edge{}, edgeWeight{}, all{}, allWeight{}; };
+    std::vector<Totals> rows(static_cast<std::size_t>(h));
+    // Each job owns one row of the reduced grid, including all the input
+    // pixels that contribute to those cells. Accumulate each cell in input order.
+    graphics::runParallelBatch(rows.size(), workerLimit(width, height), [&](std::size_t row) {
+        auto& totals = rows[row];
+        const int start = int(row) * scale, end = std::min(height, start + scale);
+        for (int y = start; y < end; ++y) {
+            stop(cancelled);
+            for (int x = 0; x < width; ++x) {
+                const auto* p = at(x, y);
+                const float alpha = std::clamp(alphaOf(p[3]), 0.f, 1.f);
+                if (!(alpha > 0)) continue;
+                const double l = luminance(linear(p, opaque));
+                totals.all += l * alpha; totals.allWeight += alpha;
+                const auto green = p[1];
+                if ((x > 0 && at(x - 1, y)[1] != green) || (x + 1 < width && at(x + 1, y)[1] != green) ||
+                    (y > 0 && at(x, y - 1)[1] != green) || (y + 1 < height && at(x, y + 1)[1] != green)) {
+                    totals.edge += l * alpha; totals.edgeWeight += alpha;
+                }
+                const auto cell = row * w + x / scale;
+                low[cell] += float(std::log2(std::max(floorY, l))) * alpha; weight[cell] += alpha;
+            }
         }
+    });
+    Totals total;
+    for (const auto& row : rows) {
+        total.edge += row.edge; total.edgeWeight += row.edgeWeight;
+        total.all += row.all; total.allWeight += row.allWeight;
     }
     // Sparse edges are not representative: blend in the image mean until the
     // edge sample covers at least ten percent of the visible pixel weight.
-    const double average=allCount>0 ? all/allCount : 0.18;
-    const double fallback=std::max(0.,allCount*.1-count);
-    const double key=std::log2(std::max(floorY,count+fallback>0 ? (total+fallback*average)/(count+fallback) : average));
-    // Bound working memory even for very wide or tall documents.
-    const double cellsLimit=2000000.;
-    const int scale=std::max({1,std::min(width,height)/384,int(std::ceil(std::sqrt(double(width)*height/cellsLimit)))});
-    const int w=(width+scale-1)/scale,h=(height+scale-1)/scale;
-    const std::size_t cells=std::size_t(w)*h;
-    std::vector<float> low(cells), weight(cells), mean(cells), square(cells), a(cells), b(cells);
-    for(int y=0;y<height;++y) {
-        stop(cancelled);
-        for(int x=0;x<width;++x) {
-            const float* p=at(x,y); if (!(p[3]>0)) continue;
-            const auto i=std::size_t(y/scale)*w+x/scale;
-            const float alpha=std::clamp(p[3],0.f,1.f);
-            low[i]+=float(std::log2(std::max(floorY,luminance(linear(p)))))*alpha; weight[i]+=alpha;
-        }
-    }
+    const double average=total.allWeight>0 ? total.all/total.allWeight : 0.18;
+    const double fallback=std::max(0.,total.allWeight*.1-total.edgeWeight);
+    const double edgeWeight=total.edgeWeight+fallback;
+    const double key=std::log2(std::max(floorY,edgeWeight>0 ? (total.edge+fallback*average)/edgeWeight : average));
     for(std::size_t i=0;i<cells;++i) low[i]=weight[i]>0 ? low[i]/weight[i] : float(key);
+    CameraRawShadowAnalysis result{scale, w, h, key, std::vector<float>(cells), std::vector<float>(cells)};
+    auto& mean = result.mean;
+    auto& square = result.square;
+    std::vector<float> a(cells), b(cells), temp(cells);
     const int radius=std::max(1,int(std::lround(.25*std::min(w,h))));
-    boxMean(low,mean,w,h,radius,cancelled);
+    boxMean(low,mean,temp,w,h,radius,cancelled);
     for(std::size_t i=0;i<cells;++i) a[i]=low[i]*low[i];
-    boxMean(a,square,w,h,radius,cancelled);
+    boxMean(a,square,temp,w,h,radius,cancelled);
     for(std::size_t i=0;i<cells;++i) { float variance=std::max(0.f,square[i]-mean[i]*mean[i]); a[i]=variance/(variance+1.5f); b[i]=mean[i]-a[i]*mean[i]; }
-    boxMean(a,mean,w,h,radius,cancelled); boxMean(b,square,w,h,radius,cancelled);
+    boxMean(a,mean,temp,w,h,radius,cancelled); boxMean(b,square,temp,w,h,radius,cancelled);
+    return result;
+}
+
+template<class Channel>
+void adaptiveShadows(std::vector<Channel>& pixels, int width, int height, double amount, double previewScale,
+                     const std::function<bool()>& cancelled, CameraRawShadowAnalysis* cached) {
+    if (amount == 0) return;
+    if (width < 1 || height < 1 || pixels.size() != std::size_t(width) * height * 4)
+        throw std::runtime_error("Invalid Camera Raw shadow image");
+    stop(cancelled);
+    ByteDecode opaque{};
+    if constexpr (sizeof(Channel) == 1)
+        for (std::size_t i = 0; i < opaque.size(); ++i) opaque[i] = decode(float(i) / 255.f);
+    auto at = [&](int x, int y) { return pixels.data() + (std::size_t(y) * width + x) * 4; };
+    CameraRawShadowAnalysis local;
+    auto& analysis = cached ? *cached : local;
+    if (!analysis.scale) analysis = analyze(width, height, at, opaque, cancelled);
+    const auto& [scale, w, h, key, mean, square] = analysis;
+    const double effectiveScale = std::isfinite(previewScale) && previewScale > 0 ? previewScale : 1;
+    const auto coeff = coefficients(amount, std::max(width, height) / effectiveScale >= 1020 ? 1 : 0);
     const double kp=std::clamp((key+11)/2.,0.,5.); const int k0=int(kp), k1=std::min(k0+1,5); const double kt=kp-k0;
-    for(int y=0;y<height;++y) {
+    graphics::runParallelBatch(std::size_t(height), workerLimit(width, height), [&](std::size_t row) {
+        const int y = int(row);
         stop(cancelled); const double fy=std::clamp((y+.5)/scale-.5,0.,double(h-1)); const int y0=int(fy),y1=std::min(y0+1,h-1); const double ty=fy-y0;
         for(int x=0;x<width;++x) {
-            float* p=at(x,y); if (!(p[3]>0)) continue;
-            auto rgb=linear(p); const double lum=luminance(rgb); if(!(lum>0)) continue;
+            auto* p=at(x,y); if (!(p[3]>0)) continue;
+            auto rgb=linear(p, opaque); const double lum=luminance(rgb); if(!(lum>0)) continue;
             const double fx=std::clamp((x+.5)/scale-.5,0.,double(w-1)); const int x0=int(fx),x1=std::min(x0+1,w-1); const double tx=fx-x0;
             auto sample=[&](const std::vector<float>& v) { return (v[std::size_t(y0)*w+x0]*(1-tx)+v[std::size_t(y0)*w+x1]*tx)*(1-ty)+(v[std::size_t(y1)*w+x0]*(1-tx)+v[std::size_t(y1)*w+x1]*tx)*ty; };
             // Hold the log-domain lookup at the floor while scaling the actual
@@ -130,8 +178,25 @@ void applyAdaptiveShadows(std::vector<float>& pixels, int width, int height, dou
                 term[t]=r0*(1-kt)+r1*kt;
             }
             const double gain=std::exp2(term[0]+term[1]*std::max(detail,0.)+term[2]*std::min(detail,0.));
-            for(int c=0;c<3;++c) p[c]=float(encode(rgb[c]*gain)*p[3]);
+            const float alpha = alphaOf(p[3]);
+            for(int c=0;c<3;++c) p[c]=shadowChannel(rgb[c]*gain, alpha, p[c]);
         }
-    }
+    });
+}
+}
+
+std::uint64_t cameraRawShadowWorkingBytes(int width, int height) {
+    const int scale = gridScale(width, height);
+    const auto rows = std::uint64_t((height + scale - 1) / scale);
+    const auto columns = std::uint64_t((width + scale - 1) / scale);
+    return rows * (columns * 7 * sizeof(float) + 4 * sizeof(double));
+}
+void applyAdaptiveShadows(std::vector<float>& pixels, int width, int height, double amount,
+                          double previewScale, const std::function<bool()>& cancelled, CameraRawShadowAnalysis* analysis) {
+    adaptiveShadows(pixels, width, height, amount, previewScale, cancelled, analysis);
+}
+void applyAdaptiveShadows(std::vector<std::uint8_t>& pixels, int width, int height, double amount,
+                          double previewScale, const std::function<bool()>& cancelled, CameraRawShadowAnalysis* analysis) {
+    adaptiveShadows(pixels, width, height, amount, previewScale, cancelled, analysis);
 }
 }

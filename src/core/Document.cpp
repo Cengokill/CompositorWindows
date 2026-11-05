@@ -1,6 +1,7 @@
 #include "Document.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numbers>
 #include <stdexcept>
@@ -67,10 +68,46 @@ Point Transform::fromUnit(Point p)const{double a=std::remainder(rotation,360.)*s
 Point Transform::toUnit(Point p)const{double a=std::remainder(rotation,360.)*std::numbers::pi/180,c=std::cos(a),s=std::sin(a),px=p.x-x-width/2,py=p.y-y-height/2;return {.5+(px*c+py*s)/width*(flipX?-1:1),.5+(-px*s+py*c)/height*(flipY?-1:1)};}
 std::string newId(){GUID g{};if(FAILED(CoCreateGuid(&g)))throw std::runtime_error("UUID generation failed");char b[37];std::snprintf(b,sizeof b,"%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",g.Data1,g.Data2,g.Data3,g.Data4[0],g.Data4[1],g.Data4[2],g.Data4[3],g.Data4[4],g.Data4[5],g.Data4[6],g.Data4[7]);return b;}
 std::shared_ptr<const Raster> Raster::filled(int w,int h,Pixel value){sizeCheck(w,h);value.r=std::min(value.r,value.a);value.g=std::min(value.g,value.a);value.b=std::min(value.b,value.a);auto r=std::make_shared<Raster>();r->width=w;r->height=h;auto tile=std::make_shared<Tile>();tile->pixels.fill(value);r->tiles.resize(size_t((w+255)/256)*((h+255)/256),tile);return r;}
-std::shared_ptr<const Raster> Raster::fromRgba(int w,int h,const uint8_t*data,size_t stride){sizeCheck(w,h);if(!data||stride<size_t(w)*4||stride%4!=0)throw std::runtime_error("Invalid RGBA buffer");auto r=filled(w,h);return r->replacing(0,0,w,h,reinterpret_cast<const Pixel*>(data),stride/4);}
+std::shared_ptr<const Raster> Raster::fromRgba(int w,int h,const uint8_t* data,size_t stride,const std::function<bool()>& cancelled){
+    sizeCheck(w,h);
+    if(!data||stride<size_t(w)*4||stride%4!=0||stride>std::numeric_limits<size_t>::max()/size_t(h))
+        throw std::runtime_error("Invalid RGBA buffer");
+    static_assert(sizeof(Pixel)==4);
+    auto raster=std::make_shared<Raster>();raster->width=w;raster->height=h;
+    raster->tiles.reserve(size_t((w+tileSide-1)/tileSide)*((h+tileSide-1)/tileSide));
+    for(int top=0;top<h;top+=tileSide)for(int left=0;left<w;left+=tileSide){
+        if(cancelled&&cancelled())throw std::runtime_error("Raster conversion cancelled");
+        auto tile=std::make_shared<Tile>();
+        const int rows=std::min(tileSide,h-top),columns=std::min(tileSide,w-left);
+        for(int y=0;y<rows;++y){
+            auto* pixels=tile->pixels.data()+size_t(y)*tileSide;
+            std::memcpy(pixels,data+size_t(top+y)*stride+size_t(left)*4,size_t(columns)*4);
+            for(int x=0;x<columns;++x){
+                auto& p=pixels[x];p.r=std::min(p.r,p.a);p.g=std::min(p.g,p.a);p.b=std::min(p.b,p.a);
+            }
+        }
+        raster->tiles.push_back(std::move(tile));
+    }
+    return raster;
+}
 Pixel Raster::pixel(int x,int y)const{if(x<0||y<0||x>=width||y>=height)return {};return tiles[size_t(y/256)*((width+255)/256)+x/256]->pixels[size_t(y%256)*256+x%256];}
 std::shared_ptr<const Raster> Raster::replacing(int x,int y,int w,int h,const Pixel* src,size_t stride)const{if(x<0||y<0||w<0||h<0||w>width-x||h>height-y||stride<size_t(w)||(!src&&w*h))throw std::runtime_error("Invalid raster patch");auto out=std::make_shared<Raster>(*this);std::unordered_map<size_t,std::shared_ptr<Tile>> changed;for(int py=0;py<h;++py)for(int px=0;px<w;++px){int dx=x+px,dy=y+py;size_t idx=size_t(dy/256)*((width+255)/256)+dx/256;auto& tile=changed[idx];if(!tile){tile=std::make_shared<Tile>(*tiles[idx]);out->tiles[idx]=tile;}auto p=src[size_t(py)*stride+px];p.r=std::min(p.r,p.a);p.g=std::min(p.g,p.a);p.b=std::min(p.b,p.a);tile->pixels[size_t(dy%256)*256+dx%256]=p;}return out;}
-std::vector<uint8_t> Raster::rgba()const{++materializations;std::vector<uint8_t> bytes(size_t(width)*height*4);for(int y=0;y<height;++y)for(int x=0;x<width;++x){auto p=pixel(x,y);auto i=(size_t(y)*width+x)*4;bytes[i]=p.r;bytes[i+1]=p.g;bytes[i+2]=p.b;bytes[i+3]=p.a;}return bytes;}
+std::vector<uint8_t> Raster::rgba(const std::function<bool()>& cancelled)const{
+    ++materializations;
+    if(cancelled&&cancelled())throw std::runtime_error("Raster conversion cancelled");
+    static_assert(sizeof(Pixel)==4);
+    std::vector<uint8_t> bytes(size_t(width)*height*4);
+    const int tileColumns=(width+tileSide-1)/tileSide;
+    for(int y=0;y<height;++y){
+        if(cancelled&&cancelled())throw std::runtime_error("Raster conversion cancelled");
+        auto* row=bytes.data()+size_t(y)*width*4;
+        for(int x=0;x<width;x+=tileSide){
+            const auto& tile=*tiles[size_t(y/tileSide)*tileColumns+x/tileSide];
+            std::memcpy(row+size_t(x)*4,tile.pixels.data()+size_t(y%tileSide)*tileSide,size_t(std::min(tileSide,width-x))*4);
+        }
+    }
+    return bytes;
+}
 uint8_t GrayRaster::pixel(int x,int y,uint8_t exterior)const{return x<0||y<0||x>=width||y>=height?exterior:source?source->pixel(x,y):pixels[size_t(y)*width+x];}
 bool GrayRaster::validStorage()const{return width>0&&height>0&&width<=30000&&height<=30000&&(source?pixels.empty():pixels.size()==size_t(width)*height);}
 GrayBounds GrayRaster::nonzeroBounds()const{

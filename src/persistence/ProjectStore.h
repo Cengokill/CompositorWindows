@@ -16,8 +16,10 @@ struct ProjectAssetCodec {
     std::function<void(const std::filesystem::path&,const DeepImage&)> writeDeep;
 };
 struct OpenProject { Document document; std::string activeLayer; int readVersion{7}; };
-enum class SaveFaultPoint { AfterStage, AfterJournal, AfterBackup, AfterInstall, BeforeCleanup };
+enum class SaveFaultPoint { AfterStage, AfterJournal, AfterBackup, AfterInstall, BeforeCleanup, BeforeJournalReplace, BeforeMetadataTempCreate };
 using SaveFaultInjector=std::function<void(SaveFaultPoint)>;
+// Non-null only while a BeforeMetadataTempCreate hook is running.
+const std::filesystem::path* metadataTempAwaitingCreate();
 class IProjectStore {
 public:
     virtual ~IProjectStore()=default;

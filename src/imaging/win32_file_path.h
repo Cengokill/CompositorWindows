@@ -40,7 +40,8 @@ inline std::filesystem::path win32FilePath(const std::filesystem::path& path) {
     }else throw std::invalid_argument("Image filename cannot be made absolute");
     std::vector<std::wstring> parts;size_t start=0;
     while(start<tail.size()){auto end=tail.find(L'\\',start);auto part=tail.substr(start,end==std::wstring::npos?end:end-start);if(part==L".."){if(parts.empty())throw std::invalid_argument("Image path leaves its drive or UNC share");parts.pop_back();}else if(!part.empty()&&part!=L"."){component(part);parts.push_back(std::move(part));}if(end==std::wstring::npos)break;start=end+1;}
-    if(parts.empty())throw std::invalid_argument("Image filename must include a file component");
+    // A UNC share root is a directory (`\\server\share`), not an image file. Drive paths still need a file component.
+    if(parts.empty()&&!unc)throw std::invalid_argument("Image filename must include a file component");
     std::wstring result=unc?L"\\\\?\\UNC\\"+root:L"\\\\?\\"+root;for(size_t i=0;i<parts.size();++i){if(i)result+=L'\\';result+=parts[i];}
     if(result.size()>=32767)throw std::invalid_argument("Image filename exceeds the extended Win32 length limit");
     return std::filesystem::path(result);

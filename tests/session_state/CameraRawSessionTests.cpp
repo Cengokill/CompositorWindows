@@ -3,6 +3,7 @@
 #undef main
 #include "filters/CameraRaw.h"
 #include "ui/ImportCommit.h"
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDoubleSpinBox>
@@ -76,10 +77,36 @@ void commit_ok() {
     require(pixel.r > 165 && pixel.r < 190 && pixel.r == pixel.g && pixel.a == 255, "OK bakes about one stop");
     rawModal(f, [](QDialog& dialog) { require(field<QDoubleSpinBox>(dialog, "Exposure")->value() == 1, "reopen restores the committed exposure"); }, false);
 }
-void commit_during_refinement() {
+void commit_auto_white_balance() {
+    auto initial = document();
+    const auto source = Raster::filled(initial.width, initial.height, {160, 110, 80, 255});
+    initial.layers.front().raster = source;
+    const auto balance = filters::CameraRawSettings::autoBalance(*source, {});
+    require(balance && (balance->first != 0 || balance->second != 0), "fixture needs a white balance correction");
+    Fixture f(initial);
+    rawModal(f, [&](QDialog& dialog) {
+        auto* choice = field<QComboBox>(dialog, "cameraRawWhiteBalance");
+        auto* ok = dialog.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+        choice->setCurrentIndex(1);
+        require(!ok->isEnabled(), "selecting Auto disables OK until the result arrives");
+        ok->click();
+        require(dialog.isVisible() && f.a->history.undoCount() == 0, "immediate OK cannot apply stale white balance");
+    }, true);
+    const auto settings = f.a->toolState.filterSettings.cameraRaw;
+    require(settings.whiteBalance == filters::CameraRawWhiteBalance::Auto &&
+            settings.temperature == std::clamp(balance->first, -100., 100.) &&
+            settings.tint == std::clamp(balance->second, -100., 100.),
+            "OK uses the completed Auto white balance");
+    const auto expected = filters::renderCameraRaw(*source, settings, {}, nullptr).raster;
+    require(expected && f.a->history.undoCount() == 1 &&
+            f.a->document->layers.front().raster->rgba() == expected->rgba(), "Auto correction commits one undoable edit");
+}
+void commit_during_native_preview() {
     Fixture f(document(2048, 1536));
+    const auto before = f.a->document;
+    f.a->toolState.filterSettings.cameraRaw.shadows = 35;
     std::exception_ptr failure;
-    bool opened = false, finished = false, submitted = false, sawRefinement = false;
+    bool opened = false, finished = false, submitted = false;
     QPointer<QDialog> panel;
     QMetaObject::Connection completion;
     QEventLoop wait;
@@ -89,7 +116,7 @@ void commit_during_refinement() {
     elapsed.start();
     QObject::connect(&poll, &QTimer::timeout, &f.window, [&] {
         try {
-            if (elapsed.elapsed() > 30000) throw std::runtime_error("Camera Raw refinement did not commit within 30 seconds");
+            if (elapsed.elapsed() > 30000) throw std::runtime_error("Camera Raw native preview did not commit within 30 seconds");
             QDialog* dialog = panel ? panel.data() : nullptr;
             if (!dialog) for (auto* object : f.window.findChildren<QObject*>()) if (auto* session = dynamic_cast<ui::EditPanelSession*>(object))
                 if (session->canvas() == f.window.canvas() && session->panel() && session->panel()->isVisible()) dialog = session->panel();
@@ -102,10 +129,8 @@ void commit_during_refinement() {
             }
             auto* box = dialog->findChild<QDialogButtonBox*>();
             auto* button = box ? box->button(QDialogButtonBox::Ok) : nullptr;
-            const auto labels = dialog->findChildren<QLabel*>();
-            const bool updating = std::any_of(labels.cbegin(), labels.cend(), [](const QLabel* label) { return label->text() == "Updating preview…"; });
-            if (!submitted && button && button->isEnabled() && updating) {
-                sawRefinement = true;
+            auto* status = field<QLabel>(*dialog, "filterPreviewStatus");
+            if (!submitted && button && button->isEnabled() && status->text() == "Updating preview…") {
                 submitted = true;
                 button->click();
             }
@@ -121,8 +146,82 @@ void commit_during_refinement() {
     poll.stop();
     QObject::disconnect(completion);
     if (failure) std::rethrow_exception(failure);
-    require(opened && sawRefinement && submitted && finished, "OK was submitted while the refinement preview was running");
-    require(f.a->history.undoCount() == 1 && f.a->history.undoName() == "Camera Raw Filter", "OK during refinement commits one Camera Raw Filter undo");
+    require(opened && submitted && finished, "OK was submitted during the native preview");
+    require(f.a->history.undoCount() == 1 && f.a->history.undoName() == "Camera Raw Filter", "OK during a preview commits one Camera Raw Filter undo");
+    const auto committed = f.a->document;
+    auto rendered = filters::renderCameraRaw(*before->layers.front().raster, f.a->toolState.filterSettings.cameraRaw, {}, nullptr);
+    require(f.a->toolState.filterSettings.cameraRaw.exposure == 1 &&
+            committed->layers.front().raster->rgba() == rendered.raster->rgba(), "OK uses the latest settings at full resolution");
+    f.trigger("edit.undo");
+    require(f.a->document == before, "Undo restores the original raster after an in-flight OK");
+    f.trigger("edit.redo");
+    require(f.a->document == committed, "Redo restores the full native grade");
+}
+void native_preview_session() {
+    constexpr int width = 3073, height = 64;
+    auto initial = document(width, height);
+    std::vector<Pixel> stripes(std::size_t(width) * height);
+    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+        const auto value = std::uint8_t(x % 2 == 0 ? 50 : 110);
+        stripes[std::size_t(y) * width + x] = {value, value, value, 255};
+    }
+    const auto source = Raster::fromRgba(width, height, reinterpret_cast<const std::uint8_t*>(stripes.data()), std::size_t(width) * 4);
+    initial.layers.front().raster = source;
+    Fixture f(initial);
+    auto waitFor = [](const auto& condition, const char* failure) {
+        QElapsedTimer elapsed;
+        elapsed.start();
+        while (!condition() && elapsed.elapsed() < 15000) QTest::qWait(5);
+        require(condition(), failure);
+    };
+    f.trigger("filter.camera_raw");
+    QPointer<ui::EditPanelSession> session;
+    for (auto* object : f.window.findChildren<QObject*>()) {
+        auto* candidate = dynamic_cast<ui::EditPanelSession*>(object);
+        if (candidate && candidate->panel() && candidate->panel()->isVisible() && candidate->canvas() == f.window.canvas()) session = candidate;
+    }
+    require(bool(session), "Camera Raw command opened its edit session");
+    auto* exposure = field<QDoubleSpinBox>(*session->panel(), "Exposure");
+    auto* enabled = field<QCheckBox>(*session->panel(), "filterPreviewEnabled");
+    auto* status = field<QLabel>(*session->panel(), "filterPreviewStatus");
+    const auto previewRaster = [&]() -> std::shared_ptr<const Raster> {
+        const auto preview = session->previewDocument();
+        return preview ? preview->layers.front().raster : nullptr;
+    };
+    for (const double value : {.5, -.5, 1.}) exposure->setValue(value);
+    filters::CameraRawSettings expected;
+    expected.exposure = 1;
+    const auto latest = filters::renderCameraRaw(*source, expected, {}, nullptr).raster;
+    waitFor([&] {
+        const auto shown = previewRaster();
+        return shown && shown->width == width && shown->pixel(3010, 10) == latest->pixel(3010, 10);
+    }, "preview converges to the latest slider value at native dimensions");
+    require(previewRaster()->rgba() == latest->rgba(), "native preview retains the one-pixel stripes and full grade");
+    exposure->setValue(-1);
+    enabled->setChecked(false);
+    waitFor([&] { return status->text() == "Preview"; }, "hidden preview work settled");
+    require(!previewRaster() && !f.a->effectPreview, "Preview off keeps late results off the canvas");
+    exposure->setValue(2);
+    waitFor([&] { return !previewRaster() && !f.a->effectPreview && status->text() == "Preview"; },
+            "Preview off keeps later Exposure moves off the canvas");
+    enabled->setChecked(true);
+    require(!previewRaster() && !f.a->effectPreview, "Preview on waits for the worker to prepare a viewport");
+    auto* canvas = f.window.canvas();
+    const auto oldBounds = canvas->viewportBounds();
+    canvas->zoomAt(1.5, QPointF(80, 60));
+    canvas->panBy(QPointF(12.5, 0));
+    require(canvas->viewportBounds() != oldBounds && canvas->deferViewportComposite && canvas->deferViewportComposite(),
+            "changed bounds defer composition while the Camera Raw worker is active");
+    expected.exposure = 2;
+    const auto bright = filters::renderCameraRaw(*source, expected, {}, nullptr).raster;
+    waitFor([&] { return previewRaster() && previewRaster()->rgba() == bright->rgba(); },
+            "Preview on displays the latest completed grade after preparing the new viewport");
+    exposure->setValue(.7);
+    session->cancel();
+    waitFor([&] { return session.isNull(); }, "cancelled panel retired");
+    require(!canvas->deferViewportComposite && !canvas->deferNavigatorComposite &&
+            !f.a->effectPreview && f.a->document == initial && f.a->history.undoCount() == 0,
+            "Cancel leaves the document, history and canvas unchanged");
 }
 void cancel_keeps() {
     Fixture f;
@@ -426,7 +525,7 @@ void guided_lines() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_refinement", commit_during_refinement}, {"cancel_keeps", cancel_keeps}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_auto_white_balance", commit_auto_white_balance}, {"commit_during_native_preview", commit_during_native_preview}, {"native_preview_session", native_preview_session}, {"cancel_keeps", cancel_keeps}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();

@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace compositor::filters {
+struct CameraRawShadowAnalysis;
 enum class CameraRawWhiteBalance { Custom, Auto };
 enum class CameraRawGlowStyle { Diffusion, Bloom, Halation };
 enum class CameraRawVignetteStyle { HighlightPriority, ColorPriority, PaintOverlay };
@@ -130,7 +131,7 @@ struct CameraRawGroupEyes {
     bool operator==(const CameraRawGroupEyes&) const = default;
 };
 
-// Preview-only paint. OK leaves every field at these defaults.
+// Presentation options. OK clears diagnostic paint and skips the scope.
 struct CameraRawView {
     int clipping{};
     double scale{1};
@@ -139,8 +140,10 @@ struct CameraRawView {
     bool sharpenMask{};
     bool shadowOverlay{};
     bool highlightOverlay{};
-    // 0 grades the scope from every pixel. A positive limit downsamples first.
+    // Zero counts every pixel. A positive edge samples the grid. A negative edge skips the scope.
     int scopeLimit{};
+    bool paints() const { return clipping || visualizePointColor >= 0 || sharpenMask || shadowOverlay || highlightOverlay; }
+    bool operator==(const CameraRawView&) const = default;
 };
 
 struct CameraRawScope {
@@ -148,6 +151,8 @@ struct CameraRawScope {
     std::array<double, 64 * 64> vectorscope{};
     double peak() const;
     static CameraRawScope make(const std::uint8_t* rgba, int width, int height);
+    static CameraRawScope make(const Raster&, int limit, const std::function<bool()>& cancelled = {});
+    static CameraRawScope make(const DeepImage&, int limit, const std::function<bool()>& cancelled);
 };
 
 struct CameraRawSettings {
@@ -182,16 +187,19 @@ struct CameraRawSettings {
     static std::optional<std::pair<double, double>> neutralizeLinear(double red, double green, double blue);
     static std::optional<std::pair<double, double>> neutralizeStraight(double red, double green, double blue);
     static std::optional<std::pair<double, double>> autoBalance(const std::uint8_t* rgba, int width, int height, int stride);
+    static std::optional<std::pair<double, double>> autoBalance(const Raster&, const std::function<bool()>& cancelled);
     bool operator==(const CameraRawSettings&) const = default;
 };
 
 struct CameraRawRender {
     std::shared_ptr<const Raster> raster;
-    CameraRawScope scope;
+    std::optional<CameraRawScope> scope;
     bool changed{};
 };
 // Grade, then selection blend, then preview-only paint. Scope is the grade before that paint.
-CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {});
-std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {});
+// The cancellation probe may be polled by several workers. An optional analysis belongs
+// to the same source, dimensions and grade before Shadows. A session owns it exclusively.
+CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {}, CameraRawShadowAnalysis* analysis = nullptr);
+std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const CameraRawSettings& settings, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled = {}, CameraRawShadowAnalysis* analysis = nullptr);
 bool cameraRawNeedsEightBit(const CameraRawSettings&);
 }

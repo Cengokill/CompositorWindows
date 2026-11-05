@@ -9,12 +9,19 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#if defined(_WIN32)
+#include <windows.h>
+#include <psapi.h>
+#else
+#include <sys/resource.h>
+#endif
 using namespace compositor;
 using namespace compositor::filters;
 namespace {
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 void fails(const std::function<void()>& action,const char* message){try{action();}catch(const std::exception&){return;}throw std::runtime_error(message);}
-bool near(double a,double b){return std::abs(a-b)<1e-8;}
+bool nearlyEqual(double a,double b){return std::abs(a-b)<1e-8;}
 std::shared_ptr<const Raster> image(int w,int h,const std::function<Pixel(int,int)>& get){
     std::vector<std::uint8_t> p(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto q=get(x,y);auto i=(std::size_t(y)*w+x)*4;p[i]=q.r;p[i+1]=q.g;p[i+2]=q.b;p[i+3]=q.a;}return Raster::fromRgba(w,h,p.data(),std::size_t(w)*4);
 }
@@ -124,16 +131,16 @@ void testFill(){
     auto stripesMask=mask(80,64,[](int x,int y){return std::uint8_t(x>=32&&x<44&&y>=26&&y<36?255:0);});auto stripes=image(80,64,[&](int x,int y){auto b=std::uint8_t((x/4)%2==0?51:204);return stripesMask->pixel(x,y)?Pixel{255,0,0,255}:Pixel{b,b,b,255};});q=request(Kind::ContentAwareFill,stripes);q.selection=SourceSelection{stripesMask};result=apply(q);int matching=0;for(int y=26;y<36;++y)for(int x=32;x<44;++x)matching+=std::abs(int(result.raster->pixel(x,y).r)-((x/4)%2==0?51:204))<=1;std::cout<<"fill stripes matched "<<matching<<" of 120\n";require(matching>=114,"source repeating texture threshold");
     q.selection=SourceSelection{mask(80,64,[](int,int){return std::uint8_t(255);})};fails([&]{apply(q);},"fill with no donor must fail");q.selection.reset();fails([&]{apply(q);},"fill with absent selection must fail");
     // Coverage outside the original source expands the layer grid while preserving placement.
-    q=request(Kind::ContentAwareFill,Raster::filled(8,8,{51,153,204,255}));q.selection=SourceSelection{mask(4,4,[](int,int){return std::uint8_t(255);}),-2,2};result=apply(q);require(result.sourceBounds==PixelRect{-2,0,10,8}&&near(result.transform.x,8)&&result.raster->pixel(0,3).a==255,"fill extends into selected exterior");
+    q=request(Kind::ContentAwareFill,Raster::filled(8,8,{51,153,204,255}));q.selection=SourceSelection{mask(4,4,[](int,int){return std::uint8_t(255);}),-2,2};result=apply(q);require(result.sourceBounds==PixelRect{-2,0,10,8}&&nearlyEqual(result.transform.x,8)&&result.raster->pixel(0,3).a==255,"fill extends into selected exterior");
 }
 void testCoverageAndPlacement(){
     auto src=image(19,15,[](int x,int y){return Pixel{std::uint8_t(40+x),std::uint8_t(50+y),60,128};});Settings s;s.amount=200;auto changed=runPixels(Kind::AddNoise,*src,s,1,99);auto coverage=mask(19,15,[](int x,int){return std::uint8_t(x<5?0:x<10?128:255);});auto blended=runPixels(Kind::AddNoise,*src,s,1,99,coverage.get());
     for(int y=0;y<15;++y)for(int x=0;x<19;++x){auto a=src->pixel(x,y),b=changed->pixel(x,y),p=blended->pixel(x,y);unsigned c=coverage->pixel(x,y);require(p.r==(b.r*c+a.r*(255-c)+127)/255&&p.a==128,"coverage endpoints and half blend");require(p.r<=p.a&&p.g<=p.a&&p.b<=p.a,"premultiplied filter result");}
     Transform placed{25.25,-13.5,87.3,21.4,37,true,false,Transform::Sampling::Nearest};PixelRect bounds{-7,-9,43,36};auto grown=placedGrid(placed,19,15,bounds);require(grown.rotation==placed.rotation&&grown.flipX&&grown.sampling==placed.sampling,"metadata preserved");
-    for(Point pixel: {Point{0,0},Point{.5,.5},Point{8.75,11.1},Point{19,15}}){auto before=placed.fromUnit({pixel.x/19,pixel.y/15});auto after=grown.fromUnit({(pixel.x-bounds.x)/bounds.width,(pixel.y-bounds.y)/bounds.height});require(near(before.x,after.x)&&near(before.y,after.y),"rotated flipped placement preserves source pixels");}
+    for(Point pixel: {Point{0,0},Point{.5,.5},Point{8.75,11.1},Point{19,15}}){auto before=placed.fromUnit({pixel.x/19,pixel.y/15});auto after=grown.fromUnit({(pixel.x-bounds.x)/bounds.width,(pixel.y-bounds.y)/bounds.height});require(nearlyEqual(before.x,after.x)&&nearlyEqual(before.y,after.y),"rotated flipped placement preserves source pixels");}
     auto q=request(Kind::GaussianBlur,Raster::filled(10,6,{255,255,255,255}));q.settings.radius=2;q.transform=placed;q.preview=true;q.retainedBlurMargin=20;auto preview=apply(q);require(preview.sourceBounds==PixelRect{-20,-20,50,46},"retained preview blur margin");q.preview=false;auto commit=apply(q);require(commit.raster->width<preview.raster->width&&commit.raster->height<preview.raster->height,"commit removes empty blur padding");
     bool lowAlpha=false;for(int y=0;y<commit.raster->height;++y)lowAlpha|=commit.raster->pixel(0,y).a>0&&commit.raster->pixel(0,y).a<255;require(lowAlpha,"unclamped blur spreads through border");
-    for(Point pixel:{Point{0,0},Point{10,6}}){auto before=placed.fromUnit({pixel.x/10,pixel.y/6});auto after=commit.transform.fromUnit({(pixel.x-commit.sourceBounds.x)/commit.sourceBounds.width,(pixel.y-commit.sourceBounds.y)/commit.sourceBounds.height});require(near(before.x,after.x)&&near(before.y,after.y),"trim keeps original pixel placement");}
+    for(Point pixel:{Point{0,0},Point{10,6}}){auto before=placed.fromUnit({pixel.x/10,pixel.y/6});auto after=commit.transform.fromUnit({(pixel.x-commit.sourceBounds.x)/commit.sourceBounds.width,(pixel.y-commit.sourceBounds.y)/commit.sourceBounds.height});require(nearlyEqual(before.x,after.x)&&nearlyEqual(before.y,after.y),"trim keeps original pixel placement");}
 }
 void testRgbSplit(){
     auto source=image(64,32,[](int x,int){return x<32?Pixel{200,80,40,255}:Pixel{40,80,200,255};});
@@ -172,7 +179,7 @@ void testRgbSplit(){
     require(highBloom->rgba()==nearZeroBloom->rgba(),"Bloom is continuous at zero threshold");
 }
 void testPreviewAndFailure(){
-    auto q=request(Kind::LensCorrection,Raster::filled(3001,17,{100,100,100,255}));q.preview=true;q.settings.distortion=10;auto preview=apply(q);require(preview.raster->width==2048&&preview.raster->height==11&&near(preview.previewScale,2048./3001)&&preview.transform==q.transform,"2048 preview source scale");q.kind=Kind::AddNoise;preview=apply(q);require(preview.raster->width==3001&&preview.previewScale==1,"noise preview remains full resolution");
+    auto q=request(Kind::LensCorrection,Raster::filled(3001,17,{100,100,100,255}));q.preview=true;q.settings.distortion=10;auto preview=apply(q);require(preview.raster->width==2048&&preview.raster->height==11&&nearlyEqual(preview.previewScale,2048./3001)&&preview.transform==q.transform,"2048 preview source scale");q.kind=Kind::AddNoise;preview=apply(q);require(preview.raster->width==3001&&preview.previewScale==1,"noise preview remains full resolution");
     q.kind=Kind::LensCorrection;q.settings.distortion=0;auto noop=apply(q);require(!noop.changed&&noop.raster==q.source,"neutral lens has no commit");q.kind=Kind::GaussianBlur;q.selection=SourceSelection{mask(3001,17,[](int,int){return std::uint8_t(0);})};noop=apply(q);require(!noop.changed&&noop.raster==q.source,"present empty selection has no commit");
     q.selection.reset();q.limits.maxWorkingBytes=1;fails([&]{apply(q);},"working budget must fail");q.limits={};q.limits.cancelled=[]{return true;};fails([&]{apply(q);},"pre-cancel must fail");int polls=0;q.source=Raster::filled(80,60,{255,255,255,255});q.transform={0,0,80,60};q.limits.cancelled=[&]{return ++polls>8;};fails([&]{apply(q);},"in-flight Gaussian cancellation must fail");require(polls>8&&q.source->pixel(0,0).a==255,"cancel preserves input");
     auto large=request(Kind::GaussianBlur,Raster::filled(7000,5000,{100,100,100,255}));large.preview=true;large.settings.radius=1;large.retainedBlurMargin=blurMargin(Kind::GaussianBlur,large.settings);large.limits.maxWorkingBytes=1200000000;auto largePreview=apply(large);require(largePreview.changed&&largePreview.raster->width<=2048&&largePreview.previewScale<1,"large gaussian preview downsamples before the working budget");
@@ -203,6 +210,65 @@ int benchmark(){
         for(int run=0;run<4;++run){auto start=std::chrono::steady_clock::now();auto output=apply(q);double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();std::cout<<"kind="<<int(kind)<<" run="<<run<<" elapsed_ms="<<ms<<" result="<<output.raster->width<<"x"<<output.raster->height<<"\n";}
     }return 0;
 }
+std::uint64_t peakProcessBytes() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, DWORD(sizeof(counters))))
+        throw std::runtime_error("Cannot measure Camera Raw process memory");
+    return counters.PeakWorkingSetSize;
+#else
+    struct rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) != 0) throw std::runtime_error("Cannot measure Camera Raw process memory");
+    return std::uint64_t(usage.ru_maxrss) * 1024;
+#endif
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int benchmarkCameraRaw() {
+    using Clock = std::chrono::steady_clock;
+    auto elapsed = [](Clock::time_point start) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    };
+    std::cout << "Camera Raw native preview, five runs per grade. Peak is process-wide since launch.\n";
+    for (const auto& [width, height] : {std::pair{1024, 768}, std::pair{6000, 4000}}) {
+        const auto inputStart = Clock::now();
+        auto source = image(width, height, [height](int x, int y) {
+            const int value = (y < height / 3 ? 145 : 16) + ((x * 31 + y * 13) & 63);
+            return Pixel{std::uint8_t(value), std::uint8_t(value + 10), std::uint8_t(value + 28), 255};
+        });
+        std::cout << "source=" << width << 'x' << height << " rgba8_prepare_ms=" << elapsed(inputStart) << '\n';
+        for (const auto* grade : {"light8", "shadows8", "light16"}) {
+            auto job = request(Kind::CameraRaw, source);
+            job.preview = true;
+            job.cameraRawNativePreview = true;
+            job.cameraRawView.scopeLimit = -1;
+            job.cameraRaw.exposure = .5; job.cameraRaw.contrast = 15; job.cameraRaw.highlights = -20;
+            if (std::string_view(grade) == "shadows8") job.cameraRawCache = std::make_shared<CameraRawPreviewCache>();
+            if (std::string_view(grade) == "light16") {
+                const auto deepStart = Clock::now();
+                auto deep = makeDeep(width, height, DeepImage::Format::Unorm16);
+                const auto bytes = source->rgba();
+                for (std::size_t i = 0; i < bytes.size(); ++i) deep->samples[i] = promote8(bytes[i]);
+                job.deepSource = std::move(deep);
+                std::cout << "source=" << width << 'x' << height << " unorm16_prepare_ms=" << elapsed(deepStart) << '\n';
+            }
+            for (int run = 0; run < 5; ++run) {
+                if (job.cameraRawCache) job.cameraRaw.shadows = 25 + run * 10;
+                const auto start = Clock::now();
+                const auto result = apply(job);
+                const double gradeMs = elapsed(start);
+                const auto scopeStart = Clock::now();
+                const auto scope = result.deep ? CameraRawScope::make(*result.deep, 512, {})
+                                               : CameraRawScope::make(*result.raster, 512);
+                const double scopeMs = elapsed(scopeStart);
+                require(result.raster->width == width && result.raster->height == height && scope.peak() > 0,
+                        "benchmark requires the native grade and a valid scope");
+                std::cout << "source=" << width << 'x' << height << " grade=" << grade << " run=" << run
+                          << " grade_ms=" << gradeMs << " scope_ms=" << scopeMs
+                          << " peak_process_mib=" << double(peakProcessBytes()) / (1024 * 1024) << '\n';
+            }
+        }
+    }
+    return 0;
+}
+}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

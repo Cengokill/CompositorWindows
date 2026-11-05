@@ -1,4 +1,5 @@
 #include "persistence/ProjectStore.h"
+#include "imaging/win32_file_path.h"
 #include "editing/DocumentGeometry.h"
 #include "editing/Shapes.h"
 #include "graphics/StackRenderer.h"
@@ -10,9 +11,12 @@
 #include <QTemporaryDir>
 #include <Windows.h>
 #include <winioctl.h>
+#include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 using namespace compositor;
 namespace fs=std::filesystem;
 void check(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
@@ -60,5 +64,233 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
  }
  else if(test=="guides_roundtrip"){d.guides.push_back({id(9),true,12.5});d.guides.push_back({id(10),false,4});store.save(p,d,id(2));auto loaded=store.load(p);check(loaded.readVersion==8&&loaded.document.guides.size()==2,"Guide save did not round-trip");check(loaded.document.guides[0]==Guide{id(9),true,12.5}&&loaded.document.guides[1]==Guide{id(10),false,4},"Guide orientation or position changed");auto manifest=json(p/L"manifest.json");auto guides=manifest["guides"].toArray();check(manifest["version"]==8&&guides.size()==2&&guides[0].toObject()["orientation"]=="horizontal"&&guides[1].toObject()["orientation"]=="vertical","Guide manifest shape changed");}
   else if(test=="shape_stroke_roundtrip"){editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,1,0};style.strokeEnabled=true;style.strokeWidth=3;style.strokeRed=1;style.strokeBlue=.5;Document shaped;shaped.id=id(1);shaped.width=20;shaped.height=20;shaped.resolution=72;auto layer=*editing::createShapeLayer({0,0,8,6},style,"Stroke");layer.id=id(2);shaped.layers.push_back(layer);store.save(p,shaped,id(2));auto loaded=store.load(p);check(loaded.readVersion==14&&loaded.document.layers.size()==1&&editing::decodeShapeStyle(loaded.document.layers[0].shapeJson)==style,"Stroked shape did not round-trip as format v14");auto manifest=json(p/L"manifest.json");check(manifest["version"]==14,"Stroked shape did not write format v14");manifest["version"]=13;json(p/L"manifest.json",manifest);rejects([&]{store.load(p);});}
+  else if(test=="long_image_path"){fs::path deep=root;const auto imageName=fs::path(id(2)+".png");bool longEnough=false;for(int i=0;i<40;++i){if(fs::absolute(deep/L"Saved.comp"/L"images"/imageName).native().size()>=260){longEnough=true;break;}deep/=L"long-path-segment";}check(longEnough,"Could not construct an image path of at least 260 characters");fs::create_directories(imaging::win32FilePath(deep));auto project=deep/L"Saved.comp";ProjectStore actual(makeWicProjectCodec());d.layers[0].raster=Raster::filled(2,2,{9,8,7,255});actual.save(project,d,id(2));auto loaded=actual.load(project);check(loaded.document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"Long-path WIC pixels changed");int entries=0;for(auto& entry:fs::directory_iterator(imaging::win32FilePath(deep))){++entries;check(entry.path().filename()==L"Saved.comp","Long-path save left a recovery directory");}check(entries==1,"Long-path save left recovery files");std::error_code ignored;fs::remove_all(imaging::win32FilePath(root),ignored);}
+  else if(test=="long_journal_interrupt"){
+    fs::path deep=root;bool longEnough=false;
+    for(int i=0;i<48;++i){if(fs::absolute(deep/L"Saved.comp.compositor-save.json").native().size()>=260){longEnough=true;break;}deep/=L"long-path-segment";}
+    check(longEnough,"Could not construct a journal path of at least 260 characters");
+    fs::create_directories(imaging::win32FilePath(deep));
+    auto project=deep/L"Saved.comp";ProjectStore actual(makeWicProjectCodec());
+    d.layers[0].name="Original";d.layers[0].raster=Raster::filled(2,2,{9,8,7,255});
+    actual.save(project,d,id(2));
+    auto changed=d;changed.layers[0].name="Replacement";changed.layers[0].raster=Raster::filled(2,2,{1,2,3,255});
+    bool interrupted=false;std::string hookFailure;
+    ProjectStore faults(makeWicProjectCodec(),[&](SaveFaultPoint point){
+      if(point!=SaveFaultPoint::BeforeJournalReplace)return;
+      interrupted=true;
+      try{
+        auto journal=fs::absolute(deep/L"Saved.comp.compositor-save.json").lexically_normal();
+        QFile file(QString::fromStdWString(imaging::win32FilePath(journal).wstring()));
+        check(file.open(QIODevice::ReadOnly),"Previous journal was not readable at the interruption");
+        auto bytes=file.readAll();file.close();
+        check(!bytes.isEmpty(),"Previous journal was empty at the interruption");
+        auto phase=QJsonDocument::fromJson(bytes).object()["phase"].toString();
+        check(phase=="prepared","Previous journal phase was no longer prepared");
+        int backups=0;
+        for(auto& entry:fs::directory_iterator(imaging::win32FilePath(deep))){
+          auto name=entry.path().filename().wstring();
+          if(name.rfind(L"Saved.comp.backup-",0)!=0)continue;
+          ++backups;
+          auto recovered=ProjectStore(makeWicProjectCodec()).load(deep/name);
+          check(recovered.document.layers[0].name=="Original"&&recovered.document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"Backup did not still hold the previous project");
+        }
+        check(backups==1,"Previous project backup was not accessible");
+      }catch(const std::exception& error){hookFailure=error.what();throw;}
+      throw std::runtime_error("interrupted journal replace");
+    });
+    rejects([&]{faults.save(project,changed,id(2));});
+    check(interrupted,"Long-path journal replace was not interrupted");
+    check(hookFailure.empty(),hookFailure.c_str());
+    auto restored=actual.load(project);
+    check(restored.document.layers[0].name=="Original"&&restored.document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"Interrupted journal update did not leave the previous project accessible");
+    int entries=0;for(auto& entry:fs::directory_iterator(imaging::win32FilePath(deep))){++entries;check(entry.path().filename()==L"Saved.comp","Interrupted save left a recovery directory");}
+    check(entries==1,"Interrupted save left recovery files");
+    std::error_code ignored;fs::remove_all(imaging::win32FilePath(root),ignored);
+  }
+  else if(test=="metadata_temp_ownership"){
+    fs::path deep=root;bool longEnough=false;
+    for(int i=0;i<48;++i){if(fs::absolute(deep/L"Saved.comp.compositor-save.json").native().size()>=260){longEnough=true;break;}deep/=L"long-path-segment";}
+    check(longEnough,"Could not construct a journal path of at least 260 characters");
+    fs::create_directories(imaging::win32FilePath(deep));
+    auto project=deep/L"Saved.comp";ProjectStore actual(makeWicProjectCodec());
+    d.layers[0].name="Original";d.layers[0].raster=Raster::filled(2,2,{9,8,7,255});
+    actual.save(project,d,id(2));
+    auto changed=d;changed.layers[0].name="Replacement";
+    const QByteArray foreign("owned-by-someone-else");
+    fs::path occupied;
+    ProjectStore collision(makeWicProjectCodec(),[&](SaveFaultPoint point){
+      if(point!=SaveFaultPoint::BeforeMetadataTempCreate)return;
+      auto prepared=metadataTempAwaitingCreate();
+      check(prepared!=nullptr,"Metadata temp path was not visible before create");
+      occupied=*prepared;
+      QFile file(QString::fromStdWString(prepared->wstring()));
+      check(file.open(QIODevice::WriteOnly|QIODevice::NewOnly),"Could not plant the colliding metadata temp");
+      check(file.write(foreign)==foreign.size()&&file.flush(),"Could not write the colliding metadata temp");
+    });
+    rejects([&]{collision.save(project,changed,id(2));});
+    check(!occupied.empty(),"Colliding metadata temp was not planted");
+    QFile occupiedFile(QString::fromStdWString(occupied.wstring()));
+    check(occupiedFile.open(QIODevice::ReadOnly),"Colliding metadata temp was removed or could not be read");
+    check(occupiedFile.readAll()==foreign,"Colliding metadata temp was truncated or replaced");
+    occupiedFile.close();
+    check(actual.load(project).document.layers[0].name=="Original","Temp collision changed the previous project");
+    check(QFile::remove(QString::fromStdWString(occupied.wstring())),"Could not remove the planted metadata temp");
+    fs::path createdTemp;
+    ProjectStore interrupted(makeWicProjectCodec(),[&](SaveFaultPoint point){
+      if(point!=SaveFaultPoint::BeforeJournalReplace)return;
+      int temps=0;
+      for(auto& entry:fs::directory_iterator(imaging::win32FilePath(deep))){
+        if(entry.path().filename().wstring().find(L".tmp-")==std::wstring::npos)continue;
+        ++temps;
+        createdTemp=imaging::win32FilePath(deep/entry.path().filename());
+        QFile file(QString::fromStdWString(createdTemp.wstring()));
+        check(file.open(QIODevice::ReadOnly),"Created metadata temp could not be read");
+        check(file.read(1)=="{","Created metadata temp was not the journal written by this save");
+      }
+      check(temps==1,"Expected one metadata temp created by this save");
+      throw std::runtime_error("fail after metadata temp creation");
+    });
+    rejects([&]{interrupted.save(project,changed,id(2));});
+    check(!createdTemp.empty(),"Failure after creation did not observe the metadata temp");
+    check(GetFileAttributesW(createdTemp.c_str())==INVALID_FILE_ATTRIBUTES,"Metadata temp created by this save was left behind");
+    check(actual.load(project).document.layers[0].name=="Original"&&actual.load(project).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"Failure after metadata temp creation changed the previous project");
+    int entries=0;for(auto& entry:fs::directory_iterator(imaging::win32FilePath(deep))){++entries;check(entry.path().filename()==L"Saved.comp","Failure after metadata temp creation left a recovery file");}
+    check(entries==1,"Failure after metadata temp creation left recovery files");
+    std::error_code ignored;fs::remove_all(imaging::win32FilePath(root),ignored);
+  }
+  else if(test=="unc_share_root"){
+    auto shareRoot=imaging::win32FilePath(L"\\\\server\\share");
+    auto shareNative=shareRoot.native();
+    check(shareNative==L"\\\\?\\UNC\\server\\share\\"||shareNative==L"\\\\?\\UNC\\server\\share","UNC share root was rejected or rewritten");
+    check(imaging::win32FilePath(L"\\\\server\\share\\").native()==shareNative,"Trailing slash changed the UNC share root");
+    check(imaging::win32FilePath(L"\\\\server\\share\\Saved.comp").native()==L"\\\\?\\UNC\\server\\share\\Saved.comp","UNC project path was rewritten");
+    bool escaped=false;try{imaging::win32FilePath(L"\\\\server\\share\\..");}catch(const std::invalid_argument&){escaped=true;}
+    check(escaped,"UNC path was allowed to leave its share");
+    wchar_t configured[32768]{};
+    auto configuredLength=GetEnvironmentVariableW(L"COMPOSITOR_TEST_UNC_SHARE",configured,32768);
+    if(configuredLength==0)std::cout<<"SKIP live UNC share: COMPOSITOR_TEST_UNC_SHARE is not set, so the network save is not run\n";
+    else{
+      check(configuredLength<32768,"COMPOSITOR_TEST_UNC_SHARE is too long");
+      std::wstring given(configured,configuredLength);
+      while(!given.empty()&&(given.back()==L'\\'||given.back()==L'/'))given.pop_back();
+      check(given.starts_with(L"\\\\")&&!given.starts_with(L"\\\\?\\")&&!given.starts_with(L"\\\\.\\"),"COMPOSITOR_TEST_UNC_SHARE must be a UNC directory");
+      auto serverEnd=given.find(L'\\',2);
+      check(serverEnd!=std::wstring::npos&&serverEnd>2,"COMPOSITOR_TEST_UNC_SHARE must include a server and share");
+      auto shareEnd=given.find(L'\\',serverEnd+1);
+      check(shareEnd!=serverEnd+1&&(shareEnd==std::wstring::npos||shareEnd>serverEnd+1),"COMPOSITOR_TEST_UNC_SHARE must include a share");
+      auto shareOnly=shareEnd==std::wstring::npos?given:given.substr(0,shareEnd);
+      check(imaging::win32FilePath(shareOnly).native().starts_with(L"\\\\?\\UNC\\"),"Configured UNC share root was not accepted");
+      auto directory=imaging::win32FilePath(given);
+      auto attributes=GetFileAttributesW(directory.c_str());
+      check(attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_DIRECTORY),"COMPOSITOR_TEST_UNC_SHARE is not a readable directory");
+      check((attributes&FILE_ATTRIBUTE_REPARSE_POINT)==0,"COMPOSITOR_TEST_UNC_SHARE must not be a reparse point");
+      auto identity=std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());
+      int serial=0;
+      struct Work{
+        fs::path configured,directory;QByteArray token;
+        Work()=default;
+        Work(const Work&)=delete;
+        Work& operator=(const Work&)=delete;
+        Work(Work&& other)noexcept:configured(std::move(other.configured)),directory(std::move(other.directory)),token(std::move(other.token)){other.directory.clear();other.token.clear();}
+        ~Work(){removeOwned();}
+        static std::wstring key(const fs::path& path){auto text=path.lexically_normal().wstring();while(text.size()>3&&(text.back()==L'\\'||text.back()==L'/'))text.pop_back();return text;}
+        bool owned()const{
+          try{
+            if(directory.empty()||token.isEmpty()||configured.empty())return false;
+            if(CompareStringOrdinal(key(directory).c_str(),-1,key(configured).c_str(),-1,TRUE)==CSTR_EQUAL)return false;
+            if(CompareStringOrdinal(key(directory.parent_path()).c_str(),-1,key(configured).c_str(),-1,TRUE)!=CSTR_EQUAL)return false;
+            auto name=directory.filename().wstring();
+            if(name!=L"cmp-unc-"+QString::fromUtf8(token).toStdWString()||name.find_first_of(L"\\/:")!=std::wstring::npos)return false;
+            auto extended=imaging::win32FilePath(directory);
+            auto attributes=GetFileAttributesW(extended.c_str());
+            if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT))return false;
+            QFile marker(QString::fromStdWString(imaging::win32FilePath(directory/L".compositor-unc-test-owner").wstring()));
+            if(!marker.open(QIODevice::ReadOnly))return false;
+            return marker.read(token.size()+1)==token;
+          }catch(...){return false;}
+        }
+        void removeOwned(){if(!owned())return;std::error_code ignored;try{fs::remove_all(imaging::win32FilePath(directory),ignored);}catch(...){}directory.clear();token.clear();}
+      };
+      auto makeWork=[&](){
+        Work work;work.configured=fs::path(given);work.token=QByteArray::fromStdString(std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())+"-"+std::to_string(++serial));
+        auto path=work.configured/(L"cmp-unc-"+QString::fromUtf8(work.token).toStdWString());
+        auto extended=imaging::win32FilePath(path);
+        check(CreateDirectoryW(extended.c_str(),nullptr),"Could not create the owned UNC test directory");
+        auto created=GetFileAttributesW(extended.c_str());
+        if(created==INVALID_FILE_ATTRIBUTES||!(created&FILE_ATTRIBUTE_DIRECTORY)||(created&FILE_ATTRIBUTE_REPARSE_POINT)){RemoveDirectoryW(extended.c_str());check(false,"UNC test directory was not created as a real directory");}
+        auto markerPath=imaging::win32FilePath(path/L".compositor-unc-test-owner");
+        QFile marker(QString::fromStdWString(markerPath.wstring()));
+        bool opened=marker.open(QIODevice::WriteOnly|QIODevice::NewOnly);
+        bool wrote=opened&&marker.write(work.token)==work.token.size()&&marker.flush();
+        marker.close();
+        if(!wrote){if(opened)DeleteFileW(markerPath.c_str());RemoveDirectoryW(extended.c_str());check(false,"Could not mark ownership of the UNC test directory");}
+        work.directory=path;
+        check(work.owned(),"UNC test directory is not owned before use");
+        return work;
+      };
+      struct Sentinel{fs::path path;bool created=false,directory=false,reparse=false;DWORD attributes=0;uint64_t size=0;FILETIME written{};QByteArray bytes;std::vector<std::wstring> children;};
+      auto snapshot=[&](Sentinel& sentinel){
+        auto extended=imaging::win32FilePath(sentinel.path);
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        check(GetFileAttributesExW(extended.c_str(),GetFileExInfoStandard,&info),"Could not inspect a UNC sentinel");
+        sentinel.attributes=info.dwFileAttributes;sentinel.reparse=(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;sentinel.directory=(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+        sentinel.size=(uint64_t(info.nFileSizeHigh)<<32)|info.nFileSizeLow;sentinel.written=info.ftLastWriteTime;sentinel.children.clear();sentinel.bytes.clear();
+        if(sentinel.reparse)return;
+        if(sentinel.directory){for(auto& entry:fs::directory_iterator(extended))sentinel.children.push_back(entry.path().filename().wstring());std::sort(sentinel.children.begin(),sentinel.children.end());
+          auto keep=imaging::win32FilePath(sentinel.path/L"keep.txt");WIN32_FILE_ATTRIBUTE_DATA keepInfo{};
+          if(GetFileAttributesExW(keep.c_str(),GetFileExInfoStandard,&keepInfo)&&!(keepInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)&&!(keepInfo.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)&&((uint64_t(keepInfo.nFileSizeHigh)<<32)|keepInfo.nFileSizeLow)<=65536){QFile file(QString::fromStdWString(keep.wstring()));check(file.open(QIODevice::ReadOnly),"UNC sentinel could not be read");sentinel.bytes=file.readAll();}}
+        else if(sentinel.size<=65536){QFile file(QString::fromStdWString(extended.wstring()));check(file.open(QIODevice::ReadOnly),"UNC sentinel could not be read");sentinel.bytes=file.readAll();}
+      };
+      auto prove=[&](const Sentinel& expected){
+        Sentinel actual;actual.path=expected.path;actual.created=expected.created;snapshot(actual);
+        check(actual.attributes==expected.attributes&&actual.reparse==expected.reparse&&actual.directory==expected.directory,"UNC sentinel identity changed");
+        check(actual.size==expected.size&&CompareFileTime(&actual.written,&expected.written)==0,"UNC sentinel bytes or timestamp changed");
+        check(actual.children==expected.children&&actual.bytes==expected.bytes,"UNC sentinel contents changed");
+      };
+      auto entries=[&](){std::vector<std::wstring> names;for(auto& entry:fs::directory_iterator(imaging::win32FilePath(fs::path(given))))names.push_back(entry.path().filename().wstring());std::sort(names.begin(),names.end());return names;};
+      auto before=entries();
+      auto plant=[&](const std::wstring& name,bool asDirectory,const QByteArray& content){
+        Sentinel sentinel;sentinel.path=fs::path(given)/name;auto extended=imaging::win32FilePath(sentinel.path);auto existing=GetFileAttributesW(extended.c_str());auto missing=GetLastError();
+        if(existing==INVALID_FILE_ATTRIBUTES){check(missing==ERROR_FILE_NOT_FOUND||missing==ERROR_PATH_NOT_FOUND,"Could not inspect a UNC sentinel");
+          if(asDirectory){check(CreateDirectoryW(extended.c_str(),nullptr),"Could not create a UNC sentinel directory");auto keep=imaging::win32FilePath(sentinel.path/L"keep.txt");QFile file(QString::fromStdWString(keep.wstring()));bool opened=file.open(QIODevice::WriteOnly|QIODevice::NewOnly);bool wrote=opened&&file.write(content)==content.size()&&file.flush();file.close();if(!wrote){if(opened)DeleteFileW(keep.c_str());RemoveDirectoryW(extended.c_str());check(false,"Could not write a UNC sentinel");}}
+          else{QFile file(QString::fromStdWString(extended.wstring()));bool opened=file.open(QIODevice::WriteOnly|QIODevice::NewOnly);bool wrote=opened&&file.write(content)==content.size()&&file.flush();file.close();if(!wrote){if(opened)DeleteFileW(extended.c_str());check(false,"Could not write a UNC sentinel");}}
+          sentinel.created=true;}
+        snapshot(sentinel);
+        if(sentinel.created)check(sentinel.bytes==content,"Created UNC sentinel did not keep its contents");
+        return sentinel;
+      };
+      auto saved=plant(L"Saved.comp",true,"preexisting-saved");
+      auto nested=plant(L"nested",true,"preexisting-nested");
+      auto file=plant(L"cmp-sentinel-"+identity,false,"preexisting-sentinel");
+      auto proveAll=[&](){prove(saved);prove(nested);prove(file);auto configured=GetFileAttributesW(imaging::win32FilePath(fs::path(given)).c_str());check(configured!=INVALID_FILE_ATTRIBUTES&&(configured&FILE_ATTRIBUTE_DIRECTORY),"Configured UNC directory was removed");};
+      fs::path failedPath;
+      try{auto failed=makeWork();failedPath=failed.directory;check(failed.owned(),"UNC test directory is not owned before cleanup");throw std::runtime_error("injected UNC cleanup");}
+      catch(const std::runtime_error& error){if(std::string(error.what())!="injected UNC cleanup")throw;}
+      check(GetFileAttributesW(imaging::win32FilePath(failedPath).c_str())==INVALID_FILE_ATTRIBUTES,"Failed UNC cleanup removed nothing or removed the wrong directory");
+      proveAll();
+      {
+        auto guard=makeWork();
+        std::cout<<"LIVE UNC share: "<<QString::fromStdWString(given).toStdString()<<"\n";
+        ProjectStore network(makeWicProjectCodec());
+        d.layers[0].raster=Raster::filled(2,2,{4,5,6,255});
+        auto project=guard.directory/L"Saved.comp";
+        network.save(project,d,id(2));
+        check(network.load(project).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"UNC share project pixels changed");
+        auto nestedParent=guard.directory/L"nested";
+        fs::create_directories(imaging::win32FilePath(nestedParent));
+        d.layers[0].raster=Raster::filled(2,2,{3,2,1,255});
+        auto nestedProject=nestedParent/L"Saved.comp";
+        network.save(nestedProject,d,id(2));
+        check(network.load(nestedProject).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"UNC nested project pixels changed");
+        check(guard.owned(),"UNC test directory lost its ownership marker");
+      }
+      proveAll();
+      auto retire=[&](Sentinel& sentinel){if(!sentinel.created)return;prove(sentinel);auto extended=imaging::win32FilePath(sentinel.path);
+        if(sentinel.directory){auto keep=imaging::win32FilePath(sentinel.path/L"keep.txt");check(DeleteFileW(keep.c_str()),"Could not remove a UNC sentinel file created by this test");check(RemoveDirectoryW(extended.c_str()),"Could not remove a UNC sentinel directory created by this test");}
+        else check(DeleteFileW(extended.c_str()),"Could not remove a UNC sentinel file created by this test");};
+      retire(saved);retire(nested);retire(file);
+      check(entries()==before,"UNC test changed a pre-existing entry in the configured directory");
+    }
+  }
   else throw std::runtime_error("Unknown test");std::cout<<"PASS "<<test<<"\n";return 0;
  }catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";return 1;}}

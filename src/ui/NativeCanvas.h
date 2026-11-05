@@ -214,9 +214,11 @@ public:
     // Reduced full-document composite. maxEdge is the longest side in pixels.
     // The canvas calls it after editing pauses, not on every repaint or brush step.
     std::function<CompositeViewport(int maxEdge)> navigatorProvider;
+    std::function<bool(int maxEdge)> deferNavigatorComposite;
     struct NavigatorPlacement { bool visible{}; QRectF map; QRectF viewport; };
     NavigatorPlacement navigatorPlacement() const;
     void scheduleNavigator();
+    void presentNavigator(CompositeViewport);
     void setNavigatorDeferred(bool deferred);
     bool navigatorDeferred() const { return navigatorDeferred_; }
     void setRaster(std::shared_ptr<const Raster>);
@@ -233,8 +235,13 @@ public:
     // While held, paint keeps the current frame instead of composing on the UI thread.
     void setCompositeHeld(bool held);
     bool compositeHeld() const { return compositeHeld_; }
-    struct ViewportBounds { double x{},y{},width{},height{},units{1}; bool valid{}; };
+    struct ViewportBounds {
+        double x{},y{},width{},height{},units{1}; bool valid{};
+        bool operator==(const ViewportBounds&)const=default;
+    };
     ViewportBounds viewportBounds() const;
+    // A deferred provider can keep the last frame while a worker prepares the view.
+    std::function<bool()> deferViewportComposite;
     // Install a finished composite and, when requested, drop the move sprite in the same frame.
     void presentComposite(std::shared_ptr<const Raster> raster,double x,double y,double units,bool clearPreview);
     void setDocumentSize(int width,int height);
@@ -246,7 +253,7 @@ public:
     // Document coordinates. Source endpoints draw at radius6 DIPs; caller hit radius10 DIPs.
     void setGradientLine(std::optional<std::pair<Point,Point>> value){gradientLine_=value;update();}
     // Document coordinates for Camera Raw guided-upright segments, including the in-progress stroke.
-    void setCameraRawGuides(std::vector<std::pair<Point,Point>> value){cameraRawGuides_=std::move(value);update();}
+    void setCameraRawGuides(std::vector<std::pair<Point,Point>> value){if(value==cameraRawGuides_)return;cameraRawGuides_=std::move(value);update();}
     void setShapeDraft(std::optional<ShapeDraftOverlay> value){shapeDraft_=std::move(value);update();}
     void setTextOverlay(std::optional<TextCaretOverlay> value);
     const std::optional<ShapeDraftOverlay>& shapeDraft()const{return shapeDraft_;}

@@ -1,0 +1,37 @@
+{
+  "oracle": {
+    "normalization_tolerance_max_absolute": 0.000001,
+    "resized_rgb_max_byte_difference": 0,
+    "output_width": 1024,
+    "output_height": 1024,
+    "coefficient_precision_bits": 22,
+    "filter": "triangle",
+    "source": "Pillow Resample.c at bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d, transcribed in src/imaging/subject_input.cpp"
+  },
+  "fixtures": [
+    {"id": "identity", "width": 1024, "height": 1024, "stride": 4096, "pattern": "gradient"},
+    {"id": "down_even", "width": 2048, "height": 1536, "stride": 8192, "pattern": "gradient"},
+    {"id": "down_odd", "width": 2049, "height": 1537, "stride": 8196, "pattern": "gradient"},
+    {"id": "up_small", "width": 64, "height": 48, "stride": 256, "pattern": "gradient"},
+    {"id": "mixed_wide", "width": 2048, "height": 512, "stride": 8192, "pattern": "gradient"},
+    {"id": "mixed_tall", "width": 512, "height": 2048, "stride": 2048, "pattern": "gradient"},
+    {"id": "thin_wide", "width": 30000, "height": 48, "stride": 120000, "pattern": "stripes"},
+    {"id": "thin_tall", "width": 48, "height": 30000, "stride": 192, "pattern": "stripes"},
+    {"id": "alpha_down", "width": 1600, "height": 1200, "stride": 6400, "pattern": "alpha_gradient"},
+    {"id": "alpha_up", "width": 200, "height": 150, "stride": 800, "pattern": "alpha_gradient"},
+    {"id": "constant", "width": 1024, "height": 1024, "stride": 4096, "pattern": "constant"},
+    {"id": "transparent", "width": 128, "height": 128, "stride": 512, "pattern": "transparent"},
+    {"id": "padded_stride", "width": 32, "height": 32, "stride": 256, "pattern": "padded"}
+  ],
+  "resource_cases": [
+    "cancel_before",
+    "cancel_validation",
+    "cancel_resample",
+    "budget_reject",
+    "invalid_premultiplication",
+    "invalid_stride",
+    "source_unchanged",
+    "maximum_axis_memory",
+    "dimension_preflight"
+  ]
+}

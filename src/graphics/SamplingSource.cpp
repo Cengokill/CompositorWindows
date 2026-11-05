@@ -32,7 +32,12 @@ SamplingGrid samplingGrid(const SamplingSource& source,int level){
     return {x,y,int((last(source.width,source.alignmentX)-x)/step),int((last(source.height,source.alignmentY)-y)/step),int(step)};
 }
 struct ReducedSource::Storage {
-    struct TileEntry{std::shared_ptr<const SamplingSource> source;std::shared_ptr<const Raster::Tile> tile;uint64_t use{};};
+    struct TileEntry{
+        std::weak_ptr<const void> identity;
+        std::shared_ptr<const SamplingSource> reusableSource;
+        std::shared_ptr<const Raster::Tile> tile;
+        uint64_t use{};
+    };
     struct LevelEntry{std::weak_ptr<const ReducedSource> handle;uint64_t use{};};
     struct Work{int x{},y{},width{},height{};TileEntry prior;};
     mutable std::mutex mutex;
@@ -59,8 +64,8 @@ struct ReducedSource::Storage {
         // storage can outlive the cache budget or the source that owns its tokens.
         for(auto& [candidate,entry]:tiles){
             auto prior=candidate.source;prior.identity=0;
-            if(candidate.level!=requested.level||candidate.x!=requested.x||candidate.y!=requested.y||prior!=geometry||entry.source->reuseDomain!=source->reuseDomain||!entry.source->dependencies)continue;
-            if(entry.source->dependencies(left,top,right-left+1,bottom-top+1)==tokens){entry.use=++tick;++reused;return entry.tile;}
+            if(candidate.level!=requested.level||candidate.x!=requested.x||candidate.y!=requested.y||prior!=geometry||!entry.reusableSource||entry.reusableSource->reuseDomain!=source->reuseDomain)continue;
+            if(entry.reusableSource->dependencies(left,top,right-left+1,bottom-top+1)==tokens){entry.use=++tick;++reused;return entry.tile;}
         }
         return {};
     }
@@ -74,7 +79,7 @@ struct ReducedSource::Storage {
         // is no candidate index and at most one extra source/tile owner.
         for(const auto& [candidate,entry]:tiles){
             auto prior=candidate.source;prior.identity=0;
-            if(candidate.level==requested.level&&candidate.x==requested.x&&candidate.y==requested.y&&prior==geometry&&entry.source->reuseDomain==source->reuseDomain&&entry.source->dependencies&&entry.use>work.prior.use)work.prior=entry;
+            if(candidate.level==requested.level&&candidate.x==requested.x&&candidate.y==requested.y&&prior==geometry&&entry.reusableSource&&entry.reusableSource->reuseDomain==source->reuseDomain&&entry.use>work.prior.use)work.prior=entry;
         }
         if(!work.prior.tile)return work;
         int left=work.width,top=work.height,right=0,bottom=0;
@@ -88,7 +93,7 @@ struct ReducedSource::Storage {
             const int sy=int(std::clamp(int64_t(grid.y)+(y0+by)*step-9*(step-1),int64_t(0),int64_t(source->height-1)));
             const int ex=int(std::clamp(int64_t(grid.x)+(x0+bx+width-1)*step+10*(step-1),int64_t(0),int64_t(source->width-1)));
             const int ey=int(std::clamp(int64_t(grid.y)+(y0+by+height-1)*step+10*(step-1),int64_t(0),int64_t(source->height-1)));
-            if(source->dependencies(sx,sy,ex-sx+1,ey-sy+1)!=work.prior.source->dependencies(sx,sy,ex-sx+1,ey-sy+1)){
+            if(source->dependencies(sx,sy,ex-sx+1,ey-sy+1)!=work.prior.reusableSource->dependencies(sx,sy,ex-sx+1,ey-sy+1)){
                 left=std::min(left,bx);top=std::min(top,by);right=std::max(right,bx+width);bottom=std::max(bottom,by+height);
             }
         }
@@ -99,6 +104,12 @@ struct ReducedSource::Storage {
     std::shared_ptr<const Raster::Tile> tile(const std::shared_ptr<const SamplingSource>& source,int level,int tx,int ty){
         const TileKey tileKey{key(*source),level,tx,ty};
         auto found=tiles.find(tileKey);
+        // A raster can die while its reduced tiles remain, and its address
+        // can then be reused. Only cross-snapshot reuse needs source ownership.
+        if(found!=tiles.end()&&found->second.identity.expired()){
+            tiles.erase(found);
+            found=tiles.end();
+        }
         if(found==tiles.end()){
             auto tile=reusable(source,tileKey);
             if(!tile){
@@ -106,7 +117,7 @@ struct ReducedSource::Storage {
                 if(!work.width){tile=work.prior.tile;++reused;}
                 else{tile=generate(source,level,tileKey.x,tileKey.y,work);++generated;}
             }
-            found=tiles.emplace(tileKey,TileEntry{source,std::move(tile),++tick}).first;
+            found=tiles.emplace(tileKey,TileEntry{source->identity,source->reuseDomain&&source->dependencies?source:nullptr,std::move(tile),++tick}).first;
             trim();
         }else found->second.use=++tick;
         return found->second.tile;

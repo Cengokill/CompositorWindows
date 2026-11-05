@@ -1,16 +1,17 @@
 #include "CameraRaw.h"
 #include "CameraRawShadows.h"
 #include "effects_tools/CurveMath.h"
+#include "graphics/ParallelBatch.h"
 extern "C" {
 #include "graphics/upstream/AdjustPixels.h"
 #include "graphics/upstream/CameraRawPixels.h"
-#include "graphics/upstream/LevelsPixels.h"
 }
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <stdexcept>
 
 namespace compositor::filters {
 namespace {
@@ -242,22 +243,41 @@ double displayScale(const std::array<double, 256>& bins) {
     std::sort(interior.begin(), interior.end());
     return std::min(peak, interior[size_t(double(interior.size() - 1) * .95)] * 4);
 }
-void blendSelection(std::vector<std::uint8_t>& result, const std::vector<std::uint8_t>& original, const GrayRaster* selection) {
+template<class Work>
+void cameraRawRows(int width, int height, const std::function<bool()>& cancelled, const Work& work) {
+    constexpr int bandHeight = 32;
+    const std::uint32_t workers = std::uint64_t(width) * height < 128 * 1024 ? 1u : 0u;
+    graphics::runParallelBatch(std::size_t((height + bandHeight - 1) / bandHeight), workers, [&](std::size_t band) {
+        if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
+        const int first = int(band) * bandHeight;
+        work(first, std::min(bandHeight, height - first));
+    });
+}
+void blendSelection(std::vector<std::uint8_t>& result, const Raster& original, const GrayRaster* selection, const std::function<bool()>& cancelled) {
     if (!selection) return;
     const int w = selection->width, h = selection->height;
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            const auto i = std::size_t(y) * w + x;
-            const unsigned coverage = selection->pixels[i];
+    cameraRawRows(w, h, cancelled, [&](int first, int count) {
+        for (int y = first; y < first + count; ++y) for (int x = 0; x < w; ++x) {
+            const unsigned coverage = selection->pixel(x, y);
+            if (coverage == 255) continue;
+            const auto p = original.pixel(x, y);
+            const std::array<std::uint8_t, 4> before{p.r, p.g, p.b, p.a};
+            auto* pixel = result.data() + (std::size_t(y) * w + x) * 4;
             for (int c = 0; c < 4; ++c)
-                result[i * 4 + c] = std::uint8_t((unsigned(result[i * 4 + c]) * coverage + unsigned(original[i * 4 + c]) * (255 - coverage) + 127) / 255);
+                pixel[c] = std::uint8_t((pixel[c] * coverage + before[c] * (255 - coverage) + 127) / 255);
         }
+    });
 }
-bool viewPaints(const CameraRawView& view) {
-    return view.clipping || view.visualizePointColor >= 0 || view.sharpenMask || view.shadowOverlay || view.highlightOverlay;
-}
-std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, const CameraRawSettings& settings, const CameraRawView& view, const std::function<bool()>& cancelled) {
-    auto stop = [&] { if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled"); };
+std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, const CameraRawSettings& settings, const CameraRawView& view,
+                                const std::function<bool()>& cancelled, CameraRawShadowAnalysis* analysis = nullptr) {
+    auto shouldStop = [&] { return cancelled && cancelled(); };
+    auto stop = [&] { if (shouldStop()) throw std::runtime_error("Filter cancelled"); };
+    const CameraRawCancel cancel{[](void* context) { return int((*static_cast<decltype(shouldStop)*>(context))()); }, &shouldStop};
+    auto requirePass = [&](int success) {
+        if (success) return;
+        stop();
+        throw std::runtime_error("Could not allocate Camera Raw working buffers");
+    };
     const bool clip = view.clipping != 0;
     const bool mask = view.sharpenMask;
     const double scale = view.scale > 0 ? view.scale : 1;
@@ -269,25 +289,30 @@ std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, 
     stop();
     if (!clip && !mask && settings.calibration.adjusts()) {
         const auto& calibration = settings.calibration;
-        adjust_camera_raw_calibration(bytes, w, h, stride, calibration.shadowTint, calibration.redHue, calibration.redSaturation,
-                                      calibration.greenHue, calibration.greenSaturation, calibration.blueHue, calibration.blueSaturation, int(calibration.process));
+        cameraRawRows(w, h, cancelled, [&](int first, int count) {
+            adjust_camera_raw_calibration(bytes + std::size_t(first) * stride, w, count, stride, calibration.shadowTint,
+                                          calibration.redHue, calibration.redSaturation, calibration.greenHue, calibration.greenSaturation,
+                                          calibration.blueHue, calibration.blueSaturation, int(calibration.process));
+        });
     }
     stop();
     if (settings.adjustsLight() || settings.adjustsColor() || clip) {
         const auto gains = settings.gains();
-        if (settings.shadows == 0) {
-            adjust_camera_raw(bytes, w, h, stride, gains.red, gains.green, gains.blue, settings.exposure, settings.contrast, settings.highlights,
-                              0, settings.whites, settings.blacks, settings.vibrance, settings.saturation, view.clipping);
-        } else {
-            // The adaptive pass must see the image after the earlier light stages.
-            adjust_camera_raw(bytes, w, h, stride, gains.red, gains.green, gains.blue, settings.exposure, settings.contrast, settings.highlights,
-                              0, 0, 0, 0, 0, 0);
-            std::vector<float> working(pixels.size());
-            for (std::size_t i = 0; i < pixels.size(); ++i) working[i] = pixels[i] / 255.f;
-            applyAdaptiveShadows(working, w, h, settings.shadows, scale, cancelled);
-            for (std::size_t i = 0; i < pixels.size(); ++i) pixels[i] = std::uint8_t(std::lround(std::clamp(working[i], 0.f, 1.f) * 255));
-            adjust_camera_raw(bytes, w, h, stride, 1, 1, 1, 0, 0, 0, 0, settings.whites, settings.blacks,
-                              settings.vibrance, settings.saturation, view.clipping);
+        const bool adaptive = settings.shadows != 0;
+        cameraRawRows(w, h, cancelled, [&](int first, int count) {
+            adjust_camera_raw(bytes + std::size_t(first) * stride, w, count, stride, gains.red, gains.green, gains.blue,
+                              settings.exposure, settings.contrast, settings.highlights, 0, adaptive ? 0 : settings.whites,
+                              adaptive ? 0 : settings.blacks, adaptive ? 0 : settings.vibrance, adaptive ? 0 : settings.saturation,
+                              adaptive ? 0 : view.clipping);
+        });
+        if (adaptive) {
+            applyAdaptiveShadows(pixels, w, h, settings.shadows, scale, cancelled, analysis);
+            if (settings.whites || settings.blacks || settings.vibrance || settings.saturation || view.clipping) {
+                cameraRawRows(w, h, cancelled, [&](int first, int count) {
+                    adjust_camera_raw(bytes + std::size_t(first) * stride, w, count, stride, 1, 1, 1, 0, 0, 0, 0,
+                                      settings.whites, settings.blacks, settings.vibrance, settings.saturation, view.clipping);
+                });
+            }
         }
     }
     stop();
@@ -300,55 +325,108 @@ std::vector<std::uint8_t> paint(std::vector<std::uint8_t> pixels, int w, int h, 
         const auto mixer = settings.mixer.mixerFloats();
         const auto points = settings.mixer.pointFloats();
         const auto grade = settings.grading.gradeFloats();
-        adjust_camera_raw_curve_color(bytes, w, h, stride, tone.data(), red.data(), green.data(), blue.data(), settings.curve.refineSaturation / 100,
-                                      mixer.data(), int(settings.mixer.points.size()), points.empty() ? nullptr : points.data(), grade.data(),
-                                      settings.grading.blending / 100, settings.grading.balance / 100, view.visualizePointColor);
+        cameraRawRows(w, h, cancelled, [&](int first, int count) {
+            adjust_camera_raw_curve_color(bytes + std::size_t(first) * stride, w, count, stride, tone.data(), red.data(), green.data(), blue.data(),
+                                          settings.curve.refineSaturation / 100, mixer.data(), int(settings.mixer.points.size()),
+                                          points.empty() ? nullptr : points.data(), grade.data(), settings.grading.blending / 100,
+                                          settings.grading.balance / 100, view.visualizePointColor);
+        });
     }
     stop();
     if (!clip && !mask && settings.adjustsEffects()) {
         if (settings.texture != 0 || settings.clarity != 0 || settings.dehaze != 0 || settings.glow != 0 || settings.vignetteAmount != 0)
-            adjust_camera_raw_effects(bytes, w, h, stride, settings.texture, settings.clarity, settings.dehaze, settings.glow, int(settings.glowStyle),
-                                      settings.glowRange, settings.glowSpread, settings.glowWarmth, settings.vignetteAmount, settings.vignetteMidpoint,
-                                      settings.vignetteRoundness, settings.vignetteFeather, settings.vignetteHighlights, int(settings.vignetteStyle), scale);
-        if (settings.grainAmount > 0)
-            adjust_grain(bytes, w, h, stride, settings.grainAmount, settings.grainKernelSize(), settings.grainRoughness, view.seed, 0, 0, 1 / scale);
+            requirePass(adjust_camera_raw_effects(bytes, w, h, stride, settings.texture, settings.clarity, settings.dehaze, settings.glow, int(settings.glowStyle),
+                                                 settings.glowRange, settings.glowSpread, settings.glowWarmth, settings.vignetteAmount, settings.vignetteMidpoint,
+                                                 settings.vignetteRoundness, settings.vignetteFeather, settings.vignetteHighlights, int(settings.vignetteStyle), scale, cancel));
+        if (settings.grainAmount > 0) {
+            if (scale == 1) {
+                cameraRawRows(w, h, cancelled, [&](int first, int count) {
+                    adjust_grain(bytes + std::size_t(first) * stride, w, count, stride, settings.grainAmount, settings.grainKernelSize(),
+                                 settings.grainRoughness, view.seed, 0, first, 1);
+                });
+            } else {
+                adjust_grain(bytes, w, h, stride, settings.grainAmount, settings.grainKernelSize(), settings.grainRoughness, view.seed, 0, 0, 1 / scale);
+            }
+        }
     }
     stop();
     if (!clip && (settings.detail.adjusts() || settings.optics.adjusts() || mask)) {
         if (mask) {
-            adjust_camera_raw_sharpen_mask_overlay(bytes, w, h, stride, settings.detail.sharpenRadius, settings.detail.sharpenDetail, settings.detail.sharpenMasking, scale);
+            requirePass(adjust_camera_raw_sharpen_mask_overlay(bytes, w, h, stride, settings.detail.sharpenRadius,
+                                                              settings.detail.sharpenDetail, settings.detail.sharpenMasking, scale, cancel));
             return pixels;
         }
         if (settings.optics.adjusts()) {
             const auto& optics = settings.optics;
-            adjust_camera_raw_optics(bytes, w, h, stride, optics.removeChromaticAberration ? 1 : 0, optics.enableLensProfile ? 1 : 0, optics.profileDistortion,
-                                     optics.profileVignetting, optics.distortionK(0.35), optics.purpleAmount, optics.purpleHueLow, optics.purpleHueHigh,
-                                     optics.greenAmount, optics.greenHueLow, optics.greenHueHigh, optics.vignetteAmount, optics.vignetteMidpoint, scale);
+            requirePass(adjust_camera_raw_optics(bytes, w, h, stride, optics.removeChromaticAberration ? 1 : 0, optics.enableLensProfile ? 1 : 0, optics.profileDistortion,
+                                                 optics.profileVignetting, optics.distortionK(0.35), optics.purpleAmount, optics.purpleHueLow, optics.purpleHueHigh,
+                                                 optics.greenAmount, optics.greenHueLow, optics.greenHueHigh, optics.vignetteAmount, optics.vignetteMidpoint, scale, cancel));
         }
         if (settings.detail.adjusts()) {
             const auto& detail = settings.detail;
-            adjust_camera_raw_detail(bytes, w, h, stride, detail.sharpenAmount, detail.sharpenRadius, detail.sharpenDetail, detail.sharpenMasking,
-                                     detail.noiseLuminance, detail.noiseLuminanceDetail, detail.noiseLuminanceContrast, detail.noiseColor,
-                                     detail.noiseColorDetail, detail.noiseColorSmoothness, scale);
+            requirePass(adjust_camera_raw_detail(bytes, w, h, stride, detail.sharpenAmount, detail.sharpenRadius, detail.sharpenDetail, detail.sharpenMasking,
+                                                 detail.noiseLuminance, detail.noiseLuminanceDetail, detail.noiseLuminanceContrast, detail.noiseColor,
+                                                 detail.noiseColorDetail, detail.noiseColorSmoothness, scale, cancel));
         }
     }
     return pixels;
 }
-CameraRawScope scopeFrom(const std::uint8_t* rgba, int width, int height, int limit, const std::function<bool()>& cancelled) {
-    if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
-    if (limit < 1 || (width <= limit && height <= limit)) return CameraRawScope::make(rgba, width, height);
-    const double factor = double(limit) / std::max(width, height);
+template<class Sample>
+CameraRawScope scopeFrom(int width, int height, int limit, const std::function<bool()>& cancelled, const Sample& sample) {
+    CameraRawScope scope;
+    if (width < 1 || height < 1) return scope;
+    const double factor = limit > 0 ? std::min(1., double(limit) / std::max(width, height)) : 1.;
     const int sw = std::max(1, int(std::lround(width * factor))), sh = std::max(1, int(std::lround(height * factor)));
-    std::vector<std::uint8_t> small(std::size_t(sw) * sh * 4);
+    constexpr int side = 64;
     for (int y = 0; y < sh; ++y) {
-        if ((y & 31) == 0 && cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
-        const int sy = std::min(height - 1, int((std::int64_t(y) * height) / sh));
+        if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
+        const int sy = int((std::int64_t(y) * height) / sh);
         for (int x = 0; x < sw; ++x) {
-            const int sx = std::min(width - 1, int((std::int64_t(x) * width) / sw));
-            std::copy_n(rgba + (std::size_t(sy) * width + sx) * 4, 4, small.data() + (std::size_t(y) * sw + x) * 4);
+            const auto p = sample(int((std::int64_t(x) * width) / sw), sy);
+            if (!p.a) continue;
+            const double alpha = p.a, weight = alpha / 255.;
+            auto bin = [alpha](std::uint8_t channel) { return std::size_t(std::min(255., std::round(channel * 255. / alpha))); };
+            scope.red[bin(p.r)] += weight;
+            scope.green[bin(p.g)] += weight;
+            scope.blue[bin(p.b)] += weight;
+            const double r = std::min(1., p.r / alpha), g = std::min(1., p.g / alpha), b = std::min(1., p.b / alpha);
+            const double maxChannel = std::max({r, g, b}), chroma = maxChannel - std::min({r, g, b});
+            if (chroma <= 1e-4 || maxChannel <= 1e-4) continue;
+            double hue = maxChannel == r ? (g - b) / chroma : maxChannel == g ? 2 + (b - r) / chroma : 4 + (r - g) / chroma;
+            hue /= 6;
+            if (hue < 0) hue += 1;
+            const double angle = hue * 2 * std::numbers::pi;
+            const double saturation = chroma / maxChannel;
+            const int column = std::clamp(int((0.5 + std::cos(angle) * saturation * 0.48) * side), 0, side - 1);
+            const int rowIndex = std::clamp(int((0.5 + std::sin(angle) * saturation * 0.48) * side), 0, side - 1);
+            scope.vectorscope[std::size_t(rowIndex * side + column)] += weight;
         }
     }
-    return CameraRawScope::make(small.data(), sw, sh);
+    return scope;
+}
+Pixel packedPixel(const std::uint8_t* rgba, std::size_t stride, int x, int y) {
+    const auto* p = rgba + std::size_t(y) * stride + std::size_t(x) * 4;
+    return {p[0], p[1], p[2], p[3]};
+}
+template<class Sample>
+std::optional<std::pair<double, double>> autoBalanceFrom(int width, int height, const std::function<bool()>& cancelled, const Sample& sample) {
+    double red = 0, green = 0, blue = 0, count = 0;
+    std::array<double, 256> opaque{};
+    for (std::size_t i = 0; i < opaque.size(); ++i) opaque[i] = compositor::srgbToLinear(double(i) / 255);
+    for (int y = 0; y < height; ++y) {
+        if (cancelled && cancelled()) return {};
+        for (int x = 0; x < width; ++x) {
+            const auto p = sample(x, y);
+            if (!p.a) continue;
+            const double alpha = p.a;
+            auto linear = [&](std::uint8_t value) {
+                return p.a == 255 ? opaque[value] : compositor::srgbToLinear(std::min(1., value / alpha));
+            };
+            red += linear(p.r); green += linear(p.g); blue += linear(p.b); count += 1;
+        }
+    }
+    if (count <= 0) return {};
+    return CameraRawSettings::neutralizeLinear(red / count, green / count, blue / count);
 }
 }
 std::vector<Point> CameraRawCurveSettings::linear() { return {{0, 0}, {1, 1}}; }
@@ -664,88 +742,78 @@ std::optional<std::pair<double, double>> CameraRawSettings::neutralizeStraight(d
 }
 std::optional<std::pair<double, double>> CameraRawSettings::autoBalance(const std::uint8_t* rgba, int width, int height, int stride) {
     if (!rgba || width < 1 || height < 1 || stride < width * 4) return {};
-    double red = 0, green = 0, blue = 0, count = 0;
-    auto decode = [](double encoded) { return encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4); };
-    for (int y = 0; y < height; ++y) {
-        const auto* row = rgba + std::size_t(y) * stride;
-        for (int x = 0; x < width; ++x) {
-            const auto* pixel = row + x * 4;
-            if (!pixel[3]) continue;
-            const double alpha = pixel[3];
-            red += decode(std::min(1., pixel[0] / alpha));
-            green += decode(std::min(1., pixel[1] / alpha));
-            blue += decode(std::min(1., pixel[2] / alpha));
-            count += 1;
-        }
-    }
-    if (count <= 0) return {};
-    return neutralizeLinear(red / count, green / count, blue / count);
+    return autoBalanceFrom(width, height, {}, [&](int x, int y) { return packedPixel(rgba, std::size_t(stride), x, y); });
+}
+std::optional<std::pair<double, double>> CameraRawSettings::autoBalance(const Raster& source, const std::function<bool()>& cancelled) {
+    return autoBalanceFrom(source.width, source.height, cancelled, [&](int x, int y) { return source.pixel(x, y); });
 }
 double CameraRawScope::peak() const { return std::max(displayScale(red), std::max(displayScale(green), displayScale(blue))); }
 CameraRawScope CameraRawScope::make(const std::uint8_t* rgba, int width, int height) {
-    CameraRawScope scope;
-    if (!rgba || width < 1 || height < 1) return scope;
-    std::array<double, 1024> bins{};
-    levels_histogram(rgba, nullptr, std::size_t(width) * height, bins.data());
-    std::copy_n(bins.begin() + 256, 256, scope.red.begin());
-    std::copy_n(bins.begin() + 512, 256, scope.green.begin());
-    std::copy_n(bins.begin() + 768, 256, scope.blue.begin());
-    constexpr int side = 64;
-    for (int y = 0; y < height; ++y) {
-        const auto* row = rgba + std::size_t(y) * width * 4;
-        for (int x = 0; x < width; ++x) {
-            const auto* pixel = row + x * 4;
-            const double alpha = pixel[3];
-            if (!alpha) continue;
-            const double r = std::min(1., pixel[0] / alpha), g = std::min(1., pixel[1] / alpha), b = std::min(1., pixel[2] / alpha);
-            const double maxChannel = std::max(r, std::max(g, b)), minChannel = std::min(r, std::min(g, b));
-            const double chroma = maxChannel - minChannel;
-            if (chroma <= 1e-4 || maxChannel <= 1e-4) continue;
-            double hue = maxChannel == r ? (g - b) / chroma : maxChannel == g ? 2 + (b - r) / chroma : 4 + (r - g) / chroma;
-            hue /= 6;
-            if (hue < 0) hue += 1;
-            const double angle = hue * 2 * std::numbers::pi;
-            const double saturation = chroma / maxChannel;
-            const double plotX = 0.5 + std::cos(angle) * saturation * 0.48;
-            const double plotY = 0.5 + std::sin(angle) * saturation * 0.48;
-            const int column = std::clamp(int(plotX * side), 0, side - 1);
-            const int rowIndex = std::clamp(int(plotY * side), 0, side - 1);
-            scope.vectorscope[size_t(rowIndex * side + column)] += alpha / 255;
-        }
-    }
-    return scope;
+    if (!rgba) return {};
+    return scopeFrom(width, height, 0, {}, [&](int x, int y) { return packedPixel(rgba, std::size_t(width) * 4, x, y); });
 }
-CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& incoming, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled) {
+CameraRawScope CameraRawScope::make(const Raster& source, int limit, const std::function<bool()>& cancelled) {
+    return scopeFrom(source.width, source.height, limit, cancelled, [&](int x, int y) { return source.pixel(x, y); });
+}
+CameraRawScope CameraRawScope::make(const DeepImage& image, int limit, const std::function<bool()>& cancelled) {
+    if (!image.valid()) throw std::runtime_error("Invalid Camera Raw scope source");
+    // Match normalizeDeep's SDR scope, including dither at the native coordinates,
+    // without allocating a normalized full-resolution image.
+    return scopeFrom(image.width, image.height, limit, cancelled, [&](int x, int y) {
+        const auto p = image.pixel(x, y);
+        if (image.isHdr() && std::any_of(p.begin(), p.end(), [](float sample) { return !std::isfinite(sample); }))
+            throw std::runtime_error("Non-finite Camera Raw scope sample");
+        if (!(p[3] > 0)) return Pixel{};
+        const float scale = std::max({1.f, p[0] / p[3], p[1] / p[3], p[2] / p[3]});
+        auto channel = [&](float value) {
+            return ditherChannel(std::uint16_t(std::lround(std::clamp(value, 0.f, 1.f) * 65535)), x, y);
+        };
+        const auto alpha = channel(p[3]);
+        return Pixel{std::min(alpha, channel(p[0] / scale)), std::min(alpha, channel(p[1] / scale)),
+                     std::min(alpha, channel(p[2] / scale)), alpha};
+    });
+}
+CameraRawRender renderCameraRaw(const Raster& source, const CameraRawSettings& incoming, const CameraRawView& view,
+                                const GrayRaster* selection, const std::function<bool()>& cancelled, CameraRawShadowAnalysis* analysis) {
     const int w = source.width, h = source.height;
     const auto settings = incoming.normalized();
-    auto original = source.rgba();
     if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled");
-    CameraRawView clean = view;
-    clean.clipping = 0;
-    clean.visualizePointColor = -1;
-    clean.sharpenMask = false;
-    clean.shadowOverlay = false;
-    clean.highlightOverlay = false;
-    const bool early = settings.isIdentity() && !viewPaints(view);
-    std::vector<std::uint8_t> grade = early ? original : paint(original, w, h, settings, clean, cancelled);
-    blendSelection(grade, original, selection);
+    if (selection && (selection->width != w || selection->height != h || !selection->validStorage()))
+        throw std::runtime_error("Camera Raw selection must match the source grid");
     CameraRawRender result;
-    result.scope = scopeFrom(grade.data(), w, h, view.scopeLimit, cancelled);
-    result.changed = !early;
-    std::vector<std::uint8_t> display = grade;
-    if (view.clipping || view.sharpenMask || view.visualizePointColor >= 0) {
-        auto shown = view;
-        shown.shadowOverlay = false;
-        shown.highlightOverlay = false;
-        display = paint(original, w, h, settings, shown, cancelled);
-        blendSelection(display, original, selection);
-        result.changed = true;
+    if (settings.isIdentity() && !view.paints()) {
+        if (view.scopeLimit >= 0)
+            result.scope = CameraRawScope::make(source, view.scopeLimit, cancelled);
+        return result;
+    }
+
+    // The scope samples the clean grade. Alt and point-color displays are painted
+    // separately only when required, and never used as the shadow-analysis input.
+    const bool diagnostic = view.clipping || view.sharpenMask || view.visualizePointColor >= 0;
+    std::vector<std::uint8_t> display;
+    if (!diagnostic || view.scopeLimit >= 0) {
+        CameraRawView clean;
+        clean.scale = view.scale; clean.seed = view.seed;
+        display = paint(source.rgba(cancelled), w, h, settings, clean, cancelled, analysis);
+        blendSelection(display, source, selection, cancelled);
+        if (view.scopeLimit >= 0)
+            result.scope = scopeFrom(w, h, view.scopeLimit, cancelled,
+                                     [&](int x, int y) { return packedPixel(display.data(), std::size_t(w) * 4, x, y); });
+    }
+    if (diagnostic) {
+        std::vector<std::uint8_t>().swap(display);
+        display = paint(source.rgba(cancelled), w, h, settings, view, cancelled);
+        blendSelection(display, source, selection, cancelled);
     }
     if (!view.clipping && !view.sharpenMask && (view.shadowOverlay || view.highlightOverlay)) {
-        adjust_camera_raw_clip_overlay(display.data(), w, h, std::size_t(w) * 4, view.shadowOverlay ? 1 : 0, view.highlightOverlay ? 1 : 0);
-        result.changed = true;
+        const auto stride = std::size_t(w) * 4;
+        cameraRawRows(w, h, cancelled, [&](int first, int count) {
+            adjust_camera_raw_clip_overlay(display.data() + std::size_t(first) * stride, w, count, stride,
+                                           view.shadowOverlay ? 1 : 0, view.highlightOverlay ? 1 : 0);
+        });
     }
-    result.raster = result.changed ? Raster::fromRgba(w, h, display.data(), std::size_t(w) * 4) : nullptr;
+    result.raster = Raster::fromRgba(w, h, display.data(), std::size_t(w) * 4, cancelled);
+    result.changed = true;
     return result;
 }
 bool cameraRawNeedsEightBit(const CameraRawSettings& incoming) {
@@ -753,17 +821,30 @@ bool cameraRawNeedsEightBit(const CameraRawSettings& incoming) {
     return settings.mixer.adjusts() || settings.grading.adjusts() || settings.adjustsEffects() || settings.detail.adjusts() || settings.optics.adjusts();
 }
 enum class GradeStage { All, BeforeShadows, AfterShadows };
-void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& settings, GradeStage stage = GradeStage::All) {
-    const auto gains = settings.gains();
-    const double light = std::exp2(settings.exposure);
-    const double contrastScale = 1 + settings.contrast / 100;
+struct DeepGrade {
+    const CameraRawSettings& settings;
+    CameraRawSettings::Gains gains = settings.gains();
+    double light = std::exp2(settings.exposure);
+    double contrastScale = 1 + settings.contrast / 100;
+    bool curves = settings.curve.adjusts();
+    std::vector<std::array<double, 3>> opaqueLight;
+    double lightChannel(double value, double gain) const {
+        const double linear = std::clamp(compositor::srgbToLinear(value) * gain * light, 0., 1.);
+        return std::clamp(0.5 + (compositor::linearToSrgb(linear) - 0.5) * contrastScale, 0., 1.);
+    }
+};
+void gradeStraight(double& r, double& g, double& b, const DeepGrade& grade, GradeStage stage, const std::uint16_t* opaque) {
+    const auto& settings = grade.settings;
     if (stage != GradeStage::AfterShadows) {
-        r = std::clamp(compositor::srgbToLinear(r) * gains.red * light, 0., 1.);
-        g = std::clamp(compositor::srgbToLinear(g) * gains.green * light, 0., 1.);
-        b = std::clamp(compositor::srgbToLinear(b) * gains.blue * light, 0., 1.);
-        r = std::clamp(0.5 + (compositor::linearToSrgb(r) - 0.5) * contrastScale, 0., 1.);
-        g = std::clamp(0.5 + (compositor::linearToSrgb(g) - 0.5) * contrastScale, 0., 1.);
-        b = std::clamp(0.5 + (compositor::linearToSrgb(b) - 0.5) * contrastScale, 0., 1.);
+        if (opaque) {
+            r = grade.opaqueLight[opaque[0]][0];
+            g = grade.opaqueLight[opaque[1]][1];
+            b = grade.opaqueLight[opaque[2]][2];
+        } else {
+            r = grade.lightChannel(r, grade.gains.red);
+            g = grade.lightChannel(g, grade.gains.green);
+            b = grade.lightChannel(b, grade.gains.blue);
+        }
     }
     auto rec = [&] { return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
     auto scaleLum = [&](double target) {
@@ -791,29 +872,30 @@ void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& set
     };
     auto whites = [&](double y, double amount) { return y <= 0.75 ? y : std::clamp(0.75 + (y - 0.75) * (1 + amount), 0., 1.); };
     auto blacks = [&](double y, double amount) { return y >= 0.25 ? y : std::clamp(0.25 + (y - 0.25) * (1 - amount), 0., 1.); };
-    if (stage != GradeStage::AfterShadows) scaleLum(highlights(rec(), settings.highlights / 100));
-    if (stage == GradeStage::All) scaleLum(shadows(rec(), settings.shadows / 100));
+    if (stage != GradeStage::AfterShadows && settings.highlights) scaleLum(highlights(rec(), settings.highlights / 100));
+    if (stage == GradeStage::All && settings.shadows) scaleLum(shadows(rec(), settings.shadows / 100));
     if (stage == GradeStage::BeforeShadows) return;
-    scaleLum(whites(rec(), settings.whites / 100));
-    scaleLum(blacks(rec(), settings.blacks / 100));
+    if (settings.whites) scaleLum(whites(rec(), settings.whites / 100));
+    if (settings.blacks) scaleLum(blacks(rec(), settings.blacks / 100));
     const double vibrance = settings.vibrance / 100, saturation = settings.saturation / 100;
     double lum = rec();
-    const double maxc = std::max({r, g, b}), minc = std::min({r, g, b}), chroma = maxc - minc;
-    const double sat = maxc <= 1e-8 ? 0 : chroma / maxc;
-    double hue = 0;
-    if (chroma > 1e-8) {
-        if (r >= g && r >= b) hue = 60 * std::fmod((g - b) / chroma, 6.);
-        else if (g >= r && g >= b) hue = 60 * ((b - r) / chroma + 2);
-        else hue = 60 * ((r - g) / chroma + 4);
-        if (hue < 0) hue += 360;
+    double amount = 0;
+    if (vibrance) {
+        const double maxc = std::max({r, g, b}), minc = std::min({r, g, b}), chroma = maxc - minc;
+        const double sat = maxc <= 1e-8 ? 0 : chroma / maxc;
+        amount = vibrance * (1 - sat);
+        if (vibrance > 0 && chroma > 1e-8) {
+            double hue;
+            if (r >= g && r >= b) hue = 60 * std::fmod((g - b) / chroma, 6.);
+            else if (g >= r && g >= b) hue = 60 * ((b - r) / chroma + 2);
+            else hue = 60 * ((r - g) / chroma + 4);
+            if (hue < 0) hue += 360;
+            if (hue >= 10 && hue <= 50) {
+                const double skin = (hue <= 30 ? (hue - 10) / 20 : (50 - hue) / 20) * std::clamp((sat - 0.15) / 0.35, 0., 1.);
+                amount *= 1 - 0.7 * skin;
+            }
+        }
     }
-    double skin = 0;
-    if (hue >= 10 && hue <= 50) {
-        skin = hue <= 30 ? (hue - 10) / 20 : (50 - hue) / 20;
-        skin *= std::clamp((sat - 0.15) / 0.35, 0., 1.);
-    }
-    double amount = vibrance * (1 - sat);
-    if (vibrance > 0) amount *= 1 - 0.7 * skin;
     double factor = 1 + amount;
     r = std::clamp(lum + (r - lum) * factor, 0., 1.);
     g = std::clamp(lum + (g - lum) * factor, 0., 1.);
@@ -823,14 +905,15 @@ void gradeStraight(double& r, double& g, double& b, const CameraRawSettings& set
     r = std::clamp(lum + (r - lum) * factor, 0., 1.);
     g = std::clamp(lum + (g - lum) * factor, 0., 1.);
     b = std::clamp(lum + (b - lum) * factor, 0., 1.);
-    if (settings.curve.adjusts()) {
+    if (grade.curves) {
         auto apply = [&](double tone, const std::vector<Point>& channel) { return curveAt(curveAt(settings.curve.parametric(tone), settings.curve.rgb), channel); };
         r = apply(r, settings.curve.red);
         g = apply(g, settings.curve.green);
         b = apply(b, settings.curve.blue);
     }
 }
-std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const CameraRawSettings& incoming, const CameraRawView& view, const GrayRaster* selection, const std::function<bool()>& cancelled) {
+std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const CameraRawSettings& incoming, const CameraRawView& view,
+                                               const GrayRaster* selection, const std::function<bool()>& cancelled, CameraRawShadowAnalysis* analysis) {
     if (!source.valid()) throw std::runtime_error("Invalid Camera Raw source");
     const auto settings = incoming.normalized();
     auto stop = [&] { if (cancelled && cancelled()) throw std::runtime_error("Filter cancelled"); };
@@ -839,16 +922,24 @@ std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const 
         throw std::runtime_error("Convert HDR to 16-Bit before spatial Camera Raw corrections");
     if (!source.isHdr() && cameraRawNeedsEightBit(settings))
         throw std::runtime_error("Convert this 16-bit layer to 8-bit before spatial Camera Raw corrections");
-    if (settings.isIdentity() && !viewPaints(view)) return std::make_shared<DeepImage>(source);
-    std::vector<float> pixels(std::size_t(source.width) * source.height * 4);
-    for (int y = 0; y < source.height; ++y) {
-        stop();
-        for (int x = 0; x < source.width; ++x) {
-            auto p = source.pixel(x, y);
-            std::copy(p.begin(), p.end(), pixels.begin() + (std::size_t(y) * source.width + x) * 4);
-        }
+    if (settings.isIdentity() && !view.paints()) return std::make_shared<DeepImage>(source);
+    if (selection && (selection->width != source.width || selection->height != source.height || !selection->validStorage()))
+        throw std::runtime_error("Camera Raw selection must match the source grid");
+    const int width = source.width, height = source.height;
+    const bool geometry = settings.geometry.adjusts(), adaptive = settings.shadows != 0;
+    const bool spatial = geometry || adaptive;
+    const bool grade = settings.adjustsLight() || settings.adjustsColor() || settings.curve.adjusts() || view.clipping;
+    std::vector<float> pixels;
+    if (spatial) {
+        pixels.resize(std::size_t(width) * height * 4);
+        cameraRawRows(width, height, cancelled, [&](int first, int count) {
+            for (int y = first; y < first + count; ++y) for (int x = 0; x < width; ++x) {
+                const auto p = source.pixel(x, y);
+                std::copy(p.begin(), p.end(), pixels.begin() + (std::size_t(y) * width + x) * 4);
+            }
+        });
     }
-    if (settings.geometry.adjusts()) {
+    if (geometry) {
         double vertical = settings.geometry.vertical, horizontal = settings.geometry.horizontal, rotate = settings.geometry.rotate;
         if (settings.geometry.upright == CameraRawUpright::Guided && !settings.geometry.guides.empty()) {
             const auto& first = settings.geometry.guides.front();
@@ -924,41 +1015,53 @@ std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const 
             }
         }
     }
-    const bool grade = settings.adjustsLight() || settings.adjustsColor() || settings.curve.adjusts() || view.clipping;
-    if (grade) {
-        const bool adaptive = settings.shadows != 0;
-        // HDR normalization matches the existing grade path; preserve the original
-        // per-pixel scale while the spatial operation works on normalized values.
-        std::vector<float> hdrScales;
-        if (adaptive && source.isHdr()) hdrScales.resize(std::size_t(source.width) * source.height, 1.f);
-        if (adaptive) {
-            for (int y = 0; y < source.height; ++y) {
-                stop();
-                for (int x = 0; x < source.width; ++x) {
-                    const auto i = (std::size_t(y) * source.width + x) * 4;
-                    const float alpha = pixels[i + 3];
-                    if (!(alpha > 0)) continue;
-                    double r = pixels[i] / alpha, g = pixels[i + 1] / alpha, b = pixels[i + 2] / alpha;
-                    const double highlightScale = source.isHdr() ? std::max({1., r, g, b}) : 1.;
-                    if (!hdrScales.empty()) hdrScales[i / 4] = float(highlightScale);
-                    r /= highlightScale; g /= highlightScale; b /= highlightScale;
-                    gradeStraight(r, g, b, settings, GradeStage::BeforeShadows);
-                    pixels[i] = float(r * alpha); pixels[i + 1] = float(g * alpha); pixels[i + 2] = float(b * alpha);
-                }
-            }
-            applyAdaptiveShadows(pixels, source.width, source.height, settings.shadows, view.scale, cancelled);
+    DeepGrade parameters{settings};
+    if (grade && !source.isHdr() && !geometry && std::uint64_t(width) * height >= 256 * 1024) {
+        parameters.opaqueLight.resize(65536);
+        for (std::size_t i = 0; i < parameters.opaqueLight.size(); ++i) {
+            const double value = float(i) / 65535.f;
+            parameters.opaqueLight[i] = {parameters.lightChannel(value, parameters.gains.red),
+                                         parameters.lightChannel(value, parameters.gains.green),
+                                         parameters.lightChannel(value, parameters.gains.blue)};
         }
-        for (int y = 0; y < source.height; ++y) {
-            stop();
-            for (int x = 0; x < source.width; ++x) {
-                auto i = (std::size_t(y) * source.width + x) * 4;
-                float a = pixels[i + 3];
-                if (!(a > 0)) continue;
-                double r = pixels[i] / a, g = pixels[i + 1] / a, b = pixels[i + 2] / a;
+    }
+    auto opaqueSource = [&](int x, int y, float alpha) {
+        return alpha == 1 && !parameters.opaqueLight.empty() ? source.at(x, y) : nullptr;
+    };
+    // HDR normalization matches the grade path. Keep each pixel's original scale
+    // while the spatial pass works on normalized values.
+    std::vector<float> hdrScales;
+    if (adaptive && source.isHdr()) hdrScales.resize(std::size_t(width) * height, 1.f);
+    if (adaptive) {
+        cameraRawRows(width, height, cancelled, [&](int first, int count) {
+            for (int y = first; y < first + count; ++y) for (int x = 0; x < width; ++x) {
+                const auto i = (std::size_t(y) * width + x) * 4;
+                const float alpha = pixels[i + 3];
+                if (!(alpha > 0)) continue;
+                double r = pixels[i] / alpha, g = pixels[i + 1] / alpha, b = pixels[i + 2] / alpha;
+                const double highlightScale = source.isHdr() ? std::max({1., r, g, b}) : 1.;
+                if (!hdrScales.empty()) hdrScales[i / 4] = float(highlightScale);
+                r /= highlightScale; g /= highlightScale; b /= highlightScale;
+                gradeStraight(r, g, b, parameters, GradeStage::BeforeShadows, opaqueSource(x, y, alpha));
+                pixels[i] = float(r * alpha); pixels[i + 1] = float(g * alpha); pixels[i + 2] = float(b * alpha);
+            }
+        });
+        applyAdaptiveShadows(pixels, width, height, settings.shadows, view.scale, cancelled, analysis);
+    }
+
+    auto image = makeDeep(width, height, source.format);
+    cameraRawRows(width, height, cancelled, [&](int first, int count) {
+        for (int y = first; y < first + count; ++y) for (int x = 0; x < width; ++x) {
+            const auto i = (std::size_t(y) * width + x) * 4;
+            auto p = spatial ? WidePixel{pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]} : source.pixel(x, y);
+            const float alpha = p[3];
+            if (grade && alpha > 0) {
+                double r = p[0] / alpha, g = p[1] / alpha, b = p[2] / alpha;
                 const double highlightScale = adaptive ? (hdrScales.empty() ? 1. : hdrScales[i / 4])
                                                        : (source.isHdr() ? std::max({1., r, g, b}) : 1.);
                 if (!adaptive) { r /= highlightScale; g /= highlightScale; b /= highlightScale; }
-                gradeStraight(r, g, b, settings, adaptive ? GradeStage::AfterShadows : GradeStage::All);
+                gradeStraight(r, g, b, parameters, adaptive ? GradeStage::AfterShadows : GradeStage::All,
+                              adaptive ? nullptr : opaqueSource(x, y, alpha));
                 r *= highlightScale; g *= highlightScale; b *= highlightScale;
                 if (view.clipping == 1) {
                     r = r >= 254.5 / 255 ? 1 : 0;
@@ -967,31 +1070,20 @@ std::shared_ptr<const DeepImage> renderCameraRaw(const DeepImage& source, const 
                 } else if (view.clipping == 2) {
                     const int rc = r <= 0.5 / 255, gc = g <= 0.5 / 255, bc = b <= 0.5 / 255;
                     if (rc || gc || bc) {
-                        r = rc ? 0 : 1;
-                        g = gc ? 0 : 1;
-                        b = bc ? 0 : 1;
+                        r = rc ? 0 : 1; g = gc ? 0 : 1; b = bc ? 0 : 1;
                     } else r = g = b = 1;
                 }
-                pixels[i] = float(r * a);
-                pixels[i + 1] = float(g * a);
-                pixels[i + 2] = float(b * a);
+                p[0] = float(r * alpha); p[1] = float(g * alpha); p[2] = float(b * alpha);
             }
-        }
-    }
-    auto image = makeDeep(source.width, source.height, source.format);
-    for (int y = 0; y < source.height; ++y) {
-        stop();
-        for (int x = 0; x < source.width; ++x) {
-            auto i = (std::size_t(y) * source.width + x) * 4;
-            auto p = std::array<float, 4>{pixels[i], pixels[i + 1], pixels[i + 2], std::clamp(pixels[i + 3], 0.f, 1.f)};
+            p[3] = std::clamp(alpha, 0.f, 1.f);
             if (selection) {
                 const float amount = selection->pixel(x, y) / 255.f;
-                auto old = source.pixel(x, y);
+                const auto old = source.pixel(x, y);
                 for (int c = 0; c < 4; ++c) p[c] = old[c] + (p[c] - old[c]) * amount;
             }
             image->setPixel(x, y, p);
         }
-    }
+    });
     return image;
 }
 }

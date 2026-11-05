@@ -2,15 +2,22 @@
 #include "filters/PixelFilters.h"
 #include "core/DeepImage.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <string>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 using namespace compositor;
 using namespace compositor::filters;
 namespace {
+// Keep this wrapper out of line. Inlining every filters::apply call into run() overflows the default 1 MB stack.
+__declspec(noinline) Result applyIsolated(const Request& request) {
+    Result (*implementation)(const Request&) = compositor::filters::apply;
+    return implementation(request);
+}
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 std::shared_ptr<const Raster> image(int w, int h, const std::function<Pixel(int, int)>& get) {
     std::vector<std::uint8_t> pixels(std::size_t(w) * h * 4);
@@ -74,8 +81,155 @@ double shadowBandMean(const Raster& raster, bool top) {
     return sum / (rows * raster.width);
 }
 
+Request nativePreview(std::shared_ptr<const Raster> source) {
+    Request request;
+    request.kind = Kind::CameraRaw;
+    request.transform = {4, 8, double(source->width), double(source->height), 12};
+    request.source = std::move(source);
+    request.seed = 37;
+    request.preview = true;
+    request.cameraRawNativePreview = true;
+    request.cameraRawView.scopeLimit = 512;
+    return request;
 }
-void run() {
+void nativeConvergence() {
+    constexpr int width = 3073, height = 96;
+    auto request = nativePreview(image(width, height, [](int x, int y) {
+        const std::uint8_t value = (x % 2) ? 38 : 140;
+        return Pixel{value, value, std::uint8_t(value + 4), std::uint8_t(y < 16 ? 166 : 255)};
+    }));
+    auto coverage = std::make_shared<GrayRaster>();
+    coverage->width = width; coverage->height = height;
+    coverage->pixels.resize(std::size_t(width) * height);
+    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
+        coverage->pixels[std::size_t(y) * width + x] = x < 256 ? 0 : x < 512 ? 128 : 255;
+    request.selection = SourceSelection{coverage};
+    request.cameraRaw.exposure = .5;
+    request.cameraRaw.shadows = 35;
+    request.cameraRaw.grainAmount = 20;
+    auto preview = applyIsolated(request);
+    require(preview.previewScale == 1 && preview.raster->width == width && preview.raster->height == height,
+            "preview preserves the native layer grid");
+    require(preview.raster->pixel(600, 24) != preview.raster->pixel(601, 24), "preview retains single-pixel stripes");
+    require(preview.raster->pixel(0, 0) == request.source->pixel(0, 0) && preview.raster->pixel(511, 0).a == 166,
+            "native preview keeps unselected pixels and premultiplied alpha");
+    require(preview.cameraRawScope && std::accumulate(preview.cameraRawScope->red.begin(), preview.cameraRawScope->red.end(), 0.) <= 512 * 16,
+            "scope is sampled independently of the native raster");
+    request.preview = false;
+    request.cameraRawView.scopeLimit = -1;
+    auto final = applyIsolated(request);
+    require(!final.cameraRawScope && final.raster->rgba() == preview.raster->rgba() && final.transform == preview.transform,
+            "native preview and final grade have identical placement and pixels");
+
+    request.preview = true;
+    request.cameraRawView.scopeLimit = 512;
+    request.cameraRawView.clipping = 1;
+    auto clipping = applyIsolated(request);
+    require(clipping.cameraRawScope && clipping.cameraRawScope->red == preview.cameraRawScope->red
+            && clipping.raster->rgba() != preview.raster->rgba(), "diagnostic paint does not contaminate the scope");
+}
+void nativeBudget() {
+    auto request = nativePreview(solid(4096, 128, {110, 110, 110, 255}));
+    request.cameraRaw.exposure = .5;
+    request.limits.maxWorkingBytes = 19 * 1024 * 1024;
+    request.cameraRawRetainedPreviewBytes = 6 * 1024 * 1024;
+    auto reduced = applyIsolated(request);
+    require(reduced.raster->width == 2048 && reduced.previewScale < 1 && reduced.cameraRawCanRefine,
+            "retained preview forces a temporary reduction");
+    request.cameraRawRetainedPreviewBytes = reduced.raster->retainedBytes();
+    auto native = applyIsolated(request);
+    request.preview = false;
+    request.cameraRawRetainedPreviewBytes = 0;
+    require(native.previewScale == 1 && native.raster->rgba() == applyIsolated(request).raster->rgba(),
+            "freeing the old preview lets the reduced result refine to the final native grade");
+
+    request.preview = true;
+    request.limits.maxWorkingBytes = 1;
+    bool rejected = false;
+    try { applyIsolated(request); } catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "preview fails cleanly if even its smallest grid exceeds the budget");
+}
+void cachedShadows() {
+    auto request = nativePreview(shadowLandscape(400));
+    request.cameraRaw.shadows = 45;
+    request.cameraRawCache = std::make_shared<CameraRawPreviewCache>();
+    const auto first = applyIsolated(request);
+    const auto* plane = request.cameraRawCache->shadows.mean.data();
+    require(!request.cameraRawCache->shadows.mean.empty(), "first grade prepares the shadow planes");
+    request.cameraRaw.shadows = -30;
+    auto warmed = applyIsolated(request);
+    require(request.cameraRawCache->shadows.mean.data() == plane && warmed.raster->rgba() != first.raster->rgba(),
+            "only Shadows amount changes when the analysis is reused");
+    request.cameraRaw.exposure = -.8;
+    request.previewMaxEdge = 200;
+    auto regenerated = applyIsolated(request);
+    require(request.cameraRawCache->shadowInput->exposure == -.8 && request.cameraRawCache->shadowInput->width == 200,
+            "earlier settings and grid invalidate the shadow planes");
+    request.cameraRawCache.reset();
+    require(regenerated.raster->rgba() == applyIsolated(request).raster->rgba(), "recomputed planes agree with an uncached render");
+}
+void shadowBudgetRefinement() {
+    auto request = nativePreview(solid(3500, 450, {80, 75, 65, 255}));
+    request.cameraRaw.shadows = 35;
+    request.cameraRawCache = std::make_shared<CameraRawPreviewCache>();
+    request.limits.maxWorkingBytes = 103'000'000;
+    auto first = applyIsolated(request);
+    require(first.previewScale == 1 && !request.cameraRawCache->shadows.mean.empty(),
+            "first native grade warms the shadow planes");
+    request.cameraRawRetainedPreviewBytes = first.raster->retainedBytes();
+    request.cameraRaw.shadows = 60;
+    const auto reduced = applyIsolated(request);
+    require(reduced.raster->width == 2048, "the old native preview and shadow planes force a reduced grade");
+    first.raster.reset();
+    request.cameraRawRetainedPreviewBytes = reduced.raster->retainedBytes();
+    const auto retry = applyIsolated(request);
+    require(retry.previewScale == 1, "the updated shadow planes leave room for a native grade");
+    require(reduced.cameraRawCanRefine, "the reduced pass requests refinement without another edit");
+}
+void nativeDeepConvergence() {
+    constexpr int width = 2051, height = 16;
+    for (const auto format : {DeepImage::Format::Unorm16, DeepImage::Format::HalfFloat}) {
+        auto deep = makeDeep(width, height, format);
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+            const float r = .2f + float(x) / width;
+            deep->setPixel(x, y, {r, .12f, .06f, 1.f});
+        }
+        auto request = nativePreview(rasterFromDeep(*deep));
+        request.deepSource = deep;
+        require(applyIsolated(request).deep == deep, "identity native preview shares the original deep samples");
+        request.cameraRaw.exposure = .5;
+        request.cameraRaw.shadows = 25;
+        auto preview = applyIsolated(request);
+        require(preview.deep && preview.deep->format == format && preview.previewScale == 1 && preview.raster->width == width,
+                "deep preview uses the retained format and native grid");
+        require(preview.cameraRawScope && std::accumulate(preview.cameraRawScope->red.begin(), preview.cameraRawScope->red.end(), 0.) == 512 * 4,
+                "deep scope observes the same sample budget as the 8-bit scope");
+        request.preview = false;
+        request.cameraRawView.scopeLimit = -1;
+        const auto final = applyIsolated(request);
+        require(final.deep->samples == preview.deep->samples && final.raster->rgba() == preview.raster->rgba(),
+                "native deep preview and Apply have the same samples");
+        if (deep->isHdr()) require(final.deep->pixel(width - 1, 0)[0] > 1, "native Camera Raw retains HDR highlights");
+        const auto normal = normalizeDeep(*preview.deep).raster;
+        const auto legacyScope = CameraRawScope::make(*normal, 0);
+        const auto fullScope = CameraRawScope::make(*preview.deep, 0, {});
+        require(legacyScope.red == fullScope.red && legacyScope.vectorscope == fullScope.vectorscope,
+                "direct deep scope reproduces normalized SDR scope and dither");
+    }
+}
+void cancelSpatialPass() {
+    auto request = nativePreview(solid(640, 320, {76, 62, 50, 255}));
+    request.cameraRaw.clarity = 30;
+    request.cameraRawView.scopeLimit = -1;
+    const auto before = request.source->rgba();
+    int polls = 0;
+    request.limits.cancelled = [&] { return ++polls > request.source->height + 40; };
+    bool stopped = false;
+    try { applyIsolated(request); } catch (const std::runtime_error&) { stopped = true; }
+    require(stopped && request.source->rgba() == before, "cancelling spatial effects discards partial output");
+}
+}
+__declspec(noinline) void runGrades() {
         auto gray128 = solid(4, 4, {128, 128, 128, 200});
         require(rendered(*gray128, {}).a == 200 && rendered(*gray128, {}) == Pixel{128, 128, 128, 200}, "identity keeps color and alpha");
         CameraRawSettings invalid;
@@ -162,8 +316,8 @@ void run() {
         Request previewRequest; previewRequest.kind = Kind::CameraRaw;
         previewRequest.source = shadowLandscape(1200); previewRequest.cameraRaw = adaptive;
         previewRequest.preview = true; previewRequest.previewMaxEdge = 600;
-        auto reducedResult = apply(previewRequest);
-        previewRequest.preview = false; auto fullResult = apply(previewRequest);
+        auto reducedResult = applyIsolated(previewRequest);
+        previewRequest.preview = false; auto fullResult = applyIsolated(previewRequest);
         require(reducedResult.raster->width == 600 && fullResult.raster->width == 1200 &&
                 std::abs(shadowBandMean(*reducedResult.raster, false) - shadowBandMean(*fullResult.raster, false)) < 4,
                 "production preview and full render must use the original layer size");
@@ -174,7 +328,7 @@ void run() {
         require(selected.raster->pixel(50, 20) == selectedSource->pixel(50, 20) &&
                 selected.raster->pixel(50, 350) != selectedSource->pixel(50, 350), "adaptive shadows must honor selection coverage");
         bool cancelled = false;
-        int polls = 0;
+        std::atomic_int polls{0};
         try { renderCameraRaw(*selectedSource, adaptive, {}, nullptr, [&] { return ++polls > 8; }); }
         catch (const std::exception&) { cancelled = true; }
         require(cancelled, "adaptive shadows must stop a cancelled render");
@@ -189,7 +343,10 @@ void run() {
         auto translucent = solid(4, 4, {20, 20, 20, 100});
         auto translucentOut = paint(translucent, adaptive);
         require(translucentOut->pixel(0, 0).a == 100 && translucentOut->pixel(0, 0).r <= 100, "adaptive shadows preserve premultiplied alpha");
-
+}
+__declspec(noinline) void runColorAndGeometry() {
+        auto mid = solid(2, 2, {128, 128, 128, 255});
+        auto bright = solid(2, 2, {192, 192, 192, 255});
         CameraRawSettings color;
         color.temperature = 100;
         auto warmed = rendered(*mid, color);
@@ -368,13 +525,15 @@ void run() {
         vignette.vignetteAmount = -60;
         auto vignetted = paint(image(16, 16, [](int, int) { return Pixel{180, 180, 180, 255}; }), vignette);
         require(vignetted->pixel(0, 0).r < vignetted->pixel(8, 8).r, "vignette darkens the corner more than the center");
-
+}
+__declspec(noinline) void runDeepAndApply() {
+        auto mid = solid(2, 2, {128, 128, 128, 255});
         Request request;
         request.kind = Kind::CameraRaw;
         request.source = mid;
         request.cameraRaw.exposure = 1;
         request.seed = 9;
-        auto applied = apply(request);
+        auto applied = applyIsolated(request);
         require(applied.implementation == "camera raw" && applied.changed && applied.cameraRawScope && applied.raster->pixel(0, 0).r > 165, "apply runs the camera raw grade and returns a scope");
         auto darkRamp = makeDeep(1024, 8, DeepImage::Format::Unorm16);
         for (int y = 0; y < darkRamp->height; ++y) for (int x = 0; x < darkRamp->width; ++x) {
@@ -410,18 +569,29 @@ void run() {
         require(hdrShadows && hdrShadows->pixel(0, 0)[0] > 1.f, "adaptive shadows preserve HDR highlight range");
         Request shadowRequest; shadowRequest.kind = Kind::CameraRaw; shadowRequest.source = rasterFromDeep(*deep);
         shadowRequest.deepSource = deep; shadowRequest.cameraRaw = adaptiveDeep;
-        require(apply(shadowRequest).deep != nullptr, "adaptive shadows apply retains 16-bit data");
+        require(applyIsolated(shadowRequest).deep != nullptr, "adaptive shadows apply retains 16-bit data");
         shadowRequest.limits.maxWorkingBytes = 1;
-        bool budgetRejected = false; try { apply(shadowRequest); } catch (const std::exception&) { budgetRejected = true; }
+        bool budgetRejected = false; try { applyIsolated(shadowRequest); } catch (const std::exception&) { budgetRejected = true; }
         require(budgetRejected, "adaptive shadows must respect the working memory budget");
         CameraRawSettings mixer; mixer.mixer.saturation[0] = 40;
         require(cameraRawNeedsEightBit(mixer), "mixer must be classified as 8-bit");
         bool refused = false; try { renderCameraRaw(*deep, mixer, {}, nullptr); } catch (const std::exception&) { refused = true; }
         require(refused, "16-bit mixer Camera Raw did not require conversion");
         Request eight; eight.kind = Kind::CameraRaw; eight.source = rasterFromDeep(*deep); eight.deepSource = deep; eight.cameraRaw = mixer; eight.preview = true;
-        require(apply(eight).changed && !apply(eight).deep, "mixer preview must not claim 16-bit precision");
-        eight.preview = false; refused = false; try { apply(eight); } catch (const std::exception&) { refused = true; }
+        require(applyIsolated(eight).changed && !applyIsolated(eight).deep, "mixer preview must not claim 16-bit precision");
+        eight.preview = false; refused = false; try { applyIsolated(eight); } catch (const std::exception&) { refused = true; }
         require(refused, "mixer apply kept a silent 16-bit container");
+}
+void run() {
+        nativeConvergence();
+        nativeBudget();
+        cachedShadows();
+        shadowBudgetRefinement();
+        nativeDeepConvergence();
+        cancelSpatialPass();
+        runGrades();
+        runColorAndGeometry();
+        runDeepAndApply();
         std::cout << "PASS camera raw\n";
 }
 int main() {

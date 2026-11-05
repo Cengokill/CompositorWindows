@@ -108,7 +108,9 @@ NativeCanvas::ViewportBounds NativeCanvas::viewportBounds() const{
     result.units=crisp?1.:1./zoom;result.valid=std::isfinite(result.x)&&std::isfinite(result.y)&&std::isfinite(result.width)&&std::isfinite(result.height)&&result.width>=0&&result.height>=0&&std::isfinite(result.units)&&result.units>0;return result;
 }
 void NativeCanvas::presentComposite(std::shared_ptr<const Raster> raster,double x,double y,double units,bool clearPreview){
-    if(!raster)return;raster_=std::move(raster);rasterX_=x;rasterY_=y;rasterUnits_=units>0?units:1;viewportPresented_=true;if(clearPreview)movePreview_.reset();upload();update();
+    // The deferred provider keeps this frame during painting. Once it is
+    // removed or disabled, the next paint should draw the canonical document.
+    raster_=std::move(raster);rasterX_=x;rasterY_=y;rasterUnits_=units>0?units:1;viewportPresented_=!deferViewportComposite;if(clearPreview)movePreview_.reset();upload();update();
 }
 QRectF NativeCanvas::contentRect() const{
     if(!showRulers||documentWidth_<=0||documentHeight_<=0)return QRectF(0,0,width(),height());
@@ -324,7 +326,9 @@ void NativeCanvas::drawRulers(){
         context_->DrawText(label.c_str(),UINT32(label.size()),rulerTextFormat(),box,ink.Get());
     }
 }
-void NativeCanvas::draw(bool present){proofApplied_=false;const double scale=pointsPerPixel();const bool skipComposite=viewportDeferred_||movePreview_||compositeHeld_||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
+void NativeCanvas::draw(bool present){proofApplied_=false;const double scale=pointsPerPixel();const bool held=viewportDeferred_||movePreview_||compositeHeld_;
+const bool deferred=!held&&deferViewportComposite&&deferViewportComposite();
+const bool skipComposite=held||deferred||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;upload();}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
 if(proofing){if(textOverlay_)drawTextOverlay(true);context_->PopAxisAlignedClip();finishCmykProof(bounds);context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);}
 if(showPixelGrid&&zoom>=8){
     const auto area=D2D1::RectF(std::max(0.f,left),std::max(0.f,top),std::min(float(width()),bounds.right),std::min(float(height()),bounds.bottom));
@@ -596,9 +600,13 @@ void NativeCanvas::refreshNavigator(){
     const auto placement=navigatorPlacement();
     const double longest=std::max(placement.map.width(),placement.map.height());
     const int edge=std::clamp(int(std::ceil(std::max(32.,longest)*std::max(1.,devicePixelRatioF()))),1,256);
-    try{auto patch=navigatorProvider(edge);navigatorRaster_=std::move(patch.raster);navigatorOriginX_=patch.documentX;navigatorOriginY_=patch.documentY;navigatorUnits_=patch.unitsPerPixel>0?patch.unitsPerPixel:1;navigatorBitmap_.Reset();}
-    catch(const std::exception& error){error_=error.what();}
-    update();
+    if(deferNavigatorComposite&&deferNavigatorComposite(edge))return;
+    try{presentNavigator(navigatorProvider(edge));}
+    catch(const std::exception& error){error_=error.what();update();}
+}
+void NativeCanvas::presentNavigator(CompositeViewport patch){
+    navigatorRaster_=std::move(patch.raster);navigatorOriginX_=patch.documentX;navigatorOriginY_=patch.documentY;
+    navigatorUnits_=patch.unitsPerPixel>0?patch.unitsPerPixel:1;navigatorBitmap_.Reset();update();
 }
 bool NativeCanvas::sharpPatchCoversView()const{
     if(!raster_||rasterUnits_<=0||documentWidth_<=0||documentHeight_<=0)return false;

@@ -210,7 +210,7 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
         else result->tiles[index]=renderer.render(doc,x,y,w,h)->tiles.front();}
     previous_=doc;output_=result;return output_;
 }
-CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview){
+CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview,const std::function<bool()>& cancelled){
     lastViewportComposedTiles_=0;
     Document doc=input;
     if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");*found=preview->layer;}
@@ -262,7 +262,9 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
     auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
-    for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){const std::pair<int,int> key{tx,ty};auto found=viewportTiles_.find(key);if(found==viewportTiles_.end()){
+    for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){
+        if(cancelled&&cancelled()){reset();throw std::runtime_error("Viewport composition cancelled");}
+        const std::pair<int,int> key{tx,ty};auto found=viewportTiles_.find(key);if(found==viewportTiles_.end()){
             const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;Tile tile;
             if(w<=0||h<=0)tile=zeroTile();
             else if(direct){const size_t index=size_t(ty)*((direct->width+255)/256)+tx;tile=index<direct->tiles.size()&&direct->tiles[index]?direct->tiles[index]:zeroTile();}

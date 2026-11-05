@@ -74,16 +74,27 @@ std::shared_ptr<const DeepImage> deepFromPlanes(int width, int height, const std
     }
     return image;
 }
-std::shared_ptr<const Raster> rasterFromDeep(const DeepImage& image) {
+std::shared_ptr<const Raster> rasterFromDeep(const DeepImage& image,const std::function<bool()>& cancelled) {
     if (!image.valid()) throw std::runtime_error("Invalid 16-bit image");
+    if(cancelled&&cancelled())throw std::runtime_error("Deep image conversion cancelled");
     std::vector<std::uint8_t> rgba(std::size_t(image.width) * std::size_t(image.height) * 4);
-    for (int y = 0; y < image.height; ++y) for (int x = 0; x < image.width; ++x) {
-        const auto value = image.pixel(x, y);
-        std::uint16_t sample[4];for(int c=0;c<4;++c)sample[c]=std::uint16_t(std::lround(std::clamp(value[c],0.f,c==3?1.f:value[3])*65535));
-        auto* pixel = rgba.data() + (std::size_t(y) * std::size_t(image.width) + std::size_t(x)) * 4;
-        pixel[3] = ditherChannel(sample[3], x, y);
-        for (int channel = 0; channel < 3; ++channel) pixel[channel] = std::min(pixel[3], ditherChannel(sample[channel], x, y));
+    const bool hdr=image.isHdr();
+    for (int y = 0; y < image.height; ++y) {
+        if(cancelled&&cancelled())throw std::runtime_error("Deep image conversion cancelled");
+        for (int x = 0; x < image.width; ++x) {
+            const auto* sample = image.at(x,y);
+            std::uint16_t clipped[4];
+            if(hdr){
+                const auto value=image.pixel(x,y);
+                for(int c=0;c<4;++c)clipped[c]=std::uint16_t(std::lround(std::clamp(value[c],0.f,c==3?1.f:value[3])*65535));
+                sample=clipped;
+            }
+            auto* pixel = rgba.data() + (std::size_t(y) * std::size_t(image.width) + std::size_t(x)) * 4;
+            pixel[3] = ditherChannel(sample[3], x, y);
+            for (int channel = 0; channel < 3; ++channel)
+                pixel[channel] = ditherChannel(std::min(sample[3],sample[channel]), x, y);
+        }
     }
-    return Raster::fromRgba(image.width, image.height, rgba.data(), std::size_t(image.width) * 4);
+    return Raster::fromRgba(image.width, image.height, rgba.data(), std::size_t(image.width) * 4, cancelled);
 }
 }
