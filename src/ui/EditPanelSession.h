@@ -22,6 +22,7 @@ struct EditPanelHost {
     QPointer<QWidget> canvas;
     std::function<bool()> valid;
     std::function<void(std::shared_ptr<const Document>)> preview;
+    std::function<void(CompositeCache)> cachePreviewViewport;
     std::function<void(EditPanelResult)> commit;
     std::function<std::shared_ptr<const Document>()> view;
     std::function<std::optional<Document>()> currentDocument;

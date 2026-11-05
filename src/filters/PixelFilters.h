@@ -1,5 +1,6 @@
 #pragma once
 #include "CameraRaw.h"
+#include "CameraRawShadows.h"
 #include "core/Document.h"
 #include <functional>
 #include <optional>
@@ -41,11 +42,26 @@ struct Limits {
     std::uint64_t maxWorkingBytes{4000000000};
     std::function<bool()> cancelled;
 };
+// A single worker per Camera Raw panel owns this cache. The key names the
+// source and the operations that precede adaptive Shadows.
+struct CameraRawPreviewCache {
+    struct ShadowInput {
+        std::shared_ptr<const Raster> raster;
+        std::shared_ptr<const DeepImage> deep;
+        int width{},height{};
+        double temperature{},tint{},exposure{},contrast{},highlights{};
+        CameraRawGeometrySettings geometry;
+        CameraRawCalibrationSettings calibration;
+        bool operator==(const ShadowInput&) const = default;
+    };
+    std::optional<ShadowInput> shadowInput;
+    CameraRawShadowAnalysis shadows;
+};
 struct Request {
     Kind kind{Kind::GaussianBlur};std::shared_ptr<const Raster> source;Transform transform;Settings settings;
     std::uint32_t seed{};std::optional<SourceSelection> selection;
     bool preview{};
-    // Camera Raw interactive previews use this edge. Zero keeps the 2048 default.
+    // An explicit reduced preview edge. Zero uses the usual filter default.
     int previewMaxEdge{};
     // Preserve the largest padded margin while a preview panel remains open.
     double retainedBlurMargin{};
@@ -54,6 +70,9 @@ struct Request {
     Limits limits;
     std::shared_ptr<const DeepImage> deepSource;
     int canvasWidth{},canvasHeight{};
+    bool cameraRawNativePreview{};
+    std::uint64_t cameraRawRetainedPreviewBytes{};
+    std::shared_ptr<CameraRawPreviewCache> cameraRawCache;
 };
 struct Result {
     std::shared_ptr<const Raster> raster;Transform transform;
@@ -61,6 +80,7 @@ struct Result {
     std::optional<CameraRawScope> cameraRawScope;
     std::string implementation;
     std::shared_ptr<const DeepImage> deep;
+    bool cameraRawCanRefine{};
 };
 // Linear RGBA/float intermediates plus one tiled Raster. Distinct from the
 // 1.2 GB import/merge working caps. Default Limits permit a 100-megapixel Apply.

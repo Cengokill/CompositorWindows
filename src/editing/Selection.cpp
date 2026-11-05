@@ -266,17 +266,21 @@ std::optional<Selection> moveSelectionCoverage(const std::optional<Selection>& o
     }
     auto out=std::make_shared<GrayRaster>();out->width=g.width;out->height=g.height;out->pixels.resize(g.pixels.size());for(int y=0;y<g.height;++y)for(int x=0;x<g.width;++x)out->pixels[size_t(y)*g.width+x]=g.pixel(x-dx,y-dy);return Selection{out};
 }
-std::shared_ptr<const GrayRaster> mappedCoverage(const Document& doc,const Transform& transform,int w,int h,bool clipCanvas,CoverageSampling sampling){
+std::shared_ptr<const GrayRaster> mappedCoverage(const Document& doc,const Transform& transform,int w,int h,bool clipCanvas,CoverageSampling sampling,const std::function<bool()>& cancelled){
     sizeCheck(w,h);if(!transform.valid()||doc.width<1||doc.height<1||doc.width>30000||doc.height>30000)throw std::runtime_error("Invalid selection mapping");
     if(!doc.selection&&!clipCanvas)return {};
     const GrayRaster* src=doc.selection?doc.selection->coverage.get():nullptr;if(doc.selection&&!src)throw std::runtime_error("Present selection has no coverage");
     if(src){grayCheck(*src);if(src->width!=doc.width||src->height!=doc.height)throw std::runtime_error("Selection must match document dimensions");}
+    if(cancelled&&cancelled())throw std::runtime_error("Selection mapping cancelled");
     auto out=std::make_shared<GrayRaster>();out->width=w;out->height=h;out->pixels.resize(size_t(w)*h);
     auto origin=transform.fromUnit({0,0}),right=transform.fromUnit({1,0}),bottom=transform.fromUnit({0,1});
     Point stepX{(right.x-origin.x)/w,(right.y-origin.y)/w},stepY{(bottom.x-origin.x)/h,(bottom.y-origin.y)/h};
-    for(int y=0;y<h;++y)for(int x=0;x<w;++x){Point p{origin.x+(x+.5)*stepX.x+(y+.5)*stepY.x,origin.y+(x+.5)*stepX.y+(y+.5)*stepY.y};uint8_t value=0;
-        if(p.x>=0&&p.y>=0&&p.x<doc.width&&p.y<doc.height){if(!src)value=255;else if(sampling==CoverageSampling::Nearest)value=src->pixel(int(std::floor(p.x)),int(std::floor(p.y)));else{double sx=p.x-.5,sy=p.y-.5;int ix=int(std::floor(sx)),iy=int(std::floor(sy));double fx=sx-ix,fy=sy-iy;value=byte((1-fy)*((1-fx)*src->pixel(ix,iy)+fx*src->pixel(ix+1,iy))+fy*((1-fx)*src->pixel(ix,iy+1)+fx*src->pixel(ix+1,iy+1)));}}
-        out->pixels[size_t(y)*w+x]=value;
+    for(int y=0;y<h;++y){
+        if(cancelled&&cancelled())throw std::runtime_error("Selection mapping cancelled");
+        for(int x=0;x<w;++x){Point p{origin.x+(x+.5)*stepX.x+(y+.5)*stepY.x,origin.y+(x+.5)*stepX.y+(y+.5)*stepY.y};uint8_t value=0;
+            if(p.x>=0&&p.y>=0&&p.x<doc.width&&p.y<doc.height){if(!src)value=255;else if(sampling==CoverageSampling::Nearest)value=src->pixel(int(std::floor(p.x)),int(std::floor(p.y)));else{double sx=p.x-.5,sy=p.y-.5;int ix=int(std::floor(sx)),iy=int(std::floor(sy));double fx=sx-ix,fy=sy-iy;value=byte((1-fy)*((1-fx)*src->pixel(ix,iy)+fx*src->pixel(ix+1,iy))+fy*((1-fx)*src->pixel(ix,iy+1)+fx*src->pixel(ix+1,iy+1)));}}
+            out->pixels[size_t(y)*w+x]=value;
+        }
     }return out;
 }
 }

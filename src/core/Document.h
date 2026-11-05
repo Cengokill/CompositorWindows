@@ -40,10 +40,10 @@ public:
     // PNG project encoding materializes pixels and intentionally resets it.
     int samplingOriginX{},samplingOriginY{};
     static std::shared_ptr<const Raster> filled(int width,int height,Pixel value={});
-    static std::shared_ptr<const Raster> fromRgba(int width,int height,const uint8_t* data,size_t stride);
+    static std::shared_ptr<const Raster> fromRgba(int width,int height,const uint8_t* data,size_t stride,const std::function<bool()>& cancelled={});
     Pixel pixel(int x,int y) const;
     std::shared_ptr<const Raster> replacing(int x,int y,int width,int height,const Pixel* pixels,size_t rowPixels) const;
-    std::vector<uint8_t> rgba() const;
+    std::vector<uint8_t> rgba(const std::function<bool()>& cancelled={}) const;
     static uint64_t materializationCount();
     static void resetMaterializationCount();
     size_t retainedBytes() const { return tiles.size()*sizeof(Tile); }
@@ -241,7 +241,7 @@ class CompositeCache {
     size_t lastViewportComposedTiles_{};
 public:
     std::shared_ptr<const Raster> render(const Document&);
-    CompositeViewport renderViewport(const Document&,double x,double y,double width,double height,double unitsPerPixel=1,size_t maxVisibleTiles=64,size_t maxRetainedTiles=256,std::shared_ptr<const LayerRenderPreview> preview={});
+    CompositeViewport renderViewport(const Document&,double x,double y,double width,double height,double unitsPerPixel=1,size_t maxVisibleTiles=64,size_t maxRetainedTiles=256,std::shared_ptr<const LayerRenderPreview> preview={},const std::function<bool()>& cancelled={});
     size_t viewportRetainedTiles()const{return viewportTiles_.size();}
     size_t viewportMetadataEntries()const{return viewportTiles_.size();}
     // Tiles whose pixels were produced by the renderer during the last viewport call.

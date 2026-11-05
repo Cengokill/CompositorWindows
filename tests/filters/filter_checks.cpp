@@ -9,6 +9,13 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#if defined(_WIN32)
+#include <windows.h>
+#include <psapi.h>
+#else
+#include <sys/resource.h>
+#endif
 using namespace compositor;
 using namespace compositor::filters;
 namespace {
@@ -203,6 +210,65 @@ int benchmark(){
         for(int run=0;run<4;++run){auto start=std::chrono::steady_clock::now();auto output=apply(q);double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();std::cout<<"kind="<<int(kind)<<" run="<<run<<" elapsed_ms="<<ms<<" result="<<output.raster->width<<"x"<<output.raster->height<<"\n";}
     }return 0;
 }
+std::uint64_t peakProcessBytes() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, DWORD(sizeof(counters))))
+        throw std::runtime_error("Cannot measure Camera Raw process memory");
+    return counters.PeakWorkingSetSize;
+#else
+    struct rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) != 0) throw std::runtime_error("Cannot measure Camera Raw process memory");
+    return std::uint64_t(usage.ru_maxrss) * 1024;
+#endif
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();testSettings();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int benchmarkCameraRaw() {
+    using Clock = std::chrono::steady_clock;
+    auto elapsed = [](Clock::time_point start) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    };
+    std::cout << "Camera Raw native preview, five runs per grade. Peak is process-wide since launch.\n";
+    for (const auto& [width, height] : {std::pair{1024, 768}, std::pair{6000, 4000}}) {
+        const auto inputStart = Clock::now();
+        auto source = image(width, height, [height](int x, int y) {
+            const int value = (y < height / 3 ? 145 : 16) + ((x * 31 + y * 13) & 63);
+            return Pixel{std::uint8_t(value), std::uint8_t(value + 10), std::uint8_t(value + 28), 255};
+        });
+        std::cout << "source=" << width << 'x' << height << " rgba8_prepare_ms=" << elapsed(inputStart) << '\n';
+        for (const auto* grade : {"light8", "shadows8", "light16"}) {
+            auto job = request(Kind::CameraRaw, source);
+            job.preview = true;
+            job.cameraRawNativePreview = true;
+            job.cameraRawView.scopeLimit = -1;
+            job.cameraRaw.exposure = .5; job.cameraRaw.contrast = 15; job.cameraRaw.highlights = -20;
+            if (std::string_view(grade) == "shadows8") job.cameraRawCache = std::make_shared<CameraRawPreviewCache>();
+            if (std::string_view(grade) == "light16") {
+                const auto deepStart = Clock::now();
+                auto deep = makeDeep(width, height, DeepImage::Format::Unorm16);
+                const auto bytes = source->rgba();
+                for (std::size_t i = 0; i < bytes.size(); ++i) deep->samples[i] = promote8(bytes[i]);
+                job.deepSource = std::move(deep);
+                std::cout << "source=" << width << 'x' << height << " unorm16_prepare_ms=" << elapsed(deepStart) << '\n';
+            }
+            for (int run = 0; run < 5; ++run) {
+                if (job.cameraRawCache) job.cameraRaw.shadows = 25 + run * 10;
+                const auto start = Clock::now();
+                const auto result = apply(job);
+                const double gradeMs = elapsed(start);
+                const auto scopeStart = Clock::now();
+                const auto scope = result.deep ? CameraRawScope::make(*result.deep, 512, {})
+                                               : CameraRawScope::make(*result.raster, 512);
+                const double scopeMs = elapsed(scopeStart);
+                require(result.raster->width == width && result.raster->height == height && scope.peak() > 0,
+                        "benchmark requires the native grade and a valid scope");
+                std::cout << "source=" << width << 'x' << height << " grade=" << grade << " run=" << run
+                          << " grade_ms=" << gradeMs << " scope_ms=" << scopeMs
+                          << " peak_process_mib=" << double(peakProcessBytes()) / (1024 * 1024) << '\n';
+            }
+        }
+    }
+    return 0;
+}
+}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

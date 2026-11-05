@@ -18,6 +18,18 @@ tests["dodge_burn_srgb"]=[]{auto dodge=blendPixel({64,64,64,255},{64,64,64,128},
 tests["levels_single_unpremultiply"]=[]{std::vector<uint8_t> rgba{128,128,128,128};std::array<float,768> lut{};for(int c=0;c<3;++c)for(int i=0;i<256;++i)lut[size_t(c)*256+i]=i>=200?1.f:0.f;graphics::applyLevels({rgba,1,1,4},lut);require(rgba[0]==128&&rgba[3]==128,"half-alpha white stays white after one unpremultiply");};
 tests["all_blends_alpha"]=[]{for(size_t i=0;i<blendNames.size();++i){auto p=blendPixel({10,80,30,100},{90,10,20,128},Blend(i));require(p.a==178&&p.r<=p.a&&p.g<=p.a&&p.b<=p.a,"blend premultiplied bounds");require(blendPixel({},{30,40,50,90},Blend(i))==Pixel{30,40,50,90},"transparent backdrop");}};
 tests["render_tile_partition"]=[]{Document d;d.width=513;d.height=3;Layer l;l.id=newId();l.transform={-1,0,514,3,0,false,false,Transform::Sampling::Nearest};l.raster=Raster::filled(514,3,{64,32,0,128});d.layers.push_back(l);SoftwareRenderer r;auto full=r.render(d,0,0,513,3);auto left=r.render(d,0,0,256,3);auto right=r.render(d,256,0,257,3);for(int y=0;y<3;++y)for(int x=0;x<513;++x)require(full->pixel(x,y)==(x<256?left->pixel(x,y):right->pixel(x-256,y)),"partition seam");};
+tests["viewport_cancel_retry"]=[]{
+    Document document;document.width=513;document.height=257;
+    Layer layer;layer.id="preview";layer.transform={0,0,513,257};layer.raster=Raster::filled(513,257,{80,60,40,255});
+    document.layers.push_back(layer);
+    CompositeCache cache;
+    int tiles=0;bool cancelled=false;
+    try{cache.renderViewport(document,0,0,513,257,1,64,256,{},[&]{return ++tiles>2;});}
+    catch(const std::runtime_error&){cancelled=true;}
+    require(cancelled&&tiles==3&&cache.viewportRetainedTiles()==0,"cancelled viewport discards partially computed tiles");
+    const auto view=cache.renderViewport(document,0,0,513,257);
+    require(view.raster&&view.raster->rgba()==layer.raster->rgba(),"retry presents the original pixels");
+};
 tests["mask_and_hidden_clip"]=[]{Document d;d.width=2;d.height=1;Layer base;base.id="base";base.visible=false;base.raster=Raster::filled(2,1,{0,0,0,128});base.transform={0,0,2,1};Layer l;l.id="paint";l.raster=Raster::filled(2,1,{255,0,0,255});l.transform={0,0,2,1};l.maskSourceId="base";auto m=std::make_shared<GrayRaster>();m->width=2;m->height=1;m->pixels={255,0};l.mask=Mask{m};d.layers={base,l};auto out=SoftwareRenderer().render(d,0,0,2,1);require(out->pixel(0,0)==Pixel{128,0,0,128}&&out->pixel(1,0)==Pixel{},"hidden clipping alpha / grayscale mask");};
 tests["history_save_noop_redo"]=[]{History h;std::optional<Document>d=Document{};h.begin("Add",d,"");Layer l;l.id="a";d->layers.push_back(l);h.end(d,"a");h.markSaved();h.begin("Rename",d,"a");d->layers[0].name="Changed";h.end(d,"a");require(h.modified(),"dirty");d=h.undo()->document;require(!h.modified()&&h.canRedo(),"saved revision");h.begin("No-op",d,"a");h.end(d,"a");require(h.canRedo(),"no-op discarded redo");d=h.redo()->document;require(d->layers[0].name=="Changed"&&h.modified(),"redo snapshot");};
 tests["history_nested_cancel"]=[]{History h;std::optional<Document>d=Document{};h.begin("Outer",d,"");h.begin("Inner",d,"");d->width=9;h.end(d,"");require(!h.canUndo(),"nested transaction active");h.end(d,"");require(h.undoCount()==1&&h.undoName()=="Outer","one entry");h.begin("Cancel",d,"");d->width=5;d=h.cancel()->document;require(d->width==9&&h.undoCount()==1,"cancel restored");};

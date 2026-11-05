@@ -71,8 +71,7 @@ static double tone_blacks(double y, double amount) {
     return camera_clamp(0.25 + (y - 0.25) * (1.0 - amount));
 }
 
-static void vibrance_and_saturation(double *r, double *g, double *b, double vibrance, double saturation) {
-    double lum = rec709(*r, *g, *b);
+static double vibrance_amount(const double *r, const double *g, const double *b, double vibrance) {
     double maxc = fmax(*r, fmax(*g, *b));
     double minc = fmin(*r, fmin(*g, *b));
     double chroma = maxc - minc;
@@ -91,7 +90,12 @@ static void vibrance_and_saturation(double *r, double *g, double *b, double vibr
     }
     double amount = vibrance * (1.0 - sat);
     if (vibrance > 0) amount *= 1.0 - 0.7 * skin;
-    double factor = 1.0 + amount;
+    return amount;
+}
+
+static void vibrance_and_saturation(double *r, double *g, double *b, double vibrance, double saturation) {
+    double lum = rec709(*r, *g, *b);
+    double factor = 1.0 + (vibrance == 0 ? 0 : vibrance_amount(r, g, b, vibrance));
     *r = camera_clamp(lum + (*r - lum) * factor);
     *g = camera_clamp(lum + (*g - lum) * factor);
     *b = camera_clamp(lum + (*b - lum) * factor);
@@ -108,6 +112,11 @@ static void write_premultiplied(uint8_t *p, double r, double g, double b, double
     p[2] = (uint8_t)fmin(alpha, fmax(0.0, round(b * alpha)));
 }
 
+static double light_channel(double encoded, double gain, double light, double contrastScale) {
+    double linear = camera_clamp(srgb_to_linear(encoded) * gain * light);
+    return camera_clamp(0.5 + (linear_to_srgb(linear) - 0.5) * contrastScale);
+}
+
 void adjust_camera_raw(uint8_t *rgba, size_t width, size_t height, size_t stride,
                        double redGain, double greenGain, double blueGain, double exposure, double contrast,
                        double highlights, double shadows, double whites, double blacks,
@@ -120,25 +129,33 @@ void adjust_camera_raw(uint8_t *rgba, size_t width, size_t height, size_t stride
     double blackAmount = blacks / 100.0;
     double vibranceAmount = vibrance / 100.0;
     double saturationAmount = saturation / 100.0;
+    // Opaque byte channels have exactly 256 inputs to the RGB-independent light stage.
+    const int useTable = width * height >= 256;
+    double opaque[3][256];
+    if (useTable) for (int i = 0; i < 256; ++i) {
+        const double encoded = i / 255.0;
+        opaque[0][i] = light_channel(encoded, redGain, light, contrastScale);
+        opaque[1][i] = light_channel(encoded, greenGain, light, contrastScale);
+        opaque[2][i] = light_channel(encoded, blueGain, light, contrastScale);
+    }
     for (size_t y = 0; y < height; ++y) {
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
             double alpha = p[3];
             if (!alpha) continue;
-            double r = fmin(255.0, p[0] * 255.0 / alpha) / 255.0;
-            double g = fmin(255.0, p[1] * 255.0 / alpha) / 255.0;
-            double b = fmin(255.0, p[2] * 255.0 / alpha) / 255.0;
-            r = camera_clamp(srgb_to_linear(r) * redGain * light);
-            g = camera_clamp(srgb_to_linear(g) * greenGain * light);
-            b = camera_clamp(srgb_to_linear(b) * blueGain * light);
-            r = camera_clamp(0.5 + (linear_to_srgb(r) - 0.5) * contrastScale);
-            g = camera_clamp(0.5 + (linear_to_srgb(g) - 0.5) * contrastScale);
-            b = camera_clamp(0.5 + (linear_to_srgb(b) - 0.5) * contrastScale);
-            scale_luminance(&r, &g, &b, tone_highlights(rec709(r, g, b), highlightAmount));
-            scale_luminance(&r, &g, &b, tone_shadows(rec709(r, g, b), shadowAmount));
-            scale_luminance(&r, &g, &b, tone_whites(rec709(r, g, b), whiteAmount));
-            scale_luminance(&r, &g, &b, tone_blacks(rec709(r, g, b), blackAmount));
+            double r, g, b;
+            if (useTable && p[3] == 255) {
+                r = opaque[0][p[0]]; g = opaque[1][p[1]]; b = opaque[2][p[2]];
+            } else {
+                r = light_channel(fmin(255.0, p[0] * 255.0 / alpha) / 255.0, redGain, light, contrastScale);
+                g = light_channel(fmin(255.0, p[1] * 255.0 / alpha) / 255.0, greenGain, light, contrastScale);
+                b = light_channel(fmin(255.0, p[2] * 255.0 / alpha) / 255.0, blueGain, light, contrastScale);
+            }
+            if (highlightAmount != 0) scale_luminance(&r, &g, &b, tone_highlights(rec709(r, g, b), highlightAmount));
+            if (shadowAmount != 0) scale_luminance(&r, &g, &b, tone_shadows(rec709(r, g, b), shadowAmount));
+            if (whiteAmount != 0) scale_luminance(&r, &g, &b, tone_whites(rec709(r, g, b), whiteAmount));
+            if (blackAmount != 0) scale_luminance(&r, &g, &b, tone_blacks(rec709(r, g, b), blackAmount));
             vibrance_and_saturation(&r, &g, &b, vibranceAmount, saturationAmount);
             if (clipping == 1) {
                 int rc = r >= 254.5 / 255.0, gc = g >= 254.5 / 255.0, bc = b >= 254.5 / 255.0;
@@ -166,8 +183,11 @@ static size_t clamped_index(int index, size_t limit) {
     return (size_t)index;
 }
 
+static int camera_cancelled(CameraRawCancel cancel) { return cancel.check && cancel.check(cancel.context); }
+
 // Edge-clamped box blur. `dst` may not alias `src`. Returns 0 when the temporary row buffer cannot be allocated.
-static int box_blur_plane(const float *src, float *dst, size_t width, size_t height, int radius) {
+static int box_blur_plane(const float *src, float *dst, size_t width, size_t height, int radius, CameraRawCancel cancel) {
+    if (camera_cancelled(cancel)) return 0;
     if (radius < 1) {
         memcpy(dst, src, width * height * sizeof(float));
         return 1;
@@ -176,9 +196,11 @@ static int box_blur_plane(const float *src, float *dst, size_t width, size_t hei
     if (!temp) return 0;
     int window = radius * 2 + 1;
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) { free(temp); return 0; }
         double sum = 0;
         for (int k = -radius; k <= radius; ++k) sum += src[y * width + clamped_index(k, width)];
         for (size_t x = 0; x < width; ++x) {
+        if (camera_cancelled(cancel)) { free(temp); return 0; }
             temp[y * width + x] = (float)(sum / window);
             sum += src[y * width + clamped_index((int)x + radius + 1, width)];
             sum -= src[y * width + clamped_index((int)x - radius, width)];
@@ -291,22 +313,24 @@ void adjust_camera_raw_clip_overlay(uint8_t *rgba, size_t width, size_t height, 
     }
 }
 
-void adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_t stride,
+int adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_t stride,
                                double texture, double clarity, double dehaze,
                                double glow, int glowStyle, double glowRange, double glowSpread, double glowWarmth,
                                double vignetteAmount, double vignetteMidpoint, double vignetteRoundness,
                                double vignetteFeather, double vignetteHighlights, int vignetteStyle,
-                               double scale) {
-    if (width == 0 || height == 0) return;
-    if (texture == 0 && clarity == 0 && dehaze == 0 && !(glow > 0) && vignetteAmount == 0) return;
+                               double scale, CameraRawCancel cancel) {
+    if (width == 0 || height == 0) return 1;
+    if (texture == 0 && clarity == 0 && dehaze == 0 && !(glow > 0) && vignetteAmount == 0) return 1;
     size_t count = width * height;
     float *luma = NULL, *fine = NULL, *coarse = NULL, *glowPlane = NULL;
     int glowRadius = 1;
+    int success = 0;
     int failed = 0;
     if (texture != 0 || clarity != 0 || glow > 0) {
         luma = malloc(count * sizeof(float));
-        if (!luma) return;
+        if (!luma) return 0;
         for (size_t y = 0; y < height; ++y) {
+            if (camera_cancelled(cancel)) goto done;
             uint8_t *row = rgba + y * stride;
             for (size_t x = 0; x < width; ++x) {
                 uint8_t *p = row + x * 4;
@@ -320,11 +344,11 @@ void adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_
         }
         if (texture != 0) {
             fine = malloc(count * sizeof(float));
-            if (!fine || !box_blur_plane(luma, fine, width, height, effects_radius(1, scale))) failed = 1;
+            if (!fine || !box_blur_plane(luma, fine, width, height, effects_radius(1, scale), cancel)) failed = 1;
         }
         if (!failed && clarity != 0) {
             coarse = malloc(count * sizeof(float));
-            if (!coarse || !box_blur_plane(luma, coarse, width, height, effects_radius(4, scale))) failed = 1;
+            if (!coarse || !box_blur_plane(luma, coarse, width, height, effects_radius(4, scale), cancel)) failed = 1;
         }
         if (!failed && glow > 0) {
             double spread = glowSpread / 100.0;
@@ -340,20 +364,18 @@ void adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_
                 float denom = 1.0f - threshold;
                 if (denom < 0.05f) denom = 0.05f;
                 for (size_t i = 0; i < count; ++i) {
+                    if ((i & 4095) == 0 && camera_cancelled(cancel)) { failed = 1; break; }
                     float t = (luma[i] - threshold) / denom;
                     if (t < 0) t = 0;
                     if (t > 1) t = 1;
                     source[i] = t;
                 }
-                failed = !box_blur_plane(source, glowPlane, width, height, glowRadius);
+                if (!failed) failed = !box_blur_plane(source, glowPlane, width, height, glowRadius, cancel);
             }
             free(source);
         }
     }
-    if (failed) {
-        free(luma); free(fine); free(coarse); free(glowPlane);
-        return;
-    }
+    if (failed) goto done;
     double warmth = glowWarmth / 100.0;
     double glowRed, glowGreen, glowBlue, glowGain;
     if (glowStyle == 2) {
@@ -369,6 +391,7 @@ void adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_
         glowGain = glowStyle == 1 ? 1.4 : 1;
     }
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) goto done;
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
@@ -397,10 +420,13 @@ void adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_
             write_premultiplied(p, r, g, b, alpha);
         }
     }
+    success = 1;
+done:
     free(luma);
     free(fine);
     free(coarse);
     free(glowPlane);
+    return success;
 }
 static double lut_at(const float *lut, double value) {
     double scaled = camera_clamp(value) * 255.0;
@@ -587,13 +613,14 @@ static float sharpen_edge_at(const float *luma, size_t width, size_t height, siz
     return count ? sum / count : 0;
 }
 
-void adjust_camera_raw_sharpen_mask_overlay(uint8_t *rgba, size_t width, size_t height, size_t stride,
-                                            double sharpenRadius, double sharpenDetail, double sharpenMasking, double scale) {
-    if (width == 0 || height == 0) return;
+int adjust_camera_raw_sharpen_mask_overlay(uint8_t *rgba, size_t width, size_t height, size_t stride,
+                                            double sharpenRadius, double sharpenDetail, double sharpenMasking, double scale, CameraRawCancel cancel) {
+    if (width == 0 || height == 0) return 1;
     size_t count = width * height;
     float *luma = malloc(count * sizeof(float));
-    if (!luma) return;
+    if (!luma) return 0;
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) { free(luma); return 0; }
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
@@ -607,6 +634,7 @@ void adjust_camera_raw_sharpen_mask_overlay(uint8_t *rgba, size_t width, size_t 
     double threshold = (sharpenMasking / 100.0) * 0.35;
     double detailBoost = 0.5 + sharpenDetail / 100.0;
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) { free(luma); return 0; }
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
@@ -619,19 +647,23 @@ void adjust_camera_raw_sharpen_mask_overlay(uint8_t *rgba, size_t width, size_t 
         }
     }
     free(luma);
+    return 1;
 }
 
-void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t stride,
+int adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t stride,
                               double sharpenAmount, double sharpenRadius, double sharpenDetail, double sharpenMasking,
                               double noiseLuminance, double noiseLuminanceDetail, double noiseLuminanceContrast,
-                              double noiseColor, double noiseColorDetail, double noiseColorSmoothness, double scale) {
-    if (width == 0 || height == 0) return;
-    if (sharpenAmount == 0 && noiseLuminance == 0 && noiseColor == 0) return;
+                              double noiseColor, double noiseColorDetail, double noiseColorSmoothness, double scale, CameraRawCancel cancel) {
+    if (width == 0 || height == 0) return 1;
+    if (sharpenAmount == 0 && noiseLuminance == 0 && noiseColor == 0) return 1;
     size_t count = width * height;
     float *luma = malloc(count * sizeof(float));
     float *work = malloc(count * sizeof(float));
-    if (!luma || !work) { free(luma); free(work); return; }
+    float *chroma = NULL, *chromaBlur = NULL;
+    int success = 0;
+    if (!luma || !work) goto done;
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) goto done;
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
@@ -643,11 +675,12 @@ void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t
     }
     if (noiseLuminance > 0) {
         int radius = effects_radius(1.0 + noiseLuminance / 50.0, scale);
-        if (!box_blur_plane(luma, work, width, height, radius)) { free(luma); free(work); return; }
+        if (!box_blur_plane(luma, work, width, height, radius, cancel)) goto done;
         double strength = noiseLuminance / 100.0;
         double preserve = noiseLuminanceDetail / 100.0;
         double contrast = noiseLuminanceContrast / 100.0;
         for (size_t y = 0; y < height; ++y) {
+            if (camera_cancelled(cancel)) goto done;
             uint8_t *row = rgba + y * stride;
             for (size_t x = 0; x < width; ++x) {
                 uint8_t *p = row + x * 4;
@@ -668,27 +701,27 @@ void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t
     }
     if (noiseColor > 0) {
         int radius = effects_radius(1.0 + noiseColorSmoothness / 40.0, scale);
-        float *chroma = malloc(count * sizeof(float));
-        float *chromaBlur = malloc(count * sizeof(float));
-        if (!chroma || !chromaBlur) { free(chroma); free(chromaBlur); free(luma); free(work); return; }
+        chroma = malloc(count * sizeof(float));
+        chromaBlur = malloc(count * sizeof(float));
+        if (!chroma || !chromaBlur) goto done;
         for (size_t y = 0; y < height; ++y) {
+            if (camera_cancelled(cancel)) goto done;
             uint8_t *row = rgba + y * stride;
             for (size_t x = 0; x < width; ++x) {
                 uint8_t *p = row + x * 4;
                 double alpha = p[3];
-                if (!alpha) continue;
+                if (!alpha) { chroma[y * width + x] = 0; continue; }
                 double r = fmin(1.0, p[0] / alpha), g = fmin(1.0, p[1] / alpha), b = fmin(1.0, p[2] / alpha);
                 double h, s, l;
                 rgb_to_hsl(r, g, b, &h, &s, &l);
                 chroma[y * width + x] = (float)s;
             }
         }
-        if (!box_blur_plane(chroma, chromaBlur, width, height, radius)) {
-            free(chroma); free(chromaBlur); free(luma); free(work); return;
-        }
+        if (!box_blur_plane(chroma, chromaBlur, width, height, radius, cancel)) goto done;
         double strength = noiseColor / 100.0;
         double preserve = noiseColorDetail / 100.0;
         for (size_t y = 0; y < height; ++y) {
+            if (camera_cancelled(cancel)) goto done;
             uint8_t *row = rgba + y * stride;
             for (size_t x = 0; x < width; ++x) {
                 uint8_t *p = row + x * 4;
@@ -708,9 +741,11 @@ void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t
         }
         free(chroma);
         free(chromaBlur);
+        chroma = chromaBlur = NULL;
     }
     if (sharpenAmount > 0) {
         for (size_t y = 0; y < height; ++y) {
+            if (camera_cancelled(cancel)) goto done;
             uint8_t *row = rgba + y * stride;
             for (size_t x = 0; x < width; ++x) {
                 uint8_t *p = row + x * 4;
@@ -721,11 +756,12 @@ void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t
             }
         }
         int radius = effects_radius(detail_radius(sharpenRadius, scale), 1);
-        if (!box_blur_plane(luma, work, width, height, radius)) { free(luma); free(work); return; }
+        if (!box_blur_plane(luma, work, width, height, radius, cancel)) goto done;
         double amount = sharpenAmount / 100.0;
         double detailMix = sharpenDetail / 100.0;
         double threshold = (sharpenMasking / 100.0) * 0.35;
         for (size_t y = 0; y < height; ++y) {
+            if (camera_cancelled(cancel)) goto done;
             uint8_t *row = rgba + y * stride;
             for (size_t x = 0; x < width; ++x) {
                 uint8_t *p = row + x * 4;
@@ -742,8 +778,10 @@ void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t
             }
         }
     }
-    free(luma);
-    free(work);
+    success = 1;
+done:
+    free(chroma); free(chromaBlur); free(luma); free(work);
+    return success;
 }
 
 static void optics_defringe(double *r, double *g, double *b, double purpleAmount, double purpleLow, double purpleHigh,
@@ -764,14 +802,18 @@ static void optics_defringe(double *r, double *g, double *b, double purpleAmount
     *b = camera_clamp(lum + (*b - lum) * factor);
 }
 
-static void optics_chromatic(uint8_t *rgba, size_t width, size_t height, size_t stride, double strength) {
-    if (strength <= 0) return;
+static int optics_chromatic(uint8_t *rgba, size_t width, size_t height, size_t stride, double strength, CameraRawCancel cancel) {
+    if (strength <= 0) return 1;
     uint8_t *copy = malloc(height * stride);
-    if (!copy) return;
-    for (size_t y = 0; y < height; ++y) memcpy(copy + y * stride, rgba + y * stride, width * 4);
+    if (!copy) return 0;
+    for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) { free(copy); return 0; }
+        memcpy(copy + y * stride, rgba + y * stride, width * 4);
+    }
     double cx = width * 0.5, cy = height * 0.5;
     double maxR = hypot(cx, cy);
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) { free(copy); return 0; }
         uint8_t *row = rgba + y * stride;
         const uint8_t *srcRow = copy + y * stride;
         for (size_t x = 0; x < width; ++x) {
@@ -791,6 +833,7 @@ static void optics_chromatic(uint8_t *rgba, size_t width, size_t height, size_t 
         }
     }
     free(copy);
+    return 1;
 }
 
 static void optics_vignette_correct(double *r, double *g, double *b, size_t x, size_t y, size_t width, size_t height,
@@ -813,27 +856,29 @@ static void optics_vignette_correct(double *r, double *g, double *b, size_t x, s
     }
 }
 
-void adjust_camera_raw_optics(uint8_t *rgba, size_t width, size_t height, size_t stride,
+int adjust_camera_raw_optics(uint8_t *rgba, size_t width, size_t height, size_t stride,
                               int removeChromatic, int lensProfile, double profileDistortion, double profileVignetting,
                               double distortionK, double purpleAmount, double purpleHueLow, double purpleHueHigh,
                               double greenAmount, double greenHueLow, double greenHueHigh,
-                              double vignetteAmount, double vignetteMidpoint, double scale) {
+                              double vignetteAmount, double vignetteMidpoint, double scale, CameraRawCancel cancel) {
     (void)profileDistortion;
     (void)scale;
-    if (width == 0 || height == 0) return;
+    if (width == 0 || height == 0) return 1;
     double profileVignette = lensProfile ? profileVignetting / 100.0 : 0;
     double vignette = vignetteAmount + profileVignette * 35.0;
     if (distortionK != 0) {
         size_t bytes = height * stride;
         uint8_t *copy = malloc(bytes);
-        if (!copy) return;
+        if (!copy) return 0;
         memcpy(copy, rgba, bytes);
-        lens_distort(copy, rgba, width, height, stride, distortionK);
+        const int status = lens_distort_cancellable(copy, rgba, width, height, stride, distortionK, cancel.check, cancel.context);
         free(copy);
+        if (status != 0) return 0;
     }
-    if (removeChromatic) optics_chromatic(rgba, width, height, stride, 0.45);
-    if (purpleAmount == 0 && greenAmount == 0 && vignette == 0) return;
+    if (removeChromatic && !optics_chromatic(rgba, width, height, stride, 0.45, cancel)) return 0;
+    if (purpleAmount == 0 && greenAmount == 0 && vignette == 0) return 1;
     for (size_t y = 0; y < height; ++y) {
+        if (camera_cancelled(cancel)) return 0;
         uint8_t *row = rgba + y * stride;
         for (size_t x = 0; x < width; ++x) {
             uint8_t *p = row + x * 4;
@@ -845,6 +890,7 @@ void adjust_camera_raw_optics(uint8_t *rgba, size_t width, size_t height, size_t
             write_premultiplied(p, r, g, b, alpha);
         }
     }
+    return 1;
 }
 
 void adjust_camera_raw_calibration(uint8_t *rgba, size_t width, size_t height, size_t stride,

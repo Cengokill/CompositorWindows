@@ -2,6 +2,10 @@
 #define CameraRawPixels_h
 #include <stdint.h>
 #include <stddef.h>
+typedef struct {
+    int (*check)(void *);
+    void *context;
+} CameraRawCancel;
 // Camera Raw's Light and Color groups on premultiplied RGBA. Amounts use Camera Raw's ranges.
 // `clipping` 0 renders the grade; 1 is the highlight-clip view; 2 is the shadow-clip view.
 void adjust_camera_raw(uint8_t *rgba, size_t width, size_t height, size_t stride,
@@ -13,23 +17,24 @@ void adjust_camera_raw_curve_color(uint8_t *rgba, size_t width, size_t height, s
                                    const float *toneLut, const float *redLut, const float *greenLut, const float *blueLut,
                                    double refineSaturation, const float *mixer, int pointCount, const float *points,
                                    const float *grade, double blending, double balance, int visualize);
-void adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_t stride,
+// Spatial passes return 0 on cancellation or an allocation failure. Discard partial output.
+int adjust_camera_raw_effects(uint8_t *rgba, size_t width, size_t height, size_t stride,
                                double texture, double clarity, double dehaze,
                                double glow, int glowStyle, double glowRange, double glowSpread, double glowWarmth,
                                double vignetteAmount, double vignetteMidpoint, double vignetteRoundness,
                                double vignetteFeather, double vignetteHighlights, int vignetteStyle,
-                               double scale);
-void adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t stride,
+                               double scale, CameraRawCancel cancel);
+int adjust_camera_raw_detail(uint8_t *rgba, size_t width, size_t height, size_t stride,
                               double sharpenAmount, double sharpenRadius, double sharpenDetail, double sharpenMasking,
                               double noiseLuminance, double noiseLuminanceDetail, double noiseLuminanceContrast,
-                              double noiseColor, double noiseColorDetail, double noiseColorSmoothness, double scale);
-void adjust_camera_raw_sharpen_mask_overlay(uint8_t *rgba, size_t width, size_t height, size_t stride,
-                                            double sharpenRadius, double sharpenDetail, double sharpenMasking, double scale);
-void adjust_camera_raw_optics(uint8_t *rgba, size_t width, size_t height, size_t stride,
+                              double noiseColor, double noiseColorDetail, double noiseColorSmoothness, double scale, CameraRawCancel cancel);
+int adjust_camera_raw_sharpen_mask_overlay(uint8_t *rgba, size_t width, size_t height, size_t stride,
+                                            double sharpenRadius, double sharpenDetail, double sharpenMasking, double scale, CameraRawCancel cancel);
+int adjust_camera_raw_optics(uint8_t *rgba, size_t width, size_t height, size_t stride,
                               int removeChromatic, int lensProfile, double profileDistortion, double profileVignetting,
                               double distortionK, double purpleAmount, double purpleHueLow, double purpleHueHigh,
                               double greenAmount, double greenHueLow, double greenHueHigh,
-                              double vignetteAmount, double vignetteMidpoint, double scale);
+                              double vignetteAmount, double vignetteMidpoint, double scale, CameraRawCancel cancel);
 void adjust_camera_raw_calibration(uint8_t *rgba, size_t width, size_t height, size_t stride,
                                    double shadowTint, double redHue, double redSaturation,
                                    double greenHue, double greenSaturation, double blueHue, double blueSaturation,

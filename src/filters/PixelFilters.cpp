@@ -390,6 +390,151 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
     cancel(limits);if(selection)for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=std::size_t(y)*w+x;unsigned coverage=selection->pixels[i];for(int c=0;c<4;++c)result[i*4+c]=std::uint8_t((unsigned(result[i*4+c])*coverage+unsigned(original[i*4+c])*(255-coverage)+127)/255);}}
     graphics::clampPremultiplied(view(result,w,h));return Raster::fromRgba(w,h,result.data(),std::size_t(w)*4);
 }
+namespace {
+std::shared_ptr<const DeepImage> blendDeepSelection(std::shared_ptr<const DeepImage> result, const DeepImage& source,
+                                                     const GrayRaster* selection, const Limits& limits) {
+    if (!selection) return result;
+    auto mixed = std::make_shared<DeepImage>(*result);
+    for (int y = 0; y < source.height; ++y) {
+        cancel(limits);
+        for (int x = 0; x < source.width; ++x) {
+            const auto weight = selection->pixel(x, y);
+            const auto a = source.pixel(x, y);
+            auto b = result->pixel(x, y);
+            const float amount = weight / 255.f;
+            for (int c = 0; c < 4; ++c) b[c] = a[c] + (b[c] - a[c]) * amount;
+            mixed->setPixel(x, y, b);
+        }
+    }
+    return mixed;
+}
+
+Result applyCameraRaw(const Request& request, Result result) {
+    const auto& source = *request.source;
+    const auto settings = request.cameraRaw.normalized();
+    const bool identity = settings.isIdentity() && !request.cameraRawView.paints();
+    const bool eightBitOnly = cameraRawNeedsEightBit(settings);
+    const auto& deep = request.deepSource;
+    if (deep && (!deep->valid() || deep->width != source.width || deep->height != source.height))
+        throw std::runtime_error("Camera Raw source grid changed");
+    if (deep && deep->isHdr() && (eightBitOnly || settings.geometry.adjusts()))
+        throw std::runtime_error("Convert HDR to 16-Bit before spatial Camera Raw corrections");
+    if (deep && !request.preview && eightBitOnly)
+        throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
+    const bool useDeep = deep && !eightBitOnly;
+    const auto* coverage = request.selection ? request.selection->coverage.get() : nullptr;
+    const auto retainedSelection = coverage ? coverage->retainedBytes() : 0;
+    const auto cache = request.cameraRawCache;
+    const auto retainedCache = cache ? (cache->shadows.mean.capacity() + cache->shadows.square.capacity()) * sizeof(float) : 0;
+    const auto limit = request.limits.maxWorkingBytes;
+    const auto retainedPreview = request.cameraRawRetainedPreviewBytes;
+    const PixelRect native = result.sourceBounds;
+    const int edge = std::max(native.width, native.height);
+    auto reducedGrid = [&](int maxEdge) {
+        return PixelRect{0, 0, std::max(1, int(std::int64_t(native.width) * maxEdge / edge)),
+                         std::max(1, int(std::int64_t(native.height) * maxEdge / edge))};
+    };
+    auto tileBytes = [](PixelRect grid) { return estimatedWorkingBytes(grid.width, grid.height, 0); };
+    auto fits = [&](PixelRect grid, std::uint64_t retained) {
+        // Deep intermediates and the largest 8-bit detail/effects passes have
+        // different peaks. Count both the resampled input and the tiled output.
+        if (identity && grid == native && request.cameraRawNativePreview) return retained <= limit;
+        const std::uint64_t bytesPerPixel = useDeep ? (settings.shadows ? 100 : 80)
+            : (settings.adjustsEffects() || settings.detail.adjusts() || request.cameraRawView.sharpenMask ? 32 : 24);
+        const auto shadowBytes = settings.shadows ? cameraRawShadowWorkingBytes(grid.width, grid.height) : 0;
+        const auto resizedBytes = grid != native ? tileBytes(grid) : 0;
+        const auto bytes = estimatedWorkingBytes(grid.width, grid.height, bytesPerPixel) + shadowBytes + resizedBytes
+                         + retainedSelection + retainedCache;
+        return retained <= limit && bytes <= limit - retained;
+    };
+    PixelRect grid = native;
+    const bool preferNative = request.preview && request.cameraRawNativePreview && request.previewMaxEdge <= 0;
+    if (request.preview && !preferNative)
+        grid = reducedGrid(std::min(edge, request.previewMaxEdge > 0 ? request.previewMaxEdge : 2048));
+    if (preferNative && !fits(native, retainedPreview)) {
+        int maxEdge = std::min(edge, 2048);
+        grid = reducedGrid(maxEdge);
+        while (maxEdge > 1 && !fits(grid, retainedPreview)) {
+            maxEdge /= 2;
+            grid = reducedGrid(maxEdge);
+        }
+    }
+    if (!fits(grid, retainedPreview)) throw std::runtime_error("Filter exceeds transient allocation budget");
+    const bool reduced = grid != native;
+    if (preferNative && reduced) {
+        const auto reducedBytes = tileBytes(grid) + (useDeep ? std::uint64_t(grid.width) * grid.height * 8 : 0);
+        result.cameraRawCanRefine = reducedBytes < retainedPreview && fits(native, reducedBytes);
+    }
+
+    auto working = reduced ? resize(source, native, grid.width, grid.height, request.limits) : request.source;
+    std::optional<GrayRaster> selected;
+    if (coverage && (reduced || coverage->width != native.width || coverage->height != native.height ||
+                     request.selection->originX || request.selection->originY)) {
+        selected = GrayRaster{grid.width, grid.height, std::vector<std::uint8_t>(std::size_t(grid.width) * grid.height)};
+        for (int y = 0; y < grid.height; ++y) {
+            cancel(request.limits);
+            for (int x = 0; x < grid.width; ++x) {
+                const int sx = int((std::int64_t(2 * x + 1) * native.width) / (2 * grid.width)) - request.selection->originX;
+                const int sy = int((std::int64_t(2 * y + 1) * native.height) / (2 * grid.height)) - request.selection->originY;
+                selected->pixels[std::size_t(y) * grid.width + x] = coverage->pixel(sx, sy);
+            }
+        }
+        coverage = &*selected;
+    }
+    auto view = request.cameraRawView;
+    view.scale = double(std::max(grid.width, grid.height)) / edge;
+    view.seed = request.seed;
+    result.previewScale = view.scale;
+    result.implementation = "camera raw";
+    CameraRawShadowAnalysis* analysis = nullptr;
+    if (cache && settings.shadows) {
+        const CameraRawPreviewCache::ShadowInput key{request.source, useDeep ? deep : nullptr, grid.width, grid.height,
+            settings.temperature, settings.tint, settings.exposure, settings.contrast, settings.highlights, settings.geometry, settings.calibration};
+        if (cache->shadowInput != key) {
+            cache->shadows = {};
+            cache->shadowInput = key;
+        }
+        // Deep Alt clipping is applied after grading. The byte renderer uses
+        // the shared analysis only for the clean pass.
+        analysis = &cache->shadows;
+    }
+    if (!useDeep) {
+        auto rendered = renderCameraRaw(*working, settings, view, coverage, request.limits.cancelled, analysis);
+        result.raster = rendered.raster ? std::move(rendered.raster) : working;
+        result.changed = rendered.changed;
+        result.cameraRawScope = std::move(rendered.scope);
+        return result;
+    }
+
+    std::shared_ptr<const DeepImage> prepared = deep;
+    if (reduced) {
+        auto small = makeDeep(grid.width, grid.height, deep->format);
+        for (int y = 0; y < small->height; ++y) {
+            cancel(request.limits);
+            for (int x = 0; x < small->width; ++x) {
+                const int sx = int((std::int64_t(2 * x + 1) * native.width) / (2 * small->width));
+                const int sy = int((std::int64_t(2 * y + 1) * native.height) / (2 * small->height));
+                small->setPixel(x, y, deep->pixel(sx, sy));
+            }
+        }
+        prepared = std::move(small);
+    }
+    result.deep = prepared;
+    if (!identity) {
+        auto graded = renderCameraRaw(*prepared, settings, view, nullptr, request.limits.cancelled, analysis);
+        result.deep = blendDeepSelection(std::move(graded), *prepared, coverage, request.limits);
+    }
+    if (view.scopeLimit >= 0)
+        result.cameraRawScope = CameraRawScope::make(*result.deep, view.scopeLimit, request.limits.cancelled);
+    if (!reduced && (result.deep == deep || result.deep->samples == deep->samples)) {
+        result.deep = deep;
+    } else {
+        result.raster = rasterFromDeep(*result.deep, request.limits.cancelled);
+        result.changed = true;
+    }
+    return result;
+}
+}
 std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source,const Settings& raw,double scale,uint32_t seed,const GrayRaster* selection,const Limits& limits,const CameraRawSettings& cameraRaw,const CameraRawView& cameraView,LayerSides clamp){
     if(!source.valid())throw std::runtime_error("Invalid HDR filter source");
     count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?160:64);cancel(limits);const auto settings=raw.normalized();
@@ -415,19 +560,19 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
         else throw std::runtime_error("Unsupported deep filter kind");
         result=deepFromFloats(source,pixels,limits);
     }
-    if(selection){auto mixed=std::make_shared<DeepImage>(*result);for(int y=0;y<source.height;++y){cancel(limits);for(int x=0;x<source.width;++x){auto a=source.pixel(x,y),b=result->pixel(x,y);float amount=selection->pixel(x,y)/255.f;for(int c=0;c<4;++c)b[c]=a[c]+(b[c]-a[c])*amount;mixed->setPixel(x,y,b);}}result=mixed;}
-    return result;
+    return blendDeepSelection(std::move(result),source,selection,limits);
 }
 Result apply(const Request& request){
     kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>1002)throw std::runtime_error("Invalid retained blur margin");
     Result result{request.source,request.transform,{0,0,original.width,original.height},1,false,{}};auto settings=request.settings.normalized();if(request.selection){if(!request.selection->coverage)throw std::runtime_error("Present selection must have coverage");checkSelection(*request.selection->coverage);if(std::abs(std::int64_t(request.selection->originX))>30000||std::abs(std::int64_t(request.selection->originY))>30000)throw std::runtime_error("Source selection origin exceeds supported extent");if(empty(*request.selection->coverage))return result;}
+    if(request.kind==Kind::CameraRaw)return applyCameraRaw(request,std::move(result));
     if(request.kind==Kind::ContentAwareFill&&!request.selection)throw std::runtime_error("Content-Aware Fill needs a selection");if(request.kind==Kind::LensCorrection&&settings.distortion==0)return result;if(finishingIdentity(request.kind,settings))return result;
     PixelRect bounds{0,0,original.width,original.height};const bool grows=spreads(request.kind);
     const auto clamp=grows?canvasTouchingSides(request.transform,original.width,original.height,request.canvasWidth,request.canvasHeight):LayerSides{};
     if(grows)bounds=filterWorkingBounds(request);
     if(request.kind==Kind::ContentAwareFill){auto selection=coverageBounds(*request.selection);int loX=std::min(0,selection.x),loY=std::min(0,selection.y);bounds={loX,loY,std::max(original.width,selection.x+selection.width)-loX,std::max(original.height,selection.y+selection.height)-loY};}
     gateSize(bounds.width,bounds.height);
-    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=(request.kind==Kind::CameraRaw||request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit)&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
+    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=(request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit)&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
     if(request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit){
         const int w=factor<1?std::max(1,int(bounds.width*factor)):bounds.width;
         const int h=factor<1?std::max(1,int(bounds.height*factor)):bounds.height;
@@ -451,20 +596,8 @@ Result apply(const Request& request){
             settings.rgbSplitReach=settings.rgbSplitReach*std::hypot(double(working->width),double(working->height))/std::max(1.,document);
         }
     }
-    // Adaptive Shadows keeps a float image plus bounded low-resolution planes.
-    if(request.kind==Kind::CameraRaw && request.cameraRaw.normalized().shadows!=0) {
-        count(working->width,working->height,request.limits,request.deepSource?100:44);
-        const auto pixels=std::uint64_t(working->width)*working->height;
-        const auto planeBytes=std::min<std::uint64_t>(pixels, 2100000)*28;
-        const auto bytes=estimatedWorkingBytes(working->width,working->height,request.deepSource?100:44);
-        if(planeBytes>request.limits.maxWorkingBytes || bytes>request.limits.maxWorkingBytes-planeBytes)
-            throw std::runtime_error("Filter exceeds transient allocation budget");
-    }
-    // Width rounding can be substantial for a very narrow portrait. The
-    // original long edge determines the Camera Raw coefficient set.
-    const double cameraRawScale = double(std::max(working->width,working->height)) / std::max(bounds.width,bounds.height);
     std::shared_ptr<const DeepImage> deepOutput;
-    const bool eightBitOnly=request.kind==Kind::LensCorrection||request.kind==Kind::ContentAwareFill||(request.kind==Kind::CameraRaw&&cameraRawNeedsEightBit(request.cameraRaw));
+    const bool eightBitOnly=request.kind==Kind::LensCorrection||request.kind==Kind::ContentAwareFill;
     if(!request.preview&&request.deepSource&&request.deepSource->valid()&&!request.deepSource->isHdr()&&eightBitOnly)
         throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
     if(request.deepSource&&!eightBitOnly){
@@ -472,14 +605,8 @@ Result apply(const Request& request){
         count(working->width,working->height,request.limits,80);
         auto prepared=makeDeep(working->width,working->height,request.deepSource->format);
         for(int y=0;y<prepared->height;++y){cancel(request.limits);for(int x=0;x<prepared->width;++x){const int sx=bounds.x+int((int64_t(2*x+1)*bounds.width)/(2*prepared->width)),sy=bounds.y+int((int64_t(2*y+1)*bounds.height)/(2*prepared->height));prepared->setPixel(x,y,request.deepSource->pixel(sx,sy));}}
-        auto view=request.cameraRawView;view.scale=request.kind==Kind::CameraRaw?cameraRawScale:factor;view.seed=request.seed;
+        auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
         deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,request.cameraRaw,view,clamp);
-        if(request.kind==Kind::CameraRaw){auto normal=normalizeDeep(*deepOutput,request.limits.cancelled);result.cameraRawScope=CameraRawScope::make(normal.raster->rgba().data(),normal.raster->width,normal.raster->height);}
-    }
-    if(request.kind==Kind::CameraRaw&&!deepOutput){
-        auto view=request.cameraRawView;view.scale=request.kind==Kind::CameraRaw?cameraRawScale:factor;view.seed=request.seed;
-        auto rendered=renderCameraRaw(*working,request.cameraRaw,view,selected?&*selected:nullptr,request.limits.cancelled);
-        cancel(request.limits);result.raster=rendered.changed&&rendered.raster?rendered.raster:working;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=rendered.changed;result.cameraRawScope=rendered.scope;result.implementation="camera raw";return result;
     }
     if(deepOutput&&bounds==PixelRect{0,0,original.width,original.height}&&deepOutput->width==request.deepSource->width&&deepOutput->height==request.deepSource->height&&deepOutput->samples==request.deepSource->samples){result.deep=request.deepSource;return result;}
     auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,clamp);

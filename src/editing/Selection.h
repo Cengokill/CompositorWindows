@@ -76,5 +76,5 @@ enum class CoverageSampling { Nearest, Linear };
 // unless clipCanvas is requested. Linear interpolation is an explicit native
 // candidate; Core Graphics transformed-mask byte equality needs Mac fixtures.
 std::shared_ptr<const GrayRaster> mappedCoverage(const Document&, const Transform&, int sourceWidth,
-    int sourceHeight, bool clipCanvas = false, CoverageSampling = CoverageSampling::Linear);
+    int sourceHeight, bool clipCanvas = false, CoverageSampling = CoverageSampling::Linear, const std::function<bool()>& cancelled = {});
 }
