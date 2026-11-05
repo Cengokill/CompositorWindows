@@ -11,7 +11,6 @@ struct EditViewState {
     bool live{},livePending{};
     std::shared_ptr<const Document> rendered,cached;
     std::optional<Document> canonical;
-    std::optional<CompositeCache> originalViewport;
     std::shared_ptr<const Document> view(const Document& current){
         if(!rendered)return {};
         if(canonical&&*canonical==current)return cached;
@@ -58,16 +57,7 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
         auto shown=state->view(*owner->document);
         return effects_tools::sampleCompositeColor(shown?*shown:*owner->document,point,SoftwareRenderer());
     };
-    host.cachePreviewViewport=[owner,present,state](CompositeCache cache){
-        if(!present())return;
-        if(!state->originalViewport)state->originalViewport=std::move(owner->composite);
-        owner->composite=std::move(cache);
-    };
     host.preview=[this,owner,present,state](std::shared_ptr<const Document> preview){
-        if(!preview&&present()&&state->originalViewport){
-            owner->composite=std::move(*state->originalViewport);
-            state->originalViewport.reset();
-        }
         if(!present())return;state->rendered=std::move(preview);state->cached.reset();state->canonical.reset();
         owner->effectPreview=owner->document?state->view(*owner->document):nullptr;
         if(current()==owner)refresh(false,false);

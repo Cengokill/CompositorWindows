@@ -425,7 +425,6 @@ Result applyCameraRaw(const Request& request, Result result) {
     const auto* coverage = request.selection ? request.selection->coverage.get() : nullptr;
     const auto retainedSelection = coverage ? coverage->retainedBytes() : 0;
     const auto cache = request.cameraRawCache;
-    const auto retainedCache = cache ? (cache->shadows.mean.capacity() + cache->shadows.square.capacity()) * sizeof(float) : 0;
     const auto limit = request.limits.maxWorkingBytes;
     const auto retainedPreview = request.cameraRawRetainedPreviewBytes;
     const PixelRect native = result.sourceBounds;
@@ -443,6 +442,7 @@ Result applyCameraRaw(const Request& request, Result result) {
             : (settings.adjustsEffects() || settings.detail.adjusts() || request.cameraRawView.sharpenMask ? 32 : 24);
         const auto shadowBytes = settings.shadows ? cameraRawShadowWorkingBytes(grid.width, grid.height) : 0;
         const auto resizedBytes = grid != native ? tileBytes(grid) : 0;
+        const auto retainedCache = cache ? (cache->shadows.mean.capacity() + cache->shadows.square.capacity()) * sizeof(float) : 0;
         const auto bytes = estimatedWorkingBytes(grid.width, grid.height, bytesPerPixel) + shadowBytes + resizedBytes
                          + retainedSelection + retainedCache;
         return retained <= limit && bytes <= limit - retained;
@@ -461,10 +461,12 @@ Result applyCameraRaw(const Request& request, Result result) {
     }
     if (!fits(grid, retainedPreview)) throw std::runtime_error("Filter exceeds transient allocation budget");
     const bool reduced = grid != native;
-    if (preferNative && reduced) {
-        const auto reducedBytes = tileBytes(grid) + (useDeep ? std::uint64_t(grid.width) * grid.height * 8 : 0);
-        result.cameraRawCanRefine = reducedBytes < retainedPreview && fits(native, reducedBytes);
-    }
+    auto updateRefinement = [&] {
+        if (!preferNative || !reduced) return;
+        const auto rasterBytes = result.raster != request.source ? result.raster->retainedBytes() : 0;
+        const auto deepBytes = result.deep && result.deep != deep ? result.deep->samples.size() * sizeof(std::uint16_t) : 0;
+        result.cameraRawCanRefine = fits(native, std::uint64_t(rasterBytes) + deepBytes);
+    };
 
     auto working = reduced ? resize(source, native, grid.width, grid.height, request.limits) : request.source;
     std::optional<GrayRaster> selected;
@@ -503,6 +505,7 @@ Result applyCameraRaw(const Request& request, Result result) {
         result.raster = rendered.raster ? std::move(rendered.raster) : working;
         result.changed = rendered.changed;
         result.cameraRawScope = std::move(rendered.scope);
+        updateRefinement();
         return result;
     }
 
@@ -532,6 +535,7 @@ Result applyCameraRaw(const Request& request, Result result) {
         result.raster = rasterFromDeep(*result.deep, request.limits.cancelled);
         result.changed = true;
     }
+    updateRefinement();
     return result;
 }
 }

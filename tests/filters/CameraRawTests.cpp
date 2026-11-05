@@ -163,6 +163,24 @@ void cachedShadows() {
     request.cameraRawCache.reset();
     require(regenerated.raster->rgba() == apply(request).raster->rgba(), "recomputed planes agree with an uncached render");
 }
+void shadowBudgetRefinement() {
+    auto request = nativePreview(solid(3500, 450, {80, 75, 65, 255}));
+    request.cameraRaw.shadows = 35;
+    request.cameraRawCache = std::make_shared<CameraRawPreviewCache>();
+    request.limits.maxWorkingBytes = 103'000'000;
+    auto first = apply(request);
+    require(first.previewScale == 1 && !request.cameraRawCache->shadows.mean.empty(),
+            "first native grade warms the shadow planes");
+    request.cameraRawRetainedPreviewBytes = first.raster->retainedBytes();
+    request.cameraRaw.shadows = 60;
+    const auto reduced = apply(request);
+    require(reduced.raster->width == 2048, "the old native preview and shadow planes force a reduced grade");
+    first.raster.reset();
+    request.cameraRawRetainedPreviewBytes = reduced.raster->retainedBytes();
+    const auto retry = apply(request);
+    require(retry.previewScale == 1, "the updated shadow planes leave room for a native grade");
+    require(reduced.cameraRawCanRefine, "the reduced pass requests refinement without another edit");
+}
 void nativeDeepConvergence() {
     constexpr int width = 2051, height = 16;
     for (const auto format : {DeepImage::Format::Unorm16, DeepImage::Format::HalfFloat}) {
@@ -210,6 +228,7 @@ void run() {
         nativeConvergence();
         nativeBudget();
         cachedShadows();
+        shadowBudgetRefinement();
         nativeDeepConvergence();
         cancelSpatialPass();
         auto gray128 = solid(4, 4, {128, 128, 128, 200});

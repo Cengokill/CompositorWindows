@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "LastFilterJob.h"
 #include "CameraRawPanel.h"
+#include "CropViewport.h"
 #include "DocumentPreview.h"
 #include "EditPanelSession.h"
 #include "NativeCanvas.h"
@@ -31,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <utility>
 
 namespace compositor {
 namespace {
@@ -131,8 +133,10 @@ struct FilterOutput {
     std::optional<Document> document;
     QImage thumbnail;
     QString error;
+    QString viewportError;
     std::optional<filters::CameraRawScope> scope;
-    std::optional<CompositeCache> viewport;
+    std::optional<CompositeViewport> viewport;
+    std::optional<CompositeViewport> navigator;
     std::uint64_t retainedBytes{};
     bool full{},reduced{},canRefine{};
 };
@@ -161,12 +165,19 @@ public:
     void reject()override{if(!mayReject||mayReject())QDialog::reject();}
 };
 class FilterPanel final:public ui::EditPanelSession {
+    struct RawViewport {
+        NativeCanvas::ViewportBounds bounds;
+        Document canonical;
+        std::optional<editing::Rect> crop;
+        bool operator==(const RawViewport&)const=default;
+    };
     Document before_;
     Layer original_;
     filters::Request request_;
     std::function<void(const filters::Settings&)> remember_;
     std::function<void(const filters::CameraRawSettings&)> rememberRaw_;
     std::function<void(filters::Kind)> rememberLast_;
+    std::function<std::optional<editing::Rect>()> currentCrop_;
     ui::CameraRawPanel* raw_{};
     QFutureWatcher<std::optional<std::pair<double,double>>> balance_;
     std::shared_ptr<std::atomic_bool> balanceCancelled_;
@@ -183,22 +194,25 @@ class FilterPanel final:public ui::EditPanelSession {
     QFutureWatcher<FilterOutput> worker_;
     std::shared_ptr<std::atomic_bool> cancelled_=std::make_shared<std::atomic_bool>(false);
     std::shared_ptr<const Document> completedPreview_;
-    std::optional<CompositeCache> completedViewport_;
+    std::shared_ptr<CompositeCache> rawViewportCache_;
+    std::optional<RawViewport> runningViewport_,lastViewport_;
+    int pendingNavigatorEdge_{};
     std::optional<Document> committed_;
     filters::CameraRawView runningRawView_;
     std::uint64_t version_{},runningVersion_{},retainedPreviewBytes_{};
-    bool running_{},balanceRunning_{},closed_{},committing_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
+    bool running_{},runningViewportOnly_{},balanceRunning_{},closed_{},committing_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
     static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
+    bool autoBalancePending()const{return balanceRunning_&&raw_&&raw_->whiteBalanceIsAuto();}
     void retire(){if(closed_&&!running_&&!balanceRunning_)deleteLater();}
     void change(){
         if(closed_||committing_)return;
         ++version_;
         if(raw_){
             request_.cameraRaw=raw_->rendered();request_.cameraRawView=raw_->previewView();syncGuideOverlay();
-            apply_->setEnabled(true);
-            // Allow normal slider jobs to finish. Only the latest settings
-            // wait behind them. Diagnostic paint can be discarded immediately.
-            if(running_&&runningRawView_!=request_.cameraRawView)cancelled_->store(true);
+            apply_->setEnabled(!autoBalancePending());
+            // Let ordinary grades finish and keep only the latest settings.
+            // Recomposition and superseded diagnostics can be cancelled.
+            if(running_&&(runningViewportOnly_||runningRawView_!=request_.cameraRawView))cancelled_->store(true);
             if(!running_&&!debounce_.isActive()){status_.setText("Updating preview…");debounce_.start();}
             return;
         }
@@ -245,46 +259,75 @@ class FilterPanel final:public ui::EditPanelSession {
     }
     void publishPreview(){
         if(!host_.preview)return;
-        if(preview_.isChecked()&&completedViewport_&&host_.cachePreviewViewport){
-            host_.cachePreviewViewport(std::move(*completedViewport_));
-            completedViewport_.reset();
-        }
         host_.preview(preview_.isChecked()?completedPreview_:nullptr);
     }
-    void start(){
+    std::optional<RawViewport> currentRawViewport()const{
+        auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());
+        if(!canvas||!host_.currentDocument||!preview_.isChecked())return {};
+        const auto bounds=canvas->viewportBounds();
+        if(bounds.valid)if(auto document=host_.currentDocument())return RawViewport{bounds,std::move(*document),currentCrop_()};
+        return {};
+    }
+    bool deferRawViewport(){
+        if(closed_||!preview_.isChecked())return false;
+        if(!running_&&!committing_&&!debounce_.isActive()&&completedPreview_&&(!host_.valid||host_.valid())){
+            auto viewport=currentRawViewport();
+            if(viewport&&(viewport!=lastViewport_||pendingNavigatorEdge_))start(std::move(viewport));
+        }
+        return true;
+    }
+    void start(std::optional<RawViewport> viewportOnly={}){
         if(closed_||running_)return;
         if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
         running_=true;runningVersion_=version_;runningRawView_=request_.cameraRawView;
         request_.retainedBlurMargin=std::max(request_.retainedBlurMargin,filters::blurMargin(request_.kind,request_.settings));
         cancelled_=std::make_shared<std::atomic_bool>(false);
         auto job=request_;job.preview=!committing_;job.limits.cancelled=[token=cancelled_]{return token->load();};
-        std::optional<NativeCanvas::ViewportBounds> viewport;
-        std::optional<Document> currentPreview;
+        const auto existingGrade=viewportOnly?completedPreview_:nullptr;
+        runningViewportOnly_=bool(existingGrade);
+        runningViewport_.reset();
         if(raw_){
             job.cameraRawView.scopeLimit=job.preview?512:-1;
             if(!job.preview&&completedPreview_){
-                completedPreview_.reset();completedViewport_.reset();retainedPreviewBytes_=0;publishPreview();
+                completedPreview_.reset();lastViewport_.reset();retainedPreviewBytes_=0;publishPreview();
             }
-            if(job.preview&&preview_.isChecked()){
-                if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data())){
-                    const auto bounds=canvas->viewportBounds();
-                    if(bounds.valid)viewport=bounds;
-                }
-                if(host_.currentDocument)currentPreview=host_.currentDocument();
-            }
+            if(job.preview)runningViewport_=viewportOnly?std::move(viewportOnly):currentRawViewport();
             job.cameraRawRetainedPreviewBytes=retainedPreviewBytes_;
         }
         if((job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit)&&job.preview)job.previewMaxEdge=512;
-        status_.setText(committing_?"Applying filter…":"Updating preview…");
-        worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_,selection=rawSelection_,viewport,currentPreview=std::move(currentPreview)]() mutable {
+        if(!existingGrade)status_.setText(committing_?"Applying filter…":"Updating preview…");
+        const int navigatorEdge=existingGrade?std::exchange(pendingNavigatorEdge_,0):0;
+        worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_,selection=rawSelection_,
+                                             viewport=runningViewport_,cache=rawViewportCache_,existingGrade,navigatorEdge]() mutable {
             FilterOutput out;out.full=!job.preview;
             try{
+                auto compose=[&](const Document& grade){
+                    if(!viewport)return;
+                    auto& document=viewport->canonical;
+                    const auto graded=std::find_if(grade.layers.begin(),grade.layers.end(),[&](const Layer& layer){return layer.id==original.id;});
+                    const auto target=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.id==original.id;});
+                    if(graded!=grade.layers.end()&&target!=document.layers.end()){
+                        target->raster=graded->raster;target->deep=graded->deep;
+                    }
+                    const auto& bounds=viewport->bounds;
+                    try{
+                        if(viewport->crop)out.viewport=ui::renderCropViewport(document,*viewport->crop,bounds.x,bounds.y,bounds.width,bounds.height,bounds.units);
+                        else out.viewport=cache->renderViewport(document,bounds.x,bounds.y,bounds.width,bounds.height,bounds.units,64,256,{},job.limits.cancelled);
+                        if(navigatorEdge){
+                            const double units=std::max(1.,std::max(document.width,document.height)/double(navigatorEdge));
+                            out.navigator=CompositeCache().renderViewport(document,0,0,document.width,document.height,units,4,16,{},job.limits.cancelled);
+                        }
+                    }
+                    catch(const std::exception& error){cache->reset();out.viewportError=QString::fromUtf8(error.what());}
+                };
+                if(existingGrade){compose(*existingGrade);return out;}
+                if(cache)cache->reset();
                 if(selection){
                     if(!*selection)*selection=filterSelection(before,original,job.kind,job.limits.cancelled);
                     job.selection=*selection;
                 }
                 auto prepared=filteredLayer(original,job);
-                auto document=currentPreview?std::move(*currentPreview):before;
+                auto document=std::move(before);
                 if(job.kind==filters::Kind::CameraRaw&&job.preview){
                     if(prepared.layer.raster&&prepared.layer.raster!=original.raster)out.retainedBytes=prepared.layer.raster->retainedBytes();
                     if(prepared.layer.deep&&prepared.layer.deep!=original.deep)out.retainedBytes+=prepared.layer.deep->samples.size()*sizeof(std::uint16_t);
@@ -297,13 +340,9 @@ class FilterPanel final:public ui::EditPanelSession {
                         target->raster=std::move(prepared.layer.raster);target->deep=std::move(prepared.layer.deep);
                     }else *target=std::move(prepared.layer);
                 }
-                if(viewport){
-                    out.viewport.emplace();
-                    out.viewport->renderViewport(document,viewport->x,viewport->y,viewport->width,viewport->height,viewport->units,64,256,{},job.limits.cancelled);
-                }
-                if(job.kind==filters::Kind::CameraRaw&&job.preview&&target!=document.layers.end())target->transform=original.transform;
                 validateDocument(document);if(job.kind!=filters::Kind::CameraRaw)out.thumbnail=fittedDocumentPreview(document,{640,420});out.document=std::move(document);out.scope=std::move(prepared.scope);
-            }catch(const std::exception& error){out.error=QString::fromUtf8(error.what());}
+                compose(*out.document);
+            }catch(const std::exception& error){if(cache)cache->reset();out.error=QString::fromUtf8(error.what());}
             return out;
         }));
     }
@@ -341,11 +380,18 @@ class FilterPanel final:public ui::EditPanelSession {
             if(rememberLast_)rememberLast_(request_.kind);
         }}
         catch(const std::exception& error){if(host_.error)host_.error(QString::fromUtf8(error.what()));}
-        completedPreview_.reset();completedViewport_.reset();clearGuideOverlay();if(host_.preview)host_.preview({});if(host_.closed)host_.closed();host_={};retire();
+        clearRawViewportProviders();
+        completedPreview_.reset();rawViewportCache_.reset();clearGuideOverlay();if(host_.preview)host_.preview({});if(host_.closed)host_.closed();host_={};retire();
+    }
+    void clearRawViewportProviders(){
+        if(raw_)if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data())){
+            canvas->deferViewportComposite={};
+            canvas->deferNavigatorComposite={};
+        }
     }
 public:
-    FilterPanel(QWidget* parent,Document before,Layer original,filters::Request request,QString title,ui::EditPanelHost host,std::function<void(const filters::Settings&)> remember,std::function<void(const filters::CameraRawSettings&)> rememberRaw={},std::function<void(filters::Kind)> rememberLast={})
-        :EditPanelSession(parent,Kind::Filter,false,std::move(host)),before_(std::move(before)),original_(std::move(original)),request_(std::move(request)),remember_(std::move(remember)),rememberRaw_(std::move(rememberRaw)),rememberLast_(std::move(rememberLast)),dialog_(parent),layout_(&dialog_){
+    FilterPanel(QWidget* parent,Document before,Layer original,filters::Request request,QString title,ui::EditPanelHost host,std::function<void(const filters::Settings&)> remember,std::function<void(const filters::CameraRawSettings&)> rememberRaw,std::function<void(filters::Kind)> rememberLast,std::function<std::optional<editing::Rect>()> currentCrop)
+        :EditPanelSession(parent,Kind::Filter,false,std::move(host)),before_(std::move(before)),original_(std::move(original)),request_(std::move(request)),remember_(std::move(remember)),rememberRaw_(std::move(rememberRaw)),rememberLast_(std::move(rememberLast)),currentCrop_(std::move(currentCrop)),dialog_(parent),layout_(&dialog_){
         const bool cameraRaw=request_.kind==filters::Kind::CameraRaw;
         if(cameraRaw)buttons_.setStandardButtons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);
         dialog_.mayReject=[this]{return !committing_;};dialog_.setObjectName("filterPanel");dialog_.setWindowTitle(title);dialog_.setWindowFlags(Qt::Tool|Qt::WindowTitleHint|Qt::WindowCloseButtonHint);dialog_.setWindowModality(Qt::NonModal);
@@ -412,17 +458,20 @@ public:
         if(cameraRaw){
             request_.cameraRawNativePreview=true;
             request_.cameraRawCache=std::make_shared<filters::CameraRawPreviewCache>();
+            rawViewportCache_=std::make_shared<CompositeCache>();
             if(before_.selection)rawSelection_=std::make_shared<std::optional<filters::SourceSelection>>();
             layout_.removeItem(&fields_);raw_=new ui::CameraRawPanel(request_.cameraRaw.normalized(),&dialog_);raw_->edited=[this]{change();};
             raw_->autoRequested=[this]{
                 if(!raw_||!original_.raster||closed_||committing_)return;
-                raw_->selectAuto();change();
-                if(balanceRunning_)return;
-                balanceRunning_=true;
-                balanceCancelled_=std::make_shared<std::atomic_bool>(false);
-                balance_.setFuture(QtConcurrent::run([source=original_.raster,token=balanceCancelled_]{
-                    return filters::CameraRawSettings::autoBalance(*source,[token]{return token->load();});
-                }));
+                raw_->selectAuto();
+                if(!balanceRunning_){
+                    balanceRunning_=true;
+                    balanceCancelled_=std::make_shared<std::atomic_bool>(false);
+                    balance_.setFuture(QtConcurrent::run([source=original_.raster,token=balanceCancelled_]{
+                        return filters::CameraRawSettings::autoBalance(*source,[token]{return token->load();});
+                    }));
+                }
+                change();
             };
             layout_.insertWidget(0,raw_,1);
             connect(&balance_,&QFutureWatcher<std::optional<std::pair<double,double>>>::finished,&dialog_,[this]{
@@ -432,14 +481,25 @@ public:
             });
         }
         connect(&debounce_,&QTimer::timeout,&dialog_,[this]{start();});
-        connect(&preview_,&QCheckBox::toggled,&dialog_,[this]{publishPreview();});
+        connect(&preview_,&QCheckBox::toggled,&dialog_,[this]{
+            if(!raw_||!preview_.isChecked()){
+                lastViewport_.reset();pendingNavigatorEdge_=0;publishPreview();
+                if(running_&&runningViewportOnly_)cancelled_->store(true);
+            }else deferRawViewport();
+            if(raw_)if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data()))canvas->scheduleNavigator();
+        });
         connect(&worker_,&QFutureWatcher<FilterOutput>::finished,&dialog_,[this]{
             running_=false;
             if(closed_){retire();return;}
             if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
             const bool superseded=runningVersion_!=version_;
+            auto viewport=std::exchange(runningViewport_,{});
             if(superseded&&(!raw_||committing_||runningRawView_!=request_.cameraRawView)){
                 if(!debounce_.isActive())start();
+                return;
+            }
+            if(runningViewportOnly_&&cancelled_->load()){
+                if(superseded)start();else deferRawViewport();
                 return;
             }
             auto result=worker_.result();
@@ -450,18 +510,42 @@ public:
                 return;
             }
             if(result.full){committed_=std::move(result.document);dialog_.accept();return;}
+            if(!runningViewportOnly_)lastViewport_.reset();
+            const auto latestViewport=viewport?currentRawViewport():std::nullopt;
+            const bool current=viewport&&viewport==latestViewport;
+            auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());
+            const bool navigatorReady=canvas&&result.navigator&&latestViewport&&viewport->canonical==latestViewport->canonical;
+            if(navigatorReady)
+                canvas->presentNavigator(std::move(*result.navigator));
+            if(current){
+                lastViewport_=std::move(viewport);
+                if(canvas&&result.viewport){
+                    auto& frame=*result.viewport;
+                    canvas->presentComposite(std::move(frame.raster),frame.documentX,frame.documentY,frame.unitsPerPixel,false);
+                }
+            }
+            if(runningViewportOnly_){
+                if(current&&result.viewport)publishPreview();
+                if(current&&!superseded&&!result.viewportError.isEmpty())status_.setText(result.viewportError);
+                if(superseded)start();else deferRawViewport();
+                return;
+            }
             completedPreview_=std::make_shared<const Document>(std::move(*result.document));
-            completedViewport_=std::move(result.viewport);
             retainedPreviewBytes_=result.retainedBytes;
             if(raw_&&result.scope)raw_->setScope(*result.scope);
-            if(preview_.isChecked())publishPreview();
+            if(preview_.isChecked()&&(!raw_||(current&&result.viewport)))publishPreview();
+            else if(raw_&&host_.preview)host_.preview({});
+            if(raw_&&canvas&&preview_.isChecked()&&!pendingNavigatorEdge_)canvas->scheduleNavigator();
             if(!result.thumbnail.isNull())thumbnail_.setPixmap(QPixmap::fromImage(result.thumbnail));
-            status_.setText(raw_&&result.reduced?"Preview (reduced to fit memory)":"Preview");
-            apply_->setEnabled(true);
+            if(current&&!result.viewportError.isEmpty())status_.setText(result.viewportError);
+            else status_.setText(raw_&&result.reduced?"Preview (reduced to fit memory)":"Preview");
+            apply_->setEnabled(!autoBalancePending());
             if(superseded||result.canRefine)start();
+            else if(raw_)deferRawViewport();
         });
         connect(apply_,&QPushButton::clicked,&dialog_,[this]{
             if(raw_){
+                if(autoBalancePending())return;
                 auto rendered=raw_->rendered();
                 if(rendered.isIdentity()){if(rememberRaw_)rememberRaw_(rendered);dialog_.reject();return;}
                 if(original_.deep&&original_.deep->valid()&&!original_.deep->isHdr()&&filters::cameraRawNeedsEightBit(rendered)){
@@ -478,13 +562,22 @@ public:
             for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
-            preview_.setEnabled(false);debounce_.stop();publishPreview();
+            preview_.setEnabled(false);debounce_.stop();
+            if(!raw_)publishPreview();
             if(running_){++version_;cancelled_->store(true);}
             start();
         });
         connect(&buttons_,&QDialogButtonBox::rejected,&dialog_,&QDialog::reject);
         connect(&dialog_,&QDialog::finished,this,[this](int answer){finish(answer);});
         syncGuideOverlay();
+        if(cameraRaw)if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data())){
+            canvas->deferViewportComposite=[this]{return deferRawViewport();};
+            canvas->deferNavigatorComposite=[this](int edge){
+                if(!preview_.isChecked())return false;
+                pendingNavigatorEdge_=edge;
+                return deferRawViewport();
+            };
+        }
         if(cameraRaw){auto* dock=new DockFollow(&dialog_,parent->window());parent->window()->installEventFilter(dock);dialog_.setFixedWidth(440);start();dialog_.show();dock->place();}
         else{dialog_.resize(430,220);if(auto found=positions().find(request_.kind);found!=positions().end())dialog_.move(found->second);start();dialog_.show();}
         dialog_.raise();dialog_.activateWindow();
@@ -492,6 +585,7 @@ public:
         else preview_.setFocus(Qt::ActiveWindowFocusReason);
     }
     ~FilterPanel()override{
+        if(!closed_)clearRawViewportProviders();
         clearGuideOverlay();cancelled_->store(true);
         if(balanceCancelled_)balanceCancelled_->store(true);
         disconnect(&worker_,nullptr,&dialog_,nullptr);disconnect(&balance_,nullptr,&dialog_,nullptr);
@@ -605,6 +699,6 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     }
     auto host=makeEditPanelHost(*p,before,names[kindIndex].toStdString());
     auto rememberLast=[p](filters::Kind applied){if(applied!=filters::Kind::ContentAwareFill)p->toolState.lastFilterKind=applied;};
-    editPanel_=new FilterPanel(this,before,original,request,names[kindIndex],std::move(host),[p](const filters::Settings& value){p->toolState.filterSettings.pixels=value;},[p](const filters::CameraRawSettings& value){p->toolState.filterSettings.cameraRaw=value;},std::move(rememberLast));refresh(false,false);
+    editPanel_=new FilterPanel(this,before,original,request,names[kindIndex],std::move(host),[p](const filters::Settings& value){p->toolState.filterSettings.pixels=value;},[p](const filters::CameraRawSettings& value){p->toolState.filterSettings.cameraRaw=value;},std::move(rememberLast),[this]{return tool_==Tool::Crop?cropDraft_:std::nullopt;});refresh(false,false);
 }
 }

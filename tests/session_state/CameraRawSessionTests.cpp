@@ -77,6 +77,30 @@ void commit_ok() {
     require(pixel.r > 165 && pixel.r < 190 && pixel.r == pixel.g && pixel.a == 255, "OK bakes about one stop");
     rawModal(f, [](QDialog& dialog) { require(field<QDoubleSpinBox>(dialog, "Exposure")->value() == 1, "reopen restores the committed exposure"); }, false);
 }
+void commit_auto_white_balance() {
+    auto initial = document();
+    const auto source = Raster::filled(initial.width, initial.height, {160, 110, 80, 255});
+    initial.layers.front().raster = source;
+    const auto balance = filters::CameraRawSettings::autoBalance(*source);
+    require(balance && (balance->first != 0 || balance->second != 0), "fixture needs a white balance correction");
+    Fixture f(initial);
+    rawModal(f, [&](QDialog& dialog) {
+        auto* choice = field<QComboBox>(dialog, "cameraRawWhiteBalance");
+        auto* ok = dialog.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+        choice->setCurrentIndex(1);
+        require(!ok->isEnabled(), "selecting Auto disables OK until the result arrives");
+        ok->click();
+        require(dialog.isVisible() && f.a->history.undoCount() == 0, "immediate OK cannot apply stale white balance");
+    }, true);
+    const auto settings = f.a->toolState.filterSettings.cameraRaw;
+    require(settings.whiteBalance == filters::CameraRawWhiteBalance::Auto &&
+            settings.temperature == std::clamp(balance->first, -100., 100.) &&
+            settings.tint == std::clamp(balance->second, -100., 100.),
+            "OK uses the completed Auto white balance");
+    const auto expected = filters::renderCameraRaw(*source, settings, {}, nullptr).raster;
+    require(expected && f.a->history.undoCount() == 1 &&
+            f.a->document->layers.front().raster->rgba() == expected->rgba(), "Auto correction commits one undoable edit");
+}
 void commit_during_native_preview() {
     Fixture f(document(2048, 1536));
     const auto before = f.a->document;
@@ -181,13 +205,22 @@ void native_preview_session() {
     waitFor([&] { return !previewRaster() && !f.a->effectPreview && status->text() == "Preview"; },
             "Preview off keeps later Exposure moves off the canvas");
     enabled->setChecked(true);
+    require(!previewRaster() && !f.a->effectPreview, "Preview on waits for the worker to prepare a viewport");
+    auto* canvas = f.window.canvas();
+    const auto oldBounds = canvas->viewportBounds();
+    canvas->zoomAt(1.5, QPointF(80, 60));
+    canvas->panBy(QPointF(12.5, 0));
+    require(canvas->viewportBounds() != oldBounds && canvas->deferViewportComposite && canvas->deferViewportComposite(),
+            "changed bounds defer composition while the Camera Raw worker is active");
     expected.exposure = 2;
     const auto bright = filters::renderCameraRaw(*source, expected, {}, nullptr).raster;
-    require(previewRaster() && previewRaster()->rgba() == bright->rgba(), "Preview on displays the latest completed grade");
+    waitFor([&] { return previewRaster() && previewRaster()->rgba() == bright->rgba(); },
+            "Preview on displays the latest completed grade after preparing the new viewport");
     exposure->setValue(.7);
     session->cancel();
     waitFor([&] { return session.isNull(); }, "cancelled panel retired");
-    require(!f.a->effectPreview && f.a->document == initial && f.a->history.undoCount() == 0,
+    require(!canvas->deferViewportComposite && !canvas->deferNavigatorComposite &&
+            !f.a->effectPreview && f.a->document == initial && f.a->history.undoCount() == 0,
             "Cancel leaves the document, history and canvas unchanged");
 }
 void cancel_keeps() {
@@ -492,7 +525,7 @@ void guided_lines() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_during_native_preview", commit_during_native_preview}, {"native_preview_session", native_preview_session}, {"cancel_keeps", cancel_keeps}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_auto_white_balance", commit_auto_white_balance}, {"commit_during_native_preview", commit_during_native_preview}, {"native_preview_session", native_preview_session}, {"cancel_keeps", cancel_keeps}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();
