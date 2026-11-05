@@ -11,10 +11,12 @@
 #include <QTemporaryDir>
 #include <Windows.h>
 #include <winioctl.h>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 using namespace compositor;
 namespace fs=std::filesystem;
 void check(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
@@ -181,19 +183,113 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
       auto directory=imaging::win32FilePath(given);
       auto attributes=GetFileAttributesW(directory.c_str());
       check(attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_DIRECTORY),"COMPOSITOR_TEST_UNC_SHARE is not a readable directory");
-      std::cout<<"LIVE UNC share: "<<QString::fromStdWString(given).toStdString()<<"\n";
-      struct Guard{fs::path project,nested,nestedParent;~Guard(){std::error_code ignored;auto remove=[&](const fs::path& path){if(path.empty())return;try{fs::remove_all(imaging::win32FilePath(path),ignored);}catch(...){}};remove(nested);remove(nestedParent);remove(project);}} guard;
-      ProjectStore network(makeWicProjectCodec());
-      d.layers[0].raster=Raster::filled(2,2,{4,5,6,255});
-      guard.project=fs::path(given)/L"Saved.comp";
-      network.save(guard.project,d,id(2));
-      check(network.load(guard.project).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"UNC share project pixels changed");
-      guard.nestedParent=fs::path(given)/L"nested";
-      fs::create_directories(imaging::win32FilePath(guard.nestedParent));
-      guard.nested=guard.nestedParent/L"Saved.comp";
-      d.layers[0].raster=Raster::filled(2,2,{3,2,1,255});
-      network.save(guard.nested,d,id(2));
-      check(network.load(guard.nested).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"UNC nested project pixels changed");
+      check((attributes&FILE_ATTRIBUTE_REPARSE_POINT)==0,"COMPOSITOR_TEST_UNC_SHARE must not be a reparse point");
+      auto identity=std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());
+      int serial=0;
+      struct Work{
+        fs::path configured,directory;QByteArray token;
+        Work()=default;
+        Work(const Work&)=delete;
+        Work& operator=(const Work&)=delete;
+        Work(Work&& other)noexcept:configured(std::move(other.configured)),directory(std::move(other.directory)),token(std::move(other.token)){other.directory.clear();other.token.clear();}
+        ~Work(){removeOwned();}
+        static std::wstring key(const fs::path& path){auto text=path.lexically_normal().wstring();while(text.size()>3&&(text.back()==L'\\'||text.back()==L'/'))text.pop_back();return text;}
+        bool owned()const{
+          try{
+            if(directory.empty()||token.isEmpty()||configured.empty())return false;
+            if(CompareStringOrdinal(key(directory).c_str(),-1,key(configured).c_str(),-1,TRUE)==CSTR_EQUAL)return false;
+            if(CompareStringOrdinal(key(directory.parent_path()).c_str(),-1,key(configured).c_str(),-1,TRUE)!=CSTR_EQUAL)return false;
+            auto name=directory.filename().wstring();
+            if(name!=L"cmp-unc-"+QString::fromUtf8(token).toStdWString()||name.find_first_of(L"\\/:")!=std::wstring::npos)return false;
+            auto extended=imaging::win32FilePath(directory);
+            auto attributes=GetFileAttributesW(extended.c_str());
+            if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT))return false;
+            QFile marker(QString::fromStdWString(imaging::win32FilePath(directory/L".compositor-unc-test-owner").wstring()));
+            if(!marker.open(QIODevice::ReadOnly))return false;
+            return marker.read(token.size()+1)==token;
+          }catch(...){return false;}
+        }
+        void removeOwned(){if(!owned())return;std::error_code ignored;try{fs::remove_all(imaging::win32FilePath(directory),ignored);}catch(...){}directory.clear();token.clear();}
+      };
+      auto makeWork=[&](){
+        Work work;work.configured=fs::path(given);work.token=QByteArray::fromStdString(std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())+"-"+std::to_string(++serial));
+        auto path=work.configured/(L"cmp-unc-"+QString::fromUtf8(work.token).toStdWString());
+        auto extended=imaging::win32FilePath(path);
+        check(CreateDirectoryW(extended.c_str(),nullptr),"Could not create the owned UNC test directory");
+        auto created=GetFileAttributesW(extended.c_str());
+        if(created==INVALID_FILE_ATTRIBUTES||!(created&FILE_ATTRIBUTE_DIRECTORY)||(created&FILE_ATTRIBUTE_REPARSE_POINT)){RemoveDirectoryW(extended.c_str());check(false,"UNC test directory was not created as a real directory");}
+        auto markerPath=imaging::win32FilePath(path/L".compositor-unc-test-owner");
+        QFile marker(QString::fromStdWString(markerPath.wstring()));
+        bool opened=marker.open(QIODevice::WriteOnly|QIODevice::NewOnly);
+        bool wrote=opened&&marker.write(work.token)==work.token.size()&&marker.flush();
+        marker.close();
+        if(!wrote){if(opened)DeleteFileW(markerPath.c_str());RemoveDirectoryW(extended.c_str());check(false,"Could not mark ownership of the UNC test directory");}
+        work.directory=path;
+        check(work.owned(),"UNC test directory is not owned before use");
+        return work;
+      };
+      struct Sentinel{fs::path path;bool created=false,directory=false,reparse=false;DWORD attributes=0;uint64_t size=0;FILETIME written{};QByteArray bytes;std::vector<std::wstring> children;};
+      auto snapshot=[&](Sentinel& sentinel){
+        auto extended=imaging::win32FilePath(sentinel.path);
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        check(GetFileAttributesExW(extended.c_str(),GetFileExInfoStandard,&info),"Could not inspect a UNC sentinel");
+        sentinel.attributes=info.dwFileAttributes;sentinel.reparse=(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;sentinel.directory=(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+        sentinel.size=(uint64_t(info.nFileSizeHigh)<<32)|info.nFileSizeLow;sentinel.written=info.ftLastWriteTime;sentinel.children.clear();sentinel.bytes.clear();
+        if(sentinel.reparse)return;
+        if(sentinel.directory){for(auto& entry:fs::directory_iterator(extended))sentinel.children.push_back(entry.path().filename().wstring());std::sort(sentinel.children.begin(),sentinel.children.end());
+          auto keep=imaging::win32FilePath(sentinel.path/L"keep.txt");WIN32_FILE_ATTRIBUTE_DATA keepInfo{};
+          if(GetFileAttributesExW(keep.c_str(),GetFileExInfoStandard,&keepInfo)&&!(keepInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)&&!(keepInfo.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)&&((uint64_t(keepInfo.nFileSizeHigh)<<32)|keepInfo.nFileSizeLow)<=65536){QFile file(QString::fromStdWString(keep.wstring()));check(file.open(QIODevice::ReadOnly),"UNC sentinel could not be read");sentinel.bytes=file.readAll();}}
+        else if(sentinel.size<=65536){QFile file(QString::fromStdWString(extended.wstring()));check(file.open(QIODevice::ReadOnly),"UNC sentinel could not be read");sentinel.bytes=file.readAll();}
+      };
+      auto prove=[&](const Sentinel& expected){
+        Sentinel actual;actual.path=expected.path;actual.created=expected.created;snapshot(actual);
+        check(actual.attributes==expected.attributes&&actual.reparse==expected.reparse&&actual.directory==expected.directory,"UNC sentinel identity changed");
+        check(actual.size==expected.size&&CompareFileTime(&actual.written,&expected.written)==0,"UNC sentinel bytes or timestamp changed");
+        check(actual.children==expected.children&&actual.bytes==expected.bytes,"UNC sentinel contents changed");
+      };
+      auto entries=[&](){std::vector<std::wstring> names;for(auto& entry:fs::directory_iterator(imaging::win32FilePath(fs::path(given))))names.push_back(entry.path().filename().wstring());std::sort(names.begin(),names.end());return names;};
+      auto before=entries();
+      auto plant=[&](const std::wstring& name,bool asDirectory,const QByteArray& content){
+        Sentinel sentinel;sentinel.path=fs::path(given)/name;auto extended=imaging::win32FilePath(sentinel.path);auto existing=GetFileAttributesW(extended.c_str());auto missing=GetLastError();
+        if(existing==INVALID_FILE_ATTRIBUTES){check(missing==ERROR_FILE_NOT_FOUND||missing==ERROR_PATH_NOT_FOUND,"Could not inspect a UNC sentinel");
+          if(asDirectory){check(CreateDirectoryW(extended.c_str(),nullptr),"Could not create a UNC sentinel directory");auto keep=imaging::win32FilePath(sentinel.path/L"keep.txt");QFile file(QString::fromStdWString(keep.wstring()));bool opened=file.open(QIODevice::WriteOnly|QIODevice::NewOnly);bool wrote=opened&&file.write(content)==content.size()&&file.flush();file.close();if(!wrote){if(opened)DeleteFileW(keep.c_str());RemoveDirectoryW(extended.c_str());check(false,"Could not write a UNC sentinel");}}
+          else{QFile file(QString::fromStdWString(extended.wstring()));bool opened=file.open(QIODevice::WriteOnly|QIODevice::NewOnly);bool wrote=opened&&file.write(content)==content.size()&&file.flush();file.close();if(!wrote){if(opened)DeleteFileW(extended.c_str());check(false,"Could not write a UNC sentinel");}}
+          sentinel.created=true;}
+        snapshot(sentinel);
+        if(sentinel.created)check(sentinel.bytes==content,"Created UNC sentinel did not keep its contents");
+        return sentinel;
+      };
+      auto saved=plant(L"Saved.comp",true,"preexisting-saved");
+      auto nested=plant(L"nested",true,"preexisting-nested");
+      auto file=plant(L"cmp-sentinel-"+identity,false,"preexisting-sentinel");
+      auto proveAll=[&](){prove(saved);prove(nested);prove(file);auto configured=GetFileAttributesW(imaging::win32FilePath(fs::path(given)).c_str());check(configured!=INVALID_FILE_ATTRIBUTES&&(configured&FILE_ATTRIBUTE_DIRECTORY),"Configured UNC directory was removed");};
+      fs::path failedPath;
+      try{auto failed=makeWork();failedPath=failed.directory;check(failed.owned(),"UNC test directory is not owned before cleanup");throw std::runtime_error("injected UNC cleanup");}
+      catch(const std::runtime_error& error){if(std::string(error.what())!="injected UNC cleanup")throw;}
+      check(GetFileAttributesW(imaging::win32FilePath(failedPath).c_str())==INVALID_FILE_ATTRIBUTES,"Failed UNC cleanup removed nothing or removed the wrong directory");
+      proveAll();
+      {
+        auto guard=makeWork();
+        std::cout<<"LIVE UNC share: "<<QString::fromStdWString(given).toStdString()<<"\n";
+        ProjectStore network(makeWicProjectCodec());
+        d.layers[0].raster=Raster::filled(2,2,{4,5,6,255});
+        auto project=guard.directory/L"Saved.comp";
+        network.save(project,d,id(2));
+        check(network.load(project).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"UNC share project pixels changed");
+        auto nestedParent=guard.directory/L"nested";
+        fs::create_directories(imaging::win32FilePath(nestedParent));
+        d.layers[0].raster=Raster::filled(2,2,{3,2,1,255});
+        auto nestedProject=nestedParent/L"Saved.comp";
+        network.save(nestedProject,d,id(2));
+        check(network.load(nestedProject).document.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"UNC nested project pixels changed");
+        check(guard.owned(),"UNC test directory lost its ownership marker");
+      }
+      proveAll();
+      auto retire=[&](Sentinel& sentinel){if(!sentinel.created)return;prove(sentinel);auto extended=imaging::win32FilePath(sentinel.path);
+        if(sentinel.directory){auto keep=imaging::win32FilePath(sentinel.path/L"keep.txt");check(DeleteFileW(keep.c_str()),"Could not remove a UNC sentinel file created by this test");check(RemoveDirectoryW(extended.c_str()),"Could not remove a UNC sentinel directory created by this test");}
+        else check(DeleteFileW(extended.c_str()),"Could not remove a UNC sentinel file created by this test");};
+      retire(saved);retire(nested);retire(file);
+      check(entries()==before,"UNC test changed a pre-existing entry in the configured directory");
     }
   }
   else throw std::runtime_error("Unknown test");std::cout<<"PASS "<<test<<"\n";return 0;
