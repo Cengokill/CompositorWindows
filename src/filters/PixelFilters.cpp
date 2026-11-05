@@ -451,6 +451,18 @@ Result apply(const Request& request){
             settings.rgbSplitReach=settings.rgbSplitReach*std::hypot(double(working->width),double(working->height))/std::max(1.,document);
         }
     }
+    // Adaptive Shadows keeps a float image plus bounded low-resolution planes.
+    if(request.kind==Kind::CameraRaw && request.cameraRaw.normalized().shadows!=0) {
+        count(working->width,working->height,request.limits,request.deepSource?100:44);
+        const auto pixels=std::uint64_t(working->width)*working->height;
+        const auto planeBytes=std::min<std::uint64_t>(pixels, 2100000)*28;
+        const auto bytes=estimatedWorkingBytes(working->width,working->height,request.deepSource?100:44);
+        if(planeBytes>request.limits.maxWorkingBytes || bytes>request.limits.maxWorkingBytes-planeBytes)
+            throw std::runtime_error("Filter exceeds transient allocation budget");
+    }
+    // Width rounding can be substantial for a very narrow portrait. The
+    // original long edge determines the Camera Raw coefficient set.
+    const double cameraRawScale = double(std::max(working->width,working->height)) / std::max(bounds.width,bounds.height);
     std::shared_ptr<const DeepImage> deepOutput;
     const bool eightBitOnly=request.kind==Kind::LensCorrection||request.kind==Kind::ContentAwareFill||(request.kind==Kind::CameraRaw&&cameraRawNeedsEightBit(request.cameraRaw));
     if(!request.preview&&request.deepSource&&request.deepSource->valid()&&!request.deepSource->isHdr()&&eightBitOnly)
@@ -460,12 +472,12 @@ Result apply(const Request& request){
         count(working->width,working->height,request.limits,80);
         auto prepared=makeDeep(working->width,working->height,request.deepSource->format);
         for(int y=0;y<prepared->height;++y){cancel(request.limits);for(int x=0;x<prepared->width;++x){const int sx=bounds.x+int((int64_t(2*x+1)*bounds.width)/(2*prepared->width)),sy=bounds.y+int((int64_t(2*y+1)*bounds.height)/(2*prepared->height));prepared->setPixel(x,y,request.deepSource->pixel(sx,sy));}}
-        auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
+        auto view=request.cameraRawView;view.scale=request.kind==Kind::CameraRaw?cameraRawScale:factor;view.seed=request.seed;
         deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,request.cameraRaw,view,clamp);
         if(request.kind==Kind::CameraRaw){auto normal=normalizeDeep(*deepOutput,request.limits.cancelled);result.cameraRawScope=CameraRawScope::make(normal.raster->rgba().data(),normal.raster->width,normal.raster->height);}
     }
     if(request.kind==Kind::CameraRaw&&!deepOutput){
-        auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
+        auto view=request.cameraRawView;view.scale=request.kind==Kind::CameraRaw?cameraRawScale:factor;view.seed=request.seed;
         auto rendered=renderCameraRaw(*working,request.cameraRaw,view,selected?&*selected:nullptr,request.limits.cancelled);
         cancel(request.limits);result.raster=rendered.changed&&rendered.raster?rendered.raster:working;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=rendered.changed;result.cameraRawScope=rendered.scope;result.implementation="camera raw";return result;
     }
