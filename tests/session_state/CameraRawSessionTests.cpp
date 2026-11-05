@@ -81,7 +81,7 @@ void commit_auto_white_balance() {
     auto initial = document();
     const auto source = Raster::filled(initial.width, initial.height, {160, 110, 80, 255});
     initial.layers.front().raster = source;
-    const auto balance = filters::CameraRawSettings::autoBalance(*source);
+    const auto balance = filters::CameraRawSettings::autoBalance(*source, {});
     require(balance && (balance->first != 0 || balance->second != 0), "fixture needs a white balance correction");
     Fixture f(initial);
     rawModal(f, [&](QDialog& dialog) {
