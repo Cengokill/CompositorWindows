@@ -1,3 +1,15 @@
+# Compositor Windows 1.2.0
+
+- **File → Focus Stack Images** combines 2 to 16 photos of the same size into a layer or a new document.
+- **RAW Development → Camera Raw…** imports a 16-bit sRGB layer and opens Camera Raw Filter. The filter adds adaptive Shadows and uses the layer's native resolution for previews when memory allows.
+- **16-bit editing** keeps the original precision through most pixel edits, filters and adjustments. Tools that need 8-bit pixels ask before converting the layer.
+- **HDR and OpenEXR** keep highlights above white through supported edits, project saves and OpenEXR export. The canvas displays an SDR preview. **Layer → Convert HDR to 16-Bit…** enables tools that need integer pixels.
+- **CMYK profiles** support ICC-based import, on-canvas proofing and CMYK JPEG, TIFF and PDF export. The working pixels are RGB. A saved CMYK profile requires project format v15 or later.
+- **Progressive Blur and RGB Split** are available as filters. Both are also available as editable adjustment layers, alongside Bloom / Glow. These layers use project format v16.
+- **Long Windows paths** are supported when saving projects, with recovery of the previous project if the save is interrupted.
+
+See the [user guide](user-guide.md) for workflows and format limits.
+
 # Compositor Windows 1.1.0
 
 Version 1.1.0 is the first build that reports its release number: the executable, the update check, and the packages all read it from `project(VERSION)` in `CMakeLists.txt`. Packages use the stable channel instead of the community preview. Compositor checks GitHub for new stable releases and links to their page; installing an update is still manual.
@@ -34,10 +46,6 @@ Version 0.1.7 shows a navigator at the bottom-right of the canvas when zoom or p
 Version 0.1.8 shows horizontal and vertical rulers at the edges of the canvas. They display document pixels and stay aligned with the image at fit, at actual pixels, and after zooming or panning. View → Rulers (Ctrl+R) shows or hides them, and hiding them returns that margin to the canvas. Drag from the top ruler to add a horizontal guide, or from the left ruler to add a vertical guide. Drag a guide to move it; its position is shown while the pointer moves. Releasing the pointer commits one undo step. Escape cancels the drag. Releasing a new guide back on its ruler, or releasing a guide outside the document on its axis, cancels it and leaves the document unchanged. Opening a project shows the guides saved in it. View → Guides shows or hides guides and adds one at the vertical center when the document has none. View → Snap includes those guides while transforming.
 
 The current source starts a new session with the rulers hidden. **File > Open Project** and the welcome **Open project** button use the Windows folder picker, start in Downloads, and accept one or more `.comp` folders. A 16-bit RGB PSD or PSB layer keeps its samples. Saving that document writes project format v13 and a 16-bit PNG. PNG export stays 16-bit for a visible root layer that is not clipped and has no adjustment or effect. A gradient, fill, invert, clear, brush, clone, blur, smudge, liquify, most filters, Camera Raw light/color/curves/geometry, and adjustments keep the extra precision. Spot Healing, Lens Correction, Content-Aware Fill, and some Camera Raw corrections ask to convert to 8-bit first. JPEG export is 8-bit. Transform fields show position, size, and angle without trailing zeros. **File > Export Image** also writes a one-page PDF at the document's print size, with a chosen scale and background in the preview; Cancel leaves an existing file unchanged.
-
-## Unreleased: HDR image workflows
-
-Import single-image linear-sRGB EXR or Radiance HDR, retain highlights on HDR layers, recover them with Exposure, and save/reopen EXR assets inside `.comp` projects. Export Image adds OpenEXR. Supported adjustments, blur, painting, gradients, resizing and merges retain HDR; unsupported destructive tools require the explicit, undoable HDR-to-16-bit conversion. The canvas remains SDR. Windows application/build verification and Mac fixture exchange are pending for this change.
 
 ## What you can do
 
