@@ -8,8 +8,9 @@ set(directory "${EVIDENCE_ROOT}/${CASE}/${stamp}-${nonce}")
 file(MAKE_DIRECTORY "${directory}")
 # This is a functional timeout, including ASAN's full sequential comparison.
 # The separate frozen performance executable retains its 16.7ms p95 threshold.
-execute_process(COMMAND "${EXECUTABLE}" "${CASE}" "${directory}/capture"
-  RESULT_VARIABLE status OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr TIMEOUT 240)
+include("${CMAKE_CURRENT_LIST_DIR}/../launch_recorded_process.cmake")
+launch_recorded_process(TIMEOUT 240 STATUS_VAR status STDOUT_VAR stdout STDERR_VAR stderr
+  ARGS "${EXECUTABLE}" "${CASE}" "${directory}/capture")
 file(WRITE "${directory}/stdout.log" "${stdout}")
 file(WRITE "${directory}/stderr.log" "${stderr}")
 message("${stdout}${stderr}")

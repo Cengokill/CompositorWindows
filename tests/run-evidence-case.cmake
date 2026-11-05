@@ -16,8 +16,9 @@ endif()
 if(NOT DEFINED WITNESS_TIMEOUT_SECONDS)
   set(WITNESS_TIMEOUT_SECONDS 60)
 endif()
-execute_process(COMMAND "${EXECUTABLE}" "${CASE}" "${argument}"
-  RESULT_VARIABLE status OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr TIMEOUT ${WITNESS_TIMEOUT_SECONDS})
+include("${CMAKE_CURRENT_LIST_DIR}/launch_recorded_process.cmake")
+launch_recorded_process(TIMEOUT ${WITNESS_TIMEOUT_SECONDS} STATUS_VAR status STDOUT_VAR stdout STDERR_VAR stderr
+  ARGS "${EXECUTABLE}" "${CASE}" "${argument}")
 file(WRITE "${directory}/stdout.log" "${stdout}")
 file(WRITE "${directory}/stderr.log" "${stderr}")
 message("${stdout}${stderr}")

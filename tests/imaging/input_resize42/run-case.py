@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import time
 import uuid
 
 BASE=Path(__file__).resolve().parent
@@ -36,8 +37,26 @@ executable=args.executable.resolve()
 before=sha(executable)
 command=[str(executable),'candidate',str((args.fixtures/fixture).resolve()),str(meta['width']),str(meta['height']),
          str(meta['stride']),args.case,str((output/'result.json').resolve()),kind]
-run=subprocess.run(command,capture_output=True,text=True,timeout=120)
-(output/'stdout.log').write_text(run.stdout+run.stderr)
+run=None
+launch_attempts=[]
+for attempt in range(5):
+    try:
+        run=subprocess.run(command,capture_output=True,text=True,timeout=120)
+        launch_attempts.append({'attempt':attempt+1,'status':'started','returncode':run.returncode})
+        break
+    except PermissionError as error:
+        record={'attempt':attempt+1,'status':'permission_denied','error':str(error)}
+        launch_attempts.append(record)
+        print(f"Launch attempt {attempt+1}/5 failed: {error}",flush=True)
+        if attempt==4:
+            (output/'launch-attempts.json').write_text(json.dumps(launch_attempts,indent=2)+'\n')
+            raise
+        time.sleep(2)
+(output/'launch-attempts.json').write_text(json.dumps(launch_attempts,indent=2)+'\n')
+trace=''.join(f"Launch attempt {item['attempt']}/5 failed: {item['error']}\n"
+              for item in launch_attempts if item['status']=='permission_denied')
+(output/'stdout.log').write_text(trace+(run.stdout+run.stderr if run else ''))
+print(trace,end='')
 print(run.stdout,end='');print(run.stderr,end='')
 assert run.returncode in [0,1],('Abnormal process exit',run.returncode)
 report=json.loads((output/'result.json').read_text())
@@ -47,6 +66,7 @@ assert sha(executable)==before
 (output/'provenance.json').write_text(json.dumps({'argv':command,'exit_code':run.returncode,
     'binary_sha256':before,'protocol_sha256':sha(BASE/'protocol.json'),
     'fixture_manifest_sha256':sha(args.fixtures/'manifest.json'),
-    'report_sha256':sha(output/'result.json')},indent=2)+'\n')
+    'report_sha256':sha(output/'result.json'),
+    'launch_attempts':launch_attempts},indent=2)+'\n')
 print('SUBJECT_INPUT_REPORT',str((output/'result.json').resolve()))
 raise SystemExit(run.returncode)

@@ -56,6 +56,9 @@ __pycache__/
 !/tests/display_profile/fixtures/manifest.json
 !/tests/update/fixtures/TEST-ONLY-private-key.xml
 !/tests/imaging/quality_criteria.json
+!/tests/imaging/input_resize42/protocol.json
+!/tests/imaging/input_resize42/fixtures-02/manifest.json
+!/tests/imaging/input_resize42/fixtures-02/**/fixture.json
 CMakeFiles/
 *_autogen/
 *.dmp

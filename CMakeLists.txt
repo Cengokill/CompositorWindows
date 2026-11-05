@@ -93,11 +93,23 @@ add_executable(subject_input_tests tests/imaging/input_resize42/InputResizeTests
 target_compile_definitions(subject_input_tests PRIVATE SUBJECT_INPUT_PRODUCTION_ONLY)
 target_include_directories(subject_input_tests PRIVATE src/imaging)
 target_link_libraries(subject_input_tests PRIVATE compositor_imaging)
+set(SUBJECT_INPUT_FIXTURES "${CMAKE_BINARY_DIR}/subject-input-fixtures")
+add_custom_command(OUTPUT "${SUBJECT_INPUT_FIXTURES}/manifest.json"
+  COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_SOURCE_DIR}/tests/imaging/input_resize42/generate_fixtures.py"
+    --output "${SUBJECT_INPUT_FIXTURES}"
+  DEPENDS
+    "${CMAKE_SOURCE_DIR}/tests/imaging/input_resize42/generate_fixtures.py"
+    "${CMAKE_SOURCE_DIR}/tests/imaging/input_resize42/protocol.json"
+  COMMENT "Generating subject_input frozen fixtures"
+  VERBATIM)
+add_custom_target(subject_input_fixtures DEPENDS "${SUBJECT_INPUT_FIXTURES}/manifest.json")
+add_dependencies(subject_input_tests subject_input_fixtures)
 foreach(case identity down_even down_odd up_small mixed_wide mixed_tall thin_wide thin_tall alpha_down alpha_up constant transparent padded_stride cancel_before cancel_validation cancel_resample budget_reject invalid_premultiplication invalid_stride source_unchanged maximum_axis_memory dimension_preflight)
   add_test(NAME subject_input.${case} COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_SOURCE_DIR}/tests/imaging/input_resize42/run-case.py"
     --executable $<TARGET_FILE:subject_input_tests> --case ${case}
-    --fixtures "${CMAKE_SOURCE_DIR}/tests/imaging/input_resize42/fixtures-02"
+    --fixtures "${SUBJECT_INPUT_FIXTURES}"
     --output-root "${CMAKE_BINARY_DIR}/subject-input-evidence")
   set_tests_properties(subject_input.${case} PROPERTIES TIMEOUT 150)
 endforeach()
