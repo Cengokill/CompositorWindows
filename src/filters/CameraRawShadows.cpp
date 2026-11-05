@@ -77,13 +77,18 @@ void applyAdaptiveShadows(std::vector<float>& pixels, int width, int height, dou
         stop(cancelled);
         for(int x=0;x<width;++x) {
             const float* p=at(x,y); if (!(p[3]>0)) continue;
-            double l=luminance(linear(p)); all+=l; ++allCount;
+            const double alpha=std::clamp(double(p[3]),0.,1.);
+            double l=luminance(linear(p)); all+=l*alpha; allCount+=alpha;
             const float g=p[1];
             if ((x>0 && at(x-1,y)[1]!=g) || (x+1<width && at(x+1,y)[1]!=g) ||
-                (y>0 && at(x,y-1)[1]!=g) || (y+1<height && at(x,y+1)[1]!=g)) { total+=l; ++count; }
+                (y>0 && at(x,y-1)[1]!=g) || (y+1<height && at(x,y+1)[1]!=g)) { total+=l*alpha; count+=alpha; }
         }
     }
-    const double key=std::log2(std::max(floorY,count>0 ? total/count : allCount>0 ? all/allCount : 0.18));
+    // Sparse edges are not representative: blend in the image mean until the
+    // edge sample covers at least ten percent of the visible pixel weight.
+    const double average=allCount>0 ? all/allCount : 0.18;
+    const double fallback=std::max(0.,allCount*.1-count);
+    const double key=std::log2(std::max(floorY,count+fallback>0 ? (total+fallback*average)/(count+fallback) : average));
     // Bound working memory even for very wide or tall documents.
     const double cellsLimit=2000000.;
     const int scale=std::max({1,std::min(width,height)/384,int(std::ceil(std::sqrt(double(width)*height/cellsLimit)))});
@@ -95,7 +100,8 @@ void applyAdaptiveShadows(std::vector<float>& pixels, int width, int height, dou
         for(int x=0;x<width;++x) {
             const float* p=at(x,y); if (!(p[3]>0)) continue;
             const auto i=std::size_t(y/scale)*w+x/scale;
-            low[i]+=float(std::log2(std::max(floorY,luminance(linear(p))))); weight[i]+=1;
+            const float alpha=std::clamp(p[3],0.f,1.f);
+            low[i]+=float(std::log2(std::max(floorY,luminance(linear(p)))))*alpha; weight[i]+=alpha;
         }
     }
     for(std::size_t i=0;i<cells;++i) low[i]=weight[i]>0 ? low[i]/weight[i] : float(key);
@@ -110,10 +116,12 @@ void applyAdaptiveShadows(std::vector<float>& pixels, int width, int height, dou
         stop(cancelled); const double fy=std::clamp((y+.5)/scale-.5,0.,double(h-1)); const int y0=int(fy),y1=std::min(y0+1,h-1); const double ty=fy-y0;
         for(int x=0;x<width;++x) {
             float* p=at(x,y); if (!(p[3]>0)) continue;
-            auto rgb=linear(p); const double lum=luminance(rgb); if(lum<=floorY) continue;
+            auto rgb=linear(p); const double lum=luminance(rgb); if(!(lum>0)) continue;
             const double fx=std::clamp((x+.5)/scale-.5,0.,double(w-1)); const int x0=int(fx),x1=std::min(x0+1,w-1); const double tx=fx-x0;
             auto sample=[&](const std::vector<float>& v) { return (v[std::size_t(y0)*w+x0]*(1-tx)+v[std::size_t(y0)*w+x1]*tx)*(1-ty)+(v[std::size_t(y1)*w+x0]*(1-tx)+v[std::size_t(y1)*w+x1]*tx)*ty; };
-            const double level=std::log2(lum),region=sample(mean)*level+sample(square),detail=level-region;
+            // Hold the log-domain lookup at the floor while scaling the actual
+            // pixel, so the gain extends continuously all the way to black.
+            const double level=std::log2(std::max(floorY,lum)),region=sample(mean)*level+sample(square),detail=level-region;
             const double xp=std::clamp((region-key+14)/.5,0.,34.); const int xc=std::min(int(xp),33); const double xt=xp-xc;
             double term[3]{};
             for(int t=0;t<3;++t) {

@@ -140,6 +140,18 @@ void run() {
         CameraRawSettings adaptive; adaptive.shadows = 100;
         auto openedLandscape = paint(landscape, adaptive);
         auto flatDark = solid(600, 400, {20, 20, 20, 255});
+        for (double amount : {-100., 100.}) {
+            CameraRawSettings settings; settings.shadows = amount;
+            const auto baseline = paint(flatDark, settings);
+            for (std::uint8_t alpha : {std::uint8_t(1), std::uint8_t(255)}) {
+                auto speck = image(600, 400, [alpha](int x, int y) {
+                    return x == 300 && y == 200 ? Pixel{alpha, alpha, alpha, alpha} : Pixel{20, 20, 20, 255};
+                });
+                const auto adjusted = paint(speck, settings);
+                require(std::abs(int(adjusted->pixel(0, 0).r) - int(baseline->pixel(0, 0).r)) <= 1,
+                        "an isolated bright pixel must not determine the image-wide shadow adjustment");
+            }
+        }
         require(shadowBandMean(*openedLandscape, false) - shadowBandMean(*landscape, false) >
                 rendered(*flatDark, adaptive).r - 20 + 10, "surrounding sky must affect the shadow lift");
         CameraRawView reduced; reduced.scale = .5;
@@ -364,6 +376,20 @@ void run() {
         request.seed = 9;
         auto applied = apply(request);
         require(applied.implementation == "camera raw" && applied.changed && applied.cameraRawScope && applied.raster->pixel(0, 0).r > 165, "apply runs the camera raw grade and returns a scope");
+        auto darkRamp = makeDeep(1024, 8, DeepImage::Format::Unorm16);
+        for (int y = 0; y < darkRamp->height; ++y) for (int x = 0; x < darkRamp->width; ++x) {
+            for (int c = 0; c < 3; ++c) darkRamp->at(x, y)[c] = std::uint16_t(x);
+            darkRamp->at(x, y)[3] = 65535;
+        }
+        for (double amount : {-100., 100.}) {
+            CameraRawSettings rampSettings; rampSettings.shadows = amount;
+            auto adjusted = renderCameraRaw(*darkRamp, rampSettings, {}, nullptr);
+            for (int x = 1; x < darkRamp->width; ++x) {
+                const int step = int(adjusted->at(x, 4)[0]) - int(adjusted->at(x - 1, 4)[0]);
+                require(step >= 0 && step <= 4, "adaptive shadows must preserve a smooth, ordered dark 16-bit ramp");
+            }
+            require(adjusted->at(0, 4)[0] == 0, "adaptive shadows must keep black black");
+        }
         auto deep = makeDeep(4, 1, DeepImage::Format::Unorm16);
         deep->at(0, 0)[0] = 10001; deep->at(1, 0)[0] = 10031; deep->at(2, 0)[0] = 10001; deep->at(3, 0)[0] = 50021;
         for (int x = 0; x < 4; ++x) { deep->at(x, 0)[1] = 20003; deep->at(x, 0)[2] = 30007; deep->at(x, 0)[3] = 65535; }
