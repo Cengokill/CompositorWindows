@@ -246,7 +246,7 @@ public:
     // Document coordinates. Source endpoints draw at radius6 DIPs; caller hit radius10 DIPs.
     void setGradientLine(std::optional<std::pair<Point,Point>> value){gradientLine_=value;update();}
     // Document coordinates for Camera Raw guided-upright segments, including the in-progress stroke.
-    void setCameraRawGuides(std::vector<std::pair<Point,Point>> value){cameraRawGuides_=std::move(value);update();}
+    void setCameraRawGuides(std::vector<std::pair<Point,Point>> value){if(value==cameraRawGuides_)return;cameraRawGuides_=std::move(value);update();}
     void setShapeDraft(std::optional<ShapeDraftOverlay> value){shapeDraft_=std::move(value);update();}
     void setTextOverlay(std::optional<TextCaretOverlay> value);
     const std::optional<ShapeDraftOverlay>& shapeDraft()const{return shapeDraft_;}

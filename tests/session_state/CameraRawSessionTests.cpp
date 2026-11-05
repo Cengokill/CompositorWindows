@@ -177,10 +177,13 @@ void native_preview_session() {
     enabled->setChecked(false);
     waitFor([&] { return status->text() == "Preview"; }, "hidden preview work settled");
     require(!previewRaster() && !f.a->effectPreview, "Preview off keeps late results off the canvas");
+    exposure->setValue(2);
+    waitFor([&] { return !previewRaster() && !f.a->effectPreview && status->text() == "Preview"; },
+            "Preview off keeps later Exposure moves off the canvas");
     enabled->setChecked(true);
-    expected.exposure = -1;
-    const auto dark = filters::renderCameraRaw(*source, expected, {}, nullptr).raster;
-    require(previewRaster() && previewRaster()->rgba() == dark->rgba(), "Preview on displays the latest completed grade");
+    expected.exposure = 2;
+    const auto bright = filters::renderCameraRaw(*source, expected, {}, nullptr).raster;
+    require(previewRaster() && previewRaster()->rgba() == bright->rgba(), "Preview on displays the latest completed grade");
     exposure->setValue(.7);
     session->cancel();
     waitFor([&] { return session.isNull(); }, "cancelled panel retired");
