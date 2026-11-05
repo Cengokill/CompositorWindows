@@ -22,25 +22,22 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.1.0
+## What's new in 1.2.0
 
-Version 1.1.0 is the first build that reports its release number, and it moves the packages to the stable channel. The [release notes](docs/release-notes.md) list everything. The main additions:
+See the [release notes](docs/release-notes.md) for details.
 
-- **Start and navigate.** New canvas presets with print units and backgrounds, **File → Open Recent**, a command palette (**Ctrl+Shift+P**), a navigator mini-map, rulers and guides, a layout grid with snap targets, and canvas-only full screen (**F11**).
-- **Customize.** A keyboard shortcut editor in **Help → Keyboard Shortcuts**, and a daily check for new stable releases.
-- **Edit.** 90° canvas rotation, **Filters → Last Filter** (**Ctrl+Alt+F**), Color Balance and Black & White controls, restyled Camera Raw sliders with double-click reset, and RAW development before import (see below).
-- **Photoshop files.** Editable PSD shapes, 16-bit RGB layers kept at 16 bits, and cropping of oversized or off-canvas layers.
-- **Save and export.** Background project saving, and one-page PDF export at the document's print size, next to PNG and JPEG.
+- **Focus stacking.** Combine photos taken at different focus distances into one sharper image.
+- **RAW and 16-bit editing.** Open Camera Raw directly from RAW Development. The filter adds adaptive Shadows and previews at native resolution when memory allows. Most edits retain 16-bit precision.
+- **HDR and CMYK.** Keep HDR highlights through editing and OpenEXR export. Use ICC profiles to import, proof and export CMYK images.
+- **Filters and adjustment layers.** Use Progressive Blur and RGB Split as filters, or add editable Progressive Blur, Bloom / Glow and RGB Split layers.
 
-**RAW files open in RAW Development first.** Set exposure, temperature, tint and noise reduction with a live preview before the photo becomes a layer.
-
-<img alt="RAW Development: exposure, temperature, tint and noise reduction with a live preview" src="https://github.com/user-attachments/assets/bd9ede35-20ae-4fc2-b840-41c6a69e54cf" />
+<img width="1024" alt="RAW Development with a live preview and the Camera Raw button" src="https://github.com/user-attachments/assets/14fd198a-286b-459e-8086-5ebfd2843f8d" />
 
 The command palette (**Ctrl+Shift+P**) finds every command and tool by name.
 
 <img width="1024" alt="The command palette listing commands with their shortcuts" src="docs/images/command-palette.png" />
 
-A project is a `.comp` folder. Copy or back up the whole folder. **File → Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer. **File → Open Project** and the welcome **Open project** button open the Windows folder picker in Downloads, and you can select one or more `.comp` folders. Export a flattened PNG, JPEG or one-page PDF when another application needs a single image.
+A project is a `.comp` folder. Copy or back up the whole folder. **File → Import Image**, the Save step of **Export Image**, and the first **Save Project** open Windows Explorer. **File → Open Project** and the welcome **Open project** button open the Windows folder picker in Downloads, and you can select one or more `.comp` folders. Use **Export Image** to make a flattened copy for another application.
 
 This build has [known limitations](KNOWN-ISSUES.md). A large soft brush can pause. Hair, fur, and transparent subjects can need a pass with the mask tools. Exchanging a project with the Mac app, and matching the Mac app pixel for pixel, are still unverified. Keep a copy of the complete `.comp` folder when you try that.
 
