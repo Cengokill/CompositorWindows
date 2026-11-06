@@ -48,9 +48,12 @@ void writeColors(TextContent& text,const std::vector<Color>& colors){
     }
     text.colorRuns=std::move(runs);
 }
-void writeFaces(TextContent& text,const std::vector<Face>& faces){
+void writeFaces(TextContent& text,const std::vector<Face>& faces,bool preserveBaseSize){
     if(!faces.empty()&&std::all_of(faces.begin(),faces.end(),[&](const Face& face){return face==faces.front();})){
-        text.fontFamily=faces.front().family;text.fontStyle=faces.front().style;text.fontSize=faces.front().size;text.fontRuns.clear();return;
+        text.fontFamily=faces.front().family;
+        text.fontStyle=faces.front().style;
+        if(!preserveBaseSize)text.fontSize=faces.front().size;
+        if(text.fontSize==faces.front().size){text.fontRuns.clear();return;}
     }
     const Face base=baseFace(text);
     std::vector<TextRun> runs;
@@ -118,7 +121,7 @@ void setTextFont(TextContent& text,std::string family,std::string style,int loca
         faces[size_t(index)].family=family;
         faces[size_t(index)].style=style;
     }
-    writeFaces(text,faces);
+    writeFaces(text,faces,true);
 }
 void setTextSize(TextContent& text,double size){
     if(!(size>=1)||size>1000||!std::isfinite(size))return;
@@ -146,7 +149,7 @@ bool replaceText(TextContent& text,int location,int length,std::string_view inse
         const Face inherited=start>0?faces[size_t(start-1)]:(end>start?faces[size_t(start)]:baseFace(text));
         faces.erase(faces.begin()+start,faces.begin()+end);
         faces.insert(faces.begin()+start,size_t(inserted.size()),inherited);
-        writeFaces(text,faces);
+        writeFaces(text,faces,false);
     }
     text.value=utf8.toStdString();
     return true;
