@@ -47,6 +47,16 @@ struct TipSweep {
         const float tangent=std::sqrt((length-change)*(length+change));
         return std::clamp((projection+std::sqrt(perpendicularSquared)*radiusDelta/tangent)/length,0.f,1.f);
     }
+    float reachLimit(float inside,float endpoint) const {
+        if(reaches(endpoint))return endpoint;
+        float outside=endpoint;
+        for(int i=0;i<20;++i){
+            const float mid=(inside+outside)*0.5f;
+            if(reaches(mid))inside=mid;
+            else outside=mid;
+        }
+        return inside;
+    }
 };
 TipSweep tipSweep(Vec p,const BrushSegment& s,float radius) {
     const Vec offset{p.x-s.x0,p.y-s.y0},v{s.x1-s.x0,s.y1-s.y0};
@@ -85,15 +95,10 @@ float segmentStrength(Vec p,const BrushSegment& s,float radius) {
 
     // A linearly changing disc covers a single interval along the segment.
     // Find the edge of that interval on the side with greater pressure.
-    float inside=sweep.closestEdge(),outside=strongest;
+    const float inside=sweep.closestEdge();
     if(!sweep.reaches(inside))return 0;
     if(s.strength0==s.strength1)return s.strength0;
-    for(int i=0;i<20;++i){
-        const float mid=(inside+outside)*0.5f;
-        if(sweep.reaches(mid))inside=mid;
-        else outside=mid;
-    }
-    return interpolate(s.strength0,s.strength1,inside);
+    return interpolate(s.strength0,s.strength1,sweep.reachLimit(inside,strongest));
 }
 float segmentDensity(Vec p,const BrushSegment& s,const BrushUniforms& u) {
     const Vec a{s.x0,s.y0},v{s.x1-s.x0,s.y1-s.y0};
@@ -105,17 +110,43 @@ float segmentDensity(Vec p,const BrushSegment& s,const BrushUniforms& u) {
     const float widest=radius*std::max(s.size0,s.size1);
     float radiusSquared=widest*widest; if(squared>=radiusSquared)return 0;
     float reach=std::sqrt(radiusSquared-squared),lo=std::max(0.0f,projection-reach),hi=std::min(length,projection+reach);
-    if(hi<=lo)return 0; float midpoint=(lo+hi)*0.5f,halfLength=(hi-lo)*0.5f;
+    if(hi<=lo)return 0;
+    const bool variableSize=s.size0!=s.size1;
+    const float radiusDelta=radius*(s.size1-s.size0);
+    int panels=1;
+    if(variableSize){
+        // Integrate over the actual taper so narrow regions of coverage
+        // are sampled even when the segment's widest tip is much larger.
+        const TipSweep sweep{length,projection,squared,radius*s.size0,radiusDelta};
+        const float inside=sweep.closestEdge();
+        if(!sweep.reaches(inside))return 0;
+        lo=length*sweep.reachLimit(inside,0.f);
+        hi=length*sweep.reachLimit(inside,1.f);
+        // Steep tapers need an extra interval for the changing density profile.
+        panels=std::abs(radiusDelta)>=length ? 3 : 2;
+    }
+    if(hi<=lo)return 0;
+    const float halfLength=(hi-lo)/(2.f*static_cast<float>(panels));
     constexpr float nodes[]={0.1834346425f,0.5255324099f,0.7966664774f,0.9602898565f};
     constexpr float weights[]={0.3626837834f,0.3137066459f,0.2223810345f,0.1012285363f};
     float integral=0;
-    const bool variableSize=s.size0!=s.size1;
-    const float startRadius=radius*s.size0;
-    for(int i=0;i<4;++i){float aa=midpoint-halfLength*nodes[i]-projection,bb=midpoint+halfLength*nodes[i]-projection;
-        const float ra=variableSize?radius*interpolate(s.size0,s.size1,std::clamp((projection+aa)/length,0.f,1.f)):startRadius;
-        const float rb=variableSize?radius*interpolate(s.size0,s.size1,std::clamp((projection+bb)/length,0.f,1.f)):startRadius;
-        integral+=weights[i]*(tipDensity(squared+aa*aa,ra,u)+tipDensity(squared+bb*bb,rb,u));}
-    return integral*halfLength/u.canvas[3];
+    for(int panel=0;panel<panels;++panel){
+        const float midpoint=variableSize?lo+(2.f*static_cast<float>(panel)+1.f)*halfLength:(lo+hi)*0.5f;
+        for(int i=0;i<4;++i){
+            const float aa=midpoint-halfLength*nodes[i]-projection,bb=midpoint+halfLength*nodes[i]-projection;
+            const float sizeA=variableSize?interpolate(s.size0,s.size1,std::clamp((projection+aa)/length,0.f,1.f)):s.size0;
+            const float sizeB=variableSize?interpolate(s.size0,s.size1,std::clamp((projection+bb)/length,0.f,1.f)):s.size0;
+            float densityA=tipDensity(squared+aa*aa,radius*sizeA,u);
+            float densityB=tipDensity(squared+bb*bb,radius*sizeB,u);
+            if(variableSize){
+                densityA/=std::max(0.25f,u.canvas[3]*sizeA);
+                densityB/=std::max(0.25f,u.canvas[3]*sizeB);
+            }
+            integral+=weights[i]*(densityA+densityB);
+        }
+    }
+    const float spacing=variableSize?1.f:std::max(0.25f,u.canvas[3]*s.size0);
+    return integral*halfLength/spacing;
 }
 }
 BrushTile::BrushTile(uint32_t w,uint32_t h,bool capped):width(w),height(h) {

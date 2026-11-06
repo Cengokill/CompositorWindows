@@ -51,6 +51,16 @@ bool tipReaches(TipSweep sweep,float t) {
     float radius=tipRadius(sweep,t);
     return tipDistanceSquared(sweep,t)<radius*radius;
 }
+float tipReachLimit(TipSweep sweep,float inside,float endpoint) {
+    if(tipReaches(sweep,endpoint))return endpoint;
+    float outside=endpoint;
+    [loop]for(int i=0;i<20;++i){
+        float mid=(inside+outside)*0.5f;
+        if(tipReaches(sweep,mid))inside=mid;
+        else outside=mid;
+    }
+    return inside;
+}
 float closestTipEdge(TipSweep sweep) {
     float change=abs(sweep.radiusDelta);
     if(change>=sweep.length)return sweep.radiusDelta>0.0f ? 1.0f : 0.0f;
@@ -85,15 +95,10 @@ float segmentStrength(float2 p,BrushSegment s) {
     TipSweep sweep=tipSweep(p,s,geometry.z);
     float strongest=s.dynamics.w>s.dynamics.z ? 1.0f : 0.0f;
     if(tipReaches(sweep,strongest))return max(s.dynamics.z,s.dynamics.w);
-    float inside=closestTipEdge(sweep),outside=strongest;
+    float inside=closestTipEdge(sweep);
     if(!tipReaches(sweep,inside))return 0.0f;
     if(s.dynamics.z==s.dynamics.w)return s.dynamics.z;
-    [loop]for(int i=0;i<20;++i){
-        float mid=(inside+outside)*0.5f;
-        if(tipReaches(sweep,mid))inside=mid;
-        else outside=mid;
-    }
-    return lerp(s.dynamics.z,s.dynamics.w,inside);
+    return lerp(s.dynamics.z,s.dynamics.w,tipReachLimit(sweep,inside,strongest));
 }
 float segmentDensity(float2 p,BrushSegment s) {
     if(s.dynamics.z==0.0f && s.dynamics.w==0.0f)return 0.0f;
@@ -107,17 +112,39 @@ float segmentDensity(float2 p,BrushSegment s) {
     if(squared>=radiusSquared)return 0.0f;
     float reach=sqrt(radiusSquared-squared),lo=max(0.0f,projection-reach),hi=min(len,projection+reach);
     if(hi<=lo)return 0.0f;
-    float midpoint=(lo+hi)*0.5f,halfLength=(hi-lo)*0.5f;
+    bool variableSize=s.dynamics.x!=s.dynamics.y;
+    float radiusDelta=geometry.z*(s.dynamics.y-s.dynamics.x);
+    int panels=1;
+    if(variableSize){
+        TipSweep sweep={len,projection,squared,geometry.z*s.dynamics.x,radiusDelta};
+        float inside=closestTipEdge(sweep);
+        if(!tipReaches(sweep,inside))return 0.0f;
+        lo=len*tipReachLimit(sweep,inside,0.0f);
+        hi=len*tipReachLimit(sweep,inside,1.0f);
+        panels=abs(radiusDelta)>=len ? 3 : 2;
+    }
+    if(hi<=lo)return 0.0f;
+    float halfLength=(hi-lo)/(2.0f*panels);
     static const float nodes[4]={0.1834346425f,0.5255324099f,0.7966664774f,0.9602898565f};
     static const float weights[4]={0.3626837834f,0.3137066459f,0.2223810345f,0.1012285363f};
     float integral=0.0f;
-    bool variableSize=s.dynamics.x!=s.dynamics.y;
-    float startRadius=geometry.z*s.dynamics.x;
-    [unroll]for(uint i=0;i<4;++i){float a=midpoint-halfLength*nodes[i]-projection,b=midpoint+halfLength*nodes[i]-projection;
-        float ra=variableSize?geometry.z*lerp(s.dynamics.x,s.dynamics.y,saturate((projection+a)/len)):startRadius;
-        float rb=variableSize?geometry.z*lerp(s.dynamics.x,s.dynamics.y,saturate((projection+b)/len)):startRadius;
-        integral+=weights[i]*(tipDensity(squared+a*a,ra)+tipDensity(squared+b*b,rb));}
-    return integral*halfLength/canvas.w;
+    [loop]for(int panel=0;panel<panels;++panel){
+        float midpoint=variableSize?lo+(2.0f*panel+1.0f)*halfLength:(lo+hi)*0.5f;
+        [unroll]for(uint i=0;i<4;++i){
+            float a=midpoint-halfLength*nodes[i]-projection,b=midpoint+halfLength*nodes[i]-projection;
+            float sizeA=variableSize?lerp(s.dynamics.x,s.dynamics.y,saturate((projection+a)/len)):s.dynamics.x;
+            float sizeB=variableSize?lerp(s.dynamics.x,s.dynamics.y,saturate((projection+b)/len)):s.dynamics.x;
+            float densityA=tipDensity(squared+a*a,geometry.z*sizeA);
+            float densityB=tipDensity(squared+b*b,geometry.z*sizeB);
+            if(variableSize){
+                densityA/=max(0.25f,canvas.w*sizeA);
+                densityB/=max(0.25f,canvas.w*sizeB);
+            }
+            integral+=weights[i]*(densityA+densityB);
+        }
+    }
+    float spacing=variableSize?1.0f:max(0.25f,canvas.w*s.dynamics.x);
+    return integral*halfLength/spacing;
 }
 [numthreads(16,16,1)]
 void continuousBrush(uint3 dispatchId : SV_DispatchThreadID) {
