@@ -53,6 +53,20 @@ void pen_pressure() {
     REQUIRE(live->pixel(48,24)==result->pixel(48,24));
     REQUIRE(std::abs(int(result->pixel(48,24).a)-128)<=1);
     REQUIRE(result->pixel(20,29).a==0&&result->pixel(74,29).a>0);
+    for(double hardness:{0.,1.}){
+        s.hardness=hardness;
+        GrowingBrushSession stationary(base,s,96,48);
+        stationary.begin(click,0);
+        REQUIRE(!stationary.preview()->changed());
+        REQUIRE(!stationary.append(click,-1));
+        REQUIRE(stationary.append(click,.25));
+        REQUIRE(stationary.preview()->pixel(30,24).a==51);
+        REQUIRE(stationary.append(click,1));
+        REQUIRE(stationary.preview()->pixel(35,24)==dab(1)->pixel(35,24));
+        REQUIRE(stationary.preview()->pixel(30,24).a==204);
+        REQUIRE(!stationary.append(click,2));
+        REQUIRE(stationary.commit()->pixel(30,24).a==204);
+    }
     GrowingBrushSession canceled(base,s,96,48);
     canceled.begin(click,.25);
     REQUIRE(canceled.preview()->changed()&&canceled.cancel()->materializeLayer()==base);

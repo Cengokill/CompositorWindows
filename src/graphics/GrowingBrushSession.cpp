@@ -317,9 +317,11 @@ bool GrowingBrushSession::begin(Point point,double pressure) {
 bool GrowingBrushSession::append(Point point,double pressure) {
     auto& stroke=*impl_;
     if(!stroke.begun||stroke.finished)throw std::logic_error("Growing stroke is not active");
-    if(!validPoint(point)||(!stroke.samples.empty()&&stroke.samples.back().point==point))return false;
+    if(!validPoint(point))return false;
+    const auto sample=normalizedBrushSample(point,pressure);
+    if(!stroke.samples.empty()&&sample.repeats(stroke.samples.back(),stroke.settings))return false;
     auto next=stroke.samples;
-    next.push_back(normalizedBrushSample(point,pressure));
+    next.push_back(sample);
     if(next.size()>4)next.erase(next.begin());
     const auto count=next.size();
     std::vector<BrushSegment> settled,tail;

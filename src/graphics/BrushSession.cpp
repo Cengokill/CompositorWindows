@@ -26,6 +26,8 @@ BrushSample normalizedBrushSample(Point point,double pressure) {
     return {point,std::isfinite(pressure)?std::clamp(pressure,0.,1.):1.};
 }
 BrushSegment brushSegment(BrushSample start,BrushSample end,const BrushSessionSettings& settings) {
+    // A stationary pressure update deposits the new tip without a connecting curve.
+    if(start.point==end.point)start=end;
     const auto size=[&](double pressure){
         return settings.pressureSize ? float(std::max(pressure,0.5/settings.radius)) : 1.f;
     };
@@ -36,6 +38,7 @@ BrushSegment brushSegment(BrushSample start,BrushSample end,const BrushSessionSe
 std::vector<BrushSegment> brushContinuousCurve(BrushSample first,BrushSample last,Point before,Point after,
                                                const BrushSessionSettings& settings) {
     const auto start=first.point,end=last.point;
+    if(start==end)return {brushSegment(first,last,settings)};
     auto knot=[](double t,Point a,Point b){return t+std::max(0.0001,std::sqrt(std::hypot(b.x-a.x,b.y-a.y)));};
     auto mix=[](Point a,Point b,double ta,double tb,double t){double wa=(tb-t)/(tb-ta),wb=(t-ta)/(tb-ta);return Point{a.x*wa+b.x*wb,a.y*wa+b.y*wb};};
     double t0=0,t1=knot(t0,before,start),t2=knot(t1,start,end),t3=knot(t2,end,after);
@@ -95,8 +98,10 @@ bool BrushSession::begin(Point p,double pressure){
 }
 bool BrushSession::append(Point p,double pressure){
     if(!begun_||finished_)throw std::logic_error("Brush session is not active");
-    if(!validPoint(p)||(!samples_.empty()&&samples_.back().point==p))return false;
-    auto next=samples_;next.push_back(normalizedBrushSample(p,pressure));if(next.size()>4)next.erase(next.begin());
+    if(!validPoint(p))return false;
+    const auto sample=normalizedBrushSample(p,pressure);
+    if(!samples_.empty()&&sample.repeats(samples_.back(),settings_))return false;
+    auto next=samples_;next.push_back(sample);if(next.size()>4)next.erase(next.begin());
     auto n=next.size();std::vector<BrushSegment> settled,tail;
     if(n==1)settled.push_back(brushSegment(next[0],next[0],settings_));
     else if(n>=3)settled=brushContinuousCurve(next[n-3],next[n-2],next[n>=4?n-4:0].point,p,settings_);

@@ -15,6 +15,10 @@ struct BrushSessionSettings {
 struct BrushSample {
     Point point;
     double pressure{1};
+    bool repeats(const BrushSample& previous,const BrushSessionSettings& settings) const {
+        return point==previous.point &&
+            (!(settings.pressureSize||settings.pressureOpacity)||pressure==previous.pressure);
+    }
 };
 BrushSample normalizedBrushSample(Point,double pressure);
 BrushSegment brushSegment(BrushSample start,BrushSample end,const BrushSessionSettings&);
