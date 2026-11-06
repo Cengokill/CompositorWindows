@@ -20,10 +20,12 @@
 #include "ProjectLayerCopyJob.h"
 #include "LayerCopyCommit.h"
 #include <QDir>
+#include <QDialog>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QColorDialog>
 #include <QBuffer>
@@ -51,6 +53,12 @@
 #include <QMenu>
 #include <QThread>
 #include <QEventLoop>
+#include <QScreen>
+#include <QStyle>
+#include <QTextDocument>
+#include <QTextEdit>
+#include <QTextOption>
+#include <QVBoxLayout>
 #include <commdlg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
@@ -69,11 +77,40 @@ static void reportPickerBusy(MainWindow* window){
     window->statusBar()->showMessage("A file picker is already open",5000);
 }
 namespace {
-void showPdfImportErrors(QWidget* owner, const QStringList& errors) {
-    QMessageBox message(QMessageBox::Critical, "Import PDF", errors.join("\n\n"), QMessageBox::Ok, owner);
-    message.setProperty("studioChrome", true);
-    message.setTextFormat(Qt::PlainText);
-    message.exec();
+void showPdfImportError(QWidget* owner, const QString& title, const QString& error, const char* name = "pdfImportError") {
+    QDialog dialog(owner);
+    dialog.setObjectName(name);
+    dialog.setWindowTitle(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* body = new QHBoxLayout;
+    layout->addLayout(body);
+
+    auto* icon = new QLabel(&dialog);
+    icon->setPixmap(dialog.style()->standardIcon(QStyle::SP_MessageBoxCritical)
+        .pixmap(QSize(48, 48), dialog.devicePixelRatioF()));
+    body->addWidget(icon, 0, Qt::AlignTop);
+
+    auto* text = new QTextEdit(&dialog);
+    text->setReadOnly(true);
+    text->setFrameShape(QFrame::NoFrame);
+    text->setStyleSheet("QTextEdit { background: transparent; border: none; }");
+    text->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    text->setPlainText(error);
+    text->ensurePolished();
+    const auto available = owner->screen()->availableGeometry();
+    const int textWidth = std::clamp(available.width() - 120, 1, 520);
+    text->setFixedWidth(textWidth);
+    text->document()->setTextWidth(textWidth);
+    text->setFixedHeight(std::min(int(std::ceil(text->document()->size().height())) + 2, available.height() / 2));
+    body->addWidget(text);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok, &dialog);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+    buttons->button(QDialogButtonBox::Ok)->setFocus();
+    dialog.exec();
 }
 
 template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& paths,Load&& load){
@@ -293,7 +330,16 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
     host.cancelImage=[this](QObject* target){if(importQueue_)importQueue_->cancel(target);};
-    host.error=[this](const QString& path,const QString& error){QMessageBox message(QMessageBox::Critical,"Receive Dropped Files",QString("Could not open %1.\n\n%2").arg(QDir::toNativeSeparators(path),error),QMessageBox::Ok,this);message.setObjectName("workspaceDropError");message.exec();};
+    host.error=[this](const QString& path,const QString& error){
+        const auto text = QString("Could not open %1.\n\n%2").arg(QDir::toNativeSeparators(path), error);
+        if (ui::isPdfImport(nativePath(path))) {
+            showPdfImportError(this, "Receive Dropped Files", text, "workspaceDropError");
+            return;
+        }
+        QMessageBox message(QMessageBox::Critical, "Receive Dropped Files", text, QMessageBox::Ok, this);
+        message.setObjectName("workspaceDropError");
+        message.exec();
+    };
     workspaceDrops_=new ui::WorkspaceDropQueue(std::move(host),this);return workspaceDrops_;
 }
 void MainWindow::receiveDropPaths(const QStringList& paths,NativeCanvas* destination,std::optional<Point> point){
@@ -520,7 +566,7 @@ void MainWindow::openPath(const QString&path){
     ui::PreparedPdfs pdfs;
     if (!ui::preparePdfImports(this, {nativePath(path)}, std::nullopt, pdfs)) return;
     if (!pdfs.empty() && !pdfs.begin()->second.error.isEmpty()) {
-        showPdfImportErrors(this, {QFileInfo(path).fileName() + ": " + pdfs.begin()->second.error});
+        showPdfImportError(this, "Import PDF", QDir::toNativeSeparators(path) + "\n\n" + pdfs.begin()->second.error);
         return;
     }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
@@ -573,10 +619,10 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
     for (const auto& path : images) {
         const auto pdf = pdfs.find(nativePath(path));
         if (pdf == pdfs.end() || pdf->second.error.isEmpty()) break;
-        pdfErrors.append(QFileInfo(path).fileName() + ": " + pdf->second.error);
+        pdfErrors.append(QDir::toNativeSeparators(path) + "\n" + pdf->second.error);
     }
     if (pdfErrors.size() == images.size()) {
-        showPdfImportErrors(this, pdfErrors);
+        showPdfImportError(this, "Import PDF", pdfErrors.join("\n\n"));
         return;
     }
     queueImageImports(images,target,{},rawSettings,prepared,std::move(pdfs));

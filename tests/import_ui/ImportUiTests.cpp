@@ -31,6 +31,10 @@
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextEdit>
+#include <QTextLayout>
 #include <QTimer>
 #include <QThread>
 #include <QTreeWidget>
@@ -345,7 +349,9 @@ void pdfImportTests(const std::function<void(const char*, const std::function<vo
     test("pdf_rejected_inputs_and_cancel_preserve_workspace", [] {
         QTemporaryDir temp;
         const auto pdf = writePdfFixture(temp.path(), 20);
-        const auto bad = temp.filePath("broken.pdf");
+        const QString folder(135, QLatin1Char('W'));
+        require(QDir(temp.path()).mkdir(folder), "Could not create a long PDF fixture path");
+        const auto bad = temp.filePath(folder + "/broken.pdf");
         { QFile file(bad); require(file.open(QIODevice::WriteOnly), "Bad PDF fixture write failed"); file.write("broken"); }
         // An independent, empty one-page fixture encrypted by pypdf. Its password is compositor-pdf-test.
         const auto encrypted = QByteArray::fromBase64(
@@ -362,7 +368,7 @@ void pdfImportTests(const std::function<void(const char*, const std::function<vo
     "MzU2MzY1NjIzMDM0MzMzMjM5NjYzMDM2Mzg2NDM4Mzg2MjMxMzUzNTM4NjQzMjYzMzQ2MjY2NjI2NTM3NjIzNT4gXQovRW5j"
     "cnlwdCA1IDAgUgo+PgpzdGFydHhyZWYKNDc0CiUlRU9GCg=="
         );
-        const auto locked = temp.filePath("locked.pdf");
+        const auto locked = temp.filePath(folder + "/locked.pdf");
         { QFile file(locked); require(file.open(QIODevice::WriteOnly) && file.write(encrypted) == encrypted.size(),
                                       "Encrypted PDF fixture write failed"); }
         MainWindow window(true);
@@ -370,17 +376,23 @@ void pdfImportTests(const std::function<void(const char*, const std::function<vo
         const auto before = project.document;
         auto* tabs = window.findChild<QTabWidget*>();
         const auto count = tabs->count();
-        bool sawError = false;
-        bool lockedError = false;
+        QString errorText;
+        bool pathWrapped = false;
         bool cancel = false;
         bool cancelled = false;
         QTimer poll;
         QObject::connect(&poll, &QTimer::timeout, &window, [&] {
-            for (auto* box : window.findChildren<QMessageBox*>()) {
-                if (!box->isVisible()) continue;
-                sawError = true;
-                lockedError |= box->text().contains("password-protected");
-                box->accept();
+            for (auto* dialog : window.findChildren<QDialog*>()) {
+                if (!dialog->isVisible()) continue;
+                const auto name = dialog->objectName();
+                const bool previousErrorBox = qobject_cast<QMessageBox*>(dialog) && dialog->windowTitle() == "Import PDF";
+                if (name != "pdfImportError" && name != "workspaceDropError" && !previousErrorBox) continue;
+                if (auto* text = dialog->findChild<QTextEdit*>()) {
+                    errorText = text->toPlainText();
+                    const auto* firstLine = text->document()->firstBlock().layout();
+                    pathWrapped = firstLine && firstLine->lineCount() > 1;
+                }
+                dialog->accept();
             }
             if (!cancel || cancelled) return;
             if (auto* progress = window.findChild<QDialog*>("pdfImportPreflight")) {
@@ -392,9 +404,19 @@ void pdfImportTests(const std::function<void(const char*, const std::function<vo
         });
         poll.start(0);
         window.openPath(bad);
-        require(sawError, "Malformed PDF was not reported");
+        require(errorText.contains(QDir::toNativeSeparators(bad)) && pathWrapped,
+                "The malformed PDF error did not show and wrap its full path");
+        errorText.clear();
         window.openPath(locked);
-        require(lockedError, "Locked PDF was not distinguished from a malformed file");
+        require(errorText.contains("password-protected"), "Locked PDF was not distinguished from a malformed file");
+        for (const auto& rejected : {bad, locked}) {
+            errorText.clear();
+            pathWrapped = false;
+            window.receiveDropPaths({rejected}, project.canvas, {});
+            until([&] { return ui::WorkspaceDropQueue::find(&window)->idle(); });
+            require(errorText.contains(QDir::toNativeSeparators(rejected)) && pathWrapped,
+                    "The drop error did not show and wrap the full PDF path");
+        }
         cancel = true;
         window.openPath(pdf);
         poll.stop();
