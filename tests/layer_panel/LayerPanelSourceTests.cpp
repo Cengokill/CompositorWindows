@@ -4,13 +4,18 @@
 #include <QApplication>
 #include <QCursor>
 #include <QFont>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QScrollBar>
+#include <QWindow>
 #include <algorithm>
 #include <QStyleOptionViewItem>
 #include <QTest>
 #include <iostream>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 using namespace compositor;
 namespace {
 void check(bool value,const char*why){if(!value)throw std::runtime_error(why);}
@@ -83,6 +88,84 @@ void middle_scroll(){
         check(p.history.modified()==modified&&p.history.canRedo()==redo,"scroll changed dirty or redo state");
     }
 }
+void middle_scroll_rename(){
+    MainWindow w(true);auto& p=w.addProject(scrollExample(40));
+    auto* t=tree(w);t->setFixedHeight(240);
+    w.show();w.activateWindow();
+    check(QTest::qWaitForWindowActive(&w,1000),"editor window did not activate");
+    auto* bar=t->verticalScrollBar();bar->setValue(0);
+    auto* edited=t->topLevelItem(0);
+    const auto id=edited->data(0,Qt::UserRole).toString().toStdString();
+    const auto before=p.document;
+    const auto undo=p.history.undoCount();
+    const auto start=t->viewport()->mapTo(&w,t->visualRect(t->indexFromItem(t->topLevelItem(2),0)).center());
+    t->editItem(edited,0);
+    auto* editor=qobject_cast<QLineEdit*>(QApplication::focusWidget());
+    check(editor&&t->viewport()->isAncestorOf(editor),"inline rename editor did not take focus");
+    editor->setText("Pending name");
+
+    QTest::mousePress(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,start);
+    QTest::mouseMove(w.windowHandle(),start-QPoint(0,30));
+    QTest::mouseRelease(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,start-QPoint(0,30));
+    QApplication::processEvents();
+    check(bar->value()==30,"window input did not scroll the Layers panel");
+    check(QApplication::focusWidget()==editor,"middle drag moved focus away from the inline editor");
+    check(editor->text()=="Pending name"&&p.document==before&&p.history.undoCount()==undo,
+          "middle drag committed the pending rename");
+
+    QTest::keyClick(editor,Qt::Key_Return);
+    check(QTest::qWaitFor([&]{return layer(p,id.c_str()).name=="Pending name"&&p.history.undoCount()==undo+1;},1000),
+          "Return did not commit the preserved rename");
+}
+void middle_scroll_capture(){
+    MainWindow w(true);w.addProject(scrollExample(40));
+    auto* t=tree(w);t->setFixedHeight(240);
+    w.show();w.activateWindow();
+    check(QTest::qWaitForWindowActive(&w,1000),"editor window did not activate");
+    auto* viewport=t->viewport();
+    auto* receiver=w.findChild<QWidget*>("layerGroupButton");
+    check(receiver&&receiver->isVisible(),"missing outside capture receiver");
+    const auto outside=receiver->mapTo(&w,receiver->rect().center());
+    check(!viewport->rect().contains(viewport->mapFrom(&w,outside)),"capture receiver overlaps viewport");
+    const auto start=viewport->mapTo(&w,QPoint(viewport->width()/2,100));
+    auto* bar=t->verticalScrollBar();
+    bar->setValue(0);
+
+    QTest::mousePress(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,start);
+    QTest::mouseMove(w.windowHandle(),start-QPoint(0,30));
+    check(bar->value()==30&&QWidget::mouseGrabber()==viewport,"middle scroll did not capture the mouse");
+    receiver->grabMouse();
+    check(QWidget::mouseGrabber()==receiver,"mouse grab did not transfer");
+    QTest::mouseRelease(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,outside);
+    check(QWidget::mouseGrabber()==receiver,"scroll cleanup released the new grabber");
+    check(bar->value()==30&&viewport->cursor().shape()!=Qt::ClosedHandCursor,
+          "outside release after capture transfer left scroll active");
+    receiver->releaseMouse();
+
+    QTest::mousePress(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,start);
+    QTest::mouseMove(w.windowHandle(),start-QPoint(0,20));
+    QTest::mouseRelease(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,start-QPoint(0,20));
+    check(bar->value()==50&&QWidget::mouseGrabber()!=viewport,"fresh scroll failed after capture transfer");
+
+#ifdef Q_OS_WIN
+    if(QGuiApplication::platformName()=="windows"){
+        QWindow nativeReceiver(w.windowHandle());
+        nativeReceiver.setGeometry(QRect(outside,QSize(20,20)));
+        nativeReceiver.show();
+        const auto hwnd=reinterpret_cast<HWND>(nativeReceiver.winId());
+        QTest::mousePress(w.windowHandle(),Qt::MiddleButton,Qt::NoModifier,start);
+        check(GetCapture()==reinterpret_cast<HWND>(viewport->effectiveWinId()),"missing native capture");
+        SetCapture(hwnd);
+        const bool stopped=QTest::qWaitFor([&]{
+            return QWidget::mouseGrabber()!=viewport&&viewport->cursor().shape()!=Qt::ClosedHandCursor;
+        },1000);
+        const bool keptCapture=GetCapture()==hwnd;
+        QTest::mouseRelease(&nativeReceiver,Qt::MiddleButton,Qt::NoModifier,QPoint(10,10));
+        if(GetCapture()==hwnd)ReleaseCapture();
+        check(stopped&&keptCapture,"native capture loss did not stop scroll and preserve the new owner");
+    }
+#endif
+}
 void middle_scroll_cancel(){
     MainWindow w(true);w.addProject(scrollExample(40));w.show();QApplication::processEvents();
     auto*t=tree(w);t->setFixedHeight(240);QApplication::processEvents();auto*bar=t->verticalScrollBar();
@@ -130,4 +213,4 @@ void middle_scroll_controls(){
 void source_cursor_conflict(){MainWindow w(true);auto d=example();for(auto&l:d.layers){l.raster.reset();l.transform={0,0,400,300};}w.addProject(d);w.show();QApplication::processEvents();auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor,"source Option name offers duplicate");auto*row=item(w,"c");const auto rect=tree(w)->visualItemRect(row);const auto size=row->icon(1).actualSize({36,36});check(size==QSize(36,27),"source thumbnail takes400x300canvas shape");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,rect.center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::AltModifier);const bool thumbnailAssertion=view->cursor().shape()!=Qt::DragCopyCursor;std::cout<<"SOURCE-TEST-CONFLICT CursorTests.optionOverALayerRowOffersDuplicatingExceptOverThumbnails row_top="<<rect.top()<<" row_height="<<rect.height()<<" thumbnail_center_y="<<picture.y()<<" clipping_boundary="<<rect.bottom()+1-rect.height()/4<<" actual_role="<<view->property("layerCursorRole").toString().toStdString()<<" expected=not-duplicate\n";mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"source return to plain name restores arrow");check(thumbnailAssertion,"upstream expected Option at image thumbnail center not duplicate; literal pinned source route gives duplicate");}
 void panel_cursors(){MainWindow w(true);auto&p=w.addProject(example());(void)p;w.show();QApplication::processEvents();auto*c=controller(w);auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"tool cursor persisted in layer name");view->setCursor(Qt::CrossCursor);c->refreshCursor({},name);check(view->cursor().shape()==Qt::ArrowCursor,"cursor refresh failed to restore arrow");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->cursor().shape()==Qt::ArrowCursor,"Ctrl away from thumbnail changed cursor");view->setCursor(Qt::CrossCursor);c->refreshCursor({},QPoint(-50,-50));check(view->cursor().shape()==Qt::CrossCursor,"outside modifier refresh touched other view cursor");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor&&view->property("layerCursorRole")=="duplicate","Alt row name did not offer duplicate");auto*row=item(w,"c");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,tree(w)->visualItemRect(row).center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->property("layerCursorRole")=="load-selection","Ctrl image did not offer load selection");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"plain row failed to restore arrow");}
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_rename")middle_scroll_rename();else if(name=="middle_scroll_capture")middle_scroll_capture();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

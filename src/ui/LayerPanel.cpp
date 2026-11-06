@@ -21,7 +21,12 @@
 #include <cmath>
 #include <QSignalBlocker>
 #include <QUuid>
+#include <QWindow>
 #include <algorithm>
+#ifdef Q_OS_WIN
+#include <QTimer>
+#include <windows.h>
+#endif
 
 namespace compositor::ui {
 namespace {
@@ -160,6 +165,9 @@ LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(
     connect(tree_,&QTreeWidget::itemExpanded,this,[this](QTreeWidgetItem* item){if(!rebuilding_){if(host_.canEdit&&!host_.canEdit()){updateSelection();return;}invoke([&]{host_.collapse(idOf(item),false);});}});
     connect(tree_,&QTreeWidget::customContextMenuRequested,this,[this](QPoint p){if(host_.canEdit&&!host_.canEdit())return;invoke([&]{contextMenu(p);});});
     tree_->setMouseTracking(true);tree_->viewport()->setMouseTracking(true);tree_->viewport()->setCursor(Qt::ArrowCursor);qApp->installEventFilter(this);
+#ifdef Q_OS_WIN
+    qApp->installNativeEventFilter(this);
+#endif
     installLayerAccessibility(tree_);
 }
 LayerPanelController::~LayerPanelController(){if(qApp)qApp->removeEventFilter(this);host_={};}
@@ -253,6 +261,21 @@ void LayerPanelController::finishMiddleScroll(){
     viewport->setCursor(Qt::ArrowCursor);viewport->setProperty("layerCursorRole","arrow");modifierCursor_=false;
     refreshCursor(QApplication::keyboardModifiers(),viewport->mapFromGlobal(QCursor::pos()));
 }
+#ifdef Q_OS_WIN
+bool LayerPanelController::nativeEventFilter(const QByteArray& type,void* message,qintptr*){
+    if(!middleScrollY_||type!="windows_generic_MSG")return false;
+    const auto* msg=static_cast<const MSG*>(message);
+    if(msg->message==WM_CAPTURECHANGED&&msg->hwnd==reinterpret_cast<HWND>(tree_->viewport()->effectiveWinId())){
+        // ReleaseCapture can notify synchronously while Qt is changing its grabber.
+        QTimer::singleShot(0,this,[this]{
+            auto* viewport=tree_->viewport();
+            if(middleScrollY_&&(QWidget::mouseGrabber()!=viewport||
+               GetCapture()!=reinterpret_cast<HWND>(viewport->effectiveWinId())))finishMiddleScroll();
+        });
+    }
+    return false;
+}
+#endif
 void LayerPanelController::refreshCursor(Qt::KeyboardModifiers modifiers,const QPoint&point){
     if(middleScrollY_){tree_->viewport()->setCursor(Qt::ClosedHandCursor);tree_->viewport()->setProperty("layerCursorRole","middle-scroll");return;}
     auto*viewport=tree_->viewport();const bool inside=viewport->rect().contains(point);if(!inside){if(modifierCursor_){viewport->setCursor(Qt::ArrowCursor);viewport->setProperty("layerCursorRole","arrow");modifierCursor_=false;}return;}
@@ -282,6 +305,34 @@ bool LayerPanelController::accepts(const QMimeData* mime,const QPoint& point,Qt:
 bool LayerPanelController::performDrop(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers){if(!accepts(mime,point,modifiers))return false;bool changed=false;invoke([&]{const auto state=host_.state();const auto dest=destination(tree_,*state.document,point);auto result=mime->hasFormat(maskMime)?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id):dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier));changed=result.changed;if(changed){host_.commit(std::move(result),mime->hasFormat(maskMime));if(dest.zone==DropZone::IntoGroup)host_.collapse(dest.id,false);}});return changed;}
 
 bool LayerPanelController::eventFilter(QObject* watched,QEvent* event){
+    auto* viewport=tree_->viewport();
+    if(middleScrollY_&&QWidget::mouseGrabber()!=viewport)finishMiddleScroll();
+    if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick){
+        const auto* mouse=static_cast<QMouseEvent*>(event);
+        if(mouse->button()==Qt::MiddleButton){
+            bool targetsViewport=watched==viewport;
+            // At the window level Qt has yet to assign click focus to a widget.
+            // Catch the gesture here so an inline rename keeps its focus.
+            if(!watched->isWidgetType()&&mouse->buttons()==Qt::MiddleButton&&
+               viewport->isVisible()&&viewport->isEnabled()&&!QApplication::activePopupWidget()){
+                auto* nativeWidget=viewport->windowHandle()?viewport:viewport->nativeParentWidget();
+                auto* grabber=QWidget::mouseGrabber();
+                if(nativeWidget&&watched==nativeWidget->windowHandle()&&(!grabber||grabber==viewport)){
+                    auto* target=nativeWidget->childAt(mouse->position());
+                    targetsViewport=nativeWidget==viewport||target==viewport||viewport->isAncestorOf(target);
+                }
+            }
+            if(targetsViewport){
+                if(!middleScrollY_&&!visibilitySwipe_&&!pressed_&&!dragging_&&mouse->buttons()==Qt::MiddleButton){
+                    const auto global=mouse->globalPosition().toPoint();
+                    viewport->grabMouse();
+                    middleScrollY_=global.y();
+                    refreshCursor(mouse->modifiers(),viewport->mapFromGlobal(global));
+                }
+                return true;
+            }
+        }
+    }
     if((event->type()==QEvent::WindowDeactivate&&watched==tree_->window())||
        (event->type()==QEvent::Hide&&(watched==tree_||watched==tree_->viewport()))||
        (event->type()==QEvent::UngrabMouse&&watched==tree_->viewport()))finishMiddleScroll();
@@ -289,18 +340,6 @@ bool LayerPanelController::eventFilter(QObject* watched,QEvent* event){
         if(event->type()==QEvent::WindowDeactivate&&watched==tree_->window())finishVisibilitySwipe();
         if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){const auto point=tree_->viewport()->mapFromGlobal(QCursor::pos());if(tree_->viewport()->rect().contains(point))refreshCursor(static_cast<QKeyEvent*>(event)->modifiers(),point);}
         return QObject::eventFilter(watched,event);
-    }
-    // Navigation never prepares a pending edit or enters the left-button routes.
-    if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick){
-        auto* mouse=static_cast<QMouseEvent*>(event);
-        if(mouse->button()==Qt::MiddleButton){
-            if(!visibilitySwipe_&&!pressed_&&!dragging_&&mouse->buttons()==Qt::MiddleButton){
-                middleScrollY_=mouse->globalPosition().toPoint().y();
-                tree_->viewport()->grabMouse();
-                refreshCursor(mouse->modifiers(),mouse->position().toPoint());
-            }
-            return true;
-        }
     }
     if(middleScrollY_){
         if(event->type()==QEvent::MouseMove){
