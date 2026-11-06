@@ -52,13 +52,25 @@ void MainWindow::setupDrawingActions(){
         if(refreshing_)return;
         finishShapeStyleEdit();
         shapeStyle_.smoothing=enabled;
-        applyShapeStyleToSelection();
+        applyShapeStyleToSelection(enabled);
         finishShapeStyleEdit();
     });
     auto*stroke=new QCheckBox("Stroke");stroke->setObjectName("shapeStroke");bar->addWidget(stroke);connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
     auto*strokeWidth=new ui::PropertyNumber;strokeWidth->releaseFocus=[this]{if(canvas())canvas()->setFocus();};strokeWidth->setObjectName("shapeStrokeWidth");strokeWidth->setRange(.1,500);strokeWidth->setDecimals(1);strokeWidth->setAccessibleName("Stroke width");strokeWidth->setSuffix(" px");bar->addWidget(strokeWidth);connect(strokeWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.strokeWidth=v;applyShapeStyleToSelection();});connect(strokeWidth,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});
     auto*strokeColor=new QPushButton("Stroke Color…");strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");bar->addWidget(strokeColor);connect(strokeColor,&QPushButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();finishShapeStyleEdit();}});
-    auto*restyle=bar->addAction("Update Shape Style");bindCommand(restyle,"Drawing Options","Update Shape Style",[this]{finishShapeStyleEdit();if(!active()||active()->shapeJson.empty())return;edit("Shape Style",[&](Document&){auto style=shapeStyle_;if(style.kind!=editing::ShapeKind::Rectangle)style.smoothing=false;if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;style.red=foreground_.redF();style.green=foreground_.greenF();style.blue=foreground_.blueF();*active()=editing::restyleShape(*active(),style);});});
+    auto*restyle=bar->addAction("Update Shape Style");bindCommand(restyle,"Drawing Options","Update Shape Style",[this]{
+        finishShapeStyleEdit();
+        if(!active()||active()->shapeJson.empty())return;
+        edit("Shape Style",[&](Document&){
+            auto style=shapeStyle_;
+            const auto stored=editing::decodeShapeStyle(active()->shapeJson);
+            if(style.kind!=editing::ShapeKind::Rectangle)style.smoothing=false;
+            else if(stored.kind==editing::ShapeKind::Rectangle)style.smoothing=stored.smoothing;
+            if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;
+            style.red=foreground_.redF();style.green=foreground_.greenF();style.blue=foreground_.blueF();
+            *active()=editing::restyleShape(*active(),style);
+        });
+    });
     auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");cropRatioControl->addItems({"Free","Original","1:1","4:3","3:4","16:9","9:16"});bar->addWidget(cropRatioControl);
     connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){if(refreshing_)return;cropRatioChoice_=value;changeCropRatio();});
     auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);bar->addAction(cropCancel);bar->addAction(cropApply);
@@ -114,14 +126,24 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     const auto insertion=at==next.layers.end()?next.layers.size():size_t(at-next.layers.begin())+1;
     if(at!=next.layers.end())layer->parentId=at->group?at->id:at->parentId;
     auto selected=std::vector<std::string>{layer->id};auto activeId=layer->id;
-    shapeStyleLayer_=activeId;shapeStyleSynced_=editing::decodeShapeStyle(layer->shapeJson);// shapeStyle_ already holds this layer's style; the refresh inside edit() must keep the toolbar as drawn.
+    const auto committedStyle=editing::decodeShapeStyle(layer->shapeJson);
     next.layers.insert(next.layers.begin()+insertion,std::move(*layer));validateDocument(next);
     auto previousSelected=p->selected;const bool previousMask=p->maskSelected;finishOpacityEdit();finishShapeStyleEdit();
+    // Keep the tool preferences and remember the actual committed style separately.
+    shapeStyleLayer_=activeId;shapeStyleSynced_=committedStyle;
     try{edit(style.kind==editing::ShapeKind::Rectangle?"Rectangle":"Ellipse",[&](Document& document){document=std::move(next);p->active=std::move(activeId);p->selected=std::move(selected);p->maskSelected=false;});}
     catch(...){p->selected=std::move(previousSelected);p->maskSelected=previousMask;throw;}
     return true;
 }
-void MainWindow::cancelShape(){shapeDraftId_.clear();shapeDraftRect_.reset();if(canvas()){canvas()->setShapeDraft({});canvas()->setSnapGuides();}}
+void MainWindow::cancelShape(){
+    const bool hadDraft=!shapeDraftId_.empty();
+    shapeDraftId_.clear();shapeDraftRect_.reset();
+    if(hadDraft)refreshShapeControls();
+    if(canvas()){
+        if(!hadDraft)canvas()->setShapeDraft({});
+        canvas()->setSnapGuides();
+    }
+}
 void MainWindow::refreshShapeControls(){
     const auto* layer=active();
     const bool shapeLayer=layer&&!layer->shapeJson.empty();
@@ -133,7 +155,8 @@ void MainWindow::refreshShapeControls(){
     if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);radius->setVisible(rectangleControls);}
     if(auto* smoothing=findChild<QCheckBox*>("shapeSmoothing")){
         const QSignalBlocker block(smoothing);
-        smoothing->setChecked(shapeStyle_.smoothing);
+        const bool selectedRectangle=shapeLayer&&shapeStyleSynced_.kind==editing::ShapeKind::Rectangle&&shapeDraftId_.empty();
+        smoothing->setChecked(selectedRectangle?shapeStyleSynced_.smoothing:shapeStyle_.smoothing);
         smoothing->setVisible(rectangleControls);
     }
     const bool strokable=controls&&shapeStyle_.kind!=editing::ShapeKind::Line;
@@ -146,11 +169,13 @@ void MainWindow::refreshShapeControls(){
     canvas()->setShapeDraft(std::move(overlay));
 }
 // Controls edit a selected shape layer directly; its own fill colour is kept, unlike Update Shape Style.
-void MainWindow::applyShapeStyleToSelection(){
+void MainWindow::applyShapeStyleToSelection(std::optional<bool> smoothing){
     if(!shapeDraftId_.empty()||!active()||active()->shapeJson.empty()||!canEditLayers())return;
     const auto stored=editing::decodeShapeStyle(active()->shapeJson);
-    auto style=shapeStyle_;style.red=stored.red;style.green=stored.green;style.blue=stored.blue;
+    const bool smoothingOnly=smoothing.has_value()&&shapeStyle_.kind==stored.kind;
+    auto style=smoothingOnly?stored:shapeStyle_;style.red=stored.red;style.green=stored.green;style.blue=stored.blue;
     if(style.kind!=editing::ShapeKind::Rectangle)style.smoothing=false;
+    else if(stored.kind==editing::ShapeKind::Rectangle)style.smoothing=smoothing.value_or(stored.smoothing);
     if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;
     if(style==stored)return;
     auto* project=current();

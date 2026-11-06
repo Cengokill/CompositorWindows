@@ -64,6 +64,22 @@ void shape_smoothing_draft(){
     auto ordinary=style;
     ordinary.smoothing=false;
     REQUIRE(added(p).raster->rgba()!=editing::shapeRaster(ordinary,80,60)->rgba());
+    REQUIRE(smoothing->isChecked());
+
+    radius(w)->setValue(20);
+    emit radius(w)->editingFinished();
+    auto resizedCorners=style;
+    resizedCorners.cornerRadius=20;
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson)==resizedCorners&&smoothing->isChecked());
+    REQUIRE(p.history.undoCount()==2&&p.history.undoName()=="Shape Style");
+
+    down(p,{14,16});
+    move(p,{86,68});
+    REQUIRE(p.canvas->shapeDraft()&&!p.canvas->shapeDraft()->style.smoothing);
+    p.canvas->pointerCancel();
+    REQUIRE(smoothing->isChecked()&&p.history.undoCount()==2);
+    draw(p,{14,16},{86,68});
+    REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).smoothing&&!smoothing->isChecked());
 }
 void shape_smoothing_history(){
     MainWindow w(true);

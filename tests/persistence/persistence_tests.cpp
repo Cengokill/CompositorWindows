@@ -83,8 +83,31 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
     reopened=editing::redrawShape(reopened);
     check(reopened.raster->rgba()==editing::shapeRaster(style,120,80)->rgba(),"Reopened shape did not resize with smoothing");
 
-    mutate(p,[](auto& manifest){manifest["version"]=16;});
-    rejects([&]{actual.load(p);});
+    auto legacyDocument=d;
+    legacyDocument.layers[0].raster=ordinary.raster;
+    legacyDocument.layers[0].shapeJson=ordinary.shapeJson;
+    const auto cachedPixels=ordinary.raster->rgba();
+    for(int version:{7,14,16}){
+        actual.save(p,legacyDocument,active);
+        mutate(p,[version](auto& manifest){manifest["version"]=version;});
+        mutateLayer(p,[](auto& layer){
+            auto shape=layer["shape"].toObject();
+            shape["smoothing"]=true;
+            layer["shape"]=shape;
+        });
+        const auto legacy=actual.load(p);
+        const auto& layer=legacy.document.layers[0];
+        check(legacy.readVersion==version&&legacy.activeLayer==active,"Legacy smooth project identity changed");
+        check(editing::decodeShapeStyle(layer.shapeJson)==style,"Legacy smooth style was lost");
+        check(layer.raster&&layer.raster->rgba()==cachedPixels,"Legacy cached shape pixels changed on load");
+
+        actual.save(p,legacy.document,legacy.activeLayer);
+        const auto migrated=actual.load(p);
+        const auto& migratedLayer=migrated.document.layers[0];
+        check(migrated.readVersion==17&&migrated.activeLayer==active,"Legacy smooth project did not migrate to format v17");
+        check(editing::decodeShapeStyle(migratedLayer.shapeJson)==style,"Migrated smooth style was lost");
+        check(migratedLayer.raster&&migratedLayer.raster->rgba()==cachedPixels,"Legacy cached shape pixels changed on resave");
+    }
     actual.save(p,d,active);
     mutateLayer(p,[](auto& layer){
         auto shape=layer["shape"].toObject();
