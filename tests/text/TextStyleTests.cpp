@@ -69,6 +69,32 @@ void font_range(){
     REQUIRE(text.fontFamily=="Courier New"&&text.fontRuns.empty());
     setTextSize(text,72);
     REQUIRE(text.fontSize==72&&textRunsValid(text));
+
+    setTextFont(text,"Segoe UI","Regular",1,2);
+    text.fontRuns[0].fontSize=36;
+    setTextFont(text,"Arial","Bold Italic",2,1);
+    REQUIRE(text.fontRuns.size()==2&&text.fontRuns[1].fontStyle=="Bold Italic"&&text.fontRuns[1].fontSize==36);
+    setTextFont(text,"Arial","Italic",0,0);
+    REQUIRE(text.fontFamily=="Arial"&&text.fontStyle=="Italic"&&text.fontSize==72);
+    REQUIRE(text.fontRuns.size()==1&&text.fontRuns[0].location==1&&text.fontRuns[0].length==2&&text.fontRuns[0].fontSize==36);
+    REQUIRE(text.fontRuns[0].fontFamily=="Arial"&&text.fontRuns[0].fontStyle=="Italic"&&textRunsValid(text));
+
+    auto multiline=sample("First line\nSecond line");
+    TextRun smaller;
+    smaller.length=utf16Length(multiline.value);
+    smaller.hasFont=true;
+    smaller.fontFamily=multiline.fontFamily;
+    smaller.fontSize=24;
+    multiline.fontRuns={smaller};
+    REQUIRE(textRunsValid(multiline));
+    const double leading=lineHeight(multiline);
+    setTextFont(multiline,"Arial","Bold",0,0);
+    REQUIRE(multiline.fontSize==48&&lineHeight(multiline)==leading);
+    REQUIRE(multiline.fontFamily=="Arial"&&multiline.fontStyle=="Bold");
+    REQUIRE(multiline.fontRuns.size()==1);
+    const auto& run=multiline.fontRuns.front();
+    REQUIRE(run.location==0&&run.length==smaller.length&&run.fontSize==24);
+    REQUIRE(run.fontFamily=="Arial"&&run.fontStyle=="Bold"&&textRunsValid(multiline));
 }
 void paragraph_layout(){
     const HRESULT started=CoInitializeEx(nullptr,COINIT_MULTITHREADED);

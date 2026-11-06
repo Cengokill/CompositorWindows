@@ -6,8 +6,10 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <cstdlib>
 #include <mutex>
@@ -118,6 +120,47 @@ SelectionOutline SelectionOutline::ellipse(Rect r,bool aa) {
 SelectionOutline SelectionOutline::roundedRectangle(Rect r,double radius,bool aa){
     rectCheck(r);if(!std::isfinite(radius))throw std::runtime_error("Invalid corner radius");radius=std::min({std::max(0.,radius),r.width/2,r.height/2});if(radius==0||r.empty())return rectangle(r,aa);
     ComPtr<ID2D1RoundedRectangleGeometry> g;auto rounded=D2D1::RoundedRect(D2D1::RectF(float(r.x),float(r.y),float(r.x+r.width),float(r.y+r.height)),float(radius),float(radius));check(factory()->CreateRoundedRectangleGeometry(rounded,&g));return SelectionOutline(std::make_shared<Impl>(Impl{g,aa}));
+}
+// Cubic–arc–cubic corner construction from upstream ShapeTool.swift (9f1d158).
+SelectionOutline SelectionOutline::smoothedRectangle(Rect rect, double radius) {
+    rectCheck(rect);
+    if(!std::isfinite(radius))throw std::runtime_error("Invalid corner radius");
+    const double halfSide=std::min(rect.width,rect.height)/2;
+    if(radius<=0||halfSide<=0)return rectangle(rect);
+    if(radius>=halfSide)return roundedRectangle(rect,radius);
+
+    const double smoothing=std::min(0.6,(halfSide-radius)/radius);
+    const double reach=std::min(halfSide,(1+smoothing)*radius);
+    const double angle=smoothing*std::numbers::pi/4;
+    const double arcSpan=radius*std::numbers::sqrt2*std::sin(std::numbers::pi/4-angle);
+    const double tangent=radius*std::tan(angle/2);
+    const double b=std::max(0.,(reach-arcSpan-tangent*(std::cos(angle)+std::sin(angle)))/3);
+    const double c=radius*std::sin(angle);
+    const double d=radius*(1-std::cos(angle));
+
+    ComPtr<ID2D1PathGeometry> path;
+    check(factory()->CreatePathGeometry(&path));
+    ComPtr<ID2D1GeometrySink> sink;
+    check(path->Open(&sink));
+    const std::array<Point,4> corners{{{rect.x+rect.width,rect.y},
+        {rect.x+rect.width,rect.y+rect.height},{rect.x,rect.y+rect.height},{rect.x,rect.y}}};
+    const std::array<Point,4> axes{{{1,0},{0,1},{-1,0},{0,-1}}};
+    for(size_t i=0;i<corners.size();++i){
+        const auto corner=corners[i];
+        const auto axis=axes[i];
+        const auto point=[&](double x,double y){
+            return D2D1::Point2F(float(corner.x+axis.x*x-axis.y*y),float(corner.y+axis.y*x+axis.x*y));
+        };
+        if(i==0)sink->BeginFigure(point(-reach,0),D2D1_FIGURE_BEGIN_FILLED);
+        else sink->AddLine(point(-reach,0));
+        sink->AddBezier(D2D1::BezierSegment(point(-reach+2*b,0),point(-reach+3*b,0),point(-radius+c,d)));
+        sink->AddArc(D2D1::ArcSegment(point(-d,radius-c),D2D1::SizeF(float(radius),float(radius)),
+            0,D2D1_SWEEP_DIRECTION_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+        sink->AddBezier(D2D1::BezierSegment(point(0,reach-3*b),point(0,reach-2*b),point(0,reach)));
+    }
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    check(sink->Close());
+    return SelectionOutline(std::make_shared<Impl>(Impl{path,true}));
 }
 SelectionOutline SelectionOutline::fromCoverage(const GrayRaster& mask,bool aa){
     if(mask.source){

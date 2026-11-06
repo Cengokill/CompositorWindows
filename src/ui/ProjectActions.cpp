@@ -138,6 +138,7 @@ void detach(NativeCanvas*canvas){
 }
 }
 MainWindow::~MainWindow(){
+    delete textFontPopup_.data();
     if(movePreviewJob_)movePreviewJob_->shutdown();
     if(viewportComposite_)viewportComposite_->shutdown();
     detachOpacityPercent();
@@ -170,10 +171,10 @@ void MainWindow::initializeProject(EditorProject&project){
     }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;
-    project.canvas->pointerDown=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerBegin(p,m);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
+    project.canvas->pointerDown=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerBegin(p.position,m,1,p.pressure);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerDoubleClick=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerBegin(p,m,2);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
-    project.canvas->pointerMove=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerUpdate(p,m);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
-    project.canvas->pointerUp=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerEnd(p,m);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
+    project.canvas->pointerMove=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerUpdate(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
+    project.canvas->pointerUp=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerEnd(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerCancel=[this]{pointerCancel();};project.canvas->pointerInterrupted=[this]{interruptPointer();};
     project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);};
     project.canvas->pointerLeave=[this]{clearBrushPointer();if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal){selectionGesture_.moveCursor({});refreshSelectionGesture();}};
@@ -209,6 +210,7 @@ void MainWindow::switchProject(){
     }
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();
     finishVisibilitySwipe();finishOpacityEdit();
+    if(textFontPopup_)textFontPopup_->hide();
     if(textSession_&&textSession_->owner==activeProject_)finishText();
     if(activeProject_)captureToolState(*activeProject_);
     if(transformSession_&&transformSession_->persistent)applyTransformSession();
@@ -221,7 +223,7 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
        (!importQueue_||!importQueue_->contains(projects_.front()->canvas)))return *projects_.front();
     const bool first=projects_.empty();auto project=std::make_unique<EditorProject>();auto*raw=project.get();
     raw->defaultTitle=first&&nextProjectNumber_==2?"Untitled":QString("Untitled %1").arg(nextProjectNumber_++);
-    initializeProject(*raw);applyRememberedSnapAndGrid(raw->toolState.snapPolicy,raw->toolState.layoutGrid);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
+    initializeProject(*raw);applyRememberedBrushPressure(raw->toolState.brushSettings);applyRememberedSnapAndGrid(raw->toolState.snapPolicy,raw->toolState.layoutGrid);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
     raw->welcome=new QWidget;raw->welcome->setObjectName("newCanvasWelcome");auto*outer=new QVBoxLayout(raw->welcome);outer->addStretch();
     auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setObjectName("newCanvasCard");panel->setMaximumWidth(440);
     panel->setStyleSheet("QWidget#newCanvasCard { background: #27292e; border: 1px solid #3b3e46; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");

@@ -1,14 +1,18 @@
 #include "MainWindow.h"
+#include "EditorIcons.h"
 #include "PaletteDialog.h"
 #include "PropertyControls.h"
 #include "text/TextStyle.h"
 #include <QApplication>
-#include <QFontComboBox>
-#include <QFontDatabase>
 #include <QComboBox>
 #include <QAbstractItemView>
+#include <QFont>
+#include <QHideEvent>
+#include <QKeyEvent>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMouseEvent>
+#include <QScreen>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -20,16 +24,15 @@
 #include <QStatusBar>
 #include <QInputMethodEvent>
 #include <QFontMetrics>
-#include <QHash>
-#include <QPainter>
-#include <QPixmap>
 #include <QRegularExpression>
-#include <QStyle>
-#include <QStyledItemDelegate>
+#include <QStringList>
+#include <QVariant>
+#include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <optional>
+#include <utility>
 
 namespace compositor {
 namespace {
@@ -176,34 +179,180 @@ void openComboOnFieldClick(QComboBox* combo){
     combo->installEventFilter(filter);
     if(combo->lineEdit())combo->lineEdit()->installEventFilter(filter);
 }
-class FontFamilyDelegate final:public QStyledItemDelegate{
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-    void paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index)const override{
-        QStyleOptionViewItem opt(option);initStyleOption(&opt,index);
-        const QString family=opt.text;opt.text.clear();opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
-        if(family.isEmpty())return;
-        const bool selected=option.state&QStyle::State_Selected;
-        const QColor color=option.palette.color(selected?QPalette::HighlightedText:QPalette::Text);
-        const int height=std::max(8,option.rect.height()-6);
-        const QString key=family+"|"+QString::number(height)+"|"+color.name()+"|"+QString::number(option.rect.width());
-        auto found=cache_.constFind(key);
-        if(found==cache_.cend()){
-            QFont font(family);font.setPixelSize(height);
-            QFontMetrics metrics(font);
-            const QString shown=metrics.elidedText(family,Qt::ElideRight,std::max(1,option.rect.width()-8));
-            QPixmap pixmap(std::max(1,metrics.horizontalAdvance(shown)+2),std::max(1,metrics.height()+2));
-            pixmap.fill(Qt::transparent);
-            QPainter mark(&pixmap);mark.setFont(font);mark.setPen(color);mark.drawText(QRect(0,0,pixmap.width(),pixmap.height()),Qt::AlignVCenter|Qt::AlignLeft,shown);
-            if(cache_.size()>512)cache_.clear();
-            found=cache_.insert(key,pixmap);
-        }
-        const QPixmap& pixmap=found.value();
-        painter->drawPixmap(option.rect.left()+4,option.rect.top()+(option.rect.height()-pixmap.height())/2,pixmap);
+text::FontFace textFaceAt(const TextContent& content,int start,int length){
+    if(length>0){
+        auto family=text::uniformFont(content,start,length);
+        if(family.empty())return {};
+        return {std::move(family),text::styleAt(content,start)};
     }
-    QSize sizeHint(const QStyleOptionViewItem&,const QModelIndex&)const override{return {180,22};}
+    const int index=std::max(0,start-1);
+    return {text::fontAt(content,index),text::styleAt(content,index)};
+}
+bool sameFontName(const std::string& left,const std::string& right){
+    return unitsOf(left).compare(unitsOf(right),Qt::CaseInsensitive)==0;
+}
+QString fontSearchKey(QString name){
+    static const QRegularExpression marks("\\p{M}");
+    return name.normalized(QString::NormalizationForm_D).toCaseFolded().remove(marks);
+}
+class TextFontPopup final:public QWidget{
+public:
+    TextFontPopup(QWidget* parent,QToolButton* anchor)
+        :QWidget(parent,Qt::Popup),anchor_(anchor){
+        setObjectName("textFontPopup");
+        setStyleSheet(R"(
+            QWidget#textFontPopup { background:#26282d; border:1px solid #454850; }
+            QListWidget#textFontResults { background:#26282d; border:0; outline:0; }
+            QListWidget#textFontResults::item { padding:4px 8px; min-height:20px; }
+            QListWidget#textFontResults::item:selected { background:#376dac; color:white; }
+        )");
+        auto* layout=new QVBoxLayout(this);
+        layout->setContentsMargins(8,8,8,8);
+        search_=new QLineEdit(this);
+        search_->setObjectName("textFontSearch");
+        search_->setAccessibleName("Search fonts");
+        search_->setPlaceholderText("Search fonts");
+        search_->setClearButtonEnabled(true);
+        results_=new QListWidget(this);
+        results_->setObjectName("textFontResults");
+        results_->setAccessibleName("Installed font faces");
+        results_->setFocusPolicy(Qt::NoFocus);
+        results_->setMouseTracking(true);
+        results_->setUniformItemSizes(true);
+        empty_=new QLabel("No matching fonts",this);
+        empty_->setAlignment(Qt::AlignCenter);
+        layout->addWidget(search_);
+        layout->addWidget(results_,1);
+        layout->addWidget(empty_,1);
+        search_->installEventFilter(this);
+        previewTimer_.setSingleShot(true);
+        previewTimer_.setInterval(80);
+        connect(&previewTimer_,&QTimer::timeout,this,[this]{
+            if(open_&&results_->currentItem())onPreview(faceAt(results_->currentItem()));
+        });
+        connect(search_,&QLineEdit::textChanged,this,[this](const QString& query){
+            previewTimer_.stop();
+            onPreview(nullptr);
+            refill(query);
+        });
+        connect(results_,&QListWidget::itemEntered,this,[this](QListWidgetItem* item){highlight(results_->row(item));});
+        connect(results_,&QListWidget::itemClicked,this,[this](QListWidgetItem* item){choose(item);});
+    }
+    void open(const text::FontFace& selected){
+        if(open_||!anchor_)return;
+        const auto catalog=text::installedFontFaces(true);
+        if(faces_!=catalog){
+            faces_=catalog;
+            labels_.clear();
+            keys_.clear();
+            for(const auto& face:*faces_){
+                labels_.push_back(unitsOf(face.family)+" — "+unitsOf(face.style));
+                keys_.push_back(fontSearchKey(labels_.back()));
+            }
+        }
+        initialFace_=text::installedFontFace(selected);
+        {
+            const QSignalBlocker block(search_);
+            search_->clear();
+        }
+        refill({});
+        const QPoint top=anchor_->mapToGlobal(QPoint(0,0));
+        const QPoint bottom=anchor_->mapToGlobal(QPoint(0,anchor_->height()));
+        const QRect area=anchor_->screen()->availableGeometry();
+        const int roomBelow=area.bottom()+1-bottom.y(),roomAbove=top.y()-area.top();
+        const bool below=roomBelow>=240||roomBelow>=roomAbove;
+        const int height=std::clamp(below?roomBelow:roomAbove,1,std::min(380,area.height()));
+        resize(std::min(340,area.width()),height);
+        move(std::clamp(top.x(),area.left(),area.right()+1-width()),
+             std::clamp(below?bottom.y():top.y()-this->height(),area.top(),std::max(area.top(),area.bottom()+1-this->height())));
+        open_=true;
+        show();
+        search_->setFocus(Qt::PopupFocusReason);
+        if(results_->currentItem())results_->scrollToItem(results_->currentItem(),QAbstractItemView::PositionAtCenter);
+    }
+    std::function<void(const text::FontFace*)> onPreview;
+    std::function<void(const text::FontFace*)> onClosed;
+    std::function<void()> onReturnFocus;
+protected:
+    bool eventFilter(QObject* watched,QEvent* event)override{
+        if(watched==search_&&event->type()==QEvent::KeyPress){
+            auto* key=static_cast<QKeyEvent*>(event);
+            switch(key->key()){
+            case Qt::Key_Up:
+            case Qt::Key_Down:
+                if(results_->count())highlight(std::clamp(results_->currentRow()+(key->key()==Qt::Key_Up?-1:1),0,results_->count()-1));
+                return true;
+            case Qt::Key_Return:
+            case Qt::Key_Enter:
+                if(key->modifiers()==Qt::NoModifier||key->modifiers()==Qt::KeypadModifier)choose(results_->currentItem());
+                return true;
+            case Qt::Key_Escape:
+                if(search_->text().isEmpty())closeFromPicker(nullptr);else search_->clear();
+                return true;
+            default: break;
+            }
+        }
+        return QWidget::eventFilter(watched,event);
+    }
+    void mousePressEvent(QMouseEvent* event)override{
+        if(anchor_&&anchor_->rect().contains(anchor_->mapFromGlobal(event->globalPosition().toPoint())))
+            setAttribute(Qt::WA_NoMouseReplay);
+        QWidget::mousePressEvent(event);
+    }
+    void hideEvent(QHideEvent* event)override{
+        QWidget::hideEvent(event);
+        if(!std::exchange(open_,false))return;
+        previewTimer_.stop();
+        onClosed(std::exchange(chosen_,nullptr));
+    }
 private:
-    mutable QHash<QString,QPixmap> cache_;
+    const text::FontFace* faceAt(const QListWidgetItem* item)const{
+        return &(*faces_)[item->data(Qt::UserRole).toULongLong()];
+    }
+    void refill(const QString& query){
+        static const QRegularExpression whitespace("\\s+",QRegularExpression::UseUnicodePropertiesOption);
+        const auto terms=fontSearchKey(query).split(whitespace,Qt::SkipEmptyParts);
+        results_->clear();
+        int current=-1;
+        for(qsizetype i=0;i<labels_.size();++i){
+            if(!std::all_of(terms.cbegin(),terms.cend(),[&](const QString& word){return keys_[i].contains(word);}))continue;
+            const auto& face=(*faces_)[size_t(i)];
+            if(terms.isEmpty()&&face==initialFace_)current=results_->count();
+            auto* item=new QListWidgetItem(labels_[i],results_);
+            item->setData(Qt::UserRole,QVariant::fromValue(qulonglong(i)));
+            QFont font=results_->font();
+            font.setFamily(unitsOf(face.family));
+            font.setStyleName(unitsOf(face.style));
+            item->setFont(font);
+        }
+        const bool hasResults=results_->count()>0;
+        results_->setVisible(hasResults);
+        empty_->setVisible(!hasResults);
+        results_->setCurrentRow(hasResults&&!terms.isEmpty()?0:current);
+    }
+    void highlight(int row){
+        results_->setCurrentRow(row);
+        results_->scrollToItem(results_->currentItem());
+        previewTimer_.start();
+    }
+    void choose(QListWidgetItem* item){
+        if(item)closeFromPicker(faceAt(item));
+    }
+    void closeFromPicker(const text::FontFace* face){
+        chosen_=face;
+        hide();
+        onReturnFocus();
+    }
+    QPointer<QToolButton> anchor_;
+    std::shared_ptr<const std::vector<text::FontFace>> faces_;
+    text::FontFace initialFace_;
+    QStringList labels_,keys_;
+    QLineEdit* search_{};
+    QListWidget* results_{};
+    QLabel* empty_{};
+    QTimer previewTimer_;
+    const text::FontFace* chosen_{};
+    bool open_{};
 };
 std::pair<int,int> wordRange(const QString& text,int index){
     if(text.isEmpty())return {0,0};
@@ -217,13 +366,13 @@ std::pair<int,int> wordRange(const QString& text,int index){
 }
 void MainWindow::setupTypeControls(){
     auto* bar=addToolBar("Type Options");bar->setObjectName("typeOptions");
-    auto* fonts=new QFontComboBox;fonts->setObjectName("textFont");fonts->setAccessibleName("Text font");fonts->setFixedWidth(180);fonts->setItemDelegate(new FontFamilyDelegate(fonts));
-    fonts->setEditable(true);fonts->lineEdit()->setReadOnly(true);fonts->lineEdit()->setPlaceholderText("Multiple");
-    fonts->setCurrentFont(QFont(QString::fromStdString(textDefaults_.fontFamily)));
+    auto* fonts=new QToolButton;fonts->setObjectName("textFont");fonts->setAccessibleName("Text font");fonts->setFixedWidth(180);
+    fonts->setFocusPolicy(Qt::StrongFocus);fonts->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    fonts->setIcon(ui::editorIcon(ui::EditorIcon::ChevronDown));fonts->setIconSize({12,12});
     auto* styles=new QComboBox;styles->setObjectName("textStyle");styles->setAccessibleName("Text style");styles->setFixedWidth(120);
     styles->setEditable(true);styles->lineEdit()->setReadOnly(true);styles->lineEdit()->setPlaceholderText("Multiple");
-    openComboOnFieldClick(fonts);openComboOnFieldClick(styles);
-    textFontBox_=fonts;textStyleBox_=styles;
+    openComboOnFieldClick(styles);
+    textStyleBox_=styles;
     auto* size=new ui::PropertyNumber;size->setObjectName("textSize");size->setAccessibleName("Text size");size->setRange(1,1000);size->setDecimals(0);size->setValue(textDefaults_.fontSize);size->setSuffix(" px");
     size->releaseFocus=[this]{focusTextCanvas();};
     auto* color=new QToolButton;color->setObjectName("textColor");color->setAccessibleName("Text color");color->setFixedSize(36,22);
@@ -237,32 +386,37 @@ void MainWindow::setupTypeControls(){
     bar->addWidget(fonts);bar->addWidget(styles);bar->addWidget(size);bar->addWidget(color);
     addAlign("textAlignLeft","Align left",TextAlignment::Left);addAlign("textAlignCenter","Align center",TextAlignment::Center);addAlign("textAlignRight","Align right",TextAlignment::Right);
     bar->addWidget(tracking);bar->addWidget(leading);bar->addAction(cancel);bar->addAction(done);
-    connect(fonts,&QFontComboBox::currentFontChanged,this,[this,fonts](const QFont& font){if(refreshing_||fonts->property("typePopupQuiet").toBool()||(fonts->view()&&fonts->view()->isVisible()))return;applyTextFont(font.family().toStdString());});
-    auto* fontTimer=new QTimer(fonts);fontTimer->setSingleShot(true);fontTimer->setInterval(80);
-    connect(fonts,&QComboBox::highlighted,this,[fonts,fontTimer](int index){if(index<0||fonts->property("typePopupQuiet").toBool()||!fonts->view()||!fonts->view()->isVisible()||index==fonts->currentIndex())return;fontTimer->setProperty("family",fonts->itemText(index));fontTimer->start();});
-    connect(fontTimer,&QTimer::timeout,this,[this,fonts,fontTimer]{if(!fonts->view()||!fonts->view()->isVisible())return;previewTextFont(fontTimer->property("family").toString().toStdString());});
-    connect(fonts,qOverload<int>(&QComboBox::activated),this,[this,fonts](int index){
-        if(index<0)return;
-        fontChoiceKept_=true;
-        keepTextFontPreview();
-        if(!refreshing_)applyTextFont(fonts->itemText(index).toStdString());
-        if(!refreshing_)publishTextEdit();
-        QTimer::singleShot(0,this,[this]{focusTextCanvas();});
+    connect(fonts,&QToolButton::clicked,this,[this,fonts]{
+        auto* popup=static_cast<TextFontPopup*>(textFontPopup_.data());
+        if(!popup){
+            popup=new TextFontPopup(this,fonts);
+            textFontPopup_=popup;
+            popup->onPreview=[this](const text::FontFace* face){
+                if(face)setTextFontFace(*face,true);else endTextFontPreview();
+            };
+            popup->onClosed=[this](const text::FontFace* face){
+                if(face)setTextFontFace(*face,false);else endTextFontPreview();
+            };
+            popup->onReturnFocus=[this]{
+                // Hiding a popup can leave its owner inactive until Qt processes the focus change.
+                activateWindow();
+                focusTextCanvas();
+            };
+        }
+        const bool editing=textSession_&&textSession_->owner==current();
+        const int start=editing?std::min(textSession_->caret,textSession_->anchor):0;
+        const int length=editing?std::abs(textSession_->caret-textSession_->anchor):0;
+        popup->open(textFaceAt(editing?textSession_->style:textDefaults_,start,length));
+        refreshTypeControls();
     });
-    auto* styleTimer=new QTimer(styles);styleTimer->setSingleShot(true);styleTimer->setInterval(80);
+    auto* styleTimer=new QTimer(styles);styleTimer->setObjectName("textStylePreviewTimer");styleTimer->setSingleShot(true);styleTimer->setInterval(80);
     connect(styles,&QComboBox::highlighted,this,[styles,styleTimer](int index){if(index<0||styles->property("typePopupQuiet").toBool()||!styles->view()||!styles->view()->isVisible()||index==styles->currentIndex())return;styleTimer->setProperty("style",styles->itemText(index));styleTimer->start();});
-    connect(styleTimer,&QTimer::timeout,this,[this,styles,styleTimer]{if(!styles->view()||!styles->view()->isVisible())return;previewTextStyle(styleTimer->property("style").toString().toStdString());});
-    connect(styles,qOverload<int>(&QComboBox::activated),this,[this,styles](int index){
+    connect(styleTimer,&QTimer::timeout,this,[this,styles,styleTimer]{if(!styles->view()||!styles->view()->isVisible())return;setTextStyle(styleTimer->property("style").toString().toStdString(),true);});
+    connect(styles,qOverload<int>(&QComboBox::activated),this,[this,styles,styleTimer](int index){
         if(index<0)return;
-        fontChoiceKept_=true;
-        keepTextFontPreview();
-        if(!refreshing_)applyTextStyle(styles->itemText(index).toStdString());
-        if(!refreshing_)publishTextEdit();
+        styleTimer->stop();
+        if(!refreshing_)setTextStyle(styles->itemText(index).toStdString(),false);
         QTimer::singleShot(0,this,[this]{focusTextCanvas();});
-    });
-    connect(styles,qOverload<int>(&QComboBox::currentIndexChanged),this,[this,styles](int index){
-        if(refreshing_||index<0||styles->property("typePopupQuiet").toBool()||(styles->view()&&styles->view()->isVisible()))return;
-        applyTextStyle(styles->itemText(index).toStdString());
     });
     connect(size,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this](double value){if(!refreshing_)applyTextSize(value);});
     connect(align,&QButtonGroup::idClicked,this,[this](int id){if(!refreshing_)applyTextAlignment(TextAlignment(id));});
@@ -293,32 +447,47 @@ void MainWindow::setupTypeControls(){
     addAction(applyForeground);
 }
 void MainWindow::refreshTypeControls(){
-    auto* fonts=findChild<QFontComboBox*>("textFont");auto* styles=findChild<QComboBox*>("textStyle");auto* size=findChild<QDoubleSpinBox*>("textSize");auto* color=findChild<QToolButton*>("textColor");
+    auto* fonts=findChild<QToolButton*>("textFont");auto* styles=textStyleBox_.data();auto* size=findChild<QDoubleSpinBox*>("textSize");auto* color=findChild<QToolButton*>("textColor");
     auto* tracking=findChild<QDoubleSpinBox*>("textTracking");auto* leading=findChild<QLineEdit*>("textLeading");
     auto* previousFocus=QApplication::focusWidget();
-    const bool editingTypeField=previousFocus&&((fonts&&(previousFocus==fonts||fonts->isAncestorOf(previousFocus)))||(styles&&(previousFocus==styles||styles->isAncestorOf(previousFocus)))||(size&&(previousFocus==size||size->isAncestorOf(previousFocus)))||(tracking&&(previousFocus==tracking||tracking->isAncestorOf(previousFocus)))||leading==previousFocus);
+    const bool editingTypeField=previousFocus&&(previousFocus==fonts||(textFontPopup_&&textFontPopup_->isAncestorOf(previousFocus))||(styles&&(previousFocus==styles||styles->isAncestorOf(previousFocus)))||(size&&(previousFocus==size||size->isAncestorOf(previousFocus)))||(tracking&&(previousFocus==tracking||tracking->isAncestorOf(previousFocus)))||leading==previousFocus);
     const bool editing=textSession_&&textSession_->owner==current();
-    const TextContent& style=editing?textSession_->style:textDefaults_;
+    const bool available=tool_==Tool::Text||editing;
+    if(!available&&textFontPopup_)textFontPopup_->hide();
+    const TextContent& style=editing?(textSession_->fontPreviewOriginal?*textSession_->fontPreviewOriginal:textSession_->style):textDefaults_;
     const int start=editing?std::min(textSession_->caret,textSession_->anchor):0,length=editing?std::abs(textSession_->caret-textSession_->anchor):0;
-    const auto family=length>0?text::uniformFont(style,start,length):text::fontAt(style,std::max(0,start-1));
-    const auto variant=length>0?text::uniformStyle(style,start,length):text::styleAt(style,std::max(0,start-1));
-    const bool mixed=length>0&&family.empty();
-    if(fonts){const QSignalBlocker block(fonts);if(const int marker=fonts->findText("Multiple");marker>=0&&!mixed)fonts->removeItem(marker);if(mixed){if(fonts->findText("Multiple")<0)fonts->insertItem(0,"Multiple");fonts->setCurrentIndex(fonts->findText("Multiple"));}else if(!family.empty()&&!(editing&&textSession_->fontPreviewOriginal)){const QString wanted=QString::fromStdString(family);if(fonts->currentFont().family()!=wanted)fonts->setCurrentFont(QFont(wanted));}fonts->setEnabled(tool_==Tool::Text||editing);}
-    else if(fonts)fonts->setEnabled(true);
-    if(styles){const QSignalBlocker block(styles);
-        if(mixed){if(styles->findText("Multiple")<0){styles->clear();styles->addItem("Multiple");}styles->setCurrentIndex(styles->findText("Multiple"));}
-        else if(!(editing&&textSession_->fontPreviewOriginal)){
-            QString listed=QString::fromStdString(family.empty()?style.fontFamily:family);
-            if(listed.isEmpty()&&fonts)listed=fonts->currentFont().family();
-            static QString cachedStyleFamily;static QStringList cachedStyleNames;
-            if(listed!=cachedStyleFamily){cachedStyleNames=QFontDatabase::styles(listed);if(cachedStyleNames.isEmpty()&&fonts)cachedStyleNames=QFontDatabase::styles(fonts->currentFont().family());cachedStyleFamily=listed;}
-            auto names=cachedStyleNames;
-            if(names.isEmpty())names=QStringList{"Regular","Bold","Italic","Bold Italic"};
-            if(styles->count()!=names.size()||(styles->count()&&styles->itemText(0)!=names.value(0))){styles->clear();for(const auto& name:names)styles->addItem(name);}
-            QString wanted=QString::fromStdString(variant.empty()?std::string("Regular"):variant);
-            int found=styles->findText(wanted);if(found<0)found=styles->findText(wanted,Qt::MatchContains);if(found>=0)styles->setCurrentIndex(found);
+    const auto face=textFaceAt(style,start,length);
+    if(fonts){
+        const QString label=face.family.empty()?QString("Multiple"):unitsOf(face.family);
+        fonts->setText(fonts->fontMetrics().elidedText(label,Qt::ElideRight,fonts->width()-42));
+        const QString description=face.style.empty()?label:label+" — "+unitsOf(face.style);
+        fonts->setToolTip(description);
+        fonts->setAccessibleDescription(description);
+        fonts->setEnabled(available);
+    }
+    if(styles){
+        const QSignalBlocker block(styles);
+        if(available){
+            const QString family=unitsOf(face.family);
+            const auto catalog=text::installedFontFaces();
+            if(textStylesFamily_!=family||textStylesCatalog_!=catalog){
+                styles->clear();
+                if(!family.isEmpty())for(const auto& installed:*catalog){
+                    if(sameFontName(face.family,installed.family))styles->addItem(unitsOf(installed.style));
+                }
+                textStylesFamily_=family;
+                textStylesCatalog_=catalog;
+            }
+            const QString wanted=face.family.empty()||face.style.empty()?QString("Multiple"):unitsOf(face.style);
+            styles->setCurrentIndex(face.family.empty()? -1:styles->findText(wanted,Qt::MatchFixedString));
+            if(styles->currentIndex()<0){
+                // The project may refer to a face that is absent on this machine.
+                styles->lineEdit()->setText(wanted);
+                styles->setAccessibleDescription(wanted);
+            }else styles->setAccessibleDescription(QString());
         }
-        styles->setEnabled(tool_==Tool::Text||editing);}
+        styles->setEnabled(available&&styles->count()>0);
+    }
     if(size){const QSignalBlocker block(size);size->setValue(style.fontSize);size->setEnabled(tool_==Tool::Text||editing);}
     if(color){double red=style.red,green=style.green,blue=style.blue;if(editing)text::colorAt(style,length>0?start:std::max(0,start-1),red,green,blue);color->setEnabled(editing);color->setStyleSheet(QString("background:%1;border:1px solid palette(mid);").arg(QColor::fromRgbF(red,green,blue).name()));}
     if(auto* group=findChild<QButtonGroup*>("textAlign")){const QSignalBlocker block(group);if(auto* button=group->button(int(style.alignment)))button->setChecked(true);for(auto* button:group->buttons())button->setEnabled(editing);}
@@ -328,13 +497,13 @@ void MainWindow::refreshTypeControls(){
     if(previousFocus&&!editingTypeField&&previousFocus!=QApplication::focusWidget())previousFocus->setFocus(Qt::OtherFocusReason);
     if(auto* view=canvas();view&&tool_==Tool::Text&&!spaceHeld_)view->setCursor(Qt::IBeamCursor);
 }
-void MainWindow::publishTextEdit(){
-    if(!textSession_||!textSession_->owner)return;
+bool MainWindow::publishTextEdit(){
+    if(!textSession_||!textSession_->owner)return false;
     auto& session=*textSession_;
     TextContent shown=session.style;
     if(!session.preedit.empty()){auto withMark=shown;if(text::replaceText(withMark,session.caret,0,session.preedit))shown=std::move(withMark);}
     const auto previousRaster=session.layout.raster;const int previousWidth=session.layout.width,previousHeight=session.layout.height;
-    try{session.layout=text::layoutText(shown);}catch(const std::exception& error){statusBar()->showMessage(error.what());return;}
+    try{session.layout=text::layoutText(shown);}catch(const std::exception& error){statusBar()->showMessage(error.what());return false;}
     const bool glyphsChanged=session.layout.raster!=previousRaster||session.layout.width!=previousWidth||session.layout.height!=previousHeight;
     const auto& layout=session.layout;
     Layer* existing=nullptr;
@@ -401,13 +570,13 @@ void MainWindow::publishTextEdit(){
         session.owner->textPreview=std::move(preview);
     }else session.owner->textPreview.reset();
     if(session.owner->canvas)session.owner->canvas->setTextOverlay(std::move(overlay));
-    if(session.fontPreviewOriginal){if(session.owner->canvas)session.owner->canvas->update();return;}
+    if(session.fontPreviewOriginal){if(session.owner->canvas)session.owner->canvas->update();return true;}
     const int selStart=std::min(session.caret,session.anchor),selLength=std::abs(session.caret-session.anchor);
-    const auto face=selLength>0?text::uniformFont(session.style,selStart,selLength):text::fontAt(session.style,std::max(0,selStart-1));
-    const auto variant=selLength>0?text::uniformStyle(session.style,selStart,selLength):text::styleAt(session.style,std::max(0,selStart-1));
-    const bool toolbarChanged=face!=session.toolbarFace||variant!=session.toolbarVariant;
-    session.toolbarFace=face;session.toolbarVariant=variant;
+    const auto face=textFaceAt(session.style,selStart,selLength);
+    const bool toolbarChanged=face.family!=session.toolbarFace||face.style!=session.toolbarVariant;
+    session.toolbarFace=face.family;session.toolbarVariant=face.style;
     if(session.owner==current()){if(glyphsChanged)refresh(true,false);else if(toolbarChanged)refresh(false,false);}
+    return true;
 }
 void MainWindow::beginText(Point point,bool forceNew,bool extend,int clickCount){
     if(!canEditLayers()||!current()||!current()->document)return;
@@ -549,6 +718,7 @@ void MainWindow::updateTextCaret(Point point){
 }
 bool MainWindow::finishText(){
     textSelecting_=false;
+    if(textFontPopup_)textFontPopup_->hide();
     if(!textSession_)return true;
     endTextFontPreview();
     auto session=std::move(*textSession_);textSession_.reset();
@@ -584,12 +754,13 @@ bool MainWindow::finishText(){
                 commit("Edit Text",[&](Document& document){auto layer=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& item){return item.id==id;});if(layer==document.layers.end())return;layer->text=session.style;layer->raster=drawn.raster;layer->transform.x=session.originX;layer->transform.y=session.originY;layer->transform.width=width;layer->transform.height=height;});
             }
         }
-        textDefaults_.fontFamily=session.style.fontFamily;textDefaults_.fontSize=session.style.fontSize;
+        textDefaults_.fontFamily=session.style.fontFamily;textDefaults_.fontStyle=session.style.fontStyle;textDefaults_.fontSize=session.style.fontSize;
         clear();if(project==current())refresh();return true;
     }catch(const std::exception& error){if(!textSession_)textSession_=std::move(session);statusBar()->showMessage(error.what());if(textSession_)publishTextEdit();return false;}
 }
 void MainWindow::cancelText(){
     textSelecting_=false;
+    if(textFontPopup_)textFontPopup_->hide();
     if(!textSession_)return;auto* project=textSession_->owner;textSession_.reset();
     if(project){project->textPreview.reset();if(project->canvas)project->canvas->setTextOverlay({});}
     if(project==current())refresh(false,false);
@@ -604,61 +775,59 @@ bool MainWindow::undoTextTyping(bool redo){
     textSession_->style=step.style;textSession_->caret=step.caret;textSession_->anchor=step.anchor;textSession_->preedit.clear();
     publishTextEdit();return true;
 }
-std::string selectedStyleName(MainWindow* window,const TextContent& style,int index){
-    if(auto* styles=window->findChild<QComboBox*>("textStyle");styles&&styles->currentIndex()>=0){const auto name=styles->currentText().toStdString();if(!name.empty())return name;}
-    const auto current=text::styleAt(style,std::max(0,index));
-    return current.empty()?"Regular":current;
-}
-void MainWindow::previewTextFont(const std::string& family){
-    if(!textSession_||family.empty())return;
-    if(!textSession_->fontPreviewOriginal)textSession_->fontPreviewOriginal=textSession_->style;
-    auto next=*textSession_->fontPreviewOriginal;
-    const int start=std::min(textSession_->caret,textSession_->anchor),length=std::abs(textSession_->caret-textSession_->anchor);
-    text::setTextFont(next,family,selectedStyleName(this,next,length?start:start-1),start,length);
-    if(!text::textRunsValid(next))return;
-    textSession_->style=std::move(next);publishTextEdit();
-}
-void MainWindow::previewTextStyle(const std::string& style){
-    if(!textSession_||style.empty())return;
-    if(!textSession_->fontPreviewOriginal)textSession_->fontPreviewOriginal=textSession_->style;
-    auto next=*textSession_->fontPreviewOriginal;
-    const int start=std::min(textSession_->caret,textSession_->anchor),length=std::abs(textSession_->caret-textSession_->anchor);
-    const auto family=length>0&&!text::uniformFont(next,start,length).empty()?text::uniformFont(next,start,length):text::fontAt(next,length?start:std::max(0,start-1));
-    text::setTextFont(next,family.empty()?next.fontFamily:family,style,start,length);
-    if(!text::textRunsValid(next))return;
-    textSession_->style=std::move(next);publishTextEdit();
-}
-void MainWindow::keepTextFontPreview(){
-    if(!textSession_||!textSession_->fontPreviewOriginal)return;
-    textSession_->undo.push_back({*textSession_->fontPreviewOriginal,textSession_->caret,textSession_->anchor});
-    textSession_->redo.clear();textSession_->fontPreviewOriginal.reset();
-}
 void MainWindow::endTextFontPreview(){
     if(!textSession_||!textSession_->fontPreviewOriginal)return;
-    textSession_->style=*textSession_->fontPreviewOriginal;textSession_->fontPreviewOriginal.reset();publishTextEdit();
+    textSession_->style=std::move(*textSession_->fontPreviewOriginal);textSession_->fontPreviewOriginal.reset();publishTextEdit();
 }
-void MainWindow::applyTextFont(const std::string& family){
-    if(family.empty()||family=="Multiple")return;
-    if(!textSession_){textDefaults_.fontFamily=family;return;}
-    if(textSession_->fontPreviewOriginal)return;
-    auto next=textSession_->style;
-    const int start=std::min(textSession_->caret,textSession_->anchor),length=std::abs(textSession_->caret-textSession_->anchor);
-    text::setTextFont(next,family,selectedStyleName(this,next,length?start:start-1),start,length);
-    if(next.fontFamily==textSession_->style.fontFamily&&next.fontStyle==textSession_->style.fontStyle&&next.fontRuns==textSession_->style.fontRuns)return;
-    if(!text::textRunsValid(next))return;
-    textSession_->undo.push_back({textSession_->style,textSession_->caret,textSession_->anchor});textSession_->redo.clear();
-    textSession_->style=std::move(next);publishTextEdit();
+void MainWindow::setTextFontFace(const text::FontFace& face,bool preview){
+    if(face.family.empty()||face.style.empty())return;
+    if(!textSession_){
+        if(!preview){
+            text::setTextFont(textDefaults_,face.family,face.style,0,0);
+            refreshTypeControls();
+        }
+        return;
+    }
+    auto& session=*textSession_;
+    if(session.owner!=current())return;
+    const bool hadPreview=session.fontPreviewOriginal.has_value();
+    const auto& original=hadPreview?*session.fontPreviewOriginal:session.style;
+    auto next=original;
+    const int start=std::min(session.caret,session.anchor),length=std::abs(session.caret-session.anchor);
+    text::setTextFont(next,face.family,face.style,start,length);
+    if(next==original){
+        endTextFontPreview();
+        return;
+    }
+    if(!text::textRunsValid(next)){
+        if(!preview)endTextFontPreview();
+        return;
+    }
+    auto previous=std::exchange(session.style,std::move(next));
+    if(preview){
+        if(!hadPreview)session.fontPreviewOriginal=previous;
+        if(!publishTextEdit()){
+            session.style=std::move(previous);
+            if(!hadPreview)session.fontPreviewOriginal.reset();
+        }
+        return;
+    }
+    auto before=hadPreview?std::move(*session.fontPreviewOriginal):std::move(previous);
+    session.fontPreviewOriginal.reset();
+    if(!publishTextEdit()){
+        session.style=std::move(before);
+        publishTextEdit();
+        return;
+    }
+    session.undo.push_back({std::move(before),session.caret,session.anchor});
+    session.redo.clear();
 }
-void MainWindow::applyTextStyle(const std::string& style){
-    if(!textSession_||style.empty()||style=="Multiple"||textSession_->fontPreviewOriginal)return;
-    auto next=textSession_->style;
-    const int start=std::min(textSession_->caret,textSession_->anchor),length=std::abs(textSession_->caret-textSession_->anchor);
-    const auto family=length>0&&!text::uniformFont(next,start,length).empty()?text::uniformFont(next,start,length):text::fontAt(next,length?start:std::max(0,start-1));
-    text::setTextFont(next,family.empty()?next.fontFamily:family,style,start,length);
-    if(next.fontStyle==textSession_->style.fontStyle&&next.fontRuns==textSession_->style.fontRuns)return;
-    if(!text::textRunsValid(next))return;
-    textSession_->undo.push_back({textSession_->style,textSession_->caret,textSession_->anchor});textSession_->redo.clear();
-    textSession_->style=std::move(next);publishTextEdit();
+void MainWindow::setTextStyle(const std::string& style,bool preview){
+    if(style.empty())return;
+    const auto& original=textSession_?(textSession_->fontPreviewOriginal?*textSession_->fontPreviewOriginal:textSession_->style):textDefaults_;
+    const int start=textSession_?std::min(textSession_->caret,textSession_->anchor):0;
+    const int length=textSession_?std::abs(textSession_->caret-textSession_->anchor):0;
+    setTextFontFace({textFaceAt(original,start,length).family,style},preview);
 }
 void MainWindow::applyTextSize(double size){
     if(!textSession_){text::setTextSize(textDefaults_,size);return;}

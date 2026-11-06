@@ -22,6 +22,7 @@ public:
     SelectionOutline();
     static SelectionOutline rectangle(Rect, bool antialiased = true);
     static SelectionOutline roundedRectangle(Rect, double radius, bool antialiased = true);
+    static SelectionOutline smoothedRectangle(Rect, double radius);
     static SelectionOutline ellipse(Rect, bool antialiased = true);
     static SelectionOutline polygon(std::span<const Point>, bool antialiased = true);
     // Exact pinned wand_trace: every NONZERO pixel is selected; holes retain

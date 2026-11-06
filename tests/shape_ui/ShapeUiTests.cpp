@@ -31,5 +31,78 @@ void shape_style_loads_from_selected_layer(){MainWindow w(true);auto d=fixture()
 void shape_controls_edit_selected_layer(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);const auto id=p.active;const auto fill=editing::decodeShapeStyle(added(p).shapeJson);w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->setValue(3);const auto style=editing::decodeShapeStyle(added(p).shapeJson);REQUIRE(p.active==id&&style.strokeEnabled&&style.strokeWidth==3);REQUIRE(style.red==fill.red&&style.green==fill.green&&style.blue==fill.blue);REQUIRE(p.history.undoName()=="Shape Style");}
 QAction* command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
 void shape_undo_resyncs_bar(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);auto*stroke=w.findChild<QCheckBox*>("shapeStroke");auto*width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");stroke->setChecked(true);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);command(w,"edit.undo")->trigger();REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled&&!stroke->isChecked());width->setValue(4);REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
+void shape_smoothing_draft(){
+    MainWindow w(true);
+    auto d=fixture();
+    auto& p=w.addProject(d);
+    shapeTool(w);
+    auto* smoothing=w.findChild<QCheckBox*>("shapeSmoothing");
+    REQUIRE(smoothing&&!smoothing->isChecked()&&!smoothing->isHidden());
+    kind(w)->setCurrentIndex(1);
+    REQUIRE(smoothing->isHidden());
+    kind(w)->setCurrentIndex(2);
+    REQUIRE(smoothing->isHidden());
+    kind(w)->setCurrentIndex(0);
+    REQUIRE(!smoothing->isHidden());
+    radius(w)->setValue(15);
+    smoothing->setChecked(true);
+
+    down(p,{10,12});
+    move(p,{90,72});
+    REQUIRE(p.canvas->shapeDraft()&&p.canvas->shapeDraft()->style.smoothing);
+    p.canvas->pointerCancel();
+    REQUIRE(!p.canvas->shapeDraft()&&p.document==d&&p.history.undoCount()==0);
+
+    down(p,{10,12});
+    move(p,{90,72});
+    smoothing->setChecked(false);
+    REQUIRE(p.canvas->shapeDraft()&&p.canvas->shapeDraft()->style.smoothing);
+    up(p,{90,72});
+    REQUIRE(!p.canvas->shapeDraft()&&p.history.undoCount()==1);
+    const auto style=editing::decodeShapeStyle(added(p).shapeJson);
+    REQUIRE(style.smoothing&&style.cornerRadius==15);
+    auto ordinary=style;
+    ordinary.smoothing=false;
+    REQUIRE(added(p).raster->rgba()!=editing::shapeRaster(ordinary,80,60)->rgba());
+    REQUIRE(smoothing->isChecked());
+
+    radius(w)->setValue(20);
+    emit radius(w)->editingFinished();
+    auto resizedCorners=style;
+    resizedCorners.cornerRadius=20;
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson)==resizedCorners&&smoothing->isChecked());
+    REQUIRE(p.history.undoCount()==2&&p.history.undoName()=="Shape Style");
+
+    down(p,{14,16});
+    move(p,{86,68});
+    REQUIRE(p.canvas->shapeDraft()&&!p.canvas->shapeDraft()->style.smoothing);
+    p.canvas->pointerCancel();
+    REQUIRE(smoothing->isChecked()&&p.history.undoCount()==2);
+    draw(p,{14,16},{86,68});
+    REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).smoothing&&!smoothing->isChecked());
+}
+void shape_smoothing_history(){
+    MainWindow w(true);
+    auto& p=w.addProject(fixture());
+    shapeTool(w);
+    radius(w)->setValue(15);
+    draw(p,{10,12},{90,72});
+    const auto ordinary=added(p);
+    auto* smoothing=w.findChild<QCheckBox*>("shapeSmoothing");
+    REQUIRE(smoothing&&!smoothing->isChecked());
+    smoothing->setChecked(true);
+    const auto smoothed=added(p);
+    REQUIRE(p.history.undoCount()==2&&p.history.undoName()=="Shape Style");
+    REQUIRE(smoothed.id==ordinary.id&&smoothed.raster->rgba()!=ordinary.raster->rgba());
+    REQUIRE(editing::decodeShapeStyle(smoothed.shapeJson).smoothing);
+    command(w,"edit.undo")->trigger();
+    REQUIRE(added(p)==ordinary&&!smoothing->isChecked());
+    command(w,"edit.redo")->trigger();
+    REQUIRE(added(p)==smoothed&&smoothing->isChecked());
+    kind(w)->setCurrentIndex(1);
+    REQUIRE(smoothing->isHidden()&&!editing::decodeShapeStyle(added(p).shapeJson).smoothing);
+    command(w,"edit.undo")->trigger();
+    REQUIRE(added(p)==smoothed&&!smoothing->isHidden()&&smoothing->isChecked());
+}
 void shape_width_steps_coalesce(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);const auto base=p.history.undoCount();w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);auto*width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");const auto before=editing::decodeShapeStyle(added(p).shapeJson).strokeWidth;width->setValue(3);width->setValue(4);width->setValue(5);REQUIRE(p.history.undoCount()==base+1);emit width->editingFinished();REQUIRE(p.history.undoCount()==base+2&&p.history.undoName()=="Shape Style");REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeWidth==5);command(w,"edit.undo")->trigger();REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeWidth==before&&editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

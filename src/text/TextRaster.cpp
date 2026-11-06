@@ -5,11 +5,15 @@
 #include <dwrite_1.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <QByteArray>
+#include <QString>
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 namespace compositor::text {
 namespace {
@@ -52,34 +56,63 @@ bool faceNameMatches(IDWriteFont* font,const std::wstring& wanted){
     return false;
 }
 IDWriteFactory* sharedFactory(){
-    static ComPtr<IDWriteFactory> factory;
-    if(!factory)check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(factory.GetAddressOf())));
+    static const auto factory=[] {
+        ComPtr<IDWriteFactory> result;
+        check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(result.GetAddressOf())));
+        return result;
+    }();
     return factory.Get();
 }
-IDWriteFontCollection* sharedCollection(){
+ComPtr<IDWriteFontCollection> systemFontCollection(bool refresh=false){
+    static std::mutex mutex;
     static ComPtr<IDWriteFontCollection> fonts;
-    if(!fonts&&FAILED(sharedFactory()->GetSystemFontCollection(&fonts,FALSE)))fonts.Reset();
-    return fonts.Get();
+    const std::lock_guard lock(mutex);
+    if(refresh||!fonts){
+        ComPtr<IDWriteFontCollection> updated;
+        if(SUCCEEDED(sharedFactory()->GetSystemFontCollection(&updated,refresh?TRUE:FALSE))&&updated)
+            fonts=std::move(updated);
+    }
+    return fonts;
 }
-Face resolveFace(IDWriteFontCollection* fonts,const std::string& family,const std::string& styleName){
+std::string catalogName(IDWriteLocalizedStrings* names){
+    if(!names||!names->GetCount())return {};
+    UINT32 index=0,length=0;
+    BOOL hasEnglish=FALSE;
+    if(FAILED(names->FindLocaleName(L"en-us",&index,&hasEnglish))||!hasEnglish)index=0;
+    if(FAILED(names->GetStringLength(index,&length))||length==0||length>256)return {};
+    std::wstring name(length+1,L'\0');
+    if(FAILED(names->GetString(index,name.data(),length+1)))return {};
+    name.resize(length);
+    const auto utf8=QString::fromStdWString(name).toUtf8();
+    if(utf8.size()>256||utf8.contains('\n')||utf8.contains('\r'))return {};
+    return utf8.toStdString();
+}
+Face resolveFace(IDWriteFontCollection* fonts,const std::string& family,const std::string& styleName,FontFace* installed=nullptr){
     Face face;face.family=wide(family.empty()?"Segoe UI":family);
     const auto wanted=lower(wide(styleName.empty()?"Regular":styleName));
     applyStyleWords(face,wanted);
     if(!fonts)return face;
     UINT32 index=0;BOOL exists=FALSE;
-    if(FAILED(fonts->FindFamilyName(face.family.c_str(),&index,&exists))||!exists){
+    const bool familyExists=SUCCEEDED(fonts->FindFamilyName(face.family.c_str(),&index,&exists))&&exists;
+    if(!familyExists){
         face.family=L"Segoe UI";fonts->FindFamilyName(face.family.c_str(),&index,&exists);if(!exists)return face;
     }
     ComPtr<IDWriteFontFamily> fontFamily;if(FAILED(fonts->GetFontFamily(index,&fontFamily))||!fontFamily)return face;
+    ComPtr<IDWriteFont> matched;
     const UINT32 count=fontFamily->GetFontCount();
     for(UINT32 i=0;i<count;++i){
         ComPtr<IDWriteFont> font;if(FAILED(fontFamily->GetFont(i,&font))||!font)continue;
-        if(!faceNameMatches(font.Get(),wanted))continue;
-        face.weight=font->GetWeight();face.style=font->GetStyle();face.stretch=font->GetStretch();return face;
+        if(font->GetSimulations()!=DWRITE_FONT_SIMULATIONS_NONE||!faceNameMatches(font.Get(),wanted))continue;
+        matched=std::move(font);
+        break;
     }
-    ComPtr<IDWriteFont> matched;
-    if(SUCCEEDED(fontFamily->GetFirstMatchingFont(face.weight,face.stretch,face.style,&matched))&&matched){
-        face.weight=matched->GetWeight();face.style=matched->GetStyle();face.stretch=matched->GetStretch();
+    if(!matched&&FAILED(fontFamily->GetFirstMatchingFont(face.weight,face.stretch,face.style,&matched)))return face;
+    if(!matched)return face;
+    face.weight=matched->GetWeight();face.style=matched->GetStyle();face.stretch=matched->GetStretch();
+    if(installed&&familyExists&&matched->GetSimulations()==DWRITE_FONT_SIMULATIONS_NONE){
+        ComPtr<IDWriteLocalizedStrings> familyNames,faceNames;
+        if(SUCCEEDED(fontFamily->GetFamilyNames(&familyNames))&&SUCCEEDED(matched->GetFaceNames(&faceNames)))
+            *installed={catalogName(familyNames.Get()),catalogName(faceNames.Get())};
     }
     return face;
 }
@@ -101,17 +134,17 @@ struct Built {
     bool box{};
     int width{},height{};
 };
-Built build(const TextContent& text){
+Built build(const TextContent& text,IDWriteFontCollection* fonts){
     if(!textRunsValid(text)||text.fontFamily.empty())throw std::runtime_error("Invalid text layer");
     Built built;built.characters=wide(text.value);
     if(built.characters.size()>100000)throw std::runtime_error("Text exceeds limit");
     built.write=sharedFactory();
-    const Face base=resolveFace(sharedCollection(),text.fontFamily,text.fontStyle);
+    const Face base=resolveFace(fonts,text.fontFamily,text.fontStyle);
     const float line=float(lineHeight(text));
     const bool box=hasTextBox(text);
     built.box=box;
     ComPtr<IDWriteTextFormat> format;
-    check(built.write->CreateTextFormat(base.family.c_str(),nullptr,base.weight,base.style,base.stretch,float(text.fontSize),L"en-us",&format));
+    check(built.write->CreateTextFormat(base.family.c_str(),fonts,base.weight,base.style,base.stretch,float(text.fontSize),L"en-us",&format));
     format->SetWordWrapping(box?DWRITE_WORD_WRAPPING_WRAP:DWRITE_WORD_WRAPPING_NO_WRAP);
     format->SetTextAlignment(alignmentOf(text.alignment));
     const float wrap=box?std::max(1.f,float(*text.boxWidth)-kPad*2):100000.f;
@@ -121,7 +154,7 @@ Built build(const TextContent& text){
     for(const auto& run:text.fontRuns){
         if(!run.hasFont||run.location<0||run.length<=0||size_t(run.location)>=built.characters.size())continue;
         DWRITE_TEXT_RANGE range{UINT32(run.location),UINT32(std::min(size_t(run.length),built.characters.size()-size_t(run.location)))};
-        auto face=resolveFace(sharedCollection(),run.fontFamily,run.fontStyle);
+        auto face=resolveFace(fonts,run.fontFamily,run.fontStyle);
         applyFace(built.layout.Get(),face,range);
         if(run.fontSize>=1)built.layout->SetFontSize(float(run.fontSize),range);
     }
@@ -195,18 +228,72 @@ RasterizedText draw(const Built& built,const TextContent& text){
     return {Raster::fromRgba(built.width,built.height,rgba.data(),size_t(built.width)*4),built.width,built.height};
 }
 }
+std::shared_ptr<const std::vector<FontFace>> installedFontFaces(bool refresh){
+    static const auto empty=std::make_shared<const std::vector<FontFace>>();
+    static std::mutex mutex;
+    static ComPtr<IDWriteFontCollection> catalogFonts;
+    static auto catalog=empty;
+    try{
+        ComApartment apartment;
+        const std::lock_guard lock(mutex);
+        const auto fonts=systemFontCollection(refresh);
+        if(!fonts)return empty;
+        if(fonts.Get()==catalogFonts.Get()&&!catalog->empty())return catalog;
+        std::vector<FontFace> result;
+        for(UINT32 familyIndex=0;familyIndex<fonts->GetFontFamilyCount();++familyIndex){
+            ComPtr<IDWriteFontFamily> family;
+            ComPtr<IDWriteLocalizedStrings> names;
+            if(FAILED(fonts->GetFontFamily(familyIndex,&family))||!family||FAILED(family->GetFamilyNames(&names)))continue;
+            const auto familyName=catalogName(names.Get());
+            if(familyName.empty())continue;
+            for(UINT32 faceIndex=0;faceIndex<family->GetFontCount();++faceIndex){
+                ComPtr<IDWriteFont> font;
+                ComPtr<IDWriteLocalizedStrings> faceNames;
+                if(FAILED(family->GetFont(faceIndex,&font))||!font||font->GetSimulations()!=DWRITE_FONT_SIMULATIONS_NONE||
+                   FAILED(font->GetFaceNames(&faceNames)))continue;
+                auto style=catalogName(faceNames.Get());
+                if(!style.empty())result.push_back({familyName,std::move(style)});
+            }
+        }
+        std::sort(result.begin(),result.end(),[](const FontFace& left,const FontFace& right){
+            if(left.family!=right.family)return left.family<right.family;
+            if((left.style=="Regular")!=(right.style=="Regular"))return left.style=="Regular";
+            return left.style<right.style;
+        });
+        result.erase(std::unique(result.begin(),result.end()),result.end());
+        if(result.empty())return empty;
+        catalog=std::make_shared<const std::vector<FontFace>>(std::move(result));
+        catalogFonts=fonts;
+        return catalog;
+    }catch(const std::runtime_error&){return empty;}
+}
+FontFace installedFontFace(const FontFace& saved){
+    if(saved.family.empty())return {};
+    try{
+        ComApartment apartment;
+        const auto fonts=systemFontCollection();
+        FontFace installed;
+        resolveFace(fonts.Get(),saved.family,saved.style,&installed);
+        return installed;
+    }catch(const std::runtime_error&){return {};}
+}
 RasterizedText rasterize(const TextContent& text){
     ComApartment apartment;
     if(text.value.empty())throw std::runtime_error("Invalid text layer");
-    auto built=build(text);return draw(built,text);
+    const auto fonts=systemFontCollection();
+    auto built=build(text,fonts.Get());return draw(built,text);
 }
-struct LayoutCache{TextContent key;TextLayout value;bool ready{};};
+struct LayoutCache{TextContent key;ComPtr<IDWriteFontCollection> fonts;TextLayout value;bool ready{};};
 LayoutCache& layoutCache(){static LayoutCache cache;return cache;}
 TextLayout layoutText(const TextContent& text){
-    auto& cached=layoutCache();if(cached.ready&&cached.key==text)return cached.value;
-    auto remember=[&](TextLayout layout){cached.key=text;cached.value=std::move(layout);cached.ready=true;return cached.value;};
+    auto& cached=layoutCache();
+    const bool sameText=cached.ready&&cached.key==text;
+    auto remember=[&](TextLayout layout,ComPtr<IDWriteFontCollection> fonts={}){
+        cached.key=text;cached.fonts=std::move(fonts);cached.value=std::move(layout);cached.ready=true;return cached.value;
+    };
     TextLayout laid;
     if(text.value.empty()){
+        if(sameText)return cached.value;
         if(!textRunsValid(text))throw std::runtime_error("Invalid text layer");
         const float line=float(lineHeight(text));
         if(hasTextBox(text)){laid.width=std::clamp(int(std::lround(*text.boxWidth)),16,30000);laid.height=std::clamp(int(std::lround(*text.boxHeight)),16,30000);}
@@ -215,10 +302,12 @@ TextLayout layoutText(const TextContent& text){
         return remember(std::move(laid));
     }
     ComApartment apartment;
-    auto built=build(text);
+    const auto fonts=systemFontCollection();
+    if(sameText&&cached.fonts.Get()==fonts.Get())return cached.value;
+    auto built=build(text,fonts.Get());
     auto drawn=draw(built,text);
     laid.raster=drawn.raster;laid.width=drawn.width;laid.height=drawn.height;
     collectCarets(built,text,laid);
-    return remember(std::move(laid));
+    return remember(std::move(laid),fonts);
 }
 }

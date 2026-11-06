@@ -1,8 +1,19 @@
 #pragma once
 #include "core/Document.h"
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace compositor::text {
+struct FontFace {
+    std::string family, style;
+    bool operator==(const FontFace&) const = default;
+};
+// Snapshot of the DirectWrite collection that lays out text. Refresh checks for
+// changes to installed fonts and leaves existing snapshots valid.
+std::shared_ptr<const std::vector<FontFace>> installedFontFaces(bool refresh=false);
+// Resolves a saved face to its catalog names. A missing family has no picker match.
+FontFace installedFontFace(const FontFace& saved);
 struct RasterizedText {std::shared_ptr<const Raster> raster;int width{},height{};};
 struct TextCaret { float x{},top{},height{}; int line{}; };
 struct TextCluster { float x{},top{},width{},height{}; int start{},length{},line{}; };
