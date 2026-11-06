@@ -38,6 +38,25 @@ void functional(const std::shared_ptr<D3D11BrushCoverage>& gpu){
         auto source=[&](Point document){auto u=t.toUnit(document);return raster->pixel(int(u.x*100),int(u.y*100));};
         require(source({50.5,50.5}).g>240&&source({54.5,50.5}).g>240&&source({50.5,54.5}).g>240,"transformed circular interior");
         require(source({61.5,50.5}).a==0&&source({50.5,61.5}).a==0,"transformed tip stretched");});
+    test("stationary-pen-pressure",[&]{
+        auto base=Raster::filled(48,32);
+        const Point point{20.5,15.5};
+        for(double hardness:{0.,1.}){
+            auto s=red(8,hardness);
+            s.pressureOpacity=true;
+            BrushSession stroke(base,s,gpu);
+            stroke.begin(point,.1);
+            require(stroke.preview()->pixel(20,15).a==(hardness==1?26:25),"initial pressure dab");
+            require(stroke.append(point,1),"stationary pressure change discarded");
+            require(stroke.preview()->pixel(20,15).a==255,"stationary pressure preview missing");
+            require(!stroke.append(point,2),"duplicate normalized pressure accepted");
+            require(stroke.commit()->pixel(20,15).a==255,"stationary pressure commit missing");
+            s.pressureOpacity=false;
+            BrushSession fixed(base,s,gpu);
+            fixed.begin(point,.1);
+            require(!fixed.append(point,1),"stationary sample accepted with pressure disabled");
+        }
+    });
     test("G-S-008-800px-no-periodic-ridges",[&]{auto base=Raster::filled(4000,2200);BrushSession s(base,red(400,0),gpu);s.begin({600,1600});s.append({3400,1600});auto r=s.commit();
         for(int y:{1600,1700,1800,1900,1980}){int lo=255,hi=0;for(int x=1000;x<=3000;++x){int a=r->pixel(x,y).a;lo=std::min(lo,a);hi=std::max(hi,a);}require(hi-lo<=1,"800px brush periodic ridges");}});
 }

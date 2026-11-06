@@ -20,9 +20,89 @@ BrushUniforms settings(float radius=60,float hardness=0,float ox=0,float oy=0){B
 void compare(const BrushTile& cpu,const BrushTile& gpu){for(size_t i=0;i<cpu.preview.size();++i){maxByteDifference=std::max(maxByteDifference,std::abs(int(cpu.preview[i])-int(gpu.preview[i])));
     maxDensityDifference=std::max(maxDensityDifference,std::abs(cpu.permanent[i]-gpu.permanent[i]));}
     require(maxByteDifference<=byteTolerance,"CPU/HLSL coverage tolerance exceeded");require(maxDensityDifference<=densityTolerance,"CPU/HLSL density tolerance exceeded");}
+void pressureCoverage(D3D11BrushCoverage* warp) {
+    for(float hardness:{0.f,1.f}){
+        auto u=settings(12,hardness);
+        BrushTile cpu(96,64,hardness<1),gpu=cpu;
+        const std::array<BrushSegment,1> light{{{12.5f,32.5f,82.5f,32.5f,.5f,.5f,.25f,.25f}}};
+        const std::array<BrushSegment,1> strong{{{12.5f,32.5f,82.5f,32.5f,.5f,1.f,.25f,1.f}}};
+        auto render=[&](std::span<const BrushSegment> settled,std::span<const BrushSegment> tail){
+            renderBrushCpu(cpu,u,settled,tail);
+            if(warp){
+                warp->render(gpu,u,settled,tail);
+                compare(cpu,gpu);
+            }
+        };
+        constexpr size_t center=32*96+48,offCenter=40*96+74;
+        render(light,{});
+        require(cpu.preview[center]==64&&cpu.preview[offCenter]==0,"Light pressure changed size or opacity incorrectly");
+        render(light,{});
+        require(cpu.preview[center]==64,"Repeated light pressure exceeded its cap");
+        render({},strong);
+        require(cpu.preview[center]>100&&cpu.preview[center]<220&&cpu.preview[offCenter]>0,"Tapered pressure tail did not preview");
+        const auto live=cpu.preview;
+        render({},{});
+        require(cpu.preview[center]==64&&cpu.preview[offCenter]==0,"Pressure tail contaminated permanent state");
+        render(strong,{});
+        require(cpu.preview==live,"Pressure tail and final stroke differ");
+    }
+}
+void pressureTaperSampling(D3D11BrushCoverage* warp) {
+    struct Taper { float radius,length,hardness; bool variableSize; };
+    for(const auto [radius,length,hardness,variableSize]:{
+        Taper{12,4,0,false},Taper{12,4,0,true},Taper{12,4,1,false},Taper{12,4,1,true},Taper{100,2,.9f,true}
+    }){
+        const auto u=settings(radius,hardness);
+        const float start=20.5f,mid=start+length*.5f,end=start+length;
+        const float startSize=variableSize?.1f:1.f,midSize=(startSize+1.f)*.5f;
+        const std::array<BrushSegment,1> whole{{{start,24.5f,end,24.5f,startSize,1.f,.1f,1.f}}};
+        const std::array<BrushSegment,2> split{{
+            {start,24.5f,mid,24.5f,startSize,midSize,.1f,.55f},
+            {mid,24.5f,end,24.5f,midSize,1.f,.55f,1.f}
+        }};
+        constexpr int width=128;
+        BrushTile sparse(width,width,hardness<1),dense=sparse;
+        renderBrushCpu(sparse,u,whole);
+        renderBrushCpu(dense,u,split);
+        require(sparse.preview[30*width+22]>100,"Tapered tip missed a pixel reached by its wider end");
+        for(size_t i=0;i<sparse.preview.size();++i)
+            require(std::abs(int(sparse.preview[i])-dense.preview[i])<=2,"Equivalent midpoint changed tapered coverage");
+        if(warp){
+            BrushTile sparseGpu(width,width,hardness<1),denseGpu=sparseGpu;
+            warp->render(sparseGpu,u,whole);
+            warp->render(denseGpu,u,split);
+            compare(sparse,sparseGpu);
+            compare(dense,denseGpu);
+        }
+    }
+}
+void softPressureSizeSpacing(D3D11BrushCoverage* warp) {
+    for(float effectiveRadius:{2.f,16.f}){
+        constexpr float baseRadius=100.f;
+        const float size=effectiveRadius/baseRadius;
+        const std::array<BrushSegment,1> fixed{{{10.5f,24.5f,48.5f,24.5f}}};
+        auto pressure=fixed;
+        pressure[0].size0=pressure[0].size1=size;
+        BrushTile expected(64,48),actual=expected;
+        const auto fixedSettings=settings(effectiveRadius),pressureSettings=settings(baseRadius);
+        renderBrushCpu(expected,fixedSettings,fixed);
+        renderBrushCpu(actual,pressureSettings,pressure);
+        require(expected.preview==actual.preview,"Size-only pressure changed the soft tip's opacity");
+        if(warp){
+            BrushTile fixedGpu(64,48),pressureGpu=fixedGpu;
+            warp->render(fixedGpu,fixedSettings,fixed);
+            warp->render(pressureGpu,pressureSettings,pressure);
+            compare(expected,fixedGpu);
+            compare(actual,pressureGpu);
+        }
+    }
+}
 void pgm(const std::filesystem::path& path,const BrushTile& tile){std::ofstream out(path,std::ios::binary);out<<"P5\n"<<tile.width<<' '<<tile.height<<"\n255\n";out.write(reinterpret_cast<const char*>(tile.preview.data()),std::streamsize(tile.preview.size()));}
 }
 int main(int argc,char**argv){
+    test("pen-pressure-coverage-and-tail-cpu",[]{pressureCoverage(nullptr);});
+    test("pen-pressure-taper-sampling-cpu",[]{pressureTaperSampling(nullptr);});
+    test("soft-size-pressure-spacing-cpu",[]{softPressureSizeSpacing(nullptr);});
     test("G-B-001-hard-tip-analytic-AA",[]{BrushTile t(16,16);auto u=settings(2,1);std::array<BrushSegment,1> click{{{4.5f,4.5f,4.5f,4.5f}}};renderBrushCpu(t,u,click);
         require(t.preview[4*16+4]==255&&t.preview[4*16+6]==128&&t.preview[4*16+7]==0,"hard analytic AA coverage");});
     test("G-B-002-tail-replacement-and-flush",[]{BrushTile t;auto u=settings();std::array<BrushSegment,1> old{{{30,40,220,40}}},next{{{30,200,220,200}}};renderBrushCpu(t,u,{},old);auto snapshot=t.preview;
@@ -43,6 +123,9 @@ int main(int argc,char**argv){
     if(argc<2){std::cout<<"SKIP WARP: shader path required\n";return failed?1:0;}
     try{
         D3D11BrushCoverage warp(argv[1],true);std::cout<<"ADAPTER "<<warp.adapterName()<<'\n';
+        test("pen-pressure-coverage-and-tail-warp",[&]{pressureCoverage(&warp);});
+        test("pen-pressure-taper-sampling-warp",[&]{pressureTaperSampling(&warp);});
+        test("soft-size-pressure-spacing-warp",[&]{softPressureSizeSpacing(&warp);});
         test("G-W-001-HLSL-quadrature-permanent-tail",[&]{for(float hardness:{0.0f,0.35f,1.0f}){BrushTile cpu,gpu;auto u=settings(60,hardness);
             std::array<BrushSegment,2> committed{{{10,40,240,180},{80,240,140,10}}};std::array<BrushSegment,1> tail{{{140,10,240,50}}};
             renderBrushCpu(cpu,u,committed,tail);warp.render(gpu,u,committed,tail);compare(cpu,gpu);auto snapshot=gpu.preview;

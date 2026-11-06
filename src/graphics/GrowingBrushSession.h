@@ -58,8 +58,8 @@ public:
     ~GrowingBrushSession();
     GrowingBrushSession(const GrowingBrushSession&)=delete;
     GrowingBrushSession& operator=(const GrowingBrushSession&)=delete;
-    bool begin(Point);
-    bool append(Point);
+    bool begin(Point,double pressure=1);
+    bool append(Point,double pressure=1);
     void flushCoverage();
     BrushSourceRect virtualBounds()const;
     std::vector<GrowingCoverageTile> coverageSnapshot()const;

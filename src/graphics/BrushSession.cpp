@@ -9,7 +9,6 @@
 
 namespace compositor::graphics {
 namespace {
-BrushSegment segment(Point a,Point b){return{float(a.x),float(a.y),float(b.x),float(b.y)};}
 bool validPoint(Point p){return std::isfinite(p.x)&&std::isfinite(p.y)&&std::abs(p.x)<=1e7&&std::abs(p.y)<=1e7;}
 // Inputs here are finite, nonnegative convex combinations of bytes. A direct
 // conversion after adding one half preserves halfway-away rounding and avoids
@@ -23,7 +22,23 @@ Pixel paintPixel(Pixel base,const BrushSessionSettings& settings,double amount){
     p.r=std::min(p.r,p.a);p.g=std::min(p.g,p.a);p.b=std::min(p.b,p.a);return p;
 }
 }
-std::vector<BrushSegment> brushContinuousCurve(Point start,Point end,Point before,Point after){
+BrushSample normalizedBrushSample(Point point,double pressure) {
+    return {point,std::isfinite(pressure)?std::clamp(pressure,0.,1.):1.};
+}
+BrushSegment brushSegment(BrushSample start,BrushSample end,const BrushSessionSettings& settings) {
+    // A stationary pressure update deposits the new tip without a connecting curve.
+    if(start.point==end.point)start=end;
+    const auto size=[&](double pressure){
+        return settings.pressureSize ? float(std::max(pressure,0.5/settings.radius)) : 1.f;
+    };
+    return {float(start.point.x),float(start.point.y),float(end.point.x),float(end.point.y),
+        size(start.pressure),size(end.pressure),
+        settings.pressureOpacity?float(start.pressure):1.f,settings.pressureOpacity?float(end.pressure):1.f};
+}
+std::vector<BrushSegment> brushContinuousCurve(BrushSample first,BrushSample last,Point before,Point after,
+                                               const BrushSessionSettings& settings) {
+    const auto start=first.point,end=last.point;
+    if(start==end)return {brushSegment(first,last,settings)};
     auto knot=[](double t,Point a,Point b){return t+std::max(0.0001,std::sqrt(std::hypot(b.x-a.x,b.y-a.y)));};
     auto mix=[](Point a,Point b,double ta,double tb,double t){double wa=(tb-t)/(tb-ta),wb=(t-ta)/(tb-ta);return Point{a.x*wa+b.x*wb,a.y*wa+b.y*wb};};
     double t0=0,t1=knot(t0,before,start),t2=knot(t1,start,end),t3=knot(t2,end,after);
@@ -37,10 +52,14 @@ std::vector<BrushSegment> brushContinuousCurve(Point start,Point end,Point befor
             return std::hypot(p.x-a.x-t*dx,p.y-a.y-t*dy);};
         double mid=(lo+hi)/2;auto m=point(mid);
         double deviation=std::max({error(m),error(point((lo+mid)/2)),error(point((mid+hi)/2))});
-        if(deviation<=0.2||depth>=10){result.push_back(segment(a,b));return;}
+        if(deviation<=0.2||depth>=10){result.push_back(brushSegment({a,std::lerp(first.pressure,last.pressure,lo)},
+            {b,std::lerp(first.pressure,last.pressure,hi)},settings));return;}
         self(self,a,m,lo,mid,depth+1);self(self,m,b,mid,hi,depth+1);
     };
     subdivide(subdivide,start,end,0,1,0);return result;
+}
+std::vector<BrushSegment> brushContinuousCurve(Point start,Point end,Point before,Point after) {
+    return brushContinuousCurve({start},{end},before,after,{});
 }
 BrushSessionGeometry BrushSessionGeometry::forLayer(const Transform& t,int sw,int sh,int cw,int ch){
     if(!t.valid()||sw<=0||sh<=0)throw std::invalid_argument("Invalid brush layer transform");
@@ -72,26 +91,30 @@ BrushSession::BrushSession(std::shared_ptr<const Raster> original,BrushSessionSe
         emptySelection_=!selection_->hasCoverage();
     }
 }
-bool BrushSession::begin(Point p){
+bool BrushSession::begin(Point p,double pressure){
     if(begun_||finished_)throw std::logic_error("Brush session already started or finished");
     if(!validPoint(p)||emptySelection_)return false;
-    begun_=true;try{return append(p);}catch(...){begun_=false;throw;}
+    begun_=true;try{return append(p,pressure);}catch(...){begun_=false;throw;}
 }
-bool BrushSession::append(Point p){
+bool BrushSession::append(Point p,double pressure){
     if(!begun_||finished_)throw std::logic_error("Brush session is not active");
-    if(!validPoint(p)||(!samples_.empty()&&samples_.back()==p))return false;
-    auto next=samples_;next.push_back(p);if(next.size()>4)next.erase(next.begin());
+    if(!validPoint(p))return false;
+    const auto sample=normalizedBrushSample(p,pressure);
+    if(!samples_.empty()&&sample.repeats(samples_.back(),settings_))return false;
+    auto next=samples_;next.push_back(sample);if(next.size()>4)next.erase(next.begin());
     auto n=next.size();std::vector<BrushSegment> settled,tail;
-    if(n==1)settled.push_back(segment(p,p));
-    else if(n>=3)settled=brushContinuousCurve(next[n-3],next[n-2],next[n>=4?n-4:0],p);
-    if(n>=2)tail.push_back(segment(next[n-2],p));
+    if(n==1)settled.push_back(brushSegment(next[0],next[0],settings_));
+    else if(n>=3)settled=brushContinuousCurve(next[n-3],next[n-2],next[n>=4?n-4:0].point,p,settings_);
+    if(n>=2)tail.push_back(brushSegment(next[n-2],next[n-1],settings_));
     render(settled,tail);samples_.swap(next);++metrics_.acceptedSamples;return true;
 }
 std::set<size_t> BrushSession::affectedKeys(std::span<const BrushSegment> segments)const {
     std::set<size_t> result;double determinant=geometry_.a*geometry_.d-geometry_.b*geometry_.c;
     auto inverse=[&](double x,double y){x-=geometry_.tx;y-=geometry_.ty;return Point{(geometry_.d*x-geometry_.c*y)/determinant,(-geometry_.b*x+geometry_.a*y)/determinant};};
-    const double reach=settings_.radius+2;const int columns=(original_->width+255)/256;
-    for(auto s:segments){
+    const int columns=(original_->width+255)/256;
+    for(const auto& s:segments){
+        if(s.strength0==0 && s.strength1==0)continue;
+        const double reach=settings_.radius*std::max(s.size0,s.size1)+2;
         double left=std::max(0.,double(std::min(s.x0,s.x1))-reach),right=std::min(double(geometry_.canvasWidth),double(std::max(s.x0,s.x1))+reach);
         double top=std::max(0.,double(std::min(s.y0,s.y1))-reach),bottom=std::min(double(geometry_.canvasHeight),double(std::max(s.y0,s.y1))+reach);
         if(left>=right||top>=bottom)continue;
@@ -118,7 +141,7 @@ void BrushSession::render(std::span<const BrushSegment> settled,std::span<const 
         int x=int(key%columns)*256,y=int(key/columns)*256;
         uint32_t w=uint32_t(std::min(256,original_->width-x)),h=uint32_t(std::min(256,original_->height-y));
         auto old=coverage_.find(key);
-        auto tile=old==coverage_.end()?std::make_shared<BrushTile>(w,h):std::make_shared<BrushTile>(*old->second);
+        auto tile=old==coverage_.end()?std::make_shared<BrushTile>(w,h,settings_.capsSoftOpacity()):std::make_shared<BrushTile>(*old->second);
         ++metrics_.coverageTileAllocations;
         BrushUniforms u;u.mapping={float(geometry_.a),float(geometry_.b),float(geometry_.c),float(geometry_.d)};
         u.geometry={float(geometry_.tx+x*geometry_.a+y*geometry_.c),float(geometry_.ty+x*geometry_.b+y*geometry_.d),float(settings_.radius),float(settings_.hardness)};
@@ -162,13 +185,13 @@ void BrushSession::render(std::span<const BrushSegment> settled,std::span<const 
         if(output){nextRaster->tiles[key]=std::move(output);outputChanged=true;}
     }
     coverage_.swap(nextCoverage);tailKeys_.swap(nextTail);metrics_.settledSegments+=settled.size();metrics_.touchedTiles=coverage_.size();
-    metrics_.coverageStorageBytes=0;for(auto&[key,tile]:coverage_){(void)key;metrics_.coverageStorageBytes+=tile->permanent.size()*sizeof(float)+tile->preview.size();}
+    metrics_.coverageStorageBytes=0;for(auto&[key,tile]:coverage_){(void)key;metrics_.coverageStorageBytes+=tile->permanent.size()*sizeof(float)+tile->preview.size()+tile->pressureCap.size()*sizeof(float);}
     if(outputChanged){published_=std::move(nextRaster);++metrics_.publishedSnapshots;}
     metrics_.tileCompositionMilliseconds+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-compositionStart).count();
 }
 std::shared_ptr<const Raster> BrushSession::commit(){
     if(finished_)return published_;
-    if(samples_.size()>=2){auto n=samples_.size();auto settled=brushContinuousCurve(samples_[n-2],samples_[n-1],samples_[n>=3?n-3:0],samples_[n-1]);
+    if(samples_.size()>=2){auto n=samples_.size();auto settled=brushContinuousCurve(samples_[n-2],samples_[n-1],samples_[n>=3?n-3:0].point,samples_[n-1].point,settings_);
         render(settled,{});samples_={samples_.back()};}
     finished_=true;return published_;
 }

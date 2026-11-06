@@ -9,7 +9,19 @@ struct BrushSessionSettings {
     double radius{20},hardness{1},opacity{1};
     std::array<uint8_t,3> color{0,0,0}; // straight sRGB, opaque paint color
     bool erase{};
+    bool pressureSize{},pressureOpacity{};
+    bool capsSoftOpacity() const { return pressureOpacity && hardness < 1; }
 };
+struct BrushSample {
+    Point point;
+    double pressure{1};
+    bool repeats(const BrushSample& previous,const BrushSessionSettings& settings) const {
+        return point==previous.point &&
+            (!(settings.pressureSize||settings.pressureOpacity)||pressure==previous.pressure);
+    }
+};
+BrushSample normalizedBrushSample(Point,double pressure);
+BrushSegment brushSegment(BrushSample start,BrushSample end,const BrushSessionSettings&);
 struct BrushSessionGeometry {
     double a{1},b{},c{},d{1},tx{},ty{}; // source pixel edge to document pixel edge
     int canvasWidth{},canvasHeight{}; // zero selects the original raster dimensions
@@ -29,8 +41,8 @@ public:
     BrushSession(std::shared_ptr<const Raster> original,BrushSessionSettings,
         std::shared_ptr<D3D11BrushCoverage> accelerator={},
         std::shared_ptr<const GrayRaster> selection={},BrushSessionGeometry geometry={},Output output=Output::Paint);
-    bool begin(Point);
-    bool append(Point);
+    bool begin(Point,double pressure=1);
+    bool append(Point,double pressure=1);
     std::shared_ptr<const Raster> preview() const {return published_;}
     std::shared_ptr<const Raster> commit();
     std::shared_ptr<const Raster> cancel();
@@ -45,7 +57,7 @@ private:
     std::shared_ptr<const GrayRaster> selection_;
     CoverageMap coverage_;
     std::set<size_t> tailKeys_;
-    std::vector<Point> samples_;
+    std::vector<BrushSample> samples_;
     BrushSessionMetrics metrics_;
     std::string acceleratorError_;
     bool begun_{},finished_{},emptySelection_{};
@@ -56,4 +68,5 @@ private:
 // Direct translation of upstream centripetal Catmull-Rom adaptive chords,
 // maximum centerline deviation 0.2 document pixels, recursive depth <=10.
 std::vector<BrushSegment> brushContinuousCurve(Point start,Point end,Point before,Point after);
+std::vector<BrushSegment> brushContinuousCurve(BrushSample start,BrushSample end,Point before,Point after,const BrushSessionSettings&);
 } // namespace compositor::graphics
