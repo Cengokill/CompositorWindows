@@ -298,9 +298,9 @@ private:
     bool waitForProjectSave(EditorProject&);
     std::function<void()> projectSaveBeforeWrite_;
     bool closeProject(int);
-    void pointerBegin(QPointF,Qt::KeyboardModifiers,int clickCount=1);
-    void pointerUpdate(QPointF,Qt::KeyboardModifiers);
-    void pointerEnd(QPointF,Qt::KeyboardModifiers);
+    void pointerBegin(QPointF,Qt::KeyboardModifiers,int clickCount=1,std::optional<double> pressure={});
+    void pointerUpdate(QPointF,Qt::KeyboardModifiers,double pressure=1);
+    void pointerEnd(QPointF,Qt::KeyboardModifiers,double pressure=1);
     void pointerCancel();
     void interruptPointer();
     void selectTool(Tool);
@@ -354,8 +354,9 @@ private:
     void cancelRetouch();
     void publishRetouch(bool finish);
     Point constrainRetouch(Point,Qt::KeyboardModifiers);
-    bool beginBrush(Point,Qt::KeyboardModifiers = Qt::NoModifier);
-    bool updateBrush(Point,bool finish);
+    bool beginBrush(Point,Qt::KeyboardModifiers,std::optional<double> pressure);
+    static void applyRememberedBrushPressure(graphics::BrushSessionSettings&);
+    bool updateBrush(Point,bool finish,double pressure=1);
     void publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapshot>,bool finish=false);
     CompositeViewport brushViewport(EditorProject&,double,double,double,double,double);
     CompositeViewport navigatorComposite(EditorProject&,int maxEdge);

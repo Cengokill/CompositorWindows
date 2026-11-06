@@ -24,6 +24,47 @@ void deep_brush(){
     REQUIRE(result.deep->at(31,8)[0]==10001&&result.deep->at(8,8)[0]<10001&&result.deep->at(8,8)[2]>30007);
     GrowingBrushSession cancelled(l,s,32,16);cancelled.begin({8,8});REQUIRE(cancelled.cancel()->materializeLayer()==l);
 }
+void pen_pressure() {
+    const auto base=layer(96,48);
+    auto s=settings();s.radius=8;s.opacity=.8;
+    const Point click{30.5,24.5};
+    const auto dab=[&](double pressure) {
+        GrowingBrushSession stroke(base,s,96,48);
+        stroke.begin(click,pressure);
+        return stroke.commit();
+    };
+    for(bool size:{false,true})for(bool opacity:{false,true}){
+        s.pressureSize=size;s.pressureOpacity=opacity;
+        const auto faint=dab(.25),full=dab(1);
+        REQUIRE(faint->pixel(30,24).a==(opacity?51:204));
+        REQUIRE(faint->pixel(35,24).a==(size?0:(opacity?51:204)));
+        REQUIRE(full->pixel(35,24).a==204);
+    }
+    REQUIRE(!dab(0)->changed()&&!dab(-1)->changed());
+    REQUIRE(dab(std::numeric_limits<double>::quiet_NaN())->pixel(35,24)==dab(2)->pixel(35,24));
+    s.pressureOpacity=false;
+    REQUIRE(dab(0)->pixel(30,24).a==204&&dab(0)->pixel(32,24).a==0);
+    s.pressureOpacity=true;
+    GrowingBrushSession stroke(base,s,96,48);
+    stroke.begin({16.5,24.5},.25);
+    stroke.append({80.5,24.5},1);
+    const auto live=stroke.preview();
+    const auto result=stroke.commit();
+    REQUIRE(live->pixel(48,24)==result->pixel(48,24));
+    REQUIRE(std::abs(int(result->pixel(48,24).a)-128)<=1);
+    REQUIRE(result->pixel(20,29).a==0&&result->pixel(74,29).a>0);
+    GrowingBrushSession canceled(base,s,96,48);
+    canceled.begin(click,.25);
+    REQUIRE(canceled.preview()->changed()&&canceled.cancel()->materializeLayer()==base);
+
+    auto masked=base;
+    masked.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{1,1,{0}})};
+    s.color={255,255,255};
+    GrowingBrushSession mask(masked,s,96,48,{},{},true);
+    mask.begin(click,.25);
+    const auto paintedMask=mask.commit()->materializeLayer();
+    REQUIRE(paintedMask.raster==masked.raster&&paintedMask.mask->raster->pixel(30,24)==51);
+}
 void unchanged_grid(){auto l=layer(512,256,{64,32,16,128});auto s=settings();s.hardness=.3;s.opacity=.6;BrushSession old(l.raster,s);GrowingBrushSession grown(l,s,512,256);for(Point p:std::array<Point,4>{{{60,80},{90,100},{120,70},{150,105}}}){if(p.x==60){old.begin(p);grown.begin(p);}else{old.append(p);grown.append(p);}}auto a=old.commit(),b=grown.commit()->materializeLayer().raster;for(int y=0;y<256;++y)for(int x=0;x<512;++x)REQUIRE(a->pixel(x,y)==b->pixel(x,y));REQUIRE(b->tiles[1]==l.raster->tiles[1]);}
 void blank_30000(){Layer l;l.id=newId();l.transform={0,0,30000,30000};Raster::resetMaterializationCount();GrowingBrushSession stroke(l,settings(),30000,30000);stroke.begin({15000,15000});auto first=stroke.preview();stroke.append({15010,15000});auto done=stroke.commit();auto bounds=done->sourceBounds();REQUIRE(bounds.width<30&&bounds.height<20&&bounds.x>14990&&bounds.y>14990);REQUIRE(first->pixel(15010,15000).a==0&&done->pixel(15010,15000).a>0);auto changed=done->materializeLayer();REQUIRE(changed.raster&&changed.raster->width==bounds.width&&changed.transform.x==bounds.x&&changed.transform.y==bounds.y);REQUIRE(stroke.metrics().sparsePixelTiles<=4&&Raster::materializationCount()==0);}
 void growth_padding_masks(){auto l=layer(64,64,{255,0,0,255});l.transform={100,100,64,64};auto mask=std::make_shared<GrayRaster>(GrayRaster{1,1,{0}});l.mask=Mask{mask};GrowingBrushSession stroke(l,settings(),512,512);stroke.begin({190,130});auto done=stroke.commit();auto bounds=done->sourceBounds();REQUIRE(bounds.x==0&&bounds.width>90&&bounds.width<100);REQUIRE(done->pixel(70,30)==Pixel{}&&done->pixel(90,30).b>0);auto changed=done->materializeLayer();REQUIRE(changed.mask->raster->pixel(10,10)==0&&changed.mask->raster->pixel(70,30)==255);REQUIRE(changed.raster->pixel(70,30)==Pixel{});l.mask->placement=Transform{20,30,64,64};l.mask->linked=false;GrowingBrushSession placed(l,settings(),512,512);placed.begin({90,130});auto moved=placed.commit()->materializeLayer();REQUIRE(moved.mask==l.mask&&moved.transform.x<100);auto point=moved.transform.fromUnit({(0-moved.transform.x+100)/moved.transform.width,.5});REQUIRE(std::abs(point.x-100)<1e-6);}
@@ -70,4 +111,4 @@ void benchmarkViewport(std::shared_ptr<D3D11BrushCoverage> gpu,const char* backe
 }
 void viewport_benchmark_cpu(){benchmarkViewport({},"CPU");}
 void viewport_benchmark_warp(){auto shader=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"shaders"/"BrushCoverage.hlsl";auto gpu=std::make_shared<D3D11BrushCoverage>(shader,true);std::cout<<"BACKEND "<<gpu->adapterName()<<'\n';benchmarkViewport(gpu,"WARP");}
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"deep_brush",deep_brush},{"unchanged_grid",unchanged_grid},{"blank_30000",blank_30000},{"growth_padding_masks",growth_padding_masks},{"transformed_growth",transformed_growth},{"selection_cancel_mask",selection_cancel_mask},{"atomic_budget",atomic_budget},{"immutable_history",immutable_history},{"empty_erase_noop",empty_erase_noop},{"gpu_equivalence",gpu_equivalence},{"invalid_sample",invalid_sample},{"viewport_image",viewport_image},{"viewport_transformed",viewport_transformed},{"viewport_mask",viewport_mask},{"region_row_copies",region_row_copies},{"small_source_growth",small_source_growth},{"benchmark",benchmark},{"viewport_benchmark_cpu",viewport_benchmark_cpu},{"viewport_benchmark_warp",viewport_benchmark_warp}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify growing brush check");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"deep_brush",deep_brush},{"pen_pressure",pen_pressure},{"unchanged_grid",unchanged_grid},{"blank_30000",blank_30000},{"growth_padding_masks",growth_padding_masks},{"transformed_growth",transformed_growth},{"selection_cancel_mask",selection_cancel_mask},{"atomic_budget",atomic_budget},{"immutable_history",immutable_history},{"empty_erase_noop",empty_erase_noop},{"gpu_equivalence",gpu_equivalence},{"invalid_sample",invalid_sample},{"viewport_image",viewport_image},{"viewport_transformed",viewport_transformed},{"viewport_mask",viewport_mask},{"region_row_copies",region_row_copies},{"small_source_growth",small_source_growth},{"benchmark",benchmark},{"viewport_benchmark_cpu",viewport_benchmark_cpu},{"viewport_benchmark_warp",viewport_benchmark_warp}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify growing brush check");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}

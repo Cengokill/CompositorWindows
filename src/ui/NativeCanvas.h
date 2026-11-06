@@ -15,6 +15,7 @@
 #include <QFutureWatcher>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <d3d11.h>
 #include <d2d1_1.h>
@@ -123,6 +124,7 @@ private:
     uint64_t presentationBytes_{},profileDiscoveryCount_{};
     uint64_t presentationByteBudget_{128ULL*1024*1024};
     bool warp_,dragging_{},rightDragging_{},panning_{},tabletActive_{};
+    std::optional<double> tabletPressure_;
     double backingScale_{1};
     bool followsFit_{true};
     bool blackSurround_{};
@@ -198,7 +200,13 @@ public:
     std::function<void(bool horizontal,double position)> guideDragUpdated;
     std::function<void(bool horizontal,double position,int index)> guideDragFinished;
     std::function<void()> guideDragCanceled;
-    std::function<void(QPointF,Qt::KeyboardModifiers)> pointerDown,pointerMove,pointerUp;
+    struct PointerSample {
+        QPointF position;
+        std::optional<double> pressure;
+        PointerSample(QPointF point,std::optional<double> penPressure={}) : position(point),pressure(penPressure) {}
+        PointerSample(double x,double y) : position(x,y) {}
+    };
+    std::function<void(PointerSample,Qt::KeyboardModifiers)> pointerDown,pointerMove,pointerUp;
     std::function<void(QPointF,Qt::KeyboardModifiers)> pointerDoubleClick;
     std::function<void()> pointerCancel;
     std::function<void()> pointerInterrupted;

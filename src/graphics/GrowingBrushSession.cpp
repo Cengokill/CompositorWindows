@@ -22,7 +22,6 @@ void budget(BrushSourceRect bounds,uint64_t pixels){if(bounds.empty()||bounds.wi
 bool validPoint(Point p){return std::isfinite(p.x)&&std::isfinite(p.y)&&std::abs(p.x)<=1e7&&std::abs(p.y)<=1e7;}
 uint8_t byte(double v){return uint8_t(std::clamp(v+.5,0.,255.));}
 Pixel paint(Pixel original,const BrushSessionSettings& settings,double amount){if(amount<=0)return original;if(settings.erase)return {byte(original.r*(1-amount)),byte(original.g*(1-amount)),byte(original.b*(1-amount)),byte(original.a*(1-amount))};Pixel result{byte(settings.color[0]*amount+original.r*(1-amount)),byte(settings.color[1]*amount+original.g*(1-amount)),byte(settings.color[2]*amount+original.b*(1-amount)),byte(255*amount+original.a*(1-amount))};result.r=std::min(result.r,result.a);result.g=std::min(result.g,result.a);result.b=std::min(result.b,result.a);return result;}
-BrushSegment segment(Point a,Point b){return {float(a.x),float(a.y),float(b.x),float(b.y)};}
 }
 struct GrowingBrushSnapshot::Impl {
     Layer original;
@@ -208,7 +207,7 @@ struct GrowingBrushSession::Impl {
     std::shared_ptr<const GrayRaster> selection;
     std::map<BrushTileKey,std::shared_ptr<const BrushTile>> coverage;
     std::set<BrushTileKey> tailKeys;
-    std::vector<Point> samples;
+    std::vector<BrushSample> samples;
     std::optional<BrushSourceRect> allocated;
     GrowingBrushMetrics metrics;
     uint64_t limit{};
@@ -252,15 +251,18 @@ struct GrowingBrushSession::Impl {
         next.crop=bounds.empty()?nextAllocated.value_or(BrushSourceRect{0,0,next.baseWidth,next.baseHeight}):bounds;budget(next.crop,limit);next.placed();
     }
     std::set<BrushTileKey> affected(std::span<const BrushSegment> segments)const{
-        std::set<BrushTileKey> result;double det=mapping.a*mapping.d-mapping.b*mapping.c,reach=settings.radius+2;auto inverse=[&](double x,double y){x-=mapping.tx;y-=mapping.ty;return Point{(mapping.d*x-mapping.c*y)/det,(-mapping.b*x+mapping.a*y)/det};};const auto extent=state->extent;
-        for(auto seg:segments){double l=std::max(0.,double(std::min(seg.x0,seg.x1))-reach),t=std::max(0.,double(std::min(seg.y0,seg.y1))-reach),r=std::min(double(mapping.canvasWidth),double(std::max(seg.x0,seg.x1))+reach),b=std::min(double(mapping.canvasHeight),double(std::max(seg.y0,seg.y1))+reach);if(l>=r||t>=b)continue;double x0=INFINITY,y0=INFINITY,x1=-INFINITY,y1=-INFINITY;for(auto p:std::array{inverse(l,t),inverse(r,t),inverse(l,b),inverse(r,b)}){x0=std::min(x0,p.x);y0=std::min(y0,p.y);x1=std::max(x1,p.x);y1=std::max(y1,p.y);}int left=int(std::clamp(std::floor(x0),double(extent.x),double(extent.x+extent.width))),top=int(std::clamp(std::floor(y0),double(extent.y),double(extent.y+extent.height))),right=int(std::clamp(std::ceil(x1),double(extent.x),double(extent.x+extent.width))),bottom=int(std::clamp(std::ceil(y1),double(extent.y),double(extent.y+extent.height)));if(left>=right||top>=bottom)continue;auto first=state->key(left,top),last=state->key(right-1,bottom-1);auto firstPoint=state->origin(first),lastPoint=state->origin(last);BrushSourceRect candidate{int(firstPoint.x),int(firstPoint.y),std::min(extent.x+extent.width,int(lastPoint.x)+256)-int(firstPoint.x),std::min(extent.y+extent.height,int(lastPoint.y)+256)-int(firstPoint.y)};budget(unite(allocated.value_or(state->mask||state->original.raster?BrushSourceRect{0,0,state->baseWidth,state->baseHeight}:BrushSourceRect{}),candidate),limit);for(int y=first.y;y<=last.y;++y)for(int x=first.x;x<=last.x;++x)result.insert({x,y});}
+        std::set<BrushTileKey> result;double det=mapping.a*mapping.d-mapping.b*mapping.c;auto inverse=[&](double x,double y){x-=mapping.tx;y-=mapping.ty;return Point{(mapping.d*x-mapping.c*y)/det,(-mapping.b*x+mapping.a*y)/det};};const auto extent=state->extent;
+        for(const auto& seg:segments){
+            if(seg.strength0==0 && seg.strength1==0)continue;
+            const double reach=settings.radius*std::max(seg.size0,seg.size1)+2;
+            double l=std::max(0.,double(std::min(seg.x0,seg.x1))-reach),t=std::max(0.,double(std::min(seg.y0,seg.y1))-reach),r=std::min(double(mapping.canvasWidth),double(std::max(seg.x0,seg.x1))+reach),b=std::min(double(mapping.canvasHeight),double(std::max(seg.y0,seg.y1))+reach);if(l>=r||t>=b)continue;double x0=INFINITY,y0=INFINITY,x1=-INFINITY,y1=-INFINITY;for(auto p:std::array{inverse(l,t),inverse(r,t),inverse(l,b),inverse(r,b)}){x0=std::min(x0,p.x);y0=std::min(y0,p.y);x1=std::max(x1,p.x);y1=std::max(y1,p.y);}int left=int(std::clamp(std::floor(x0),double(extent.x),double(extent.x+extent.width))),top=int(std::clamp(std::floor(y0),double(extent.y),double(extent.y+extent.height))),right=int(std::clamp(std::ceil(x1),double(extent.x),double(extent.x+extent.width))),bottom=int(std::clamp(std::ceil(y1),double(extent.y),double(extent.y+extent.height)));if(left>=right||top>=bottom)continue;auto first=state->key(left,top),last=state->key(right-1,bottom-1);auto firstPoint=state->origin(first),lastPoint=state->origin(last);BrushSourceRect candidate{int(firstPoint.x),int(firstPoint.y),std::min(extent.x+extent.width,int(lastPoint.x)+256)-int(firstPoint.x),std::min(extent.y+extent.height,int(lastPoint.y)+256)-int(firstPoint.y)};budget(unite(allocated.value_or(state->mask||state->original.raster?BrushSourceRect{0,0,state->baseWidth,state->baseHeight}:BrushSourceRect{}),candidate),limit);for(int y=first.y;y<=last.y;++y)for(int x=first.x;x<=last.x;++x)result.insert({x,y});}
         return result;
     }
     void render(std::span<const BrushSegment> settled,std::span<const BrushSegment> tail){
         auto begin=Clock::now();auto nextTail=affected(tail),changed=affected(settled);changed.insert(nextTail.begin(),nextTail.end());changed.insert(tailKeys.begin(),tailKeys.end());if(changed.empty()){tailKeys=std::move(nextTail);return;}
         auto nextAllocated=allocated;struct Work{BrushTileKey key;int x,y;std::shared_ptr<BrushTile> tile;BrushUniforms uniforms;};std::vector<Work> work;work.reserve(changed.size());
         for(auto key:changed){auto p=state->origin(key);int x=int(p.x),y=int(p.y),w=std::min(256,state->extent.x+state->extent.width-x),h=std::min(256,state->extent.y+state->extent.height-y);BrushSourceRect rect{x,y,w,h};if(!coverage.contains(key)){auto bounds=nextAllocated.value_or(state->mask||state->original.raster?BrushSourceRect{0,0,state->baseWidth,state->baseHeight}:BrushSourceRect{});nextAllocated=unite(bounds,rect);budget(*nextAllocated,limit);}
-            auto found=coverage.find(key);auto tile=found==coverage.end()?std::make_shared<BrushTile>(uint32_t(w),uint32_t(h)):std::make_shared<BrushTile>(*found->second);BrushUniforms u;u.mapping={float(mapping.a),float(mapping.b),float(mapping.c),float(mapping.d)};u.geometry={float(mapping.tx+x*mapping.a+y*mapping.c),float(mapping.ty+x*mapping.b+y*mapping.d),float(settings.radius),float(settings.hardness)};u.canvas={float(mapping.canvasWidth),float(mapping.canvasHeight),float(std::max(.001,std::min(std::hypot(mapping.a,mapping.b),std::hypot(mapping.c,mapping.d)))),float(std::max(.25,settings.radius*2*(settings.hardness>=1?.015:.025)))};work.push_back({key,x,y,std::move(tile),u});}
+            auto found=coverage.find(key);auto tile=found==coverage.end()?std::make_shared<BrushTile>(uint32_t(w),uint32_t(h),settings.capsSoftOpacity()):std::make_shared<BrushTile>(*found->second);BrushUniforms u;u.mapping={float(mapping.a),float(mapping.b),float(mapping.c),float(mapping.d)};u.geometry={float(mapping.tx+x*mapping.a+y*mapping.c),float(mapping.ty+x*mapping.b+y*mapping.d),float(settings.radius),float(settings.hardness)};u.canvas={float(mapping.canvasWidth),float(mapping.canvasHeight),float(std::max(.001,std::min(std::hypot(mapping.a,mapping.b),std::hypot(mapping.c,mapping.d)))),float(std::max(.25,settings.radius*2*(settings.hardness>=1?.015:.025)))};work.push_back({key,x,y,std::move(tile),u});}
         auto prepared=Clock::now();metrics.coverage.tilePreparationMilliseconds+=std::chrono::duration<double,std::milli>(prepared-begin).count();
         std::vector<BrushTileRender> requests;requests.reserve(work.size());
         for(auto& item:work)requests.push_back({item.tile.get(),item.uniforms});
@@ -299,17 +301,46 @@ struct GrowingBrushSession::Impl {
         }
         if(state->widePaint){next->hdrCoverage=nextCoverage;pixelsChanged=true;}
         if(pixelsChanged){next->changed=!next->tiles.empty()||!next->hdrCoverage.empty();BrushSourceRect bounds=next->mask||next->original.raster?BrushSourceRect{0,0,next->baseWidth,next->baseHeight}:BrushSourceRect{};if(!next->mask)for(const auto& [key,tile]:next->tiles){(void)key;bounds=unite(bounds,tile.alpha);}next->crop=bounds.empty()?nextAllocated.value_or(BrushSourceRect{0,0,next->baseWidth,next->baseHeight}):bounds;budget(next->crop,limit);next->placed();}
-        coverage.swap(nextCoverage);tailKeys.swap(nextTail);allocated=nextAllocated;metrics.coverage.settledSegments+=settled.size();metrics.coverage.touchedTiles=coverage.size();metrics.coverage.coverageStorageBytes=0;for(const auto& [key,tile]:coverage){(void)key;metrics.coverage.coverageStorageBytes+=tile->permanent.size()*sizeof(float)+tile->preview.size();}
+        coverage.swap(nextCoverage);tailKeys.swap(nextTail);allocated=nextAllocated;metrics.coverage.settledSegments+=settled.size();metrics.coverage.touchedTiles=coverage.size();metrics.coverage.coverageStorageBytes=0;for(const auto& [key,tile]:coverage){(void)key;metrics.coverage.coverageStorageBytes+=tile->permanent.size()*sizeof(float)+tile->preview.size()+tile->pressureCap.size()*sizeof(float);}
         if(pixelsChanged){state=std::move(next);published=std::shared_ptr<const GrowingBrushSnapshot>(new GrowingBrushSnapshot(state));++metrics.snapshots;++metrics.coverage.publishedSnapshots;}
         metrics.coverage.tileCompositionMilliseconds+=std::chrono::duration<double,std::milli>(Clock::now()-covered).count();
     }
 };
 GrowingBrushSession::GrowingBrushSession(Layer layer,BrushSessionSettings settings,int cw,int ch,std::shared_ptr<D3D11BrushCoverage> accelerator,std::shared_ptr<const GrayRaster> selection,bool mask,uint64_t budget,GrowingTileCompositor compositor):impl_(std::make_unique<Impl>(std::move(layer),settings,cw,ch,std::move(accelerator),std::move(selection),mask,budget,std::move(compositor))){}
 GrowingBrushSession::~GrowingBrushSession()=default;
-bool GrowingBrushSession::begin(Point point){if(impl_->begun||impl_->finished)throw std::logic_error("Growing stroke already started");if(!validPoint(point)||impl_->emptySelection)return false;impl_->begun=true;try{return append(point);}catch(...){impl_->begun=false;throw;}}
-bool GrowingBrushSession::append(Point point){if(!impl_->begun||impl_->finished)throw std::logic_error("Growing stroke is not active");if(!validPoint(point)||!impl_->samples.empty()&&impl_->samples.back()==point)return false;auto next=impl_->samples;next.push_back(point);if(next.size()>4)next.erase(next.begin());size_t n=next.size();std::vector<BrushSegment> settled,tail;if(n==1)settled.push_back(segment(point,point));else if(n>=3)settled=brushContinuousCurve(next[n-3],next[n-2],next[n>=4?n-4:0],point);if(n>=2)tail.push_back(segment(next[n-2],point));impl_->render(settled,tail);impl_->samples.swap(next);++impl_->metrics.coverage.acceptedSamples;return true;}
+bool GrowingBrushSession::begin(Point point,double pressure) {
+    if(impl_->begun||impl_->finished)throw std::logic_error("Growing stroke already started");
+    if(!validPoint(point)||impl_->emptySelection)return false;
+    impl_->begun=true;
+    try{return append(point,pressure);}catch(...){impl_->begun=false;throw;}
+}
+bool GrowingBrushSession::append(Point point,double pressure) {
+    auto& stroke=*impl_;
+    if(!stroke.begun||stroke.finished)throw std::logic_error("Growing stroke is not active");
+    if(!validPoint(point)||(!stroke.samples.empty()&&stroke.samples.back().point==point))return false;
+    auto next=stroke.samples;
+    next.push_back(normalizedBrushSample(point,pressure));
+    if(next.size()>4)next.erase(next.begin());
+    const auto count=next.size();
+    std::vector<BrushSegment> settled,tail;
+    if(count==1)settled.push_back(brushSegment(next[0],next[0],stroke.settings));
+    else if(count>=3)settled=brushContinuousCurve(next[count-3],next[count-2],next[count>=4?count-4:0].point,point,stroke.settings);
+    if(count>=2)tail.push_back(brushSegment(next[count-2],next[count-1],stroke.settings));
+    stroke.render(settled,tail);
+    stroke.samples.swap(next);
+    ++stroke.metrics.coverage.acceptedSamples;
+    return true;
+}
 std::shared_ptr<const GrowingBrushSnapshot> GrowingBrushSession::preview()const{return impl_->published;}
-void GrowingBrushSession::flushCoverage(){if(!impl_->finished&&impl_->samples.size()>=2){auto n=impl_->samples.size();auto settled=brushContinuousCurve(impl_->samples[n-2],impl_->samples[n-1],impl_->samples[n>=3?n-3:0],impl_->samples[n-1]);impl_->render(settled,{});impl_->samples={impl_->samples.back()};}}
+void GrowingBrushSession::flushCoverage() {
+    auto& stroke=*impl_;
+    const auto count=stroke.samples.size();
+    if(stroke.finished||count<2)return;
+    const auto last=stroke.samples.back();
+    auto settled=brushContinuousCurve(stroke.samples[count-2],last,stroke.samples[count>=3?count-3:0].point,last.point,stroke.settings);
+    stroke.render(settled,{});
+    stroke.samples={last};
+}
 BrushSourceRect GrowingBrushSession::virtualBounds()const{return impl_->state->extent;}
 std::vector<GrowingCoverageTile> GrowingBrushSession::coverageSnapshot()const{std::vector<GrowingCoverageTile> result;for(const auto& [key,tile]:impl_->coverage){const auto p=impl_->state->origin(key);result.push_back({{int(p.x),int(p.y),int(tile->width),int(tile->height)},tile});}return result;}
 std::shared_ptr<const Raster> GrowingBrushSession::readOriginal(BrushSourceRect rect)const{return impl_->originalSnapshot->sample(rect.x,rect.y,rect.width,rect.height);}
