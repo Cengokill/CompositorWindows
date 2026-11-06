@@ -229,9 +229,12 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
             canvas->pointerDown({20,20},{});
             canvas->pointerUp({20,20},{});
         };
+        const auto requireMissingFace=[&]{
+            require(control<QToolButton>(window,"textFont")->text()=="Missing Font 75","Toolbar replaced the saved family");
+            require(control<QComboBox>(window,"textStyle")->currentText()=="Unavailable Style","Toolbar replaced the saved face");
+        };
         edit();
-        require(control<QToolButton>(window,"textFont")->text()=="Missing Font 75","Toolbar replaced the saved family");
-        require(control<QComboBox>(window,"textStyle")->currentText()=="Unavailable Style","Toolbar replaced the saved face");
+        requireMissingFace();
         auto* search=openFontPicker(window);
         auto* results=control<QListWidget>(window,"textFontResults");
         require(results->count()>0&&!results->currentItem(),"Opening with a missing family highlighted an unrelated face");
@@ -242,10 +245,13 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         QTest::keyClick(search,Qt::Key_Escape);
         require(!results->currentItem(),"Clearing search highlighted an unrelated face");
         QTest::keyClick(search,Qt::Key_Escape);
+        require(QTest::qWaitFor([&]{return !search->isVisible()&&canvas->hasFocus();},std::chrono::seconds(2)),
+                "Closing the picker did not return focus to the canvas");
         action(window,"textDone");
         require(!control<QAction>(window,"command.edit.undo")->isEnabled(),
-                "Opening, filtering and finishing rewrote the missing face");
+                "Finishing without a font choice added a document undo step");
         edit();
+        requireMissingFace();
         openFontPicker(window)->setText("Arial Regular");
         clickFontRow(control<QListWidget>(window,"textFontResults"),"Arial \xE2\x80\x94 Regular");
         action(window,"textDone");

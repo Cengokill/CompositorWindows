@@ -272,6 +272,7 @@ public:
     }
     std::function<void(const text::FontFace*)> onPreview;
     std::function<void(const text::FontFace*)> onClosed;
+    std::function<void()> onReturnFocus;
 protected:
     bool eventFilter(QObject* watched,QEvent* event)override{
         if(watched==search_&&event->type()==QEvent::KeyPress){
@@ -286,7 +287,7 @@ protected:
                 if(key->modifiers()==Qt::NoModifier||key->modifiers()==Qt::KeypadModifier)choose(results_->currentItem());
                 return true;
             case Qt::Key_Escape:
-                if(search_->text().isEmpty())hide();else search_->clear();
+                if(search_->text().isEmpty())closeFromPicker(nullptr);else search_->clear();
                 return true;
             default: break;
             }
@@ -335,9 +336,12 @@ private:
         previewTimer_.start();
     }
     void choose(QListWidgetItem* item){
-        if(!item)return;
-        chosen_=faceAt(item);
+        if(item)closeFromPicker(faceAt(item));
+    }
+    void closeFromPicker(const text::FontFace* face){
+        chosen_=face;
         hide();
+        onReturnFocus();
     }
     QPointer<QToolButton> anchor_;
     std::shared_ptr<const std::vector<text::FontFace>> faces_;
@@ -390,13 +394,13 @@ void MainWindow::setupTypeControls(){
             popup->onPreview=[this](const text::FontFace* face){
                 if(face)setTextFontFace(*face,true);else endTextFontPreview();
             };
-            popup->onClosed=[this,fonts,popup](const text::FontFace* face){
+            popup->onClosed=[this](const text::FontFace* face){
                 if(face)setTextFontFace(*face,false);else endTextFontPreview();
-                QTimer::singleShot(0,this,[this,button=QPointer<QToolButton>(fonts),picker=QPointer<QWidget>(popup),owner=QPointer<NativeCanvas>(canvas())]{
-                    auto* focus=QApplication::focusWidget();
-                    if(owner&&canvas()==owner.data()&&picker&&!picker->isVisible()&&isActiveWindow()&&
-                       (!focus||focus==button.data()||picker->isAncestorOf(focus)))focusTextCanvas();
-                });
+            };
+            popup->onReturnFocus=[this]{
+                // Hiding a popup can leave its owner inactive until Qt processes the focus change.
+                activateWindow();
+                focusTextCanvas();
             };
         }
         const bool editing=textSession_&&textSession_->owner==current();
