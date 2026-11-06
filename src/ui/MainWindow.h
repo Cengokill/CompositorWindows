@@ -160,6 +160,7 @@ private:
     TextContent textDefaults_{};
     QPointer<QWidget> textFontPopup_;
     QString textStylesFamily_;
+    std::shared_ptr<const std::vector<text::FontFace>> textStylesCatalog_;
     struct TextSession {
         EditorProject* owner{};
         std::string layerId;

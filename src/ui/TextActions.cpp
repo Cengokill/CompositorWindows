@@ -198,7 +198,7 @@ QString fontSearchKey(QString name){
 class TextFontPopup final:public QWidget{
 public:
     TextFontPopup(QWidget* parent,QToolButton* anchor)
-        :QWidget(parent,Qt::Popup),anchor_(anchor),faces_(text::installedFontFaces()){
+        :QWidget(parent,Qt::Popup),anchor_(anchor){
         setObjectName("textFontPopup");
         setStyleSheet(R"(
             QWidget#textFontPopup { background:#26282d; border:1px solid #454850; }
@@ -224,10 +224,6 @@ public:
         layout->addWidget(search_);
         layout->addWidget(results_,1);
         layout->addWidget(empty_,1);
-        for(const auto& face:faces_){
-            labels_.push_back(unitsOf(face.family)+" — "+unitsOf(face.style));
-            keys_.push_back(fontSearchKey(labels_.back()));
-        }
         search_->installEventFilter(this);
         previewTimer_.setSingleShot(true);
         previewTimer_.setInterval(80);
@@ -244,6 +240,16 @@ public:
     }
     void open(const text::FontFace& selected){
         if(open_||!anchor_)return;
+        const auto catalog=text::installedFontFaces(true);
+        if(faces_!=catalog){
+            faces_=catalog;
+            labels_.clear();
+            keys_.clear();
+            for(const auto& face:*faces_){
+                labels_.push_back(unitsOf(face.family)+" — "+unitsOf(face.style));
+                keys_.push_back(fontSearchKey(labels_.back()));
+            }
+        }
         initialFace_=text::installedFontFace(selected);
         {
             const QSignalBlocker block(search_);
@@ -300,7 +306,7 @@ protected:
     }
 private:
     const text::FontFace* faceAt(const QListWidgetItem* item)const{
-        return &faces_[item->data(Qt::UserRole).toULongLong()];
+        return &(*faces_)[item->data(Qt::UserRole).toULongLong()];
     }
     void refill(const QString& query){
         static const QRegularExpression whitespace("\\s+",QRegularExpression::UseUnicodePropertiesOption);
@@ -309,7 +315,7 @@ private:
         int current=-1;
         for(qsizetype i=0;i<labels_.size();++i){
             if(!std::all_of(terms.cbegin(),terms.cend(),[&](const QString& word){return keys_[i].contains(word);}))continue;
-            const auto& face=faces_[size_t(i)];
+            const auto& face=(*faces_)[size_t(i)];
             if(terms.isEmpty()&&face==initialFace_)current=results_->count();
             auto* item=new QListWidgetItem(labels_[i],results_);
             item->setData(Qt::UserRole,QVariant::fromValue(qulonglong(i)));
@@ -334,7 +340,7 @@ private:
         hide();
     }
     QPointer<QToolButton> anchor_;
-    const std::vector<text::FontFace>& faces_;
+    std::shared_ptr<const std::vector<text::FontFace>> faces_;
     text::FontFace initialFace_;
     QStringList labels_,keys_;
     QLineEdit* search_{};
@@ -397,6 +403,7 @@ void MainWindow::setupTypeControls(){
         const int start=editing?std::min(textSession_->caret,textSession_->anchor):0;
         const int length=editing?std::abs(textSession_->caret-textSession_->anchor):0;
         popup->open(textFaceAt(editing?textSession_->style:textDefaults_,start,length));
+        refreshTypeControls();
     });
     auto* styleTimer=new QTimer(styles);styleTimer->setObjectName("textStylePreviewTimer");styleTimer->setSingleShot(true);styleTimer->setInterval(80);
     connect(styles,&QComboBox::highlighted,this,[styles,styleTimer](int index){if(index<0||styles->property("typePopupQuiet").toBool()||!styles->view()||!styles->view()->isVisible()||index==styles->currentIndex())return;styleTimer->setProperty("style",styles->itemText(index));styleTimer->start();});
@@ -458,12 +465,14 @@ void MainWindow::refreshTypeControls(){
         const QSignalBlocker block(styles);
         if(available){
             const QString family=unitsOf(face.family);
-            if(textStylesFamily_!=family){
+            const auto catalog=text::installedFontFaces();
+            if(textStylesFamily_!=family||textStylesCatalog_!=catalog){
                 styles->clear();
-                if(!family.isEmpty())for(const auto& installed:text::installedFontFaces()){
+                if(!family.isEmpty())for(const auto& installed:*catalog){
                     if(sameFontName(face.family,installed.family))styles->addItem(unitsOf(installed.style));
                 }
                 textStylesFamily_=family;
+                textStylesCatalog_=catalog;
             }
             const QString wanted=face.family.empty()||face.style.empty()?QString("Multiple"):unitsOf(face.style);
             styles->setCurrentIndex(face.family.empty()? -1:styles->findText(wanted,Qt::MatchFixedString));

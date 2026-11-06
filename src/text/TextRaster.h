@@ -9,8 +9,9 @@ struct FontFace {
     std::string family, style;
     bool operator==(const FontFace&) const = default;
 };
-// Names accepted by the same DirectWrite collection that lays out text.
-const std::vector<FontFace>& installedFontFaces();
+// Snapshot of the DirectWrite collection that lays out text. Refresh checks for
+// changes to installed fonts and leaves existing snapshots valid.
+std::shared_ptr<const std::vector<FontFace>> installedFontFaces(bool refresh=false);
 // Resolves a saved face to its catalog names. A missing family has no picker match.
 FontFace installedFontFace(const FontFace& saved);
 struct RasterizedText {std::shared_ptr<const Raster> raster;int width{},height{};};
