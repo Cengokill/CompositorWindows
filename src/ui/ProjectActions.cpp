@@ -138,6 +138,7 @@ void detach(NativeCanvas*canvas){
 }
 }
 MainWindow::~MainWindow(){
+    delete textFontPopup_.data();
     if(movePreviewJob_)movePreviewJob_->shutdown();
     if(viewportComposite_)viewportComposite_->shutdown();
     detachOpacityPercent();
@@ -209,6 +210,7 @@ void MainWindow::switchProject(){
     }
     if(auto* panel=ui::LayerPanelController::find(layers_))panel->finishVisibilitySwipe();
     finishVisibilitySwipe();finishOpacityEdit();
+    if(textFontPopup_)textFontPopup_->hide();
     if(textSession_&&textSession_->owner==activeProject_)finishText();
     if(activeProject_)captureToolState(*activeProject_);
     if(transformSession_&&transformSession_->persistent)applyTransformSession();

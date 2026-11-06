@@ -69,6 +69,15 @@ void font_range(){
     REQUIRE(text.fontFamily=="Courier New"&&text.fontRuns.empty());
     setTextSize(text,72);
     REQUIRE(text.fontSize==72&&textRunsValid(text));
+
+    setTextFont(text,"Segoe UI","Regular",1,2);
+    text.fontRuns[0].fontSize=36;
+    setTextFont(text,"Arial","Bold Italic",2,1);
+    REQUIRE(text.fontRuns.size()==2&&text.fontRuns[1].fontStyle=="Bold Italic"&&text.fontRuns[1].fontSize==36);
+    setTextFont(text,"Arial","Italic",0,0);
+    REQUIRE(text.fontFamily=="Arial"&&text.fontStyle=="Italic"&&text.fontSize==72);
+    REQUIRE(text.fontRuns.size()==1&&text.fontRuns[0].location==1&&text.fontRuns[0].length==2&&text.fontRuns[0].fontSize==36);
+    REQUIRE(text.fontRuns[0].fontFamily=="Arial"&&text.fontRuns[0].fontStyle=="Italic"&&textRunsValid(text));
 }
 void paragraph_layout(){
     const HRESULT started=CoInitializeEx(nullptr,COINIT_MULTITHREADED);

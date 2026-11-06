@@ -10,8 +10,8 @@ int utf16Length(std::string_view utf8);
 bool textRunsValid(const TextContent& text);
 // An empty range, or one covering every unit, sets the base color and clears runs.
 void setTextColor(TextContent& text, double red, double green, double blue, int location, int length);
-// An empty range, or one covering every unit, sets the base face and clears runs.
-// A run copies the layer font size so the saved record stays inside the format limits.
+// An empty range, or one covering every unit, sets the face for the entire layer.
+// Existing font sizes are preserved, including sizes stored in text runs.
 // The style name is an installed variant such as Regular, Bold, or Italic.
 void setTextFont(TextContent& text, std::string family, int location, int length);
 void setTextFont(TextContent& text, std::string family, std::string style, int location, int length);

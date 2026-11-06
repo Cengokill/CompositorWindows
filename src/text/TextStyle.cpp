@@ -108,9 +108,16 @@ void setTextFont(TextContent& text,std::string family,std::string style,int loca
     style=styleName(style);
     const int count=utf16Length(text.value);
     const auto [start,end]=rangeOf(location,length,count);
-    if(start==end||(start==0&&end==count)){text.fontFamily=std::move(family);text.fontStyle=std::move(style);text.fontRuns.clear();return;}
+    const bool whole=start==end||(start==0&&end==count);
+    if(whole&&text.fontRuns.empty()){
+        text.fontFamily=std::move(family);text.fontStyle=std::move(style);return;
+    }
     auto faces=facesOf(text,count);
-    for(int index=start;index<end;++index)faces[size_t(index)]={family,style,text.fontSize};
+    if(whole){text.fontFamily=family;text.fontStyle=style;}
+    for(int index=whole?0:start;index<(whole?count:end);++index){
+        faces[size_t(index)].family=family;
+        faces[size_t(index)].style=style;
+    }
     writeFaces(text,faces);
 }
 void setTextSize(TextContent& text,double size){

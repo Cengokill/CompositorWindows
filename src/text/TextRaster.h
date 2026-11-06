@@ -1,8 +1,16 @@
 #pragma once
 #include "core/Document.h"
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace compositor::text {
+struct FontFace {
+    std::string family, style;
+    bool operator==(const FontFace&) const = default;
+};
+// Names accepted by the same DirectWrite collection that lays out text.
+const std::vector<FontFace>& installedFontFaces();
 struct RasterizedText {std::shared_ptr<const Raster> raster;int width{},height{};};
 struct TextCaret { float x{},top{},height{}; int line{}; };
 struct TextCluster { float x{},top{},width{},height{}; int start{},length{},line{}; };
