@@ -194,7 +194,7 @@ void validateDocument(const Document& d) {
                 throw std::runtime_error("Invalid mask");
         }
     }
-    if (imagePixels > 100000000 || maskPixels > 100000000)
+    if (imagePixels > maxDocumentImagePixels || maskPixels > 100000000)
         throw std::runtime_error("Project pixel budget exceeded");
     if(d.selection && d.selection->coverage) {
         const auto& coverage=*d.selection->coverage;
