@@ -1,6 +1,9 @@
 #include "ui/MainWindow.h"
 #include "ui/EditPanelSession.h"
 #include "ui/LastFilterJob.h"
+#include "core/DocumentExport.h"
+#include "imaging/wic_codec.h"
+#include "persistence/ProjectStore.h"
 #include <QMessageBox>
 #include "ui/AdjustmentAdvancedControls.h"
 #include "effects/Adjustments.h"
@@ -14,10 +17,12 @@
 #include <QPushButton>
 #include <QJsonDocument>
 #include <QTest>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <map>
 
 using namespace compositor;
@@ -83,20 +88,96 @@ void rgb_split_small_layer_apply_undo(){
     trigger(f.window,"edit.undo");f.unchanged();
 }
 void rgb_split_canvas_split_layers(){
-    Fixture f;
+    auto doc=fixture({64,32,96,128});
+    doc.id=newId();doc.layers[0].id=newId();
+    auto mask=std::make_shared<GrayRaster>();mask->width=mask->height=1;mask->pixels={100};
+    doc.layers[0].mask=Mask{mask};doc.layers[0].opacity=.5;
+    Fixture f(std::move(doc));
+    f.project.history.begin("Rename",f.project.document,f.project.active);
+    f.project.document->layers[0].name="Renamed";
+    f.project.history.end(f.project.document,f.project.active);
     panel(f.window,"filter.rgb_split","RGB Split",[&](QDialog& p){
         field(p,"Distance")->setValue(8);ready(p);require(bool(f.project.effectPreview),"RGB Split preview is installed");
         for(auto* box:p.findChildren<QCheckBox*>())if(box->text()=="Radial")box->setChecked(true);
         ready(p);auto before=f.project.effectPreview;f.click({30,20});ready(p);
-        require(f.project.effectPreview&&f.project.effectPreview!=before,"radial RGB Split center updates preview");f.unchanged();
-        QPushButton* split=nullptr;for(auto* button:p.findChildren<QPushButton*>())if(button->text()=="Split to Layers")split=button;
-        require(split,"Split to Layers control");split->click();
+        require(f.project.effectPreview&&f.project.effectPreview!=before,"radial RGB Split center updates preview");
+        trigger(f.window,"edit.undo");f.unchanged();
+        f.project.history.byteLimit=0;
+        control<QPushButton>(p,"rgbSplitToLayers")->click();
         wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"Split to Layers did not close the panel");
     });
     require(f.project.document->layers.size()==5&&f.project.history.undoCount()==1,"Split to Layers adds original-channel layers");
-    require(f.project.document->layers[0].raster->rgba()==f.before.layers[0].raster->rgba(),"Split to Layers leaves the original pixels");
-    for(std::size_t i=1;i<5;++i)require(!f.project.document->layers[i].visible,"Split channels start hidden");
+    require(f.project.document->layers[0]==f.before.layers[0],"Split to Layers preserves the current source including its undone name and mask");
+    constexpr std::array names{"Red","Green","Blue","Alpha"};
+    constexpr std::array<std::uint8_t,4> intensities{128,64,191,128};
+    for(std::size_t i=0;i<names.size();++i){
+        const auto& layer=f.project.document->layers[i+1];
+        const auto value=intensities[i];
+        require(layer.name==names[i]&&!layer.visible&&!layer.mask&&layer.opacity==1&&layer.transform==f.before.layers[0].transform,
+                "Split channels are hidden, independent layers at the source placement");
+        require(layer.raster->pixel(5,5)==Pixel{value,value,value,255},"Split uses original straight channels");
+    }
+    require(!f.project.effectPreview,"Split clears the preview");
     require(SoftwareRenderer().render(*f.project.document,0,0,64,48)->rgba()==SoftwareRenderer().render(f.before,0,0,64,48)->rgba(),"Split to Layers preserves the rendered canvas");
+    const auto applied=f.project.document;
+    trigger(f.window,"edit.undo");f.unchanged();
+    trigger(f.window,"edit.redo");require(f.project.document==applied,"Split redo restores all four layers");
+
+    QTemporaryDir temp;require(temp.isValid(),"temporary directory for RGB Split round trip");
+    const auto root=std::filesystem::path(temp.path().toStdWString());
+    ProjectStore store(makeWicProjectCodec());
+    const auto package=root/"split.comp";
+    store.save(package,*applied,f.project.active);
+    const auto reopened=store.load(package);
+    require(reopened.document.layers.size()==5,"saved Split reopens with all layers");
+    for(std::size_t i=0;i<names.size();++i){
+        const auto& layer=reopened.document.layers[i+1];
+        const auto value=intensities[i];
+        require(layer.name==names[i]&&!layer.visible&&layer.raster->pixel(5,5)==Pixel{value,value,value,255},
+                "reopened Split preserves hidden channel pixels");
+    }
+    exportDocumentAtomic(f.before,root/"before.png");
+    exportDocumentAtomic(reopened.document,root/"after.png");
+    require(imaging::WicCodec::decode(root/"before.png").image.pixels==imaging::WicCodec::decode(root/"after.png").image.pixels,
+            "hidden split layers preserve flattened PNG pixels after reopen");
+}
+void rgb_split_canvas_cancel_layers(){
+    Fixture f;
+    panel(f.window,"filter.rgb_split","RGB Split",[&](QDialog& p){
+        ready(p);
+        control<QPushButton>(p,"rgbSplitToLayers")->click();
+        p.close();
+        require(!p.isVisible(),"Split can be cancelled while its channels are pending");
+    });
+    f.unchanged();require(!f.project.effectPreview,"closing during Split clears the preview");
+
+    auto doc=fixture();
+    auto deep=makeDeep(32,24,DeepImage::Format::Unorm16);
+    deep->setPixel(0,0,{.25f,.125f,.375f,.5f});
+    doc.layers[0].deep=deep;doc.layers[0].raster=rasterFromDeep(*deep);
+    Fixture wide(std::move(doc));
+    panel(wide.window,"filter.rgb_split","RGB Split",[&](QDialog& p){
+        ready(p);
+        auto answer=[&](QMessageBox::StandardButton button){
+            bool answered=false;
+            QTimer confirmation;
+            QObject::connect(&confirmation,&QTimer::timeout,&wide.window,[&]{
+                if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){
+                    answered=true;confirmation.stop();box->button(button)->click();
+                }
+            });
+            confirmation.start(5);
+            control<QPushButton>(p,"rgbSplitToLayers")->click();
+            require(answered,"16-bit Split shows a confirmation");
+        };
+        answer(QMessageBox::Cancel);wide.unchanged();
+        require(p.isVisible(),"declining 8-bit channel extraction keeps the filter open");
+        answer(QMessageBox::Ok);
+        wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"16-bit Split did not finish");
+    });
+    require(wide.project.document->layers.size()==5&&wide.project.history.undoCount()==1&&
+            wide.project.document->layers[0].deep==deep&&!wide.project.document->layers[1].deep,
+            "16-bit Split keeps source precision and adds 8-bit channel layers");
 }
 void live_filter_adjustments(){
     Fixture f;
@@ -179,4 +260,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}

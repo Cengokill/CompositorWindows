@@ -30,6 +30,7 @@
 #include <QStatusBar>
 #include <QMessageBox>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <utility>
@@ -131,6 +132,7 @@ filters::Request buildFilterRequest(EditorProject& project,const Document& befor
 }
 struct FilterOutput {
     std::optional<Document> document;
+    std::array<std::shared_ptr<const Raster>,4> channels;
     QImage thumbnail;
     QString error;
     QString viewportError;
@@ -198,6 +200,7 @@ class FilterPanel final:public ui::EditPanelSession {
     std::optional<RawViewport> runningViewport_,lastViewport_;
     int pendingNavigatorEdge_{};
     std::optional<Document> committed_;
+    std::array<std::shared_ptr<const Raster>,4> channels_;
     filters::CameraRawView runningRawView_;
     std::uint64_t version_{},runningVersion_{},retainedPreviewBytes_{};
     bool running_{},runningViewportOnly_{},balanceRunning_{},closed_{},committing_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
@@ -205,7 +208,7 @@ class FilterPanel final:public ui::EditPanelSession {
     bool autoBalancePending()const{return balanceRunning_&&raw_&&raw_->whiteBalanceIsAuto();}
     void retire(){if(closed_&&!running_&&!balanceRunning_)deleteLater();}
     void change(){
-        if(closed_||committing_)return;
+        if(closed_||committing_||splitLayers_)return;
         ++version_;
         if(raw_){
             request_.cameraRaw=raw_->rendered();request_.cameraRawView=raw_->previewView();syncGuideOverlay();
@@ -280,8 +283,19 @@ class FilterPanel final:public ui::EditPanelSession {
         if(closed_||running_)return;
         if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
         running_=true;runningVersion_=version_;runningRawView_=request_.cameraRawView;
-        request_.retainedBlurMargin=std::max(request_.retainedBlurMargin,filters::blurMargin(request_.kind,request_.settings));
         cancelled_=std::make_shared<std::atomic_bool>(false);
+        if(splitLayers_){
+            worker_.setFuture(QtConcurrent::run([source=original_.raster,limits=request_.limits,token=cancelled_]() mutable {
+                FilterOutput out;
+                try{
+                    limits.cancelled=[token]{return token->load();};
+                    out.channels=filters::splitChannels(*source,limits);
+                }catch(const std::exception& error){out.error=QString::fromUtf8(error.what());}
+                return out;
+            }));
+            return;
+        }
+        request_.retainedBlurMargin=std::max(request_.retainedBlurMargin,filters::blurMargin(request_.kind,request_.settings));
         auto job=request_;job.preview=!committing_;job.limits.cancelled=[token=cancelled_]{return token->load();};
         const auto existingGrade=viewportOnly?completedPreview_:nullptr;
         runningViewportOnly_=bool(existingGrade);
@@ -349,27 +363,19 @@ class FilterPanel final:public ui::EditPanelSession {
     void finish(int answer){
         if(closed_)return;closed_=true;cancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)positions()[request_.kind]=dialog_.pos();
         if(balanceCancelled_)balanceCancelled_->store(true);
-        try{if(splitLayers_&&host_.commit){
-            if(!original_.raster)throw std::runtime_error("RGB Split to Layers needs an image layer");
-            Document next=before_;
-            auto found=std::find_if(next.layers.begin(),next.layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
-            if(found==next.layers.end())throw std::runtime_error("Completed filter target is missing");
-            const auto& source=*original_.raster;
-            auto channel=[&](int index,const char* name){
-                std::vector<std::uint8_t> pixels(std::size_t(source.width)*source.height*4);
-                for(int y=0;y<source.height;++y)for(int x=0;x<source.width;++x){
-                    const auto p=source.pixel(x,y);const auto i=(std::size_t(y)*source.width+x)*4;
-                    const std::uint8_t value=index==3?p.a:index==0?p.r:index==1?p.g:p.b;
-                    if(index==3){pixels[i]=pixels[i+1]=pixels[i+2]=value;pixels[i+3]=255;}
-                    else{pixels[i]=pixels[i+1]=pixels[i+2]=value;pixels[i+3]=p.a;}
-                }
-                Layer layer=original_;layer.id=newId();layer.name=name;layer.visible=false;layer.raster=Raster::fromRgba(source.width,source.height,pixels.data(),std::size_t(source.width)*4);layer.deep.reset();layer.shapeJson.clear();layer.text.reset();
-                return layer;
-            };
-            const auto at=found-next.layers.begin()+1;
-            next.layers.insert(next.layers.begin()+at,{channel(0,"Red"),channel(1,"Green"),channel(2,"Blue"),channel(3,"Alpha")});
-            validateDocument(next);
-            host_.commit({std::move(next),original_.id,false,{},true});
+        try{if(answer==QDialog::Accepted&&splitLayers_&&channels_.front()&&host_.commit){
+            constexpr std::array names{"Red","Green","Blue","Alpha"};
+            std::vector<Layer> layers;
+            layers.reserve(names.size());
+            for(std::size_t i=0;i<names.size();++i){
+                Layer layer;
+                layer.id=newId();
+                layer.name=names[i];
+                layer.visible=false;
+                layer.raster=std::move(channels_[i]);
+                layers.push_back(std::move(layer));
+            }
+            host_.commit({{},original_.id,false,{},std::move(layers)});
         }else if(answer==QDialog::Accepted&&committed_&&host_.commit){
             auto found=std::find_if(committed_->layers.begin(),committed_->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
             if(found==committed_->layers.end())throw std::runtime_error("Completed filter target is missing");
@@ -442,15 +448,44 @@ public:
             auto* radial=new QCheckBox("Radial");radial->setObjectName("rgbSplitRadial");radial->setChecked(request_.settings.rgbSplitRadial);fields_.addRow(radial);
             connect(radial,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.rgbSplitRadial=value;syncGuideOverlay();change();});
             auto* split=new QPushButton("Split to Layers");split->setObjectName("rgbSplitToLayers");fields_.addRow(split);
-            connect(split,&QPushButton::clicked,&dialog_,[this]{
-                if(closed_||committing_)return;
+            split->setToolTip("Create hidden grayscale layers from the original Red, Green, Blue and Alpha channels.");
+            connect(split,&QPushButton::clicked,&dialog_,[this,split]{
+                if(closed_||committing_||splitLayers_)return;
                 if(original_.deep&&original_.deep->valid()&&!original_.deep->isHdr()){
-                    QMessageBox confirmation(QMessageBox::Question,"Convert to 8-Bit","Split to Layers uses the 8-bit preview channels. Convert this 16-bit layer to 8-bit first? Cancel leaves the document unchanged.",QMessageBox::Ok|QMessageBox::Cancel,&dialog_);
+                    QMessageBox confirmation(QMessageBox::Question,"Create 8-Bit Channels","Create 8-bit channel layers from this 16-bit source? The source keeps its 16-bit pixels.",QMessageBox::Ok|QMessageBox::Cancel,&dialog_);
                     confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
-                    if(confirmation.exec()!=QMessageBox::Ok)return;
-                    original_.deep.reset();
+                    if(confirmation.exec()!=QMessageBox::Ok||closed_)return;
                 }
-                splitLayers_=true;cancelled_->store(true);debounce_.stop();dialog_.reject();
+                const auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
+                if(!current)return;
+                auto target=std::find_if(current->layers.begin(),current->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
+                if(target==current->layers.end()||!target->raster||target->raster!=original_.raster||
+                   target->deep!=original_.deep||target->transform!=original_.transform){
+                    status_.setText("The source layer changed. Reopen RGB Split to split its channels.");
+                    return;
+                }
+                const auto pixelCount=[](const Raster& raster){return std::uint64_t(raster.width)*raster.height;};
+                auto pixels=4*pixelCount(*target->raster);
+                for(const auto& layer:current->layers)if(layer.raster)pixels+=pixelCount(*layer.raster);
+                if(pixels>maxDocumentImagePixels){
+                    status_.setText("Split to Layers would exceed the project pixel budget.");
+                    return;
+                }
+                splitLayers_=true;
+                ++version_;
+                rgbDragging_=false;
+                cancelled_->store(true);
+                debounce_.stop();
+                apply_->setEnabled(false);
+                split->setEnabled(false);
+                for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
+                for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
+                for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
+                completedPreview_.reset();
+                clearGuideOverlay();
+                status_.setText("Splitting channels…");
+                publishPreview();
+                start();
             });
             break;
         }
@@ -503,6 +538,16 @@ public:
                 return;
             }
             auto result=worker_.result();
+            if(splitLayers_){
+                if(!result.error.isEmpty()){
+                    if(host_.error)host_.error(result.error);
+                    dialog_.reject();
+                }else{
+                    channels_=std::move(result.channels);
+                    dialog_.accept();
+                }
+                return;
+            }
             if(!result.error.isEmpty()){
                 if(superseded){start();return;}
                 status_.setText(result.error);apply_->setEnabled(false);
@@ -544,6 +589,7 @@ public:
             else if(raw_)deferRawViewport();
         });
         connect(apply_,&QPushButton::clicked,&dialog_,[this]{
+            if(splitLayers_)return;
             if(raw_){
                 if(autoBalancePending())return;
                 auto rendered=raw_->rendered();
@@ -592,7 +638,7 @@ public:
         worker_.waitForFinished();balance_.waitForFinished();
     }
     QDialog* panel()const override{return const_cast<FilterDialog*>(&dialog_);}
-    bool committing()const override{return committing_;}
+    bool committing()const override{return committing_||splitLayers_;}
     void cancel()override{if(!closed_&&!committing_)dialog_.reject();}
     bool samplePress(Point point,double,Qt::KeyboardModifiers)override{
         if(request_.kind==filters::Kind::ProgressiveBlur&&!closed_&&!committing_){

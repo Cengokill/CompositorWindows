@@ -7,6 +7,7 @@
 #include <QWidget>
 #include <functional>
 #include <memory>
+#include <vector>
 class QDialog;
 
 namespace compositor::ui {
@@ -16,7 +17,8 @@ struct EditPanelResult {
     bool maskSelected{};
     // Optional pixel-filter merge carries the CURRENT owned mask after rendering.
     std::function<Layer(const Layer&)> mergeLayer;
-    bool replaceDocument{};
+    // Structural filter results are inserted into the current document.
+    std::vector<Layer> insertAfterTarget;
 };
 struct EditPanelHost {
     QPointer<QWidget> canvas;

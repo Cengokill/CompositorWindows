@@ -202,6 +202,7 @@ struct LayerRenderPreview {
     std::function<std::optional<std::vector<Damage>>(const LayerRenderPreview*)> damageComparedWith;
 };
 std::string newId();
+inline constexpr std::uint64_t maxDocumentImagePixels = 100'000'000;
 void validateDocument(const Document&);
 Pixel blendPixel(Pixel destination,Pixel source,Blend mode);
 class IRasterBackend {
