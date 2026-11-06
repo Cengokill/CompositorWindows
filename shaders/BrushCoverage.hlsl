@@ -12,7 +12,7 @@ RWStructuredBuffer<float> permanent : register(u0);
 RWStructuredBuffer<uint> preview : register(u1); // D3D11 typed store: one uint per gray8 value
 RWStructuredBuffer<float> pressureCap : register(u2);
 struct BrushSegment {
-    float4 line;
+    float4 endpoints;
     float4 dynamics; // size factors, then strengths, at start and end
 };
 StructuredBuffer<BrushSegment> segments : register(t0);
@@ -30,20 +30,20 @@ float brushCoverage(float squared,float radius) {
 float tipDensity(float squared,float radius) {return -log(max(1.0f-brushCoverage(squared,radius),0.001f));}
 float hardCoverage(float2 p,BrushSegment s) {
     float t;
-    float squared=segmentDistanceSquared(p,s.line,t);
+    float squared=segmentDistanceSquared(p,s.endpoints,t);
     return brushCoverage(squared,geometry.z*lerp(s.dynamics.x,s.dynamics.y,t))*
         lerp(s.dynamics.z,s.dynamics.w,t);
 }
 float segmentStrength(float2 p,BrushSegment s) {
     float t;
-    float squared=segmentDistanceSquared(p,s.line,t);
+    float squared=segmentDistanceSquared(p,s.endpoints,t);
     float radius=geometry.z*lerp(s.dynamics.x,s.dynamics.y,t);
     return squared<radius*radius?lerp(s.dynamics.z,s.dynamics.w,t):0.0f;
 }
 float segmentDensity(float2 p,BrushSegment s) {
     if(s.dynamics.z==0.0f && s.dynamics.w==0.0f)return 0.0f;
-    float2 offset=p-s.line.xy;
-    float2 v=s.line.zw-s.line.xy;float len=length(v);
+    float2 offset=p-s.endpoints.xy;
+    float2 v=s.endpoints.zw-s.endpoints.xy;float len=length(v);
     if(len<1e-6f)return tipDensity(dot(offset,offset),geometry.z*s.dynamics.x);
     float2 direction=v/len;float projection=dot(offset,direction);
     float2 perpendicular=offset-projection*direction;
@@ -72,8 +72,8 @@ void continuousBrush(uint3 dispatchId : SV_DispatchThreadID) {
     if(any(p<0.0f)||any(p>=canvas.xy)){preview[index]=0;return;}
     if(geometry.w>=1.0f && options.y==0){
         float a=asfloat(0x7f800000),b=a,t;
-        for(uint i=0;i<counts.z;++i)a=min(a,segmentDistanceSquared(p,segments[i].line,t));
-        for(uint j=counts.z;j<counts.w;++j)b=min(b,segmentDistanceSquared(p,segments[j].line,t));
+        for(uint i=0;i<counts.z;++i)a=min(a,segmentDistanceSquared(p,segments[i].endpoints,t));
+        for(uint j=counts.z;j<counts.w;++j)b=min(b,segmentDistanceSquared(p,segments[j].endpoints,t));
         float value=max(permanent[index],brushCoverage(a,geometry.z));
         permanent[index]=value;
         preview[index]=(uint)floor(255.0f*max(value,brushCoverage(b,geometry.z))+0.5f);
