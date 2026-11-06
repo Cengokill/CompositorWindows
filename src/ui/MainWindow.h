@@ -158,9 +158,9 @@ private:
     int gradientHandle_{-1};
     bool gradientMask_{};
     TextContent textDefaults_{};
-    QWidget* textFontPopup_{};
-    QWidget* textStylePopup_{};
+    QPointer<QWidget> textFontPopup_;
     QString textStylesFamily_;
+    std::shared_ptr<const std::vector<text::FontFace>> textStylesCatalog_;
     struct TextSession {
         EditorProject* owner{};
         std::string layerId;
@@ -179,8 +179,6 @@ private:
         text::TextLayout layout;
     };
     std::optional<TextSession> textSession_;
-    bool fontChoiceKept_{};
-    QPointer<QComboBox> textFontBox_;
     QPointer<QComboBox> textStyleBox_;
     bool textSelecting_{};
     bool textArming_{};
@@ -448,13 +446,10 @@ private:
     void cancelText();
     bool handleTextKey(QKeyEvent*);
     void handleTextInput(QInputMethodEvent*);
-    void publishTextEdit();
-    void previewTextFont(const std::string&);
-    void previewTextStyle(const std::string&);
-    void keepTextFontPreview();
+    bool publishTextEdit();
     void endTextFontPreview();
-    void applyTextFont(const std::string&);
-    void applyTextStyle(const std::string&);
+    void setTextFontFace(const text::FontFace&,bool preview);
+    void setTextStyle(const std::string&,bool preview);
     void applyTextSize(double);
     void applyTextColor(double,double,double);
     void previewTextColor(double,double,double);

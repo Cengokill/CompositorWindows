@@ -207,29 +207,23 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event){
         auto* widget=qobject_cast<QWidget*>(watched);
         if(widget&&widget->window()==this&&!(canvas()&&canvas()->pointerHeld())){setCanvasOnly(false);return true;}
     }
-    if(textSession_&&event->type()==QEvent::ShortcutOverride){
+    if(event->type()==QEvent::ShortcutOverride){
         auto* focus=QApplication::focusWidget();
-        if(!qobject_cast<QLineEdit*>(focus)&&!qobject_cast<QAbstractSpinBox*>(focus)&&!qobject_cast<QComboBox*>(focus)){
+        const bool searchingFonts=focus&&textFontPopup_&&textFontPopup_->isVisible()&&textFontPopup_->isAncestorOf(focus);
+        if(searchingFonts||(textSession_&&!qobject_cast<QLineEdit*>(focus)&&!qobject_cast<QAbstractSpinBox*>(focus)&&!qobject_cast<QComboBox*>(focus))){
             auto* key=static_cast<QKeyEvent*>(event);
             if(key->key()==Qt::Key_Escape||ui::reservesTextShortcut(*key)){event->accept();return true;}
         }
     }
-    auto popupOf=[&](QComboBox* combo){return combo&&combo->view()&&watched==combo->view()->window();};
-    if(popupOf(textFontBox_)||popupOf(textStyleBox_)){
-        if(event->type()==QEvent::Show)fontChoiceKept_=false;
-        if(event->type()==QEvent::Hide){
-            const bool kept=fontChoiceKept_;
-            fontChoiceKept_=false;
-            if(!kept)endTextFontPreview();
-            QTimer::singleShot(0,this,[this]{
-                auto popupOpen=[](QComboBox* combo){return combo&&combo->view()&&combo->view()->isVisible();};
-                if(popupOpen(textFontBox_)||popupOpen(textStyleBox_))return;
-                auto* focus=QApplication::focusWidget();
-                if(textFontBox_&&(focus==textFontBox_||focus==textFontBox_->lineEdit()))return;
-                if(textStyleBox_&&(focus==textStyleBox_||focus==textStyleBox_->lineEdit()))return;
-                focusTextCanvas();
-            });
-        }
+    if(event->type()==QEvent::Hide&&textStyleBox_&&textStyleBox_->view()&&watched==textStyleBox_->view()->window()){
+        if(auto* timer=textStyleBox_->findChild<QTimer*>("textStylePreviewTimer"))timer->stop();
+        endTextFontPreview();
+        QTimer::singleShot(0,this,[this]{
+            if((textFontPopup_&&textFontPopup_->isVisible())||(textStyleBox_&&textStyleBox_->view()&&textStyleBox_->view()->isVisible()))return;
+            auto* focus=QApplication::focusWidget();
+            if(textStyleBox_&&(focus==textStyleBox_||focus==textStyleBox_->lineEdit()))return;
+            focusTextCanvas();
+        });
     }
     if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){
         auto* widget=qobject_cast<QWidget*>(watched);if(widget&&widget->window()==this){auto* key=static_cast<QKeyEvent*>(event);
