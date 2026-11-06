@@ -468,7 +468,10 @@ public:
                 auto pixels=4*pixelCount(*target->raster);
                 for(const auto& layer:current->layers)if(layer.raster)pixels+=pixelCount(*layer.raster);
                 if(pixels>maxDocumentImagePixels){
-                    status_.setText("Split to Layers would exceed the project pixel budget.");
+                    QMessageBox warning(QMessageBox::Warning,"Cannot Split to Layers",
+                        "The four channel layers would exceed the project's combined 100-megapixel image limit. Reduce the image size or remove other image layers before trying again.",
+                        QMessageBox::Ok,&dialog_);
+                    warning.setProperty("studioChrome",true);warning.exec();
                     return;
                 }
                 splitLayers_=true;
