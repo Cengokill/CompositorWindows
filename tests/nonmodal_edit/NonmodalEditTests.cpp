@@ -151,9 +151,9 @@ void rgb_split_canvas_cancel_layers(){
     });
     f.unchanged();require(!f.project.effectPreview,"closing during Split clears the preview");
 
-    auto doc=fixture();
+    auto doc=fixture();doc.id=newId();doc.layers[0].id=newId();
     auto deep=makeDeep(32,24,DeepImage::Format::Unorm16);
-    deep->setPixel(0,0,{.25f,.125f,.375f,.5f});
+    for(int x=0;x<2;++x){auto* pixel=deep->at(x,0);pixel[0]=uint16_t(10001+x);pixel[1]=20003;pixel[2]=30007;pixel[3]=65535;}
     doc.layers[0].deep=deep;doc.layers[0].raster=rasterFromDeep(*deep);
     Fixture wide(std::move(doc));
     panel(wide.window,"filter.rgb_split","RGB Split",[&](QDialog& p){
@@ -178,6 +178,24 @@ void rgb_split_canvas_cancel_layers(){
     require(wide.project.document->layers.size()==5&&wide.project.history.undoCount()==1&&
             wide.project.document->layers[0].deep==deep&&!wide.project.document->layers[1].deep,
             "16-bit Split keeps source precision and adds 8-bit channel layers");
+    QTemporaryDir temp;require(temp.isValid(),"temporary directory for 16-bit Split round trip");
+    const auto root=std::filesystem::path(temp.path().toStdWString());
+    ProjectStore store(makeWicProjectCodec());
+    store.save(root/"split16.comp",*wide.project.document,wide.project.active);
+    const auto reopened=store.load(root/"split16.comp");
+    require(reopened.document.layers.size()==5&&reopened.document.layers[0].deep&&
+            *reopened.document.layers[0].deep==*deep,"reopened Split preserves all 16-bit source samples");
+    for(std::size_t i=1;i<5;++i)
+        require(!reopened.document.layers[i].visible&&!reopened.document.layers[i].deep,
+                "reopened Split channels remain hidden and 8-bit");
+    exportDocumentAtomic(wide.before,root/"before16.png");
+    exportDocumentAtomic(reopened.document,root/"after16.png");
+    const auto beforePng=imaging::WicCodec::decodeProjectDeepPng(root/"before16.png");
+    const auto afterPng=imaging::WicCodec::decodeProjectDeepPng(root/"after16.png");
+    require(beforePng->samples==afterPng->samples&&beforePng->at(16,12)[0]==10001&&
+            beforePng->at(17,12)[0]==10002&&beforePng->at(16,12)[1]==20003&&
+            beforePng->at(16,12)[2]==30007&&beforePng->at(16,12)[3]==65535,
+            "16-bit PNG export preserves sub-byte samples after Split and reopen");
 }
 void live_filter_adjustments(){
     Fixture f;
