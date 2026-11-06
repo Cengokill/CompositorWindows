@@ -263,7 +263,7 @@ private:
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
-    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&,const ui::PreparedImages& = {});
+    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&,const ui::PreparedImages& = {},ui::PreparedPdfs = {});
     enum class PhotoshopResult { Imported, Cancelled, Failed };
     PhotoshopResult importPhotoshop(const QString& path,CmykProfilePtr fallback={});
     bool reviewCmykImports(const QStringList&,ui::RawSettings&);

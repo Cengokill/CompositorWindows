@@ -36,6 +36,8 @@ public:
         // A standalone document import runs before creating an image destination. false means Cancel.
         std::function<std::optional<bool>(const QString&,const RawSettings&)> standalone;
         std::function<bool(const QStringList&,RawSettings&)> reviewBatch;
+        // Destination-aware preflight runs without selecting or creating a tab.
+        std::function<bool(const QString&,QObject*,bool)> prepareImage;
     };
     explicit WorkspaceDropQueue(Host,QObject* parent=nullptr);
     ~WorkspaceDropQueue() override;

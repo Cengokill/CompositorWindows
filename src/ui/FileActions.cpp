@@ -20,10 +20,12 @@
 #include "ProjectLayerCopyJob.h"
 #include "LayerCopyCommit.h"
 #include <QDir>
+#include <QDialog>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QColorDialog>
 #include <QBuffer>
@@ -51,12 +53,19 @@
 #include <QMenu>
 #include <QThread>
 #include <QEventLoop>
+#include <QScreen>
+#include <QStyle>
+#include <QTextDocument>
+#include <QTextEdit>
+#include <QTextOption>
+#include <QVBoxLayout>
 #include <commdlg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <iterator>
 #include <memory>
 #include <string>
 
@@ -68,6 +77,42 @@ static void reportPickerBusy(MainWindow* window){
     window->statusBar()->showMessage("A file picker is already open",5000);
 }
 namespace {
+void showPdfImportError(QWidget* owner, const QString& title, const QString& error, const char* name = "pdfImportError") {
+    QDialog dialog(owner);
+    dialog.setObjectName(name);
+    dialog.setWindowTitle(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* body = new QHBoxLayout;
+    layout->addLayout(body);
+
+    auto* icon = new QLabel(&dialog);
+    icon->setPixmap(dialog.style()->standardIcon(QStyle::SP_MessageBoxCritical)
+        .pixmap(QSize(48, 48), dialog.devicePixelRatioF()));
+    body->addWidget(icon, 0, Qt::AlignTop);
+
+    auto* text = new QTextEdit(&dialog);
+    text->setReadOnly(true);
+    text->setFrameShape(QFrame::NoFrame);
+    text->setStyleSheet("QTextEdit { background: transparent; border: none; }");
+    text->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    text->setPlainText(error);
+    text->ensurePolished();
+    const auto available = owner->screen()->availableGeometry();
+    const int textWidth = std::clamp(available.width() - 120, 1, 520);
+    text->setFixedWidth(textWidth);
+    text->document()->setTextWidth(textWidth);
+    text->setFixedHeight(std::min(int(std::ceil(text->document()->size().height())) + 2, available.height() / 2));
+    body->addWidget(text);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok, &dialog);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+    buttons->button(QDialogButtonBox::Ok)->setFocus();
+    dialog.exec();
+}
+
 template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& paths,Load&& load){
     bool opened=false;
     for(const auto& path:paths){
@@ -76,19 +121,22 @@ template<class Load> bool loadProjectBatch(QWidget* owner,const QStringList& pat
     }
     return opened;
 }
-QStringList nativeImportPaths(HWND owner,const QString& directory){
+QStringList nativeImportPaths(HWND owner,const QString& directory,bool includePdfs){
     // This function runs outside Qt's GUI thread. Keeping the native modal
     // loop away from Qt prevents qwindows/comdlg re-entry from corrupting
     // Qt's object tree.
-    static const wchar_t filter[]=
-        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw\0"
-        L"All files\0*.*\0";
+    static constexpr wchar_t imageFilter[] =
+        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw";
+    static constexpr wchar_t allFilesFilter[] = L"\0All files\0*.*\0";
+    std::wstring filter(imageFilter, std::size(imageFilter) - 1);
+    if (includePdfs) filter += L";*.pdf";
+    filter.append(allFilesFilter, std::size(allFilesFilter) - 1);
     std::wstring buffer(32768,L'\0');
     const auto initial=directory.toStdWString();
     OPENFILENAMEW dialog{};
     dialog.lStructSize=sizeof(dialog);
     dialog.hwndOwner=owner;
-    dialog.lpstrFilter=filter;
+    dialog.lpstrFilter=filter.c_str();
     dialog.lpstrFile=buffer.data();
     dialog.nMaxFile=DWORD(buffer.size());
     dialog.lpstrInitialDir=initial.empty()?nullptr:initial.c_str();
@@ -252,6 +300,18 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     host.project=[this](const QString& path){loadProjectDirectory(path);};
     auto hdrPrepared=std::make_shared<ui::PreparedImages>();
     host.review=[this,hdrPrepared](const QString& path,ui::RawSettings& settings){hdrPrepared->clear();return ui::reviewRawImports(this,{nativePath(path)},settings)&&ui::prepareHdrImports(this,{nativePath(path)},*hdrPrepared)&&ui::prepareCameraRawImport(this,settings.openCameraRaw,settings,*hdrPrepared);};
+    auto pdfsPrepared = std::make_shared<ui::PreparedPdfs>();
+    host.prepareImage = [this, project, pdfsPrepared](const QString& path, QObject* captured, bool hasDestination) {
+        pdfsPrepared->clear();
+        if (!ui::isPdfImport(nativePath(path))) return true;
+        auto* target = project(captured);
+        if (hasDestination && !target) return true;
+        if (!ui::preparePdfImports(this, {nativePath(path)},
+                                   target ? target->document : std::nullopt, *pdfsPrepared)) return false;
+        const auto& pdf = pdfsPrepared->at(nativePath(path));
+        if (!pdf.error.isEmpty()) throw std::runtime_error(pdf.error.toStdString());
+        return true;
+    };
     host.reviewBatch=[this](const QStringList& paths,ui::RawSettings& settings){return reviewCmykImports(paths,settings);};
     host.standalone=[this](const QString& path,const ui::RawSettings& settings)->std::optional<bool>{const auto ext=QFileInfo(path).suffix().toLower();if(ext!="psd"&&ext!="psb")return {};auto profile=settings.cmykProfiles.find(nativePath(path));return importPhotoshop(path,profile==settings.cmykProfiles.end()?nullptr:profile->second)!=PhotoshopResult::Cancelled;};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
@@ -262,21 +322,31 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==target){tabs_->setCurrentIndex(int(i));break;}
         return target->canvas;
     };
-    host.image=[this,project,hdrPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
+    host.image=[this,project,hdrPrepared,pdfsPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
         ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.cmykProfiles=settings.cmykProfiles;batch.prepared=std::move(*hdrPrepared);batch.openCameraRaw=settings.openCameraRaw;
+        batch.pdfs = std::move(*pdfsPrepared);
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
     host.cancelImage=[this](QObject* target){if(importQueue_)importQueue_->cancel(target);};
-    host.error=[this](const QString& path,const QString& error){QMessageBox message(QMessageBox::Critical,"Receive Dropped Files",QString("Could not open %1.\n\n%2").arg(QDir::toNativeSeparators(path),error),QMessageBox::Ok,this);message.setObjectName("workspaceDropError");message.exec();};
+    host.error=[this](const QString& path,const QString& error){
+        const auto text = QString("Could not open %1.\n\n%2").arg(QDir::toNativeSeparators(path), error);
+        if (ui::isPdfImport(nativePath(path))) {
+            showPdfImportError(this, "Receive Dropped Files", text, "workspaceDropError");
+            return;
+        }
+        QMessageBox message(QMessageBox::Critical, "Receive Dropped Files", text, QMessageBox::Ok, this);
+        message.setObjectName("workspaceDropError");
+        message.exec();
+    };
     workspaceDrops_=new ui::WorkspaceDropQueue(std::move(host),this);return workspaceDrops_;
 }
 void MainWindow::receiveDropPaths(const QStringList& paths,NativeCanvas* destination,std::optional<Point> point){
     ui::WorkspaceDropRequest request;request.paths=paths;request.destination=destination;request.hasDestination=destination!=nullptr;request.point=point;
     ensureWorkspaceDropQueue()->enqueue(std::move(request));
 }
-void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings,const ui::PreparedImages& prepared){
+void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings,const ui::PreparedImages& prepared, ui::PreparedPdfs pdfs){
     if(paths.isEmpty())return;
     QStringList images;
     for(const auto& path:paths){
@@ -287,6 +357,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     if(images.isEmpty())return;
     ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
     batch.rawAdjustments=rawSettings;batch.cmykProfiles=rawSettings.cmykProfiles;batch.prepared=prepared;batch.openCameraRaw=rawSettings.openCameraRaw;
+    batch.pdfs = std::move(pdfs);
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -492,9 +563,15 @@ void MainWindow::openPath(const QString&path){
     if(!reviewCmykImports({path},rawSettings))return;
     if(photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);return;}
     ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,{nativePath(path)},prepared)||!ui::prepareCameraRawImport(this,rawSettings.openCameraRaw,rawSettings,prepared))return;
+    ui::PreparedPdfs pdfs;
+    if (!ui::preparePdfImports(this, {nativePath(path)}, std::nullopt, pdfs)) return;
+    if (!pdfs.empty() && !pdfs.begin()->second.error.isEmpty()) {
+        showPdfImportError(this, "Import PDF", QDir::toNativeSeparators(path) + "\n\n" + pdfs.begin()->second.error);
+        return;
+    }
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
-    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared);
+    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared,std::move(pdfs));
 }
 QString MainWindow::userDownloadsDirectory(){
     PWSTR known=nullptr;
@@ -530,9 +607,25 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
     if(!ui::reviewRawImports(this,files,rawSettings))return;
     if(!reviewCmykImports(paths,rawSettings))return;
     ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,files,prepared)||!ui::prepareCameraRawImport(this,rawSettings.openCameraRaw,rawSettings,prepared))return;
+    ui::PreparedPdfs pdfs;
+    QPointer<NativeCanvas> captured = target ? target->canvas : nullptr;
+    // An unpinned Photoshop import can establish a new 72 DPI destination.
+    const auto pdfDestination = target && (destination || photoshop.isEmpty()) ? target->document : std::nullopt;
+    if (!ui::preparePdfImports(this, files, pdfDestination, pdfs, prepared)) return;
+    if (target && !captured) return;
     for(const auto& path:photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));const auto result=importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);if(result==PhotoshopResult::Cancelled)return;if(result==PhotoshopResult::Imported&&!destination)target=current();}
     if(images.isEmpty())return;
-    queueImageImports(images,target,{},rawSettings,prepared);
+    QStringList pdfErrors;
+    for (const auto& path : images) {
+        const auto pdf = pdfs.find(nativePath(path));
+        if (pdf == pdfs.end() || pdf->second.error.isEmpty()) break;
+        pdfErrors.append(QDir::toNativeSeparators(path) + "\n" + pdf->second.error);
+    }
+    if (pdfErrors.size() == images.size()) {
+        showPdfImportError(this, "Import PDF", pdfErrors.join("\n\n"));
+        return;
+    }
+    queueImageImports(images,target,{},rawSettings,prepared,std::move(pdfs));
 }
 namespace {
 void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObject> destination,bool pinned){
@@ -552,7 +645,7 @@ void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObj
     });
 }
 // Runs the native multi-select picker off the GUI thread and delivers its paths on the GUI thread.
-void pickNativeImages(MainWindow* window,const QString& directory,std::function<void(MainWindow*,QStringList)> deliver){
+void pickNativeImages(MainWindow* window,const QString& directory,bool includePdfs,std::function<void(MainWindow*,QStringList)> deliver){
     if(window->property("nativePickerInProgress").toBool()){
         reportPickerBusy(window);
         return;
@@ -562,11 +655,11 @@ void pickNativeImages(MainWindow* window,const QString& directory,std::function<
     auto paths=std::make_shared<QStringList>();
     const auto initial=directory;
     logging::trace(QString("native picker request queued directory=%1").arg(QDir::toNativeSeparators(directory)));
-    auto* thread=QThread::create([paths,owner,initial]{
+    auto* thread=QThread::create([paths,owner,initial,includePdfs]{
         const HRESULT apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
         struct Release{HRESULT hr;~Release(){if(SUCCEEDED(hr))CoUninitialize();}} release{apartment};
         logging::trace(QString("native picker worker started apartment=0x%1").arg(quint32(apartment),0,16));
-        *paths=nativeImportPaths(owner,initial);
+        *paths=nativeImportPaths(owner,initial,includePdfs);
         logging::trace(QString("native picker worker finished count=%1").arg(paths->size()));
     });
     if(!thread){
@@ -591,7 +684,7 @@ void startNativeImport(MainWindow* window,const QString& directory,QObject* dest
         return;
     }
     QPointer<QObject> target(destination);
-    pickNativeImages(window,directory,[target](MainWindow* guard,QStringList paths){
+    pickNativeImages(window,directory,true,[target](MainWindow* guard,QStringList paths){
         deferSelectedImageImport(guard,std::move(paths),target,true);
     });
 }
@@ -628,7 +721,7 @@ void MainWindow::focusStackImages(){
     interruptPointer();
     const auto injected=property("testFocusStackPaths");
     if(injected.isValid()){focusStackSelectedImages(injected.toStringList());return;}
-    pickNativeImages(this,userDownloadsDirectory(),[](MainWindow* window,QStringList paths){window->focusStackSelectedImages(paths);});
+    pickNativeImages(this,userDownloadsDirectory(),false,[](MainWindow* window,QStringList paths){window->focusStackSelectedImages(paths);});
 }
 bool MainWindow::saveProject(bool saveAs){cropDraft_.reset();cropDrag_.reset();if(transformSession_&&transformSession_->persistent)applyTransformSession();auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return false;if(!p->saveJob.isNull()){statusBar()->showMessage("A save is already in progress",5000);return false;}auto path=p->path;if(path.isEmpty()||saveAs){path=chooseNativeProjectDestination(this,path.isEmpty()?"Untitled.comp":path);if(path.isEmpty())return false;}for(const auto& other:projects_)if(!other->savePath.isEmpty()&&QDir::cleanPath(other->savePath).compare(QDir::cleanPath(path),Qt::CaseInsensitive)==0){statusBar()->showMessage("Another open project is already saving to this location",5000);return false;}startProjectSave(*p,path);return true;}
 void MainWindow::startProjectSave(EditorProject& project,const QString& path){
