@@ -261,7 +261,7 @@ private:
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);
     ui::ImportQueue* ensureImportQueue();
     ui::WorkspaceDropQueue* ensureWorkspaceDropQueue();
-    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&,const ui::PreparedImages& = {});
+    void queueImageImports(const QStringList&,EditorProject*,std::optional<Point>,const ui::RawSettings&,const ui::PreparedImages& = {},ui::PreparedPdfs = {});
     enum class PhotoshopResult { Imported, Cancelled, Failed };
     PhotoshopResult importPhotoshop(const QString& path,CmykProfilePtr fallback={});
     bool reviewCmykImports(const QStringList&,ui::RawSettings&);
@@ -296,9 +296,9 @@ private:
     bool waitForProjectSave(EditorProject&);
     std::function<void()> projectSaveBeforeWrite_;
     bool closeProject(int);
-    void pointerBegin(QPointF,Qt::KeyboardModifiers,int clickCount=1);
-    void pointerUpdate(QPointF,Qt::KeyboardModifiers);
-    void pointerEnd(QPointF,Qt::KeyboardModifiers);
+    void pointerBegin(QPointF,Qt::KeyboardModifiers,int clickCount=1,std::optional<double> pressure={});
+    void pointerUpdate(QPointF,Qt::KeyboardModifiers,double pressure=1);
+    void pointerEnd(QPointF,Qt::KeyboardModifiers,double pressure=1);
     void pointerCancel();
     void interruptPointer();
     void selectTool(Tool);
@@ -306,7 +306,7 @@ private:
     void changeCropRatio();
     void cancelShape();
     void refreshShapeControls();
-    void applyShapeStyleToSelection();
+    void applyShapeStyleToSelection(std::optional<bool> smoothing={});
     void finishShapeStyleEdit();
     void cancelCrop();
     void refreshCropControls();
@@ -352,8 +352,9 @@ private:
     void cancelRetouch();
     void publishRetouch(bool finish);
     Point constrainRetouch(Point,Qt::KeyboardModifiers);
-    bool beginBrush(Point,Qt::KeyboardModifiers = Qt::NoModifier);
-    bool updateBrush(Point,bool finish);
+    bool beginBrush(Point,Qt::KeyboardModifiers,std::optional<double> pressure);
+    static void applyRememberedBrushPressure(graphics::BrushSessionSettings&);
+    bool updateBrush(Point,bool finish,double pressure=1);
     void publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapshot>,bool finish=false);
     CompositeViewport brushViewport(EditorProject&,double,double,double,double,double);
     CompositeViewport navigatorComposite(EditorProject&,int maxEdge);

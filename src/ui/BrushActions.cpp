@@ -12,6 +12,7 @@
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSignalBlocker>
+#include <QSettings>
 #include <QElapsedTimer>
 #include <QTextEdit>
 #include <QPlainTextEdit>
@@ -19,8 +20,20 @@
 #include <QButtonGroup>
 #include <QToolButton>
 #include <cmath>
+#include <utility>
 
 namespace compositor {
+namespace {
+constexpr const char* pressureSizeKey="brush/pressureSize";
+constexpr const char* pressureOpacityKey="brush/pressureOpacity";
+constexpr const char* pressureSizeControl="brushPressureSize";
+constexpr const char* pressureOpacityControl="brushPressureOpacity";
+}
+void MainWindow::applyRememberedBrushPressure(graphics::BrushSessionSettings& settings) {
+    const QSettings preferences;
+    settings.pressureSize=preferences.value(pressureSizeKey,false).toBool();
+    settings.pressureOpacity=preferences.value(pressureOpacityKey,false).toBool();
+}
 void MainWindow::setupBrushControls(){
     auto*bar=addToolBar("Brush Options");bar->setObjectName("brushOptions");
     auto* options=new ui::WrappingToolOptions;options->setObjectName("brushOptionsContents");bar->addWidget(options);
@@ -37,9 +50,29 @@ void MainWindow::setupBrushControls(){
     for(bool erase:{false,true}){auto* button=new QToolButton;modeButtons[size_t(erase)]=button;button->setText(erase?"Erase":"Paint");button->setAccessibleName(erase?"Erase":"Paint");button->setObjectName(erase?"brushModeErase":"brushModePaint");button->setCheckable(true);modes->addButton(button);connect(button,&QToolButton::clicked,this,[this,erase]{selectTool(erase?Tool::Eraser:Tool::Brush);refreshBrushControls();});}
     options->addGroup({modeButtons[0],modeButtons[1]});
     auto slider=[&](int index){auto* value=new ui::TrackSlider(Qt::Horizontal);value->setObjectName(index?"brushOpacitySlider":"brushHardnessSlider");value->setAccessibleName(index?"Brush opacity slider":"Brush hardness slider");value->setRange(index?100:0,10000);value->setDefaultValue(10000);value->setFixedWidth(100);brushSliders_[size_t(index)]=value;return value;};
-    auto*size=new ui::PropertyNumber;size->setDecimals(0);size->setRange(1,2000);size->setValue(40);size->setAccessibleName("Brush diameter");options->addGroup({new QLabel("Size"),size});
+    auto pressureToggle=[&](const char* name,const char* label,const char* key,bool graphics::BrushSessionSettings::*setting){
+        auto* button=new QToolButton;
+        button->setObjectName(name);
+        button->setText("Pressure");
+        button->setAccessibleName(label);
+        button->setToolTip(label);
+        button->setCheckable(true);
+        connect(button,&QToolButton::toggled,this,[this,button,key,setting](bool checked){
+            if(refreshing_||stroke_||retouch_){
+                const QSignalBlocker block(button);
+                button->setChecked(brushSettings_.*setting);
+                return;
+            }
+            brushSettings_.*setting=checked;
+            QSettings().setValue(key,checked);
+        });
+        return button;
+    };
+    auto* sizePressure=pressureToggle(pressureSizeControl,"Pen pressure for brush size",pressureSizeKey,&graphics::BrushSessionSettings::pressureSize);
+    auto* opacityPressure=pressureToggle(pressureOpacityControl,"Pen pressure for brush opacity",pressureOpacityKey,&graphics::BrushSessionSettings::pressureOpacity);
+    auto*size=new ui::PropertyNumber;size->setDecimals(0);size->setRange(1,2000);size->setValue(40);size->setAccessibleName("Brush diameter");options->addGroup({new QLabel("Size"),size,sizePressure});
     auto*hardness=new ui::PropertyNumber;hardness->setDecimals(0);hardness->setRange(0,100);hardness->setValue(100);hardness->setSuffix("%");options->addGroup({new QLabel("Hardness"),slider(0),hardness});
-    auto*opacity=new ui::PropertyNumber;opacity->setDecimals(0);opacity->setRange(1,100);opacity->setValue(100);opacity->setSuffix("%");options->addGroup({new QLabel("Opacity"),slider(1),opacity});
+    auto*opacity=new ui::PropertyNumber;opacity->setDecimals(0);opacity->setRange(1,100);opacity->setValue(100);opacity->setSuffix("%");options->addGroup({new QLabel("Opacity"),slider(1),opacity,opacityPressure});
     for(auto* number:{size,hardness,opacity})number->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
     hardness->setAccessibleName("Brush hardness");opacity->setAccessibleName("Brush opacity");
     brushTip_={size,hardness,opacity};
@@ -56,10 +89,18 @@ void MainWindow::refreshBrushControls(){
     const double values[]{brushSettings_.radius*2,brushSettings_.hardness*100,brushSettings_.opacity*100};
     for(size_t i=0;i<brushTip_.size();++i)if(brushTip_[i]){QSignalBlocker block(brushTip_[i]);ui::synchronizeNumber(brushTip_[i],values[i]);brushTip_[i]->setEnabled(enabled);}
     for(size_t i=0;i<brushSliders_.size();++i)if(auto* slider=brushSliders_[i]){const QSignalBlocker block(slider);slider->setValue(int(std::lround(values[i+1]*100)));slider->setEnabled(enabled);}
+    for(auto [name,checked]:{std::pair{pressureSizeControl,brushSettings_.pressureSize},
+                            std::pair{pressureOpacityControl,brushSettings_.pressureOpacity}}){
+        if(auto* button=findChild<QToolButton*>(name)){
+            const QSignalBlocker block(button);
+            button->setChecked(checked);
+            button->setEnabled(enabled);
+        }
+    }
     const bool modeEnabled=ui::commandEnabled(ui::CommandGate::Tool,commandState());
     for(bool erase:{false,true})if(auto* button=findChild<QToolButton*>(erase?"brushModeErase":"brushModePaint")){const QSignalBlocker block(button);button->setChecked((brushMode_==ProjectBrushMode::Erase)==erase);button->setEnabled(modeEnabled);}
 }
-bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers){
+bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::optional<double> pressure){
     if(tool_!=Tool::Brush&&tool_!=Tool::Eraser)return false;
     auto*p=current();auto*l=active();if(!p||!p->document||!l||layerSelection().ids.size()!=1)return true;
     strokeMask_=p->maskSelected;if(strokeMask_&&(!l->mask||!l->mask->enabled))return true;if(!strokeMask_&&(l->group||!l->adjustmentJson.empty()))return true;
@@ -69,6 +110,8 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers){
     try{
         if(!brushGpu_){auto shader=QDir(QApplication::applicationDirPath()).filePath("shaders/BrushCoverage.hlsl");if(!QFileInfo::exists(shader))shader=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/shaders/BrushCoverage.hlsl";try{brushGpu_=std::make_shared<graphics::D3D11BrushCoverage>(std::filesystem::path(shader.toStdWString()),warp_);}catch(const std::exception&e){statusBar()->showMessage(QString("Using software brush: ")+e.what());}}
         auto settings=brushSettings_;settings.color={uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue())};settings.opacity*=foreground_.alphaF();settings.erase=tool_==Tool::Eraser&&!strokeMask_;if(strokeMask_){auto v=uint8_t(maskPaintWhite_?255:0);settings.color={v,v,v};settings.opacity=brushSettings_.opacity;}
+        if(!pressure){settings.pressureSize=false;settings.pressureOpacity=false;}
+        const double strength=pressure.value_or(1);
         uint64_t remaining=100000000;
         for(const auto&layer:p->document->layers)if(layer.id!=l->id){
             if(strokeMask_&&layer.mask&&layer.mask->raster)remaining-=uint64_t(layer.mask->raster->width)*layer.mask->raster->height;
@@ -78,7 +121,14 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers){
         p->brushLayerId=l->id;
         stroke_=std::make_unique<graphics::GrowingBrushSession>(*l,settings,p->document->width,p->document->height,brushGpu_,p->document->selection?p->document->selection->coverage:nullptr,strokeMask_,remaining);
         if(p->canvas)p->canvas->setNavigatorDeferred(true);
-        if(modifiers.testFlag(Qt::ShiftModifier)&&lastBrushPoint_&&lastBrushLayer_==l->id&&lastBrushMask_==strokeMask_){stroke_->begin(*lastBrushPoint_);stroke_->append(point);}else stroke_->begin(point);publishBrush(stroke_->preview());lastBrushPoint_=point;lastBrushLayer_=l->id;lastBrushMask_=strokeMask_;if(p->canvas)p->canvas->update();
+        if(modifiers.testFlag(Qt::ShiftModifier)&&lastBrushPoint_&&lastBrushLayer_==l->id&&lastBrushMask_==strokeMask_){
+            stroke_->begin(*lastBrushPoint_,strength);
+            stroke_->append(point,strength);
+        }else stroke_->begin(point,strength);
+        publishBrush(stroke_->preview());
+        lastBrushPoint_=point;lastBrushLayer_=l->id;lastBrushMask_=strokeMask_;
+        refreshBrushControls();
+        if(p->canvas)p->canvas->update();
     }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;
 }
@@ -108,9 +158,9 @@ CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,doubl
     if(!project.brushPreview)return render(*project.document);
     return render(*project.document,project.brushPreview->renderPreview());
 }
-bool MainWindow::updateBrush(Point point,bool finish){
+bool MainWindow::updateBrush(Point point,bool finish,double pressure){
     if(!stroke_)return false;
-    try{stroke_->append(point);if(finish){publishBrush(stroke_->commit(),true);stroke_.reset();current()->history.end(current()->document,current()->active);refresh();}else{publishBrush(stroke_->preview());lastBrushPoint_=point;if(auto* view=canvas())view->update();}if(finish)lastBrushPoint_=point;}
+    try{stroke_->append(point,pressure);if(finish){publishBrush(stroke_->commit(),true);stroke_.reset();current()->history.end(current()->document,current()->active);refresh();}else{publishBrush(stroke_->preview());lastBrushPoint_=point;if(auto* view=canvas())view->update();}if(finish)lastBrushPoint_=point;}
     catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;
 }

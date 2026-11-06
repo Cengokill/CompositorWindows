@@ -2,12 +2,16 @@
 #include "layers/LayerOperations.h"
 #include "editing/Selection.h"
 #include <QObject>
+#ifdef Q_OS_WIN
+#include <QAbstractNativeEventFilter>
+#endif
 #include <QPoint>
 #include <QTreeWidget>
 #include <QMimeData>
 #include <QImage>
 #include <QSizeF>
 #include <functional>
+#include <optional>
 
 namespace compositor::ui {
 enum class DropZone { Above, IntoGroup, Bottom };
@@ -40,7 +44,11 @@ QImage canvasLayerThumbnail(const Raster*,const Transform&,QSizeF canvas,double 
 double canvasMaskEdgeTone(const GrayRaster&);
 QImage canvasMaskThumbnail(const GrayRaster&,const Transform&,QSizeF canvas,double box=30);
 
-class LayerPanelController final:public QObject {
+class LayerPanelController final:public QObject
+#ifdef Q_OS_WIN
+    ,private QAbstractNativeEventFilter
+#endif
+{
 public:
     struct Host {
         std::function<void()> prepare;
@@ -95,6 +103,11 @@ private:
     std::unique_ptr<ThumbnailCache> thumbnailCache_;
     uint64_t thumbnailRenderCount_{};
     bool modifierCursor_{};
+    std::optional<int> middleScrollY_;
+    void finishMiddleScroll();
+#ifdef Q_OS_WIN
+    bool nativeEventFilter(const QByteArray&,void*,qintptr*) override;
+#endif
     QIcon thumbnail(const Layer&,bool,QSizeF);
     QRect checkRect(const QTreeWidgetItem*)const;
     void contextMenu(const QPoint&);

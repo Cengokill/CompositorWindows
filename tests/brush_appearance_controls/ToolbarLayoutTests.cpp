@@ -21,7 +21,10 @@ void toolbarLayout(const char* commandId,int requestedWidth){
     auto* opacityNumber=control<QDoubleSpinBox>(f.window,brush?"Brush opacity":"retouchOpacity");
     auto* size=control<QDoubleSpinBox>(f.window,brush?"Brush diameter":"retouchDiameter");
     std::vector<QWidget*> required{hardness,opacity,hardNumber,opacityNumber,size};
-    if(brush){required.push_back(control<QAbstractButton>(f.window,"brushModePaint"));required.push_back(control<QAbstractButton>(f.window,"brushModeErase"));required.push_back(control<QComboBox>(f.window,"Editing target"));QCheckBox* maskWhite=nullptr;for(auto* box:f.window.findChildren<QCheckBox*>())if(box->text()=="Paint mask white")maskWhite=box;require(maskWhite,"Mask paint option exists");required.push_back(maskWhite);}
+    if(brush){
+        required.push_back(control<QAbstractButton>(f.window,"brushPressureSize"));
+        required.push_back(control<QAbstractButton>(f.window,"brushPressureOpacity"));
+        required.push_back(control<QAbstractButton>(f.window,"brushModePaint"));required.push_back(control<QAbstractButton>(f.window,"brushModeErase"));required.push_back(control<QComboBox>(f.window,"Editing target"));QCheckBox* maskWhite=nullptr;for(auto* box:f.window.findChildren<QCheckBox*>())if(box->text()=="Paint mask white")maskWhite=box;require(maskWhite,"Mask paint option exists");required.push_back(maskWhite);}
     else if(clone){required.push_back(control<QCheckBox>(f.window,"retouchAligned"));required.push_back(control<QCheckBox>(f.window,"retouchAllLayers"));}
     else required.push_back(control<QComboBox>(f.window,heal?"retouchHealingMode":"retouchSmearMode"));
     QJsonArray states;bool visible=true;for(auto* value:required){const bool shown=entirelyVisible(value);visible=visible&&shown;states.append(QJsonObject{{"name",value->objectName().isEmpty()?value->accessibleName():value->objectName()},{"fully_visible",shown},{"width",value->width()},{"height",value->height()}});}observations["controls"]=states;

@@ -383,9 +383,20 @@ if(shapeDraft_&&documentWidth_>0&&documentHeight_>0){
     check(context_->CreateSolidColorBrush(D2D1::ColorF(draft.fill.r/255.f,draft.fill.g/255.f,draft.fill.b/255.f,draft.fill.a/255.f),&fill),"Shape draft fill");
     check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.6f),&outline),"Shape draft outline");
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    if(draft.kind==editing::ShapeKind::Line){context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),fill.Get(),std::max(1.f,float(draft.lineWidth*pointsPerPixel())));context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),outline.Get(),1);}
-    else if(draft.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
-    else{const float radius=float(std::clamp(draft.cornerRadius,0.,std::min(draft.rect.width,draft.rect.height)/2)*pointsPerPixel());const auto rounded=D2D1::RoundedRect(bounds,radius,radius);context_->FillRoundedRectangle(rounded,fill.Get());context_->DrawRoundedRectangle(rounded,outline.Get(),1);}
+    if(draft.style.kind==editing::ShapeKind::Line){context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),fill.Get(),std::max(1.f,float(draft.style.lineWidth*pointsPerPixel())));context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),outline.Get(),1);}
+    else if(draft.style.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
+    else{
+        const auto geometry=editing::rectangleShapeOutline({0,0,draft.rect.width,draft.rect.height},draft.style);
+        ComPtr<ID2D1PathGeometry> path;
+        check(factory_->CreatePathGeometry(&path),"Shape draft path");
+        ComPtr<ID2D1GeometrySink> sink;
+        check(path->Open(&sink),"Shape draft path sink");
+        const float scale=float(mapping.pointsPerPixel);
+        geometry.writeGeometry(sink.Get(),{scale,0,0,scale,bounds.left,bounds.top});
+        check(sink->Close(),"Shape draft path close");
+        context_->FillGeometry(path.Get(),fill.Get());
+        context_->DrawGeometry(path.Get(),outline.Get(),1);
+    }
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
 if(cropOverlay_&&documentWidth_>0&&documentHeight_>0){
@@ -783,11 +794,35 @@ void NativeCanvas::tabletEvent(QTabletEvent*e){
     if(e->type()==QEvent::TabletMove&&guideDrag_){updateGuideDrag(e->position());return;}
     if(e->type()==QEvent::TabletRelease&&guideDrag_){finishGuideDrag(e->position());return;}
     if(pointerHover)pointerHover(e->position(),e->modifiers());
-    if(e->type()==QEvent::TabletPress){setFocus();if(dragging_||rightDragging_||navigating_)return;if(beginGuideDrag(e->position())){grabMouse();return;}if(navigatorContains(e->position())){navigating_=true;grabMouse();navigateFrom(e->position());return;}tabletActive_=dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
-    else if(e->type()==QEvent::TabletMove){if(navigating_)navigateFrom(e->position());else if(tabletActive_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());}
-    else if(e->type()==QEvent::TabletRelease&&navigating_){navigating_=false;releaseMouse();}
-    else if(e->type()==QEvent::TabletRelease&&tabletActive_){tabletActive_=dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());}
-    // The pinned source has no pressure mapping. Accept prevents Qt's duplicate synthesized mouse stroke.
+    const auto pressure=e->pointingDevice()->capabilities().testFlag(QInputDevice::Capability::Pressure)
+        ? std::optional<double>(e->pressure()) : std::nullopt;
+    // Accept tablet events so Qt does not synthesize a second mouse gesture.
+    if(e->type()==QEvent::TabletPress){
+        setFocus();
+        if(dragging_||rightDragging_||panning_||navigating_)return;
+        if(beginGuideDrag(e->position())){grabMouse();return;}
+        if(navigatorContains(e->position())){navigating_=true;grabMouse();navigateFrom(e->position());return;}
+        tabletActive_=dragging_=true;
+        tabletPressure_=pressure;
+        grabMouse();
+        if(pointerDown)pointerDown({documentPoint(e->position()),tabletPressure_},e->modifiers());
+    }else if(e->type()==QEvent::TabletMove){
+        if(navigating_)navigateFrom(e->position());
+        else if(tabletActive_){
+            tabletPressure_=pressure;
+            if(pointerMove)pointerMove({documentPoint(e->position()),tabletPressure_},e->modifiers());
+        }
+    }else if(e->type()==QEvent::TabletRelease&&navigating_){
+        navigating_=false;
+        releaseMouse();
+    }else if(e->type()==QEvent::TabletRelease&&tabletActive_){
+        tabletActive_=dragging_=false;
+        const auto lastPressure=tabletPressure_;
+        tabletPressure_.reset();
+        releaseMouse();
+        // Qt release pressure describes lift-off. Use the last contact sample at the final position.
+        if(pointerUp)pointerUp({documentPoint(e->position()),lastPressure},e->modifiers());
+    }
 }
 void NativeCanvas::leaveEvent(QEvent*e){if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}
 bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();updateSelectionAnimation();}
@@ -795,7 +830,7 @@ bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentation
     const bool focusLost=e->type()==QEvent::WindowDeactivate||e->type()==QEvent::FocusOut;
     if(guideDrag_&&(focusLost||e->type()==QEvent::UngrabMouse))cancelGuideDrag();
     if(navigating_&&(focusLost||e->type()==QEvent::UngrabMouse)){navigating_=false;if(QWidget::mouseGrabber()==this&&!dragging_&&!rightDragging_)releaseMouse();}
-    if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){setSnapGuides();dragging_=rightDragging_=tabletActive_=false;if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
+    if(focusLost||(e->type()==QEvent::UngrabMouse&&(dragging_||rightDragging_))){setSnapGuides();dragging_=rightDragging_=tabletActive_=false;tabletPressure_.reset();if(QWidget::mouseGrabber()==this)releaseMouse();if(pointerInterrupted)pointerInterrupted();else if(pointerCancel)pointerCancel();}
     if(e->type()==QEvent::DevicePixelRatioChange){releaseDevice();synchronizeViewport();}
     if(e->type()==QEvent::NativeGesture){auto*gesture=static_cast<QNativeGestureEvent*>(e);if(gesture->gestureType()==Qt::ZoomNativeGesture){if(documentWidth_>0&&(!navigationAllowed||navigationAllowed()))zoomAt(zoom*(1+gesture->value()),gesture->position());gesture->accept();return true;}}
     return QWidget::event(e);

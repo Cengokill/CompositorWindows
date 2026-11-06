@@ -1,6 +1,7 @@
 #pragma once
 #include "core/Document.h"
 #include "imaging/image_types.h"
+#include "imaging/pdf_import.h"
 #include <QObject>
 #include <QPointer>
 #include <QStringList>
@@ -23,6 +24,18 @@ struct ImportState {
     std::string active;
     bool operator==(const ImportState&) const = default;
 };
+struct PreparedPdf {
+    double dpi{};
+    std::vector<std::shared_ptr<const Raster>> pages;
+    QString error;
+};
+using PreparedPdfs = std::map<std::filesystem::path, PreparedPdf>;
+using PdfRasterizer = std::function<decltype(imaging::rasterizePdf)>;
+bool isPdfImport(const std::filesystem::path&);
+bool preparePdfImports(QWidget*, const std::vector<std::filesystem::path>&,
+                       const std::optional<Document>&, PreparedPdfs&,
+                       const PreparedImages& = {},
+                       const PdfRasterizer& = imaging::rasterizePdf);
 struct ImportBatch {
     std::vector<std::filesystem::path> files;
     std::optional<Point> point;
@@ -38,6 +51,7 @@ struct ImportBatch {
     std::map<std::filesystem::path,CmykProfilePtr> cmykProfiles;
     PreparedImages prepared;
     std::optional<std::filesystem::path> openCameraRaw;
+    PreparedPdfs pdfs;
 };
 struct ImportResult {
     ImportState before, after;
@@ -47,6 +61,7 @@ struct ImportResult {
     bool cancelled{};
     std::string cameraRawLayer;
     bool importedDeepRaw{};
+    bool importedPdf{};
     bool changed() const { return !cancelled && imported != 0; }
 };
 using ImportDecoder=std::function<imaging::DecodedImage(const std::filesystem::path&,const imaging::ImportOptions&)>;
@@ -81,5 +96,6 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     void drain();
+    void finish(ImportResult);
 };
 }

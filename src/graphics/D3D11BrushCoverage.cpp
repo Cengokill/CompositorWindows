@@ -47,8 +47,10 @@ struct D3D11BrushCoverage::Impl {
     struct Slot {
         ComPtr<ID3D11Buffer> permanent,preview,constants,permanentRead,previewRead;
         ComPtr<ID3D11UnorderedAccessView> permanentView,previewView;
+        ComPtr<ID3D11Buffer> cap,capRead;
+        ComPtr<ID3D11UnorderedAccessView> capView;
     };
-    struct Readback {std::vector<float> permanent;std::vector<uint32_t> preview;};
+    struct Readback {std::vector<float> permanent,cap;std::vector<uint32_t> preview;};
     ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;ComPtr<ID3D11ComputeShader> shader;
     std::string name;
     std::vector<Slot> pool;
@@ -63,6 +65,13 @@ struct D3D11BrushCoverage::Impl {
             next.permanentRead=stagingBuffer(device.Get(),bytes);next.previewRead=stagingBuffer(device.Get(),bytes);
             pool.push_back(std::move(next));}
         return pool[index];
+    }
+    void ensureCap(Slot& slot) {
+        if(slot.capView)return;
+        constexpr UINT pixels=brushTileSize*brushTileSize,bytes=pixels*sizeof(float);
+        slot.cap=makeBuffer(device.Get(),bytes,D3D11_BIND_UNORDERED_ACCESS,sizeof(float));
+        slot.capRead=stagingBuffer(device.Get(),bytes);
+        slot.capView=uav(device.Get(),slot.cap.Get(),pixels);
     }
 };
 D3D11BrushCoverage::D3D11BrushCoverage(const std::filesystem::path& path,bool preferWarp):impl_(std::make_unique<Impl>()) {
@@ -104,18 +113,21 @@ void D3D11BrushCoverage::renderBatch(std::span<const BrushTileRender> requests,s
         // Reuse staging storage; do not copy authoritative permanent floats into
         // a readback buffer that is about to be entirely overwritten by Map.
         result->permanent.resize(request.tile->permanent.size());result->preview.resize(request.tile->preview.size());
+        result->cap.resize(request.tile->pressureCap.size());
         pending.push_back({request.tile,request.uniforms,result});}
     std::vector<BrushSegment> segments;segments.reserve(std::max<size_t>(1,settled.size()+tail.size()));
     segments.insert(segments.end(),settled.begin(),settled.end());segments.insert(segments.end(),tail.begin(),tail.end());
-    const auto count=static_cast<uint32_t>(segments.size());if(segments.empty())segments.push_back({});
-    auto geometry=makeBuffer(impl_->device.Get(),static_cast<UINT>(segments.size()*sizeof(BrushSegment)),D3D11_BIND_SHADER_RESOURCE,16,segments.data());
+    const auto count=static_cast<uint32_t>(segments.size());
+    const bool dynamicTip=std::ranges::any_of(segments,&BrushSegment::hasDynamics);
+    if(segments.empty())segments.push_back({});
+    auto geometry=makeBuffer(impl_->device.Get(),static_cast<UINT>(segments.size()*sizeof(BrushSegment)),D3D11_BIND_SHADER_RESOURCE,sizeof(BrushSegment),segments.data());
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};srvDesc.Format=DXGI_FORMAT_UNKNOWN;srvDesc.ViewDimension=D3D11_SRV_DIMENSION_BUFFER;
     srvDesc.Buffer.NumElements=static_cast<UINT>(segments.size());ComPtr<ID3D11ShaderResourceView> segmentView;
     checked(impl_->device->CreateShaderResourceView(geometry.Get(),&srvDesc,&segmentView),"CreateShaderResourceView");
     ID3D11ShaderResourceView* input=segmentView.Get();
     auto* context=impl_->context.Get();context->CSSetShader(impl_->shader.Get(),nullptr,0);
     context->CSSetShaderResources(0,1,&input);
-    // Sixteen reusable slots bound GPU/staging storage to approximately 16 MiB.
+    // Sixteen reusable slots bound GPU/staging storage to about 16 MiB, or 24 MiB with a pressure cap.
     // Dispatch a chunk before mapping any tile, avoiding per-tile CPU/GPU stalls.
     constexpr size_t batchSize=16;
     for(size_t first=0;first<pending.size();first+=batchSize){size_t number=std::min(batchSize,pending.size()-first);
@@ -124,19 +136,33 @@ void D3D11BrushCoverage::renderBatch(std::span<const BrushTileRender> requests,s
             job.uniforms.counts={tile.width,tile.height,static_cast<uint32_t>(settled.size()),count};
             D3D11_BOX box{0,0,0,static_cast<UINT>(tile.permanent.size()*sizeof(float)),1,1};
             context->UpdateSubresource(slot.permanent.Get(),0,&box,tile.permanent.data(),0,0);
+            const bool capped=!tile.pressureCap.empty();
+            job.uniforms.options={capped?1u:0u,dynamicTip?1u:0u,0,0};
+            if(capped){
+                impl_->ensureCap(slot);
+                context->UpdateSubresource(slot.cap.Get(),0,&box,tile.pressureCap.data(),0,0);
+            }
             context->UpdateSubresource(slot.constants.Get(),0,nullptr,&job.uniforms,0,0);
-            ID3D11UnorderedAccessView* outputs[]={slot.permanentView.Get(),slot.previewView.Get()};ID3D11Buffer* cb=slot.constants.Get();
-            context->CSSetConstantBuffers(0,1,&cb);context->CSSetUnorderedAccessViews(0,2,outputs,nullptr);
+            ID3D11UnorderedAccessView* outputs[]={slot.permanentView.Get(),slot.previewView.Get(),capped?slot.capView.Get():nullptr};
+            ID3D11Buffer* cb=slot.constants.Get();
+            context->CSSetConstantBuffers(0,1,&cb);context->CSSetUnorderedAccessViews(0,3,outputs,nullptr);
             context->Dispatch((tile.width+15)/16,(tile.height+15)/16,1);
         }
-        ID3D11UnorderedAccessView* nullOutputs[2]{};context->CSSetUnorderedAccessViews(0,2,nullOutputs,nullptr);
-        for(size_t j=0;j<number;++j){auto& slot=impl_->pool[j];context->CopyResource(slot.permanentRead.Get(),slot.permanent.Get());context->CopyResource(slot.previewRead.Get(),slot.preview.Get());}
+        ID3D11UnorderedAccessView* nullOutputs[3]{};context->CSSetUnorderedAccessViews(0,3,nullOutputs,nullptr);
+        for(size_t j=0;j<number;++j){
+            auto& slot=impl_->pool[j];
+            context->CopyResource(slot.permanentRead.Get(),slot.permanent.Get());
+            context->CopyResource(slot.previewRead.Get(),slot.preview.Get());
+            if(!pending[first+j].readback->cap.empty())context->CopyResource(slot.capRead.Get(),slot.cap.Get());
+        }
         for(size_t j=0;j<number;++j){auto& job=pending[first+j];auto& slot=impl_->pool[j];auto bytes=job.readback->permanent.size()*sizeof(float);
-            readBuffer(context,slot.permanentRead.Get(),job.readback->permanent.data(),bytes);readBuffer(context,slot.previewRead.Get(),job.readback->preview.data(),bytes);}
+            readBuffer(context,slot.permanentRead.Get(),job.readback->permanent.data(),bytes);readBuffer(context,slot.previewRead.Get(),job.readback->preview.data(),bytes);
+            if(!job.readback->cap.empty())readBuffer(context,slot.capRead.Get(),job.readback->cap.data(),bytes);
+        }
     }
     ID3D11ShaderResourceView* nullInput=nullptr;ID3D11Buffer* nullBuffer=nullptr;
     context->CSSetShaderResources(0,1,&nullInput);context->CSSetConstantBuffers(0,1,&nullBuffer);
     checked(impl_->device->GetDeviceRemovedReason(),"D3D11 device status");
-    for(auto& job:pending){job.tile->permanent.swap(job.readback->permanent);for(size_t i=0;i<job.readback->preview.size();++i)job.tile->preview[i]=static_cast<uint8_t>(job.readback->preview[i]);}
+    for(auto& job:pending){job.tile->permanent.swap(job.readback->permanent);job.tile->pressureCap.swap(job.readback->cap);for(size_t i=0;i<job.readback->preview.size();++i)job.tile->preview[i]=static_cast<uint8_t>(job.readback->preview[i]);}
 }
 } // namespace compositor::graphics
