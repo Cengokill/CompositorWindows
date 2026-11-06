@@ -47,10 +47,36 @@ void pressureCoverage(D3D11BrushCoverage* warp) {
         require(cpu.preview==live,"Pressure tail and final stroke differ");
     }
 }
+void pressureTaperSampling(D3D11BrushCoverage* warp) {
+    for(float hardness:{0.f,1.f})for(bool variableSize:{false,true}){
+        const auto u=settings(12,hardness);
+        const std::array<BrushSegment,1> whole{{{20.5f,24.5f,24.5f,24.5f,variableSize?.1f:1.f,1.f,.1f,1.f}}};
+        const auto& segment=whole.front();
+        const float midSize=(segment.size0+segment.size1)*.5f;
+        const std::array<BrushSegment,2> split{{
+            {20.5f,24.5f,22.5f,24.5f,segment.size0,midSize,.1f,.55f},
+            {22.5f,24.5f,24.5f,24.5f,midSize,1.f,.55f,1.f}
+        }};
+        BrushTile sparse(48,48,hardness<1),dense=sparse;
+        renderBrushCpu(sparse,u,whole);
+        renderBrushCpu(dense,u,split);
+        require(sparse.preview[30*48+22]>100,"Tapered tip missed a pixel reached by its wider end");
+        for(size_t i=0;i<sparse.preview.size();++i)
+            require(std::abs(int(sparse.preview[i])-dense.preview[i])<=2,"Equivalent midpoint changed tapered coverage");
+        if(warp){
+            BrushTile sparseGpu(48,48,hardness<1),denseGpu=sparseGpu;
+            warp->render(sparseGpu,u,whole);
+            warp->render(denseGpu,u,split);
+            compare(sparse,sparseGpu);
+            compare(dense,denseGpu);
+        }
+    }
+}
 void pgm(const std::filesystem::path& path,const BrushTile& tile){std::ofstream out(path,std::ios::binary);out<<"P5\n"<<tile.width<<' '<<tile.height<<"\n255\n";out.write(reinterpret_cast<const char*>(tile.preview.data()),std::streamsize(tile.preview.size()));}
 }
 int main(int argc,char**argv){
     test("pen-pressure-coverage-and-tail-cpu",[]{pressureCoverage(nullptr);});
+    test("pen-pressure-taper-sampling-cpu",[]{pressureTaperSampling(nullptr);});
     test("G-B-001-hard-tip-analytic-AA",[]{BrushTile t(16,16);auto u=settings(2,1);std::array<BrushSegment,1> click{{{4.5f,4.5f,4.5f,4.5f}}};renderBrushCpu(t,u,click);
         require(t.preview[4*16+4]==255&&t.preview[4*16+6]==128&&t.preview[4*16+7]==0,"hard analytic AA coverage");});
     test("G-B-002-tail-replacement-and-flush",[]{BrushTile t;auto u=settings();std::array<BrushSegment,1> old{{{30,40,220,40}}},next{{{30,200,220,200}}};renderBrushCpu(t,u,{},old);auto snapshot=t.preview;
@@ -72,6 +98,7 @@ int main(int argc,char**argv){
     try{
         D3D11BrushCoverage warp(argv[1],true);std::cout<<"ADAPTER "<<warp.adapterName()<<'\n';
         test("pen-pressure-coverage-and-tail-warp",[&]{pressureCoverage(&warp);});
+        test("pen-pressure-taper-sampling-warp",[&]{pressureTaperSampling(&warp);});
         test("G-W-001-HLSL-quadrature-permanent-tail",[&]{for(float hardness:{0.0f,0.35f,1.0f}){BrushTile cpu,gpu;auto u=settings(60,hardness);
             std::array<BrushSegment,2> committed{{{10,40,240,180},{80,240,140,10}}};std::array<BrushSegment,1> tail{{{140,10,240,50}}};
             renderBrushCpu(cpu,u,committed,tail);warp.render(gpu,u,committed,tail);compare(cpu,gpu);auto snapshot=gpu.preview;

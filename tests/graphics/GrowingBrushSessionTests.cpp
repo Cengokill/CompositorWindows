@@ -51,7 +51,9 @@ void pen_pressure() {
     const auto live=stroke.preview();
     const auto result=stroke.commit();
     REQUIRE(live->pixel(48,24)==result->pixel(48,24));
-    REQUIRE(std::abs(int(result->pixel(48,24).a)-128)<=1);
+    // The strongest fully covered tip reaches this pixel at t=33.5/58,
+    // where its pressure is .25 + .75*t and the toolbar opacity is .8.
+    REQUIRE(std::abs(int(result->pixel(48,24).a)-139)<=1);
     REQUIRE(result->pixel(20,29).a==0&&result->pixel(74,29).a>0);
     for(double hardness:{0.,1.}){
         s.hardness=hardness;

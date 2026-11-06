@@ -28,17 +28,72 @@ float brushCoverage(float squared,float radius) {
     return max(0.0f,(exp(-2.5f*t*t)-exp(-2.5f))/(1.0f-exp(-2.5f)));
 }
 float tipDensity(float squared,float radius) {return -log(max(1.0f-brushCoverage(squared,radius),0.001f));}
+struct TipSweep {
+    float length, projection, perpendicularSquared, radius0, radiusDelta;
+};
+TipSweep tipSweep(float2 p,BrushSegment s,float radius) {
+    float2 offset=p-s.endpoints.xy,v=s.endpoints.zw-s.endpoints.xy;
+    float len=length(v);
+    float2 direction=len>0.0f ? v/len : float2(1.0f,0.0f);
+    float perpendicular=offset.y*direction.x-offset.x*direction.y;
+    TipSweep sweep={len,dot(offset,direction),perpendicular*perpendicular,radius*s.dynamics.x,
+        radius*(s.dynamics.y-s.dynamics.x)};
+    return sweep;
+}
+float tipRadius(TipSweep sweep,float t) {
+    return sweep.radius0+sweep.radiusDelta*t;
+}
+float tipDistanceSquared(TipSweep sweep,float t) {
+    float along=sweep.length*t-sweep.projection;
+    return along*along+sweep.perpendicularSquared;
+}
+bool tipReaches(TipSweep sweep,float t) {
+    float radius=tipRadius(sweep,t);
+    return tipDistanceSquared(sweep,t)<radius*radius;
+}
+float closestTipEdge(TipSweep sweep) {
+    float change=abs(sweep.radiusDelta);
+    if(change>=sweep.length)return sweep.radiusDelta>0.0f ? 1.0f : 0.0f;
+    float tangent=sqrt((sweep.length-change)*(sweep.length+change));
+    return saturate((sweep.projection+sqrt(sweep.perpendicularSquared)*sweep.radiusDelta/tangent)/sweep.length);
+}
+float hardTipCoverage(TipSweep sweep,float t) {
+    return brushCoverage(tipDistanceSquared(sweep,t),tipRadius(sweep,t));
+}
 float hardCoverage(float2 p,BrushSegment s) {
-    float t;
-    float squared=segmentDistanceSquared(p,s.endpoints,t);
-    return brushCoverage(squared,geometry.z*lerp(s.dynamics.x,s.dynamics.y,t))*
-        lerp(s.dynamics.z,s.dynamics.w,t);
+    TipSweep sweep=tipSweep(p,s,geometry.z);
+    float closest=closestTipEdge(sweep),strongest=s.dynamics.w>s.dynamics.z ? 1.0f : 0.0f;
+    float maximumTip=hardTipCoverage(sweep,closest);
+    float best=maximumTip*lerp(s.dynamics.z,s.dynamics.w,closest);
+    if(maximumTip==0.0f || closest==strongest || s.dynamics.z==s.dynamics.w)return best;
+
+    // Keep the search and iteration count aligned with the CPU brush.
+    float lo=0.0f,hi=1.0f;
+    best=max(best,hardTipCoverage(sweep,strongest)*lerp(s.dynamics.z,s.dynamics.w,strongest));
+    [loop]for(int i=0;i<24;++i){
+        float left=lo+(hi-lo)/3.0f,right=hi-(hi-lo)/3.0f;
+        float a=lerp(closest,strongest,left),b=lerp(closest,strongest,right);
+        float scoreA=hardTipCoverage(sweep,a)*lerp(s.dynamics.z,s.dynamics.w,a);
+        float scoreB=hardTipCoverage(sweep,b)*lerp(s.dynamics.z,s.dynamics.w,b);
+        best=max(best,max(scoreA,scoreB));
+        if(scoreA<scoreB)lo=left;
+        else hi=right;
+    }
+    return best;
 }
 float segmentStrength(float2 p,BrushSegment s) {
-    float t;
-    float squared=segmentDistanceSquared(p,s.endpoints,t);
-    float radius=geometry.z*lerp(s.dynamics.x,s.dynamics.y,t);
-    return squared<radius*radius?lerp(s.dynamics.z,s.dynamics.w,t):0.0f;
+    TipSweep sweep=tipSweep(p,s,geometry.z);
+    float strongest=s.dynamics.w>s.dynamics.z ? 1.0f : 0.0f;
+    if(tipReaches(sweep,strongest))return max(s.dynamics.z,s.dynamics.w);
+    float inside=closestTipEdge(sweep),outside=strongest;
+    if(!tipReaches(sweep,inside))return 0.0f;
+    if(s.dynamics.z==s.dynamics.w)return s.dynamics.z;
+    [loop]for(int i=0;i<20;++i){
+        float mid=(inside+outside)*0.5f;
+        if(tipReaches(sweep,mid))inside=mid;
+        else outside=mid;
+    }
+    return lerp(s.dynamics.z,s.dynamics.w,inside);
 }
 float segmentDensity(float2 p,BrushSegment s) {
     if(s.dynamics.z==0.0f && s.dynamics.w==0.0f)return 0.0f;

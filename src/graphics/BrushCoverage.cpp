@@ -27,17 +27,73 @@ float distanceSquared(Vec p,const BrushSegment& s,float& t) {
     t=std::clamp(dot(p-a,v)/std::max(dot(v,v),1e-12f),0.0f,1.0f);
     const auto delta=p-(a+v*t); return dot(delta,delta);
 }
+struct TipSweep {
+    float length, projection, perpendicularSquared, radius0, radiusDelta;
+
+    float radius(float t) const { return radius0+radiusDelta*t; }
+    float squaredDistance(float t) const {
+        const float along=length*t-projection;
+        return along*along+perpendicularSquared;
+    }
+    bool reaches(float t) const {
+        const float r=radius(t);
+        return squaredDistance(t)<r*r;
+    }
+    float closestEdge() const {
+        // Maximize radius(t) minus distance(t). When the radius changes at
+        // least as fast as the center moves, the widest disc contains all the others.
+        const float change=std::abs(radiusDelta);
+        if(change>=length)return radiusDelta>0 ? 1.f : 0.f;
+        const float tangent=std::sqrt((length-change)*(length+change));
+        return std::clamp((projection+std::sqrt(perpendicularSquared)*radiusDelta/tangent)/length,0.f,1.f);
+    }
+};
+TipSweep tipSweep(Vec p,const BrushSegment& s,float radius) {
+    const Vec offset{p.x-s.x0,p.y-s.y0},v{s.x1-s.x0,s.y1-s.y0};
+    const float length=std::sqrt(dot(v,v));
+    const Vec direction=length>0 ? v*(1/length) : Vec{1,0};
+    const float perpendicular=offset.y*direction.x-offset.x*direction.y;
+    return {length,dot(offset,direction),perpendicular*perpendicular,radius*s.size0,radius*(s.size1-s.size0)};
+}
 float hardCoverage(Vec p,const BrushSegment& s,const BrushUniforms& u) {
-    float t;
-    const float squared=distanceSquared(p,s,t);
-    return coverage(squared,u.geometry[2]*interpolate(s.size0,s.size1,t),u)*
-        interpolate(s.strength0,s.strength1,t);
+    const auto sweep=tipSweep(p,s,u.geometry[2]);
+    const auto opacity=[&](float t){return interpolate(s.strength0,s.strength1,t);};
+    const auto tip=[&](float t){return coverage(sweep.squaredDistance(t),sweep.radius(t),u);};
+    const float closest=sweep.closestEdge(),strongest=s.strength1>s.strength0 ? 1.f : 0.f;
+    const float maximumTip=tip(closest);
+    float best=maximumTip*opacity(closest);
+    if(maximumTip==0 || closest==strongest || s.strength0==s.strength1)return best;
+
+    // Between the fullest tip coverage and the stronger endpoint, coverage
+    // decreases and opacity increases. Their product is unimodal where positive.
+    float lo=0,hi=1;
+    best=std::max(best,tip(strongest)*opacity(strongest));
+    for(int i=0;i<24;++i){
+        const float left=lo+(hi-lo)/3,right=hi-(hi-lo)/3;
+        const float a=interpolate(closest,strongest,left),b=interpolate(closest,strongest,right);
+        const float scoreA=tip(a)*opacity(a),scoreB=tip(b)*opacity(b);
+        best=std::max({best,scoreA,scoreB});
+        if(scoreA<scoreB)lo=left;
+        else hi=right;
+    }
+    return best;
 }
 float segmentStrength(Vec p,const BrushSegment& s,float radius) {
-    float t;
-    const float squared=distanceSquared(p,s,t);
-    radius*=interpolate(s.size0,s.size1,t);
-    return squared<radius*radius?interpolate(s.strength0,s.strength1,t):0.f;
+    const auto sweep=tipSweep(p,s,radius);
+    const float strongest=s.strength1>s.strength0 ? 1.f : 0.f;
+    if(sweep.reaches(strongest))return std::max(s.strength0,s.strength1);
+
+    // A linearly changing disc covers a single interval along the segment.
+    // Find the edge of that interval on the side with greater pressure.
+    float inside=sweep.closestEdge(),outside=strongest;
+    if(!sweep.reaches(inside))return 0;
+    if(s.strength0==s.strength1)return s.strength0;
+    for(int i=0;i<20;++i){
+        const float mid=(inside+outside)*0.5f;
+        if(sweep.reaches(mid))inside=mid;
+        else outside=mid;
+    }
+    return interpolate(s.strength0,s.strength1,inside);
 }
 float segmentDensity(Vec p,const BrushSegment& s,const BrushUniforms& u) {
     const Vec a{s.x0,s.y0},v{s.x1-s.x0,s.y1-s.y0};
