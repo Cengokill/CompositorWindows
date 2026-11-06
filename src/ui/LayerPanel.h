@@ -8,6 +8,7 @@
 #include <QImage>
 #include <QSizeF>
 #include <functional>
+#include <optional>
 
 namespace compositor::ui {
 enum class DropZone { Above, IntoGroup, Bottom };
@@ -95,6 +96,8 @@ private:
     std::unique_ptr<ThumbnailCache> thumbnailCache_;
     uint64_t thumbnailRenderCount_{};
     bool modifierCursor_{};
+    std::optional<int> middleScrollY_;
+    void finishMiddleScroll();
     QIcon thumbnail(const Layer&,bool,QSizeF);
     QRect checkRect(const QTreeWidgetItem*)const;
     void contextMenu(const QPoint&);

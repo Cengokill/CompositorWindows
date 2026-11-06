@@ -1,9 +1,12 @@
 #include "ui/MainWindow.h"
 #include "ui/LayerPanel.h"
+#include "ui/NativeCanvas.h"
 #include <QApplication>
 #include <QCursor>
 #include <QFont>
 #include <QMouseEvent>
+#include <QScrollBar>
+#include <algorithm>
 #include <QStyleOptionViewItem>
 #include <QTest>
 #include <iostream>
@@ -49,7 +52,82 @@ void text_layer_icon(){
     check(redDominant,"raster thumbnail was not restored after removing text");
 }
 void visibility_swipe(){MainWindow w(true);auto&p=w.addProject(example());w.show();QApplication::processEvents();const auto before=p.document;const auto active=p.active;auto start=eyePoint(w,"c"),middle=eyePoint(w,"b"),last=eyePoint(w,"a");mouse(w,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);check(!layer(p,"c").visible&&p.history.undoCount()==0,"press must preview first eye in open transaction");mouse(w,QEvent::MouseMove,middle,Qt::NoButton,Qt::LeftButton);mouse(w,QEvent::MouseMove,last,Qt::NoButton,Qt::LeftButton);mouse(w,QEvent::MouseMove,middle,Qt::NoButton,Qt::LeftButton);mouse(w,QEvent::MouseButtonRelease,QPoint(-15,-15),Qt::LeftButton,Qt::NoButton);check(!layer(p,"a").visible&&!layer(p,"b").visible&&!layer(p,"c").visible,"swipe must assign same state without toggling revisited rows");check(p.history.undoCount()==1&&p.history.undoName()=="Hide Layer"&&p.active==active,"eye swipe history or selection changed");const auto undo=p.history.undo();check(undo&&undo->document==before,"eye swipe Undo did not restore exact document");}
+Document scrollExample(int count){
+    auto d=example();d.layers.clear();
+    for(int i=0;i<count;++i){Layer l;l.id="scroll-"+std::to_string(i);l.name=l.id;l.transform={0,0,4,4};l.raster=Raster::filled(4,4,{255,0,0,255});
+        auto mask=std::make_shared<GrayRaster>();mask->width=mask->height=1;mask->pixels={255};l.mask=Mask{mask};d.layers.push_back(l);}
+    return d;
+}
+void middle_scroll(){
+    for(const int count:{3,40}){
+        MainWindow w(true);auto&p=w.addProject(scrollExample(count));w.show();QApplication::processEvents();
+        auto*t=tree(w);t->setFixedHeight(240);QApplication::processEvents();auto*bar=t->verticalScrollBar();
+        check((bar->maximum()>0)==(count==40),"scroll fixture range");
+        const auto before=p.document;const auto selected=p.selected;const auto active=p.active;const auto undo=p.history.undoCount();const auto pan=p.canvas->pan;const auto zoom=p.canvas->zoom;const bool modified=p.history.modified(),redo=p.history.canRedo();
+        const QPoint start(t->viewport()->width()/2,100);bar->setValue(0);
+        mouse(w,QEvent::MouseButtonPress,start,Qt::MiddleButton,Qt::MiddleButton);
+        check(t->viewport()->cursor().shape()==Qt::ClosedHandCursor,"missing middle-scroll cursor");
+        mouse(w,QEvent::MouseMove,start-QPoint(0,75),Qt::NoButton,Qt::MiddleButton);
+        check(bar->value()==std::min(75,bar->maximum()),"middle drag is not pixel based or has wrong direction");
+        mouse(w,QEvent::MouseMove,start-QPoint(0,10000),Qt::NoButton,Qt::MiddleButton);
+        check(bar->value()==bar->maximum(),"bottom limit");
+        mouse(w,QEvent::MouseMove,start-QPoint(0,9960),Qt::NoButton,Qt::MiddleButton);
+        check(bar->value()==std::max(0,bar->maximum()-40),"reverse at bottom must respond immediately");
+        mouse(w,QEvent::MouseMove,start+QPoint(0,10000),Qt::NoButton,Qt::MiddleButton);
+        check(bar->value()==0,"top limit");
+        mouse(w,QEvent::MouseButtonRelease,QPoint(-20,-20),Qt::MiddleButton,Qt::NoButton);
+        mouse(w,QEvent::MouseMove,start,Qt::NoButton,Qt::NoButton);
+        check(bar->value()==0&&t->viewport()->cursor().shape()==Qt::ArrowCursor,"outside release left gesture active");
+        check(p.document==before&&p.selected==selected&&p.active==active&&p.history.undoCount()==undo,"scroll edited project");
+        check(p.canvas->pan==pan&&p.canvas->zoom==zoom,"layer scroll moved canvas");
+        check(p.history.modified()==modified&&p.history.canRedo()==redo,"scroll changed dirty or redo state");
+    }
+}
+void middle_scroll_cancel(){
+    MainWindow w(true);w.addProject(scrollExample(40));w.show();QApplication::processEvents();
+    auto*t=tree(w);t->setFixedHeight(240);QApplication::processEvents();auto*bar=t->verticalScrollBar();
+    const QPoint start(t->viewport()->width()/2,100);
+    for(const int reason:{0,1,2,3,4}){
+        bar->setValue(100);mouse(w,QEvent::MouseButtonPress,start,Qt::MiddleButton,Qt::MiddleButton);
+        mouse(w,QEvent::MouseMove,start-QPoint(0,30),Qt::NoButton,Qt::MiddleButton);
+        if(reason==0){QEvent event(QEvent::WindowDeactivate);QApplication::sendEvent(&w,&event);}
+        else if(reason==1){QEvent event(QEvent::UngrabMouse);QApplication::sendEvent(t->viewport(),&event);}
+        else if(reason==2){t->hide();t->show();QApplication::processEvents();}
+        else if(reason==3)controller(w)->rebuild();
+        else mouse(w,QEvent::MouseMove,start,Qt::NoButton,Qt::NoButton);
+        const int stopped=bar->value();
+        mouse(w,QEvent::MouseMove,start-QPoint(0,90),Qt::NoButton,Qt::MiddleButton);
+        check(bar->value()==stopped,"cancelled middle gesture resumed");
+        check(t->viewport()->cursor().shape()!=Qt::ClosedHandCursor,"cancel left closed hand");
+        check(QWidget::mouseGrabber()!=t->viewport(),"cancel retained mouse capture");
+        mouse(w,QEvent::MouseButtonRelease,start,Qt::MiddleButton,Qt::NoButton);
+        // Each cancellation must permit a fresh gesture.
+        bar->setValue(100);mouse(w,QEvent::MouseButtonPress,start,Qt::MiddleButton,Qt::MiddleButton);
+        mouse(w,QEvent::MouseMove,start-QPoint(0,20),Qt::NoButton,Qt::MiddleButton);
+        check(bar->value()==120,"cannot restart after cancellation");
+        mouse(w,QEvent::MouseButtonRelease,start,Qt::MiddleButton,Qt::NoButton);
+    }
+}
+void middle_scroll_controls(){
+    MainWindow w(true);auto&p=w.addProject(scrollExample(40));w.show();QApplication::processEvents();
+    auto*t=tree(w);t->setFixedHeight(240);QApplication::processEvents();
+    p.active="scroll-39";p.selected={"scroll-39","scroll-38"};p.maskSelected=true;controller(w)->updateSelection();
+    const auto before=p.document;const auto undo=p.history.undoCount();
+    for(const auto flags:{Qt::NoModifier,Qt::AltModifier,Qt::ControlModifier,Qt::ShiftModifier})for(int column=0;column<5;++column){
+        controller(w)->updateSelection();t->verticalScrollBar()->setValue(0);
+        const auto rows=t->selectedItems();auto*current=t->currentItem();
+        const QPoint start(t->columnViewportPosition(column)+t->columnWidth(column)/2,22);
+        mouse(w,QEvent::MouseButtonPress,start,Qt::MiddleButton,Qt::MiddleButton,flags);
+        mouse(w,QEvent::MouseMove,start-QPoint(0,60),Qt::NoButton,Qt::MiddleButton,flags);
+        check(t->verticalScrollBar()->value()==60,"control or edit gate blocked navigation");
+        check(t->viewport()->cursor().shape()==Qt::ClosedHandCursor,"modifier replaced scroll cursor");
+        mouse(w,QEvent::MouseButtonRelease,start-QPoint(0,60),Qt::MiddleButton,Qt::NoButton,flags);
+        check(p.document==before&&p.history.undoCount()==undo,"middle gesture edited visibility, link or document");
+        check(p.active=="scroll-39"&&p.selected==std::vector<std::string>{"scroll-39","scroll-38"}&&p.maskSelected,"middle gesture changed selection or mask target");
+        check(t->selectedItems()==rows&&t->currentItem()==current,"middle gesture changed tree selection");
+    }
+}
 void source_cursor_conflict(){MainWindow w(true);auto d=example();for(auto&l:d.layers){l.raster.reset();l.transform={0,0,400,300};}w.addProject(d);w.show();QApplication::processEvents();auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor,"source Option name offers duplicate");auto*row=item(w,"c");const auto rect=tree(w)->visualItemRect(row);const auto size=row->icon(1).actualSize({36,36});check(size==QSize(36,27),"source thumbnail takes400x300canvas shape");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,rect.center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::AltModifier);const bool thumbnailAssertion=view->cursor().shape()!=Qt::DragCopyCursor;std::cout<<"SOURCE-TEST-CONFLICT CursorTests.optionOverALayerRowOffersDuplicatingExceptOverThumbnails row_top="<<rect.top()<<" row_height="<<rect.height()<<" thumbnail_center_y="<<picture.y()<<" clipping_boundary="<<rect.bottom()+1-rect.height()/4<<" actual_role="<<view->property("layerCursorRole").toString().toStdString()<<" expected=not-duplicate\n";mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"source return to plain name restores arrow");check(thumbnailAssertion,"upstream expected Option at image thumbnail center not duplicate; literal pinned source route gives duplicate");}
 void panel_cursors(){MainWindow w(true);auto&p=w.addProject(example());(void)p;w.show();QApplication::processEvents();auto*c=controller(w);auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"tool cursor persisted in layer name");view->setCursor(Qt::CrossCursor);c->refreshCursor({},name);check(view->cursor().shape()==Qt::ArrowCursor,"cursor refresh failed to restore arrow");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->cursor().shape()==Qt::ArrowCursor,"Ctrl away from thumbnail changed cursor");view->setCursor(Qt::CrossCursor);c->refreshCursor({},QPoint(-50,-50));check(view->cursor().shape()==Qt::CrossCursor,"outside modifier refresh touched other view cursor");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor&&view->property("layerCursorRole")=="duplicate","Alt row name did not offer duplicate");auto*row=item(w,"c");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,tree(w)->visualItemRect(row).center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->property("layerCursorRole")=="load-selection","Ctrl image did not offer load selection");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"plain row failed to restore arrow");}
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="visibility_swipe")visibility_swipe();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

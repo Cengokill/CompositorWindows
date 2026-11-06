@@ -148,7 +148,7 @@ public:
 };
 }
 LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(tree),tree_(tree),host_(std::move(host)),token_(QUuid::createUuid().toByteArray()),thumbnailCache_(std::make_unique<ThumbnailCache>()){
-    setObjectName("layerPanelController");tree_->setObjectName("layersTree");tree_->setColumnCount(5);tree_->setHeaderLabels({"Layer","Image","Link","Mask"});tree_->setHeaderHidden(true);tree_->setItemDelegate(new LayerRowDelegate(tree_));tree_->setIndentation(12);tree_->setIconSize({36,36});tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);tree_->setEditTriggers(QAbstractItemView::EditKeyPressed);tree_->setSelectionBehavior(QAbstractItemView::SelectRows);tree_->setDragDropMode(QAbstractItemView::NoDragDrop);tree_->setAcceptDrops(true);tree_->viewport()->setAcceptDrops(true);tree_->viewport()->installEventFilter(this);tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    setObjectName("layerPanelController");tree_->setObjectName("layersTree");tree_->setColumnCount(5);tree_->setHeaderLabels({"Layer","Image","Link","Mask"});tree_->setHeaderHidden(true);tree_->setItemDelegate(new LayerRowDelegate(tree_));tree_->setIndentation(12);tree_->setIconSize({36,36});tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);tree_->setEditTriggers(QAbstractItemView::EditKeyPressed);tree_->setSelectionBehavior(QAbstractItemView::SelectRows);tree_->setDragDropMode(QAbstractItemView::NoDragDrop);tree_->setAcceptDrops(true);tree_->viewport()->setAcceptDrops(true);tree_->viewport()->installEventFilter(this);tree_->setContextMenuPolicy(Qt::CustomContextMenu);
     tree_->header()->setStretchLastSection(false);tree_->header()->setMinimumSectionSize(12);
     tree_->header()->setSectionResizeMode(4,QHeaderView::Fixed);tree_->setColumnWidth(4,24);
     tree_->header()->moveSection(tree_->header()->visualIndex(4),0);
@@ -245,7 +245,16 @@ void LayerPanelController::invokeActionControl(std::string id,LayerControlKind k
 void LayerPanelController::finishVisibilitySwipe(){
     if(!visibilitySwipe_)return;visibilitySwipe_.reset();if(QWidget::mouseGrabber()==tree_->viewport())tree_->viewport()->releaseMouse();if(host_.endVisibilitySwipe)host_.endVisibilitySwipe();
 }
+void LayerPanelController::finishMiddleScroll(){
+    if(!middleScrollY_)return;
+    middleScrollY_.reset();
+    auto* viewport=tree_->viewport();
+    if(QWidget::mouseGrabber()==viewport)viewport->releaseMouse();
+    viewport->setCursor(Qt::ArrowCursor);viewport->setProperty("layerCursorRole","arrow");modifierCursor_=false;
+    refreshCursor(QApplication::keyboardModifiers(),viewport->mapFromGlobal(QCursor::pos()));
+}
 void LayerPanelController::refreshCursor(Qt::KeyboardModifiers modifiers,const QPoint&point){
+    if(middleScrollY_){tree_->viewport()->setCursor(Qt::ClosedHandCursor);tree_->viewport()->setProperty("layerCursorRole","middle-scroll");return;}
     auto*viewport=tree_->viewport();const bool inside=viewport->rect().contains(point);if(!inside){if(modifierCursor_){viewport->setCursor(Qt::ArrowCursor);viewport->setProperty("layerCursorRole","arrow");modifierCursor_=false;}return;}
     const auto state=host_.state();auto*item=tree_->itemAt(point);const auto*layer=item&&state.document?findLayer(*state.document,idOf(item)):nullptr;const bool editable=tree_->isEnabled()&&(!host_.canEdit||host_.canEdit());const int column=tree_->columnAt(point.x());
     QString role="arrow";Qt::CursorShape shape=Qt::ArrowCursor;
@@ -263,7 +272,7 @@ void LayerPanelController::invoke(const std::function<void()>& fn){try{if(host_.
 void LayerPanelController::selectionChanged(){if(rebuilding_)return;if(host_.canEdit&&!host_.canEdit()){updateSelection();return;}invoke([&]{layers::SelectionState selected;for(QTreeWidgetItemIterator it(tree_);*it;++it)if((*it)->isSelected())selected.ids.push_back(idOf(*it));selected.primary=idOf(tree_->currentItem());if(std::find(selected.ids.begin(),selected.ids.end(),selected.primary)==selected.ids.end())selected.primary=selected.ids.empty()?std::string{}:selected.ids.front();host_.select(std::move(selected),false);});}
 void LayerPanelController::syncVisibilityChrome(){const auto state=host_.state();if(!state.document)return;QSignalBlocker block(tree_);for(QTreeWidgetItemIterator it(tree_);*it;++it){const auto* layer=findLayer(*state.document,idOf(*it));if(!layer)continue;(*it)->setCheckState(0,layer->visible?Qt::Checked:Qt::Unchecked);(*it)->setForeground(0,layer->visible?QBrush():QBrush(QColor(125,125,125)));}}
 void LayerPanelController::updateSelection(){const auto state=host_.state();const bool editable=!host_.canEdit||host_.canEdit();QSignalBlocker block(tree_);for(QTreeWidgetItemIterator it(tree_);*it;++it){auto* item=*it;auto flags=item->flags();flags.setFlag(Qt::ItemIsEditable,editable);flags.setFlag(Qt::ItemIsUserCheckable,editable);flags.setFlag(Qt::ItemIsSelectable,editable);item->setFlags(flags);const auto id=idOf(item);item->setSelected(std::find(state.selection.ids.begin(),state.selection.ids.end(),id)!=state.selection.ids.end());item->setExpanded(!state.collapsed.contains(id));if(id==state.selection.primary)tree_->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);item->setBackground(1,id==state.selection.primary&&!state.maskSelected?QBrush(QColor(85,125,165)):QBrush());item->setBackground(3,id==state.selection.primary&&state.maskSelected?QBrush(QColor(85,125,165)):QBrush());}if(auto* parent=tree_->parentWidget())if(auto* combo=parent->findChild<QComboBox*>("layerEditTarget")){QSignalBlocker comboBlock(combo);const auto*l=state.document?findLayer(*state.document,state.selection.primary):nullptr;const bool hasMask=l&&l->mask&&state.selection.ids.size()==1;combo->setVisible(hasMask);combo->setEnabled(hasMask&&(!host_.targetEnabled||host_.targetEnabled()));combo->setCurrentIndex(state.maskSelected?1:0);}}
-void LayerPanelController::rebuild(){rebuilding_=true;QSignalBlocker block(tree_);tree_->clear();const auto state=host_.state();if(state.document){std::unordered_map<std::string,QTreeWidgetItem*> items;for(const auto& layer:state.document->layers){auto* item=new QTreeWidgetItem({QString::fromStdString(layer.name)});item->setData(0,Qt::UserRole,QString::fromStdString(layer.id));item->setData(0,Qt::UserRole+2,layer.group?QString("Folder"):!layer.adjustmentJson.empty()?QString("Adjustment"):layer.text?QString("Text"):!layer.shapeJson.empty()?QString("Shape"):QString(layer.deep&&layer.deep->isHdr()?"HDR · %1 × %2 px":"%1 × %2 px").arg(layer.raster?layer.raster->width:int(layer.transform.width)).arg(layer.raster?layer.raster->height:int(layer.transform.height)));item->setFlags(item->flags()|Qt::ItemIsUserCheckable|Qt::ItemIsEditable);item->setCheckState(0,layer.visible?Qt::Checked:Qt::Unchecked);item->setIcon(1,thumbnail(layer,false,{double(state.document->width),double(state.document->height)}));item->setToolTip(1,"Select image; Ctrl-click selects alpha, Ctrl+Shift adds, Ctrl+Alt subtracts");if(layer.mask){item->setIcon(3,thumbnail(layer,true,{double(state.document->width),double(state.document->height)}));if(layer.mask->linked)item->setIcon(2,editorIcon(EditorIcon::Link));item->setToolTip(2,layer.mask->linked?"Unlink mask":"Link mask");item->setToolTip(3,"Select mask; Shift-click enables/disables; Ctrl-click selects black areas; Alt-drag copies mask");}if(!layer.maskSourceId.empty())item->setToolTip(0,"Clipped to "+QString::fromStdString(layer.maskSourceId));item->setSizeHint(0,{0,44});items.emplace(layer.id,item);}
+void LayerPanelController::rebuild(){finishMiddleScroll();rebuilding_=true;QSignalBlocker block(tree_);tree_->clear();const auto state=host_.state();if(state.document){std::unordered_map<std::string,QTreeWidgetItem*> items;for(const auto& layer:state.document->layers){auto* item=new QTreeWidgetItem({QString::fromStdString(layer.name)});item->setData(0,Qt::UserRole,QString::fromStdString(layer.id));item->setData(0,Qt::UserRole+2,layer.group?QString("Folder"):!layer.adjustmentJson.empty()?QString("Adjustment"):layer.text?QString("Text"):!layer.shapeJson.empty()?QString("Shape"):QString(layer.deep&&layer.deep->isHdr()?"HDR · %1 × %2 px":"%1 × %2 px").arg(layer.raster?layer.raster->width:int(layer.transform.width)).arg(layer.raster?layer.raster->height:int(layer.transform.height)));item->setFlags(item->flags()|Qt::ItemIsUserCheckable|Qt::ItemIsEditable);item->setCheckState(0,layer.visible?Qt::Checked:Qt::Unchecked);item->setIcon(1,thumbnail(layer,false,{double(state.document->width),double(state.document->height)}));item->setToolTip(1,"Select image; Ctrl-click selects alpha, Ctrl+Shift adds, Ctrl+Alt subtracts");if(layer.mask){item->setIcon(3,thumbnail(layer,true,{double(state.document->width),double(state.document->height)}));if(layer.mask->linked)item->setIcon(2,editorIcon(EditorIcon::Link));item->setToolTip(2,layer.mask->linked?"Unlink mask":"Link mask");item->setToolTip(3,"Select mask; Shift-click enables/disables; Ctrl-click selects black areas; Alt-drag copies mask");}if(!layer.maskSourceId.empty())item->setToolTip(0,"Clipped to "+QString::fromStdString(layer.maskSourceId));item->setSizeHint(0,{0,44});items.emplace(layer.id,item);}
         for(const auto& entry:layers::entries(*state.document,true)){const auto*l=findLayer(*state.document,entry.id);auto* item=items.at(entry.id);nameLayerControls(*item,*l);if(l->parentId.empty())tree_->addTopLevelItem(item);else items.at(l->parentId)->addChild(item);item->setExpanded(!state.collapsed.contains(entry.id));if(!entry.visible)item->setForeground(0,QBrush(QColor(125,125,125)));}}
     std::erase_if(thumbnailCache_->entries,[&](const auto&entry){const auto*l=state.document?findLayer(*state.document,entry.first.first):nullptr;return !l||(entry.first.second&&!l->mask);});
     updateSelection();rebuilding_=false;updateLayerAccessibility(tree_);
@@ -273,11 +282,44 @@ bool LayerPanelController::accepts(const QMimeData* mime,const QPoint& point,Qt:
 bool LayerPanelController::performDrop(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers){if(!accepts(mime,point,modifiers))return false;bool changed=false;invoke([&]{const auto state=host_.state();const auto dest=destination(tree_,*state.document,point);auto result=mime->hasFormat(maskMime)?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id):dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier));changed=result.changed;if(changed){host_.commit(std::move(result),mime->hasFormat(maskMime));if(dest.zone==DropZone::IntoGroup)host_.collapse(dest.id,false);}});return changed;}
 
 bool LayerPanelController::eventFilter(QObject* watched,QEvent* event){
+    if((event->type()==QEvent::WindowDeactivate&&watched==tree_->window())||
+       (event->type()==QEvent::Hide&&(watched==tree_||watched==tree_->viewport()))||
+       (event->type()==QEvent::UngrabMouse&&watched==tree_->viewport()))finishMiddleScroll();
     if(watched!=tree_->viewport()){
         if(event->type()==QEvent::WindowDeactivate&&watched==tree_->window())finishVisibilitySwipe();
         if(event->type()==QEvent::KeyPress||event->type()==QEvent::KeyRelease){const auto point=tree_->viewport()->mapFromGlobal(QCursor::pos());if(tree_->viewport()->rect().contains(point))refreshCursor(static_cast<QKeyEvent*>(event)->modifiers(),point);}
         return QObject::eventFilter(watched,event);
     }
+    // Navigation never prepares a pending edit or enters the left-button routes.
+    if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick){
+        auto* mouse=static_cast<QMouseEvent*>(event);
+        if(mouse->button()==Qt::MiddleButton){
+            if(!visibilitySwipe_&&!pressed_&&!dragging_&&mouse->buttons()==Qt::MiddleButton){
+                middleScrollY_=mouse->globalPosition().toPoint().y();
+                tree_->viewport()->grabMouse();
+                refreshCursor(mouse->modifiers(),mouse->position().toPoint());
+            }
+            return true;
+        }
+    }
+    if(middleScrollY_){
+        if(event->type()==QEvent::MouseMove){
+            auto* mouse=static_cast<QMouseEvent*>(event);
+            if(!mouse->buttons().testFlag(Qt::MiddleButton)){finishMiddleScroll();return true;}
+            const int y=mouse->globalPosition().toPoint().y();
+            auto* bar=tree_->verticalScrollBar();
+            const qint64 value=qint64(bar->value())+qint64(*middleScrollY_)-y;
+            middleScrollY_=y;
+            bar->setValue(int(std::clamp(value,qint64(bar->minimum()),qint64(bar->maximum()))));
+            return true;
+        }
+        if(event->type()==QEvent::MouseButtonRelease){
+            if(static_cast<QMouseEvent*>(event)->button()==Qt::MiddleButton)finishMiddleScroll();
+            return true;
+        }
+        if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick||event->type()==QEvent::ContextMenu)return true;
+    }
+    if(event->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(event)->button()==Qt::MiddleButton)return true;
     if(event->type()==QEvent::UngrabMouse){finishVisibilitySwipe();return false;}
     if(event->type()==QEvent::Enter){refreshCursor(QApplication::keyboardModifiers(),tree_->viewport()->mapFromGlobal(QCursor::pos()));}
     if(event->type()==QEvent::Leave){refreshCursor({},QPoint(-1,-1));}
