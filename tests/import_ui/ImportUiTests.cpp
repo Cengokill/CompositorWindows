@@ -1,4 +1,5 @@
 #include "ui/ImportActions.h"
+#include "core/DocumentExport.h"
 #include "../cmyk/Fixtures.h"
 #include <QSettings>
 #include "ui/WorkspaceDropQueue.h"
@@ -44,6 +45,7 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <string_view>
 #include <vector>
 using namespace compositor;
 namespace {
@@ -248,8 +250,183 @@ bool answerPsdWarnings(const char* button,const std::function<void()>& action){
     });
     poll.start();action();poll.stop();return seen;
 }
+QString writePdfFixture(const QString& directory, int pages = 2) {
+    QByteArray bytes("%PDF-1.4\n");
+    std::vector<qsizetype> offsets{0};
+    const auto object = [&](const QByteArray& body) {
+        offsets.push_back(bytes.size());
+        bytes += QByteArray::number(offsets.size() - 1) + " 0 obj\n" + body + "\nendobj\n";
+    };
+    object("<< /Type /Catalog /Pages 2 0 R >>");
+    QByteArray children;
+    for (int i = 0; i < pages; ++i) children += QByteArray::number(3 + i * 2) + " 0 R ";
+    object("<< /Type /Pages /Count " + QByteArray::number(pages) + " /Kids [" + children + "] >>");
+    for (int i = 0; i < pages; ++i) {
+        const QByteArray geometry = i == 0 ? "/MediaBox [0 0 200 100]"
+            : "/MediaBox [0 0 120 80] /CropBox [10 20 110 70] /Rotate 90";
+        object("<< /Type /Page /Parent 2 0 R " + geometry
+               + " /Resources << >> /Contents " + QByteArray::number(4 + i * 2) + " 0 R >>");
+        const QByteArray marks = i == 0 ? "1 0 0 rg 0 50 50 50 re f\n" : "0 0 1 rg 10 20 50 50 re f\n";
+        object("<< /Length " + QByteArray::number(marks.size()) + " >>\nstream\n" + marks + "endstream");
+    }
+    const auto xref = bytes.size();
+    bytes += "xref\n0 " + QByteArray::number(offsets.size()) + "\n0000000000 65535 f \n";
+    for (size_t i = 1; i < offsets.size(); ++i)
+        bytes += QByteArray::number(offsets[i]).rightJustified(10, '0') + " 00000 n \n";
+    bytes += "trailer\n<< /Size " + QByteArray::number(offsets.size()) + " /Root 1 0 R >>\nstartxref\n"
+        + QByteArray::number(xref) + "\n%%EOF\n";
+    const auto name = directory + "/pages.PDF";
+    QFile file(name);
+    require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "PDF fixture write failed");
+    return name;
+}
+
+void pdfImportTests(const std::function<void(const char*, const std::function<void()>&)>& test) {
+    test("pdf_layers_pixels_history_project_and_export", [] {
+        QTemporaryDir temp;
+        const auto file = writePdfFixture(temp.path());
+        MainWindow window(true);
+        auto* project = &window.addEmptyProject();
+        window.importSelectedImages({file}, project->canvas);
+        finish(window);
+        require(project->document.has_value(), "No PDF document was created");
+        const auto& doc = *project->document;
+        require(doc.width == 200 && doc.height == 100 && doc.resolution == 72, "Wrong first-page canvas");
+        require(doc.layers.size() == 2 && doc.layers[0].name == "Page 2" && doc.layers[1].name == "Page 1"
+                && project->active == doc.layers[1].id, "PDF page order or active page is wrong");
+        const auto& rotated = *doc.layers[0].raster;
+        require(rotated.width == 50 && rotated.height == 100, "PDF crop or rotation is wrong");
+        require(rotated.pixel(20, 10) == Pixel{0,0,255,255} && rotated.pixel(20, 75) == Pixel{},
+                "Rotated page content or transparency is wrong");
+        require(doc.layers[1].raster->pixel(10, 10) == Pixel{255,0,0,255}
+                && doc.layers[1].raster->pixel(150, 80) == Pixel{}, "Page 1 pixels or transparency are wrong");
+
+        const auto comp = path(temp.filePath("pages.comp"));
+        ProjectStore store(makeWicProjectCodec());
+        store.save(comp, doc, project->active);
+        const auto reopened = store.load(comp);
+        require(reopened.activeLayer == project->active && reopened.document.layers.size() == 2
+                && reopened.document.layers[0].raster->rgba() == rotated.rgba()
+                && reopened.document.layers[1].raster->rgba() == doc.layers[1].raster->rgba(),
+                "Reopened project lost imported page pixels or selection");
+        const auto png = path(temp.filePath("rendered.png"));
+        exportDocumentAtomic(reopened.document, png);
+        const auto decoded = imaging::WicCodec::decode(png);
+        auto output = Raster::fromRgba(int(decoded.image.width), int(decoded.image.height),
+                                       decoded.image.pixels.data(), decoded.image.stride);
+        require(output->pixel(10, 10) == Pixel{255,0,0,255} && output->pixel(95, 10) == Pixel{0,0,255,255}
+                && output->pixel(150, 80) == Pixel{}, "Exported PDF page composite is wrong");
+        require(project->history.undoCount() == 1 && !project->history.undo()->document, "PDF import did not undo as one step");
+        const auto redo = project->history.redo();
+        require(redo && redo->document == doc && redo->activeLayer == project->active, "Redo lost the imported pages");
+    });
+    test("pdf_mixed_import_and_drop_at_destination_resolution", [] {
+        QTemporaryDir temp;
+        const auto pdf = writePdfFixture(temp.path());
+        const auto png = image(temp.path(), "image.png");
+        auto d = document(128, 80);
+        d.resolution = 144;
+        MainWindow window(true);
+        auto& project = window.addProject(d);
+        window.importSelectedImages({png, pdf}, project.canvas);
+        finish(window);
+        const auto& imported = project.document->layers;
+        require(imported.size() == 3 && imported.front().name == "image" && project.history.undoCount() == 1,
+                "Mixed import order or history is wrong");
+        require(imported.back().raster->width == 400 && imported.back().raster->height == 200
+                && imported.back().transform.width == 128 && project.document->width == 128,
+                "PDF did not keep source DPI and fit the existing canvas");
+        window.receiveDropPaths({pdf}, project.canvas, Point{72,40});
+        finish(window);
+        require(project.document->layers.size() == 5 && project.history.undoCount() == 2
+                && project.document->layers.back().transform.x == 8, "PDF drop lost its point or split history");
+    });
+    test("pdf_rejected_inputs_and_cancel_preserve_workspace", [] {
+        QTemporaryDir temp;
+        const auto pdf = writePdfFixture(temp.path(), 20);
+        const auto bad = temp.filePath("broken.pdf");
+        { QFile file(bad); require(file.open(QIODevice::WriteOnly), "Bad PDF fixture write failed"); file.write("broken"); }
+        // An independent, empty one-page fixture encrypted by pypdf. Its password is compositor-pdf-test.
+        const auto encrypted = QByteArray::fromBase64(
+    "JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgPGM5MjAwYzgxN2M+Cj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9U"
+    "eXBlIC9QYWdlcwovQ291bnQgMQovS2lkcyBbIDQgMCBSIF0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cK"
+    "L1BhZ2VzIDIgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9UeXBlIC9QYWdlCi9SZXNvdXJjZXMgPDwKPj4KL01lZGlhQm94"
+    "IFsgMC4wIDAuMCAyNCAyNCBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2JqCjUgMCBvYmoKPDwKL1YgMgovUiAzCi9MZW5ndGgg"
+    "MTI4Ci9QIDQyOTQ5NjcyOTIKL0ZpbHRlciAvU3RhbmRhcmQKL08gPDM2NmVkMGRhYTNlYWE0Y2RmMjY4OGNjNDAxMDEwYzVm"
+    "NWQyNzgzYTUzM2I2ZmJmOTJhZmU3MmE3NTFhYjMyMTA+Ci9VIDxlNDYzN2MzZTJiZjg3YmE0YmUzZTBmYTFiZGFmMGMwZTI4"
+    "YmY0ZTVlNGU3NThhNDE2NDAwNGU1NmZmZmEwMTA4Pgo+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAow"
+    "MDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNTkgMDAwMDAgbiAKMDAwMDAwMDExOCAwMDAwMCBuIAowMDAwMDAwMTY3IDAw"
+    "MDAwIG4gCjAwMDAwMDAyNTkgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA2Ci9Sb290IDMgMCBSCi9JbmZvIDEgMCBSCi9J"
+    "RCBbIDwzNTYzNjU2MjMwMzQzMzMyMzk2NjMwMzYzODY0MzgzODYyMzEzNTM1Mzg2NDMyNjMzNDYyNjY2MjY1Mzc2MjM1PiA8"
+    "MzU2MzY1NjIzMDM0MzMzMjM5NjYzMDM2Mzg2NDM4Mzg2MjMxMzUzNTM4NjQzMjYzMzQ2MjY2NjI2NTM3NjIzNT4gXQovRW5j"
+    "cnlwdCA1IDAgUgo+PgpzdGFydHhyZWYKNDc0CiUlRU9GCg=="
+        );
+        const auto locked = temp.filePath("locked.pdf");
+        { QFile file(locked); require(file.open(QIODevice::WriteOnly) && file.write(encrypted) == encrypted.size(),
+                                      "Encrypted PDF fixture write failed"); }
+        MainWindow window(true);
+        auto& project = window.addProject(document());
+        const auto before = project.document;
+        auto* tabs = window.findChild<QTabWidget*>();
+        const auto count = tabs->count();
+        bool sawError = false;
+        bool lockedError = false;
+        bool cancel = false;
+        bool cancelled = false;
+        QTimer poll;
+        QObject::connect(&poll, &QTimer::timeout, &window, [&] {
+            for (auto* box : window.findChildren<QMessageBox*>()) {
+                if (!box->isVisible()) continue;
+                sawError = true;
+                lockedError |= box->text().contains("password-protected");
+                box->accept();
+            }
+            if (!cancel || cancelled) return;
+            if (auto* progress = window.findChild<QProgressDialog*>("pdfImportPreflight")) {
+                if (auto* button = progress->findChild<QPushButton*>()) {
+                    cancelled = true;
+                    button->click();
+                }
+            }
+        });
+        poll.start(0);
+        window.openPath(bad);
+        require(sawError, "Malformed PDF was not reported");
+        window.openPath(locked);
+        require(lockedError, "Locked PDF was not distinguished from a malformed file");
+        cancel = true;
+        window.openPath(pdf);
+        poll.stop();
+        require(cancelled && project.document == before && project.history.undoCount() == 0 && tabs->count() == count,
+                "Failed or cancelled PDF import changed the workspace");
+    });
+    test("pdf_page_failure_does_not_keep_earlier_pages", [] {
+        QTemporaryDir temp;
+        const auto pdf = writePdfFixture(temp.path());
+        Fixture f;
+        ui::ImportQueue q(f.host());
+        // The first page fits, but the second page pushes this valid existing document past its import budget.
+        auto d = document(10000, 9998);
+        Layer existing;
+        existing.id = newId();
+        existing.name = "Existing";
+        existing.raster = Raster::filled(10000, 9998);
+        existing.transform = {0,0,10000,9998};
+        d.layers.push_back(existing);
+        f.state = {d, existing.id};
+        q.enqueue(&f.target, {{path(pdf)}});
+        until([&] { return q.idle(); });
+        require(f.errors.size() == 1 && f.state.document == d && f.history.undoCount() == 0 && f.commits == 0,
+                "Budget failure installed a partial PDF");
+    });
+}
+
 }
 int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;auto test=[&](const char* name,const std::function<void()>&run){try{run();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}};
+    if (argc == 2 && std::string_view(argv[1]) == "--pdf") {
+        pdfImportTests(test);
+        return failed ? 1 : 0;
+    }
     QTemporaryDir temporary;require(temporary.isValid(),"Missing temporary fixture directory");const auto first=image(temporary.path(),QString::fromUtf8("first-画像.png")),second=image(temporary.path(),"second.png"),missing=temporary.path()+"/missing.png";
     test("source_empty_partial_failure_one_undo",[&]{Fixture f;ui::ImportQueue q(f.host());q.enqueue(&f.target,{{path(first),path(missing),path(second)},Point{999,999}});until([&]{return q.idle();});require(f.state.document&&f.state.document->width==64&&f.state.document->height==32&&f.state.document->resolution==72,"First successful image dimensions/default DPI wrong");require(f.state.document->layers.size()==2&&f.state.document->layers[0].transform.x==0&&f.state.document->layers[0].transform.y==0,"Empty batch did not ignore drop point");require(f.state.document->layers[0].name==QString::fromUtf8("first-画像").toStdString()&&f.state.document->layers[1].name=="second","Provider order or Unicode basename lost");require(f.state.active==f.state.document->layers.back().id&&f.errors.size()==1&&!f.working,"Active/error/import state wrong");require(f.history.undoCount()==1,"Batch made more than one history entry");auto imported=f.state.document;auto pixels=imported->layers[0].raster;f.state.document=f.history.undo()->document;require(!f.state.document,"Undo did not restore empty project");auto redo=f.history.redo();f.state={redo->document,redo->activeLayer};require(f.state.document==imported&&f.state.document->layers[0].raster==pixels,"Redo lost original immutable imported pixels");q.enqueue(&f.target,{{path(missing)}});until([&]{return q.idle();});require(f.history.undoCount()==1&&f.commits==1,"All-failed batch added history");});
     test("source_floor_drop_parent_and_aggregate_budget",[&]{auto d=document(1000,800);Layer group;group.id="folder";group.group=true;group.transform={0,0,1000,800};d.layers={group};ui::ImportState before{d,"folder"};auto result=ui::prepareImportBatch(before,{{path(first),path(second)},Point{300.9,250.9}});require(result.after.document->layers[1].transform.x==268&&result.after.document->layers[1].transform.y==234,"Drop did not floor center minus half-size");require(result.after.document->layers[1].parentId=="folder"&&result.after.document->layers[2].parentId=="folder"&&result.expandedGroups.size()==2,"Active parent did not carry through ordered batch");require(before.document==d&&d.layers.size()==1,"Preparation mutated original");imaging::ImportOptions options;options.remainingPixels=4096;result=ui::prepareImportBatch({},{{path(first),path(second),path(first)}},ui::decodeImportImage,options);require(result.imported==2&&result.errors.size()==1,"Aggregate image budget not applied between files");});

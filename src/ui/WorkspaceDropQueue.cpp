@@ -63,6 +63,11 @@ void WorkspaceDropQueue::drain(){
             RawSettings settings=p.reviewed;
             if(!p.host.review(path,settings)){p.cancelled=true;continue;}
             if(p.host.standalone){auto handled=p.host.standalone(path,settings);if(handled){p.cancelled=!*handled;continue;}}
+            if (p.host.prepareImage && !p.host.prepareImage(path, p.running->destination, p.running->hasDestination)) {
+                p.cancelled = true;
+                continue;
+            }
+            if (p.cancelled) continue;
             auto* target=p.host.imageTarget(p.running->destination,p.running->hasDestination);if(!target)continue;
             p.waiting=target;p.waitingActive=true;
             p.host.image(target,path,p.running->point,p.running->lifetime,settings);

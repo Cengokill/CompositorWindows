@@ -21,6 +21,7 @@ inline bool commitPreparedImport(EditorProject& project,const ImportResult& resu
     // Retain import and filter steps even when their snapshots exceed that soft limit.
     const auto previousMinimum=project.history.minimumEntries;
     if(result.importedDeepRaw)project.history.minimumEntries=std::max(previousMinimum,size_t{2});
+    else if(result.importedPdf)project.history.minimumEntries=std::max(previousMinimum,size_t{1});
     try{project.history.begin("Import Images",project.document,project.active);}
     catch(...){project.history.minimumEntries=previousMinimum;throw;}
     try{

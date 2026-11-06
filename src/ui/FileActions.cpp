@@ -81,7 +81,7 @@ QStringList nativeImportPaths(HWND owner,const QString& directory){
     // loop away from Qt prevents qwindows/comdlg re-entry from corrupting
     // Qt's object tree.
     static const wchar_t filter[]=
-        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw\0"
+        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;*.pdf;*.cr2;*.nef;*.arw;*.dng;*.raw\0"
         L"All files\0*.*\0";
     std::wstring buffer(32768,L'\0');
     const auto initial=directory.toStdWString();
@@ -252,6 +252,15 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
     host.project=[this](const QString& path){loadProjectDirectory(path);};
     auto hdrPrepared=std::make_shared<ui::PreparedImages>();
     host.review=[this,hdrPrepared](const QString& path,ui::RawSettings& settings){hdrPrepared->clear();return ui::reviewRawImports(this,{nativePath(path)},settings)&&ui::prepareHdrImports(this,{nativePath(path)},*hdrPrepared)&&ui::prepareCameraRawImport(this,settings.openCameraRaw,settings,*hdrPrepared);};
+    auto pdfsPrepared = std::make_shared<ui::PreparedPdfs>();
+    host.prepareImage = [this, project, pdfsPrepared](const QString& path, QObject* captured, bool hasDestination) {
+        pdfsPrepared->clear();
+        if (!ui::isPdfImport(nativePath(path))) return true;
+        auto* target = project(captured);
+        if (hasDestination && !target) return true;
+        return ui::preparePdfImports(this, {nativePath(path)},
+                                     target ? target->document : std::nullopt, *pdfsPrepared);
+    };
     host.reviewBatch=[this](const QStringList& paths,ui::RawSettings& settings){return reviewCmykImports(paths,settings);};
     host.standalone=[this](const QString& path,const ui::RawSettings& settings)->std::optional<bool>{const auto ext=QFileInfo(path).suffix().toLower();if(ext!="psd"&&ext!="psb")return {};auto profile=settings.cmykProfiles.find(nativePath(path));return importPhotoshop(path,profile==settings.cmykProfiles.end()?nullptr:profile->second)!=PhotoshopResult::Cancelled;};
     host.imageTarget=[this,project](QObject* captured,bool hasDestination)->QObject*{
@@ -262,9 +271,10 @@ ui::WorkspaceDropQueue* MainWindow::ensureWorkspaceDropQueue(){
         for(size_t i=0;i<projects_.size();++i)if(projects_[i].get()==target){tabs_->setCurrentIndex(int(i));break;}
         return target->canvas;
     };
-    host.image=[this,project,hdrPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
+    host.image=[this,project,hdrPrepared,pdfsPrepared](QObject* canvas,const QString& path,std::optional<Point> point,std::shared_ptr<void> lifetime,const ui::RawSettings& settings){
         auto* target=project(canvas);if(!target)throw std::runtime_error("The drop destination was closed");
         ui::ImportBatch batch;batch.files={nativePath(path)};batch.point=point;batch.lifetime=std::move(lifetime);batch.rawAdjustments=settings;batch.cmykProfiles=settings.cmykProfiles;batch.prepared=std::move(*hdrPrepared);batch.openCameraRaw=settings.openCameraRaw;
+        batch.pdfs = std::move(*pdfsPrepared);
         finishOpacityEdit();cropDraft_.reset();cropDrag_.reset();if(transformSession_)applyTransformSession();
         ensureImportQueue()->enqueue(target->canvas,std::move(batch));
     };
@@ -276,7 +286,7 @@ void MainWindow::receiveDropPaths(const QStringList& paths,NativeCanvas* destina
     ui::WorkspaceDropRequest request;request.paths=paths;request.destination=destination;request.hasDestination=destination!=nullptr;request.point=point;
     ensureWorkspaceDropQueue()->enqueue(std::move(request));
 }
-void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings,const ui::PreparedImages& prepared){
+void MainWindow::queueImageImports(const QStringList& paths,EditorProject* target,std::optional<Point> point,const ui::RawSettings& rawSettings,const ui::PreparedImages& prepared, ui::PreparedPdfs pdfs){
     if(paths.isEmpty())return;
     QStringList images;
     for(const auto& path:paths){
@@ -287,6 +297,7 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     if(images.isEmpty())return;
     ui::ImportBatch batch;batch.origin=ui::ImportBatch::Origin::Explicit;batch.point=point;for(const auto& path:images)batch.files.push_back(nativePath(path));
     batch.rawAdjustments=rawSettings;batch.cmykProfiles=rawSettings.cmykProfiles;batch.prepared=prepared;batch.openCameraRaw=rawSettings.openCameraRaw;
+    batch.pdfs = std::move(pdfs);
     // EditorSession.importImages finishes an existing stroke, cancels crop and
     // commits transform. Gradient and polygon drafts keep their captured target.
     // Picker focus loss is handled separately by NativeCanvas::pointerInterrupted.
@@ -492,9 +503,11 @@ void MainWindow::openPath(const QString&path){
     if(!reviewCmykImports({path},rawSettings))return;
     if(photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);return;}
     ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,{nativePath(path)},prepared)||!ui::prepareCameraRawImport(this,rawSettings.openCameraRaw,rawSettings,prepared))return;
+    ui::PreparedPdfs pdfs;
+    if (!ui::preparePdfImports(this, {nativePath(path)}, std::nullopt, pdfs)) return;
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
     const bool reuse=!current()||!importQueue_||!importQueue_->contains(current()->canvas);
-    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared);
+    auto& destination=addEmptyProject(reuse);queueImageImports({path},&destination,{},rawSettings,prepared,std::move(pdfs));
 }
 QString MainWindow::userDownloadsDirectory(){
     PWSTR known=nullptr;
@@ -530,9 +543,15 @@ void MainWindow::importSelectedImages(const QStringList& paths,QObject* destinat
     if(!ui::reviewRawImports(this,files,rawSettings))return;
     if(!reviewCmykImports(paths,rawSettings))return;
     ui::PreparedImages prepared;if(!ui::prepareHdrImports(this,files,prepared)||!ui::prepareCameraRawImport(this,rawSettings.openCameraRaw,rawSettings,prepared))return;
+    ui::PreparedPdfs pdfs;
+    QPointer<NativeCanvas> captured = target ? target->canvas : nullptr;
+    // An unpinned Photoshop import can establish a new 72 DPI destination.
+    const auto pdfDestination = target && (destination || photoshop.isEmpty()) ? target->document : std::nullopt;
+    if (!ui::preparePdfImports(this, files, pdfDestination, pdfs)) return;
+    if (target && !captured) return;
     for(const auto& path:photoshop){auto profile=rawSettings.cmykProfiles.find(nativePath(path));const auto result=importPhotoshop(path,profile==rawSettings.cmykProfiles.end()?nullptr:profile->second);if(result==PhotoshopResult::Cancelled)return;if(result==PhotoshopResult::Imported&&!destination)target=current();}
     if(images.isEmpty())return;
-    queueImageImports(images,target,{},rawSettings,prepared);
+    queueImageImports(images,target,{},rawSettings,prepared,std::move(pdfs));
 }
 namespace {
 void deferSelectedImageImport(MainWindow* window,QStringList paths,QPointer<QObject> destination,bool pinned){
