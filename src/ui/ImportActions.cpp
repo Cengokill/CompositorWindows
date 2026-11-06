@@ -4,8 +4,13 @@
 #include "imaging/svg_raster.h"
 #include "imaging/raw_develop.h"
 #include "imaging/hdr_codec.h"
-#include "imaging/pdf_import.h"
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QProgressBar>
 #include <QProgressDialog>
+#include <QPushButton>
+#include <QVBoxLayout>
 #include <QMessageBox>
 #include <QFile>
 #include <QFileInfo>
@@ -68,8 +73,56 @@ bool isPdfImport(const std::filesystem::path& path) {
     return QString::fromStdWString(path.extension().wstring()).compare(".pdf", Qt::CaseInsensitive) == 0;
 }
 
+namespace {
+uint64_t deepBytes(const imaging::DecodedImage& image) {
+    return image.deep ? uint64_t(image.deep->samples.size()) * sizeof(uint16_t) : 0;
+}
+
+uint64_t remainingAfterPreparedImages(uint64_t budget, const PreparedImages& images) {
+    for (const auto& [path, image] : images) {
+        if (!image) continue;
+        const auto bytes = image->image.pixels.size() + deepBytes(*image);
+        budget -= std::min<uint64_t>(budget, bytes);
+    }
+    return budget;
+}
+
+class PdfImportProgress final : public QDialog {
+public:
+    PdfImportProgress(QWidget* parent, std::shared_ptr<std::atomic_bool> cancelled)
+        : QDialog(parent), cancelled_(std::move(cancelled)) {
+        setProperty("studioChrome", true);
+        setObjectName("pdfImportPreflight");
+        setWindowTitle("Import PDF");
+        setWindowModality(Qt::ApplicationModal);
+        auto* layout = new QVBoxLayout(this);
+        label_ = new QLabel("Reading PDF pages…", this);
+        layout->addWidget(label_);
+        auto* bar = new QProgressBar(this);
+        bar->setRange(0, 0);
+        layout->addWidget(bar);
+        buttons_ = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
+        layout->addWidget(buttons_);
+        connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    }
+
+    void reject() override {
+        cancelled_->store(true);
+        label_->setText("Cancelling PDF import…");
+        buttons_->setEnabled(false);
+    }
+
+private:
+    std::shared_ptr<std::atomic_bool> cancelled_;
+    QLabel* label_{};
+    QDialogButtonBox* buttons_{};
+};
+}
+
 bool preparePdfImports(QWidget* parent, const std::vector<std::filesystem::path>& files,
-                       const std::optional<Document>& document, PreparedPdfs& prepared) {
+                       const std::optional<Document>& document, PreparedPdfs& prepared,
+                       const PreparedImages& images,
+                       const PdfRasterizer& rasterize) {
     std::vector<std::filesystem::path> pdfs;
     for (const auto& path : files)
         if (isPdfImport(path)) pdfs.push_back(path);
@@ -78,6 +131,7 @@ bool preparePdfImports(QWidget* parent, const std::vector<std::filesystem::path>
     const double dpi = document ? document->resolution : 72.;
     size_t remainingLayers = 10000;
     imaging::ImportOptions options;
+    options.maxWorkingBytes = remainingAfterPreparedImages(options.maxWorkingBytes, images);
     if (document) {
         remainingLayers -= document->layers.size();
         for (const auto& layer : document->layers)
@@ -85,27 +139,20 @@ bool preparePdfImports(QWidget* parent, const std::vector<std::filesystem::path>
                 options.remainingPixels -= uint64_t(layer.raster->width) * layer.raster->height;
     }
 
-    QProgressDialog progress("Reading PDF pages…", "Cancel", 0, 0, parent);
-    progress.setProperty("studioChrome", true);
-    progress.setObjectName("pdfImportPreflight");
-    progress.setWindowModality(Qt::ApplicationModal);
-    progress.setMinimumDuration(0);
-    progress.setAutoClose(false);
-    progress.setAutoReset(false);
-    struct Result { PreparedPdfs pdfs; QString error; };
     auto cancelled = std::make_shared<std::atomic_bool>(false);
+    PdfImportProgress progress(parent, cancelled);
     options.cancelled = [cancelled] { return cancelled->load(); };
-    QFutureWatcher<Result> watcher;
-    QObject::connect(&progress, &QProgressDialog::canceled, &progress,
-                     [cancelled] { cancelled->store(true); });
-    QObject::connect(&watcher, &QFutureWatcher<Result>::finished, &progress, &QDialog::accept);
+    QFutureWatcher<PreparedPdfs> watcher;
+    QObject::connect(&watcher, &QFutureWatcher<PreparedPdfs>::finished, &progress, &QDialog::accept);
     watcher.setFuture(QtConcurrent::run(
-        [pdfs = std::move(pdfs), dpi, options, remainingLayers]() mutable {
-            Result result;
+        [pdfs = std::move(pdfs), dpi, options, remainingLayers, rasterize]() mutable {
+            PreparedPdfs result;
             for (const auto& path : pdfs) {
+                if (options.cancelled()) break;
+                auto [entry, inserted] = result.try_emplace(path);
+                if (!inserted) continue;
                 try {
-                    imaging::checkCancelled(options);
-                    auto pages = imaging::rasterizePdf(path, dpi, options);
+                    auto pages = rasterize(path, dpi, options);
                     if (pages.size() > remainingLayers)
                         throw std::runtime_error("PDF pages exceed the remaining project layer limit");
                     remainingLayers -= pages.size();
@@ -113,28 +160,18 @@ bool preparePdfImports(QWidget* parent, const std::vector<std::filesystem::path>
                         options.remainingPixels -= uint64_t(page->width) * page->height;
                         options.maxWorkingBytes -= page->retainedBytes();
                     }
-                    result.pdfs.emplace(path, PreparedPdf{dpi, std::move(pages)});
+                    entry->second = {dpi, std::move(pages)};
                 } catch (const std::exception& error) {
-                    result.error = QString::fromStdWString(path.filename().wstring())
-                        + ": " + QString::fromUtf8(error.what());
-                    break;
+                    entry->second.error = QString::fromUtf8(error.what());
                 }
             }
             return result;
         }));
-    progress.exec();
-    if (watcher.isRunning()) cancelled->store(true);
-    watcher.waitForFinished();
-    if (cancelled->load()) return false;
-    auto result = watcher.result();
-    if (!result.error.isEmpty()) {
-        QMessageBox message(QMessageBox::Critical, "Import PDF", result.error, QMessageBox::Ok, parent);
-        message.setProperty("studioChrome", true);
-        message.setTextFormat(Qt::PlainText);
-        message.exec();
+    if (progress.exec() != QDialog::Accepted || cancelled->load()) {
+        cancelled->store(true);
         return false;
     }
-    prepared = std::move(result.pdfs);
+    prepared = watcher.result();
     return true;
 }
 
@@ -204,6 +241,14 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
     ImportResult result;result.before=state;result.after=std::move(state);
     const auto point=result.before.document?batch.point:std::nullopt;
     const auto budget=std::min<uint64_t>(options.remainingPixels,100000000);
+    const bool hasPdf = std::any_of(batch.files.begin(), batch.files.end(), isPdfImport);
+    auto workingBytes = options.maxWorkingBytes;
+    if (hasPdf) {
+        workingBytes = remainingAfterPreparedImages(workingBytes, batch.prepared);
+        for (const auto& [path, pdf] : batch.pdfs)
+            for (const auto& page : pdf.pages)
+                workingBytes -= std::min<uint64_t>(workingBytes, page->retainedBytes());
+    }
     const auto fallback=options.cmykFallback;
     auto cancelled=[&]{return options.cancelled&&options.cancelled();};
     for(const auto& path:batch.files){
@@ -219,10 +264,19 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             if (isPdfImport(path)) {
                 const auto prepared = batch.pdfs.find(path);
                 if (prepared != batch.pdfs.end()) {
+                    if (!prepared->second.error.isEmpty()) {
+                        result.errors.append(QString::fromStdWString(path.filename().wstring())
+                                             + ": " + prepared->second.error);
+                        continue;
+                    }
                     appendPdfPages(result, prepared->second, path, point, options);
                 } else {
                     const double dpi = result.after.document ? result.after.document->resolution : 72.;
-                    appendPdfPages(result, {dpi, imaging::rasterizePdf(path, dpi, options)}, path, point, options);
+                    auto pdfOptions = options;
+                    pdfOptions.maxWorkingBytes = workingBytes;
+                    PreparedPdf pdf{dpi, imaging::rasterizePdf(path, dpi, pdfOptions)};
+                    appendPdfPages(result, pdf, path, point, options);
+                    for (const auto& page : pdf.pages) workingBytes -= page->retainedBytes();
                 }
                 continue;
             }
@@ -230,11 +284,24 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             options.raw=adjustments==batch.rawAdjustments.end()?imaging::RawAdjustments{}:adjustments->second;
             const auto sourceProfile=batch.cmykProfiles.find(path);options.cmykFallback=sourceProfile==batch.cmykProfiles.end()?fallback:sourceProfile->second;
             const auto prepared=batch.prepared.find(path);
+            const bool needsDecode = prepared == batch.prepared.end();
+            auto decodeOptions = options;
+            decodeOptions.maxWorkingBytes = workingBytes;
             // A shared immutable preflight result avoids decoding the HDR file twice.
-            auto owned=prepared==batch.prepared.end()?std::make_shared<const imaging::DecodedImage>(decode(path,options)):prepared->second;
+            auto owned=needsDecode?std::make_shared<const imaging::DecodedImage>(decode(path,decodeOptions)):prepared->second;
             if(!owned)throw std::runtime_error("Prepared image is missing");
             const auto& decoded=*owned;imaging::checkCancelled(options);
-            imaging::checkedBytes(decoded.image.width,decoded.image.height,4,options);imaging::validate(decoded.image);
+            imaging::checkedBytes(decoded.image.width,decoded.image.height,4,needsDecode?decodeOptions:options);imaging::validate(decoded.image);
+            uint64_t retained = 0;
+            if (hasPdf) {
+                const auto columns = (decoded.image.width + Raster::tileSide - 1) / Raster::tileSide;
+                const auto rows = (decoded.image.height + Raster::tileSide - 1) / Raster::tileSide;
+                retained = uint64_t(columns) * rows * sizeof(Raster::Tile);
+                if (needsDecode) retained += deepBytes(decoded);
+                // Prepared buffers are already charged; fresh RGBA pixels coexist with the new tiles.
+                if (retained + (needsDecode ? decoded.image.pixels.size() : 0) > workingBytes)
+                    throw std::runtime_error("Image exceeds the remaining import allocation budget");
+            }
             auto raster=Raster::fromRgba(int(decoded.image.width),int(decoded.image.height),decoded.image.pixels.data(),decoded.image.stride);
             if(!result.after.document){Document document;document.cmykProfile=decoded.metadata.cmykProfile;document.id=newId();document.width=raster->width;document.height=raster->height;result.after.document=std::move(document);}
             auto& document=*result.after.document;
@@ -247,6 +314,7 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             result.after.active=layer.id;if(batch.openCameraRaw&&*batch.openCameraRaw==path)result.cameraRawLayer=layer.id;
             if(decoded.deep&&imaging::isRawFileExtension(path))result.importedDeepRaw=true;
             document.layers.push_back(std::move(layer));++result.imported;
+            workingBytes -= retained;
         }catch(const std::exception& error){
             if(cancelled()){result.cancelled=true;break;}
             result.errors.append(QString::fromStdWString(path.filename().wstring())+": "+QString::fromUtf8(error.what()));

@@ -1,6 +1,7 @@
 #pragma once
 #include "core/Document.h"
 #include "imaging/image_types.h"
+#include "imaging/pdf_import.h"
 #include <QObject>
 #include <QPointer>
 #include <QStringList>
@@ -26,11 +27,15 @@ struct ImportState {
 struct PreparedPdf {
     double dpi{};
     std::vector<std::shared_ptr<const Raster>> pages;
+    QString error;
 };
 using PreparedPdfs = std::map<std::filesystem::path, PreparedPdf>;
+using PdfRasterizer = std::function<decltype(imaging::rasterizePdf)>;
 bool isPdfImport(const std::filesystem::path&);
 bool preparePdfImports(QWidget*, const std::vector<std::filesystem::path>&,
-                       const std::optional<Document>&, PreparedPdfs&);
+                       const std::optional<Document>&, PreparedPdfs&,
+                       const PreparedImages& = {},
+                       const PdfRasterizer& = imaging::rasterizePdf);
 struct ImportBatch {
     std::vector<std::filesystem::path> files;
     std::optional<Point> point;

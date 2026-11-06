@@ -15,6 +15,7 @@
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QDir>
+#include <QDialog>
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -382,7 +383,7 @@ void pdfImportTests(const std::function<void(const char*, const std::function<vo
                 box->accept();
             }
             if (!cancel || cancelled) return;
-            if (auto* progress = window.findChild<QProgressDialog*>("pdfImportPreflight")) {
+            if (auto* progress = window.findChild<QDialog*>("pdfImportPreflight")) {
                 if (auto* button = progress->findChild<QPushButton*>()) {
                     cancelled = true;
                     button->click();
@@ -399,6 +400,95 @@ void pdfImportTests(const std::function<void(const char*, const std::function<vo
         poll.stop();
         require(cancelled && project.document == before && project.history.undoCount() == 0 && tabs->count() == count,
                 "Failed or cancelled PDF import changed the workspace");
+    });
+    test("pdf_failed_file_does_not_abort_mixed_picker_import", [] {
+        QTemporaryDir temp;
+        const auto bad = temp.filePath("broken.pdf");
+        QFile file(bad);
+        require(file.open(QIODevice::WriteOnly) && file.write("broken") == 6, "Bad PDF fixture write failed");
+        file.close();
+        const auto png = image(temp.path(), "valid.png");
+        const auto pdf = writePdfFixture(temp.path());
+
+        MainWindow window(true);
+        auto& project = window.addEmptyProject();
+        // Also dismiss the old preflight dialog so a regression fails by assertion.
+        QTimer poll;
+        QObject::connect(&poll, &QTimer::timeout, &window, [&] {
+            for (auto* box : window.findChildren<QMessageBox*>())
+                if (box->isVisible() && box->windowTitle() == "Import PDF") box->accept();
+        });
+        poll.start(0);
+        window.importSelectedImages({bad, png, pdf}, project.canvas);
+        poll.stop();
+        auto* queue = ui::ImportQueue::find(&window);
+        require(queue, "A broken PDF prevented the mixed selection from reaching the import queue");
+        until([&] { return queue->idle() && window.findChild<QMessageBox*>("imageImportErrors"); });
+        auto* error = window.findChild<QMessageBox*>("imageImportErrors");
+        const auto details = error->detailedText();
+        error->accept();
+        require(details.contains("broken.pdf") && !details.contains("valid.png") && !details.contains("pages.PDF"),
+                "The import queue did not report only the broken PDF");
+        require(project.document && project.document->layers.size() == 3
+                && project.document->layers.front().name == "valid" && project.history.undoCount() == 1,
+                "The valid PNG and PDF did not import together as one undo step");
+    });
+    test("pdf_cancel_keeps_gui_events_running_until_worker_settles", [] {
+        QWidget parent;
+        ui::PreparedPdfs prepared;
+        std::atomic_bool entered{}, release{}, sawCancellation{};
+        bool clicked = false, processedWhileWaiting = false;
+        QTimer poll;
+        QObject::connect(&poll, &QTimer::timeout, &parent, [&] {
+            auto* progress = parent.findChild<QDialog*>("pdfImportPreflight");
+            if (!entered || !progress || !progress->isVisible()) return;
+            if (!clicked) {
+                clicked = true;
+                progress->findChild<QPushButton*>()->click();
+            } else if (sawCancellation) {
+                processedWhileWaiting = true;
+                release = true;
+            }
+        });
+        poll.start(1);
+        const auto accepted = ui::preparePdfImports(&parent, {L"stalled.pdf"}, std::nullopt, prepared, {},
+            [&](const auto&, double, const auto& options) {
+                QElapsedTimer deadline;
+                deadline.start();
+                entered = true;
+                while (!release && deadline.elapsed() < 2000) {
+                    sawCancellation = options.cancelled();
+                    QThread::msleep(1);
+                }
+                // Simulate a native operation that returns a result after Cancel.
+                return std::vector{Raster::filled(1, 1)};
+            });
+        require(clicked && sawCancellation && processedWhileWaiting,
+                "Cancel stopped GUI events while the PDF worker was still running");
+        require(!accepted && prepared.empty(), "A late PDF result survived Cancel");
+    });
+    test("pdf_mixed_import_charges_prepared_tiles_before_decoding_images", [] {
+        QTemporaryDir temp;
+        const auto first = path(image(temp.path(), "first.png"));
+        const auto second = path(image(temp.path(), "second.png"));
+        const std::filesystem::path pdf(L"prepared.pdf");
+        auto page = Raster::filled(72, 72);
+        ui::ImportBatch batch;
+        batch.files = {first, pdf, second};
+        batch.pdfs.emplace(pdf, ui::PreparedPdf{72., {page}});
+
+        imaging::ImportOptions options;
+        options.maxWorkingBytes = page->retainedBytes() + 4096;
+        auto result = ui::prepareImportBatch({}, batch, ui::decodeImportImage, options);
+        require(result.imported == 1 && result.importedPdf && result.errors.size() == 2
+                && result.after.document->layers.front().raster == page,
+                "PNG decodes ignored the prepared PDF tiles already resident in memory");
+
+        options.maxWorkingBytes = 2 * page->retainedBytes() + 64 * 32 * 4;
+        result = ui::prepareImportBatch({}, batch, ui::decodeImportImage, options);
+        require(result.imported == 2 && result.importedPdf && result.errors.size() == 1
+                && result.errors.front().startsWith("second.png:"),
+                "The second PNG ignored the tiles retained by the first PNG and PDF");
     });
     test("pdf_page_failure_does_not_keep_earlier_pages", [] {
         QTemporaryDir temp;

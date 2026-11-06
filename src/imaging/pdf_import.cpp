@@ -19,6 +19,28 @@ struct Apartment {
     ~Apartment() { winrt::uninit_apartment(); }
 };
 
+template<class Operation>
+auto awaitPdfOperation(const Operation& operation, const ImportOptions& options) {
+    auto finished = std::make_shared<winrt::handle>(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!*finished) winrt::throw_last_error();
+    operation.Completed([finished](const auto&, auto) { SetEvent(finished->get()); });
+    bool cancelling = false;
+    for (;;) {
+        const auto status = WaitForSingleObject(finished->get(), cancelling ? INFINITE : 25);
+        if (status == WAIT_OBJECT_0) break;
+        if (status != WAIT_TIMEOUT) winrt::throw_last_error();
+        if (options.cancelled && options.cancelled()) {
+            try { operation.Cancel(); }
+            catch (const winrt::hresult_error&) {
+                // Keep the inputs alive until completion even if the cancellation request fails.
+            }
+            cancelling = true;
+        }
+    }
+    checkCancelled(options);
+    return operation.GetResults();
+}
+
 uint32_t pageSide(float dips, double dpi, const ImportOptions& options) {
     // Windows supplies crop- and rotation-adjusted dimensions at 96 DIPs/inch.
     const auto pixels = std::round(double(dips) * dpi / 96.);
@@ -35,9 +57,9 @@ std::vector<std::shared_ptr<const Raster>> rasterizePdf(
     try {
         checkCancelled(options);
         Apartment apartment;
-        const auto file = storage::StorageFile::GetFileFromPathAsync(
-            std::filesystem::absolute(path).wstring()).get();
-        const auto document = pdf::PdfDocument::LoadFromFileAsync(file, L"").get();
+        const auto file = awaitPdfOperation(storage::StorageFile::GetFileFromPathAsync(
+            std::filesystem::absolute(path).wstring()), options);
+        const auto document = awaitPdfOperation(pdf::PdfDocument::LoadFromFileAsync(file, L""), options);
         const auto count = document.PageCount();
         if (count == 0 || count > 10000)
             throw std::runtime_error("PDF page count exceeds the supported layer limits");
@@ -66,19 +88,18 @@ std::vector<std::shared_ptr<const Raster>> rasterizePdf(
             render.IsIgnoringHighContrast(true);
             render.BitmapEncoderId(bitmap::BitmapEncoder::PngEncoderId());
             storage::Streams::InMemoryRandomAccessStream stream;
-            page.RenderToStreamAsync(stream, render).get();
-            checkCancelled(options);
+            awaitPdfOperation(page.RenderToStreamAsync(stream, render), options);
             const auto encodedBytes = stream.Size();
             if (encodedBytes > remaining.maxWorkingBytes - 2 * uint64_t(bytes) - tileBytes)
                 throw std::runtime_error("PDF page stream exceeds the import allocation budget");
             stream.Seek(0);
-            const auto decoder = bitmap::BitmapDecoder::CreateAsync(stream).get();
+            const auto decoder = awaitPdfOperation(bitmap::BitmapDecoder::CreateAsync(stream), options);
             if (decoder.PixelWidth() != width || decoder.PixelHeight() != height)
                 throw std::runtime_error("Windows returned unexpected PDF page dimensions");
-            const auto pixels = decoder.GetPixelDataAsync(
+            const auto pixels = awaitPdfOperation(decoder.GetPixelDataAsync(
                 bitmap::BitmapPixelFormat::Rgba8, bitmap::BitmapAlphaMode::Premultiplied,
                 bitmap::BitmapTransform{}, bitmap::ExifOrientationMode::IgnoreExifOrientation,
-                bitmap::ColorManagementMode::ColorManageToSRgb).get().DetachPixelData();
+                bitmap::ColorManagementMode::ColorManageToSRgb), options).DetachPixelData();
             if (pixels.size() != bytes)
                 throw std::runtime_error("Windows returned incomplete PDF page pixels");
             pages.push_back(Raster::fromRgba(int(width), int(height), pixels.data(),
