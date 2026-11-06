@@ -196,6 +196,28 @@ void rgb_split_canvas_cancel_layers(){
             beforePng->at(17,12)[0]==10002&&beforePng->at(16,12)[1]==20003&&
             beforePng->at(16,12)[2]==30007&&beforePng->at(16,12)[3]==65535,
             "16-bit PNG export preserves sub-byte samples after Split and reopen");
+
+    auto crowded=fixture();
+    auto source=makeDeep(64,48,DeepImage::Format::Unorm16);
+    crowded.layers[0].deep=source;crowded.layers[0].raster=rasterFromDeep(*source);
+    const auto large=Raster::filled(5000,5000,{}),almost=Raster::filled(5000,4999,{});
+    for(int i=0;i<4;++i){Layer layer;layer.id=newId();layer.name="Hidden";layer.visible=false;
+        layer.transform={0,0,1,1};layer.raster=i==3?almost:large;crowded.layers.insert(crowded.layers.begin(),std::move(layer));}
+    Fixture full(std::move(crowded));
+    panel(full.window,"filter.rgb_split","RGB Split",[&](QDialog& p){
+        ready(p);bool confirmed=false,warned=false;
+        QTimer prompts;QObject::connect(&prompts,&QTimer::timeout,&full.window,[&]{
+            if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){
+                if(box->windowTitle()=="Create 8-Bit Channels"){confirmed=true;box->button(QMessageBox::Ok)->click();}
+                else if(box->windowTitle()=="Cannot Split to Layers"){
+                    warned=box->text().contains("100-megapixel");box->button(QMessageBox::Ok)->click();
+                }
+            }
+        });
+        prompts.start(5);control<QPushButton>(p,"rgbSplitToLayers")->click();prompts.stop();
+        require(confirmed&&warned&&p.isVisible(),"Split explains when the project pixel limit prevents channel creation");
+        full.unchanged();
+    });
 }
 void live_filter_adjustments(){
     Fixture f;
