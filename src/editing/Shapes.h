@@ -11,10 +11,12 @@ struct ShapeStyle {
     // Rectangle and ellipse only. The stroke is drawn inside the layer bounds, so it never extends past the raster.
     bool strokeEnabled{};
     double strokeWidth{2},strokeRed{},strokeGreen{},strokeBlue{};
+    bool smoothing{};
     bool operator==(const ShapeStyle&) const = default;
 };
 ShapeStyle decodeShapeStyle(std::string_view);
 std::string encodeShapeStyle(const ShapeStyle&);
+SelectionOutline rectangleShapeOutline(Rect, const ShapeStyle&, double inset = 0);
 std::shared_ptr<const Raster> shapeRaster(const ShapeStyle&,int width,int height);
 std::optional<Layer> createShapeLayer(Rect,const ShapeStyle&,std::string name);
 std::string nextShapeName(const Document&,ShapeKind);

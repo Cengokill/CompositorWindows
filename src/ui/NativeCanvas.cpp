@@ -383,9 +383,20 @@ if(shapeDraft_&&documentWidth_>0&&documentHeight_>0){
     check(context_->CreateSolidColorBrush(D2D1::ColorF(draft.fill.r/255.f,draft.fill.g/255.f,draft.fill.b/255.f,draft.fill.a/255.f),&fill),"Shape draft fill");
     check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.6f),&outline),"Shape draft outline");
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    if(draft.kind==editing::ShapeKind::Line){context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),fill.Get(),std::max(1.f,float(draft.lineWidth*pointsPerPixel())));context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),outline.Get(),1);}
-    else if(draft.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
-    else{const float radius=float(std::clamp(draft.cornerRadius,0.,std::min(draft.rect.width,draft.rect.height)/2)*pointsPerPixel());const auto rounded=D2D1::RoundedRect(bounds,radius,radius);context_->FillRoundedRectangle(rounded,fill.Get());context_->DrawRoundedRectangle(rounded,outline.Get(),1);}
+    if(draft.style.kind==editing::ShapeKind::Line){context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),fill.Get(),std::max(1.f,float(draft.style.lineWidth*pointsPerPixel())));context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),outline.Get(),1);}
+    else if(draft.style.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
+    else{
+        const auto geometry=editing::rectangleShapeOutline({0,0,draft.rect.width,draft.rect.height},draft.style);
+        ComPtr<ID2D1PathGeometry> path;
+        check(factory_->CreatePathGeometry(&path),"Shape draft path");
+        ComPtr<ID2D1GeometrySink> sink;
+        check(path->Open(&sink),"Shape draft path sink");
+        const float scale=float(mapping.pointsPerPixel);
+        geometry.writeGeometry(sink.Get(),{scale,0,0,scale,bounds.left,bounds.top});
+        check(sink->Close(),"Shape draft path close");
+        context_->FillGeometry(path.Get(),fill.Get());
+        context_->DrawGeometry(path.Get(),outline.Get(),1);
+    }
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
 if(cropOverlay_&&documentWidth_>0&&documentHeight_>0){
