@@ -244,11 +244,12 @@ public:
     }
     void open(const text::FontFace& selected){
         if(open_||!anchor_)return;
+        initialFace_=text::installedFontFace(selected);
         {
             const QSignalBlocker block(search_);
             search_->clear();
         }
-        refill({},&selected);
+        refill({});
         const QPoint top=anchor_->mapToGlobal(QPoint(0,0));
         const QPoint bottom=anchor_->mapToGlobal(QPoint(0,anchor_->height()));
         const QRect area=anchor_->screen()->availableGeometry();
@@ -301,7 +302,7 @@ private:
     const text::FontFace* faceAt(const QListWidgetItem* item)const{
         return &faces_[item->data(Qt::UserRole).toULongLong()];
     }
-    void refill(const QString& query,const text::FontFace* selected=nullptr){
+    void refill(const QString& query){
         static const QRegularExpression whitespace("\\s+",QRegularExpression::UseUnicodePropertiesOption);
         const auto terms=fontSearchKey(query).split(whitespace,Qt::SkipEmptyParts);
         results_->clear();
@@ -309,7 +310,7 @@ private:
         for(qsizetype i=0;i<labels_.size();++i){
             if(!std::all_of(terms.cbegin(),terms.cend(),[&](const QString& word){return keys_[i].contains(word);}))continue;
             const auto& face=faces_[size_t(i)];
-            if(selected&&sameFontName(face.family,selected->family)&&sameFontName(face.style,selected->style))current=results_->count();
+            if(terms.isEmpty()&&face==initialFace_)current=results_->count();
             auto* item=new QListWidgetItem(labels_[i],results_);
             item->setData(Qt::UserRole,QVariant::fromValue(qulonglong(i)));
             QFont font=results_->font();
@@ -320,7 +321,7 @@ private:
         const bool hasResults=results_->count()>0;
         results_->setVisible(hasResults);
         empty_->setVisible(!hasResults);
-        if(hasResults)results_->setCurrentRow(current>=0?current:0);
+        results_->setCurrentRow(hasResults&&!terms.isEmpty()?0:current);
     }
     void highlight(int row){
         results_->setCurrentRow(row);
@@ -334,6 +335,7 @@ private:
     }
     QPointer<QToolButton> anchor_;
     const std::vector<text::FontFace>& faces_;
+    text::FontFace initialFace_;
     QStringList labels_,keys_;
     QLineEdit* search_{};
     QListWidget* results_{};

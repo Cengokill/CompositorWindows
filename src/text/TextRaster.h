@@ -11,6 +11,8 @@ struct FontFace {
 };
 // Names accepted by the same DirectWrite collection that lays out text.
 const std::vector<FontFace>& installedFontFaces();
+// Resolves a saved face to its catalog names. A missing family has no picker match.
+FontFace installedFontFace(const FontFace& saved);
 struct RasterizedText {std::shared_ptr<const Raster> raster;int width{},height{};};
 struct TextCaret { float x{},top{},height{}; int line{}; };
 struct TextCluster { float x{},top{},width{},height{}; int start{},length{},line{}; };

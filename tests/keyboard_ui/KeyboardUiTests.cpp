@@ -184,6 +184,21 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         QTest::mouseClick(styles->view()->viewport(),Qt::LeftButton,Qt::NoModifier,styles->view()->visualRect(row).center());
         require(styles->currentText()=="Italic","Style control did not apply the selected variant");
         action(window,"textCancel");
+
+        auto legacy=*project.document;
+        legacy.layers.back().text->fontStyle="Legacy Bold Italic";
+        const auto legacyPath=directory.filePath("LegacyFont.comp");
+        store.save(std::filesystem::path(legacyPath.toStdWString()),legacy,project.active);
+        require(window.openProjectPaths({legacyPath}),"Could not reopen the legacy font project");
+        key(window,Qt::Key_T);
+        window.canvas()->pointerDown(inside,{});
+        window.canvas()->pointerUp(inside,{});
+        search=openFontPicker(window);
+        results=control<QListWidget>(window,"textFontResults");
+        require(results->currentItem()&&results->currentItem()->text()=="Arial \xE2\x80\x94 Bold Italic",
+                "Picker did not select the same Arial face as the renderer for a legacy style");
+        QTest::keyClick(search,Qt::Key_Escape);
+        action(window,"textCancel");
     });
     test("keyboard_font_picker_preserves_missing_faces_on_reopen",[]{
         QTemporaryDir directory;
@@ -218,9 +233,14 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         require(control<QToolButton>(window,"textFont")->text()=="Missing Font 75","Toolbar replaced the saved family");
         require(control<QComboBox>(window,"textStyle")->currentText()=="Unavailable Style","Toolbar replaced the saved face");
         auto* search=openFontPicker(window);
+        auto* results=control<QListWidget>(window,"textFontResults");
+        require(results->count()>0&&!results->currentItem(),"Opening with a missing family highlighted an unrelated face");
+        QTest::keyClick(search,Qt::Key_Return);
+        require(search->isVisible(),"Enter accepted a face without a selection");
         search->setText("Missing Font 75");
-        require(control<QListWidget>(window,"textFontResults")->count()==0,"Missing family appeared in the installed catalog");
+        require(results->count()==0,"Missing family appeared in the installed catalog");
         QTest::keyClick(search,Qt::Key_Escape);
+        require(!results->currentItem(),"Clearing search highlighted an unrelated face");
         QTest::keyClick(search,Qt::Key_Escape);
         action(window,"textDone");
         require(!control<QAction>(window,"command.edit.undo")->isEnabled(),

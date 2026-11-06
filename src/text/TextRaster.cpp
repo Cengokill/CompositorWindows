@@ -83,25 +83,32 @@ std::string catalogName(IDWriteLocalizedStrings* names){
     if(utf8.size()>256||utf8.contains('\n')||utf8.contains('\r'))return {};
     return utf8.toStdString();
 }
-Face resolveFace(IDWriteFontCollection* fonts,const std::string& family,const std::string& styleName){
+Face resolveFace(IDWriteFontCollection* fonts,const std::string& family,const std::string& styleName,FontFace* installed=nullptr){
     Face face;face.family=wide(family.empty()?"Segoe UI":family);
     const auto wanted=lower(wide(styleName.empty()?"Regular":styleName));
     applyStyleWords(face,wanted);
     if(!fonts)return face;
     UINT32 index=0;BOOL exists=FALSE;
-    if(FAILED(fonts->FindFamilyName(face.family.c_str(),&index,&exists))||!exists){
+    const bool familyExists=SUCCEEDED(fonts->FindFamilyName(face.family.c_str(),&index,&exists))&&exists;
+    if(!familyExists){
         face.family=L"Segoe UI";fonts->FindFamilyName(face.family.c_str(),&index,&exists);if(!exists)return face;
     }
     ComPtr<IDWriteFontFamily> fontFamily;if(FAILED(fonts->GetFontFamily(index,&fontFamily))||!fontFamily)return face;
+    ComPtr<IDWriteFont> matched;
     const UINT32 count=fontFamily->GetFontCount();
     for(UINT32 i=0;i<count;++i){
         ComPtr<IDWriteFont> font;if(FAILED(fontFamily->GetFont(i,&font))||!font)continue;
         if(font->GetSimulations()!=DWRITE_FONT_SIMULATIONS_NONE||!faceNameMatches(font.Get(),wanted))continue;
-        face.weight=font->GetWeight();face.style=font->GetStyle();face.stretch=font->GetStretch();return face;
+        matched=std::move(font);
+        break;
     }
-    ComPtr<IDWriteFont> matched;
-    if(SUCCEEDED(fontFamily->GetFirstMatchingFont(face.weight,face.stretch,face.style,&matched))&&matched){
-        face.weight=matched->GetWeight();face.style=matched->GetStyle();face.stretch=matched->GetStretch();
+    if(!matched&&FAILED(fontFamily->GetFirstMatchingFont(face.weight,face.stretch,face.style,&matched)))return face;
+    if(!matched)return face;
+    face.weight=matched->GetWeight();face.style=matched->GetStyle();face.stretch=matched->GetStretch();
+    if(installed&&familyExists&&matched->GetSimulations()==DWRITE_FONT_SIMULATIONS_NONE){
+        ComPtr<IDWriteLocalizedStrings> familyNames,faceNames;
+        if(SUCCEEDED(fontFamily->GetFamilyNames(&familyNames))&&SUCCEEDED(matched->GetFaceNames(&faceNames)))
+            *installed={catalogName(familyNames.Get()),catalogName(faceNames.Get())};
     }
     return face;
 }
@@ -251,6 +258,16 @@ const std::vector<FontFace>& installedFontFaces(){
         return result;
     }();
     return catalog;
+}
+FontFace installedFontFace(const FontFace& saved){
+    if(saved.family.empty())return {};
+    try{
+        ComApartment apartment;
+        const auto fonts=systemFontCollection();
+        FontFace installed;
+        resolveFace(fonts.Get(),saved.family,saved.style,&installed);
+        return installed;
+    }catch(const std::runtime_error&){return {};}
 }
 RasterizedText rasterize(const TextContent& text){
     ComApartment apartment;
