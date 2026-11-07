@@ -2,6 +2,7 @@
 #include "CameraRaw.h"
 #include "CameraRawShadows.h"
 #include "core/Document.h"
+#include <array>
 #include <functional>
 #include <optional>
 #include <string>
@@ -42,6 +43,8 @@ struct Limits {
     std::uint64_t maxWorkingBytes{4000000000};
     std::function<bool()> cancelled;
 };
+// Opaque grayscale planes in RGBA order, extracted from premultiplied pixels.
+std::array<std::shared_ptr<const Raster>,4> splitChannels(const Raster&,const Limits& = {});
 // A single worker per Camera Raw panel owns this cache. The key names the
 // source and the operations that precede adaptive Shadows.
 struct CameraRawPreviewCache {

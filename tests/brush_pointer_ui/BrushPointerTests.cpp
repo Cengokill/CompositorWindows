@@ -29,6 +29,20 @@ int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir prefere
     test("brush_pointer_limits_and_tool_tip_families",[]{MainWindow window(true);auto& project=window.addProject(example());auto& canvas=*project.canvas;callbacks(canvas);key(window,Qt::Key_B);auto tip=brushTip(window);tip[0]->setValue(40);canvas.zoomAt(canvas.devicePixelRatioF(),{200,150});require(canvas.rightPointerDown({100,100},{}),"Size press refused");canvas.rightPointerMove({-10000,100},{},false);closeEnough(tip[0]->value(),1,"Minimum diameter");canvas.rightPointerMove({10000,100},{},false);closeEnough(tip[0]->value(),2000,"Maximum diameter");canvas.rightPointerMove({10000,100},{},true);control<QAction>(window,"retouchClone")->trigger();control<QDoubleSpinBox>(window,"retouchDiameter")->setValue(18);require(canvas.rightPointerDown({100,100},{}),"Clone tip press refused");canvas.rightPointerMove({108,100},{},false);closeEnough(control<QDoubleSpinBox>(window,"retouchDiameter")->value(),34,"Clone family tip unchanged");canvas.rightPointerMove({108,100},{},true);key(window,Qt::Key_B);closeEnough(tip[0]->value(),2000,"Clone tip contaminated Brush family");});
     test("brush_pointer_hover_leave_space_and_interruption",[]{MainWindow window(true);auto& project=window.addProject(example());auto& canvas=*project.canvas;callbacks(canvas);key(window,Qt::Key_B);canvas.pointerHover({100,100},{});require(canvas.cursor().shape()==Qt::BlankCursor,"Brush native pointer not hidden behind circle");canvas.pointerLeave();require(canvas.cursor().shape()!=Qt::BlankCursor,"Brush cursor survived leave");canvas.pointerHover({100,100},{});key(window,Qt::Key_Space);require(!canvas.rightPointerDown({100,100},{}),"Space allowed a tip edit");canvas.pointerInterrupted();require(canvas.rightPointerDown({100,100},{}),"Interruption did not clear Space");canvas.pointerInterrupted();require(canvas.cursor().shape()!=Qt::BlankCursor,"Interrupted brush cursor remained hidden");});
     test("brush_pointer_busy_raster_and_transform_navigation_guard",[]{MainWindow window(true);auto& project=window.addProject(example());auto& canvas=*project.canvas;callbacks(canvas);key(window,Qt::Key_B);project.canvas->pointerDown({20,20},{});require(!canvas.navigationAllowed(),"Navigation allowed during brush");require(!canvas.rightPointerDown({100,100},{}),"Tip changed during captured brush");project.canvas->pointerCancel();require(canvas.navigationAllowed(),"Brush cancellation retained navigation lock");key(window,Qt::Key_V);canvas.zoomAt(10,{200,150});control<QCheckBox>(window,"transformSnapping")->setChecked(false);canvas.pointerDown({32,24},{});require(!canvas.navigationAllowed(),"Navigation allowed during transform drag");canvas.pointerCancel();require(canvas.navigationAllowed(),"Transform cancel retained navigation lock");});
+    test("animated_layer_brush_origin",[]{
+        for(bool warp:{false,true}){
+            Document d;d.id=newId();d.width=360;d.height=360;
+            Layer l;l.id=newId();l.transform={0,0,360,360};l.raster=Raster::filled(360,360,{50,60,70,255});
+            l.animation=GifAnimation{{{l.raster,1000},{l.raster,1000}},0};d.layers.push_back(l);
+            MainWindow window(warp);auto& project=window.addProject(d);auto& canvas=*project.canvas;key(window,Qt::Key_B);
+            require(bool(canvas.viewportProvider),"Missing viewport provider");
+            auto checkOrigin=[&]{auto frame=canvas.viewportProvider(0,0,360,360,1);require(bool(frame.raster)&&frame.raster->pixel(0,0)==Pixel{50,60,70,255},"Brush preview painted origin");};
+            checkOrigin();canvas.pointerDown({180,180},{});checkOrigin();
+            for(int i=1;i<=12;++i){canvas.pointerMove({180.+i,180.+i},{});checkOrigin();}
+            canvas.pointerUp({192,192},{});checkOrigin();
+            require(project.document->layers[0].raster->pixel(0,0)==Pixel{50,60,70,255},"Brush committed a mark at origin");
+        }
+    });
     test("pen_pressure_controls_history_and_mouse_fallback",[]{
         MainWindow window(true);
         auto& project=window.addProject(example());
@@ -43,12 +57,12 @@ int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir prefere
         brushTip(window)[0]->setValue(16);
         auto& canvas=*project.canvas;
         const QPointF point(24.5,24.5);
-        canvas.pointerDown({point,.25},{});
+        canvas.pointerDown({point,0.25},{});
         require(project.brushPreview&&!size->isEnabled()&&!opacity->isEnabled(),"Pressure controls remained editable during the stroke");
         canvas.pointerCancel();
         require(!project.brushPreview&&project.document==original&&project.history.undoCount()==0,"Cancelling pen stroke changed the project");
-        canvas.pointerDown({point,.25},{});
-        canvas.pointerUp({point,.25},{});
+        canvas.pointerDown({point,0.25},{});
+        canvas.pointerUp({point,0.25},{});
         require(project.history.undoCount()==1&&!project.brushPreview,"Pen stroke did not create exactly one undo entry");
         const auto painted=project.document;
         const auto raster=painted->layers[0].raster;

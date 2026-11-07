@@ -73,6 +73,7 @@ public:
     ~LayerPanelController() override;
     void rebuild();
     void updateSelection();
+    void setFilter(const QString& search, bool selectedOnly);
     void syncVisibilityChrome();
     QMimeData* dragMime(bool maskCopy=false) const;
     bool accepts(const QMimeData*,const QPoint&,Qt::KeyboardModifiers) const;
@@ -98,6 +99,11 @@ private:
     int pressColumn_{};
     Qt::KeyboardModifiers pressModifiers_{};
     bool rebuilding_{},pressed_{},dragging_{},deferSingle_{};
+    QString search_;
+    bool selectedOnly_{};
+    bool filtering() const;
+    bool hasHiddenSelection() const;
+    void applyFilter(const PanelState&);
     std::optional<bool> visibilitySwipe_;
     struct ThumbnailCache;
     std::unique_ptr<ThumbnailCache> thumbnailCache_;

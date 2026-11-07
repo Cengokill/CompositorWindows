@@ -4,6 +4,7 @@
 #include "imaging/svg_raster.h"
 #include "imaging/raw_develop.h"
 #include "imaging/hdr_codec.h"
+#include "imaging/gif_codec.h"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -134,9 +135,10 @@ bool preparePdfImports(QWidget* parent, const std::vector<std::filesystem::path>
     options.maxWorkingBytes = remainingAfterPreparedImages(options.maxWorkingBytes, images);
     if (document) {
         remainingLayers -= document->layers.size();
-        for (const auto& layer : document->layers)
-            if (layer.raster)
-                options.remainingPixels -= uint64_t(layer.raster->width) * layer.raster->height;
+        for (const auto& layer : document->layers) {
+            auto charge=[&](const std::shared_ptr<const Raster>& raster){if(!raster)return;const auto pixels=uint64_t(raster->width)*raster->height;options.remainingPixels-=std::min(options.remainingPixels,pixels);};
+            if(layer.animation){for(const auto& frame:layer.animation->frames)charge(frame.raster);}else charge(layer.raster);
+        }
     }
 
     auto cancelled = std::make_shared<std::atomic_bool>(false);
@@ -255,10 +257,9 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
         if(cancelled()){result.cancelled=true;break;}
         try{
             uint64_t used=0;
-            if(result.after.document)for(const auto& layer:result.after.document->layers)if(layer.raster){
-                const auto pixels=uint64_t(layer.raster->width)*layer.raster->height;
-                if(pixels>budget||used>budget-pixels)throw std::runtime_error("This project exceeds the 100-megapixel import budget");
-                used+=pixels;
+            if(result.after.document)for(const auto& layer:result.after.document->layers){
+                auto count=[&](const std::shared_ptr<const Raster>& raster){if(!raster)return;const auto pixels=uint64_t(raster->width)*raster->height;if(pixels>budget||used>budget-pixels)throw std::runtime_error("This project exceeds the 100-megapixel import budget");used+=pixels;};
+                if(layer.animation){for(const auto& frame:layer.animation->frames)count(frame.raster);}else count(layer.raster);
             }
             options.remainingPixels=budget-used;
             if (isPdfImport(path)) {
@@ -288,7 +289,13 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
             auto decodeOptions = options;
             decodeOptions.maxWorkingBytes = workingBytes;
             // A shared immutable preflight result avoids decoding the HDR file twice.
-            auto owned=needsDecode?std::make_shared<const imaging::DecodedImage>(decode(path,decodeOptions)):prepared->second;
+            std::optional<imaging::GifAnimation> gif;
+            std::shared_ptr<const imaging::DecodedImage> owned;
+            if(needsDecode && QString::fromStdWString(path.extension().wstring()).compare(".gif",Qt::CaseInsensitive)==0){
+                gif=imaging::decodeGif(path,decodeOptions);
+                if(gif->frames.empty())throw std::runtime_error("GIF has no frames");
+                auto first=std::make_shared<imaging::DecodedImage>();first->image=std::move(gif->frames.front().image);first->metadata.decoder="GIF";owned=std::move(first);
+            }else owned=needsDecode?std::make_shared<const imaging::DecodedImage>(decode(path,decodeOptions)):prepared->second;
             if(!owned)throw std::runtime_error("Prepared image is missing");
             const auto& decoded=*owned;imaging::checkCancelled(options);
             imaging::checkedBytes(decoded.image.width,decoded.image.height,4,needsDecode?decodeOptions:options);imaging::validate(decoded.image);
@@ -303,10 +310,29 @@ ImportResult prepareImportBatch(ImportState state,const ImportBatch& batch,const
                     throw std::runtime_error("Image exceeds the remaining import allocation budget");
             }
             auto raster=Raster::fromRgba(int(decoded.image.width),int(decoded.image.height),decoded.image.pixels.data(),decoded.image.stride);
+            std::optional<GifAnimation> animation;
+            if(gif){
+                GifAnimation frames;frames.frames.reserve(gif->frames.size());
+                const auto pixels=uint64_t(decoded.image.width)*decoded.image.height;
+                if(pixels && gif->frames.size()>options.remainingPixels/pixels)throw std::runtime_error("GIF frames exceed the remaining project pixel budget");
+                uint64_t tileBytes=uint64_t((decoded.image.width+Raster::tileSide-1)/Raster::tileSide)*((decoded.image.height+Raster::tileSide-1)/Raster::tileSide)*sizeof(Raster::Tile);
+                if(tileBytes && gif->frames.size()>workingBytes/tileBytes)throw std::runtime_error("GIF frames exceed the import allocation budget");
+                const auto tiles=tileBytes*gif->frames.size();const auto bytes=uint64_t(decoded.image.width)*decoded.image.height*4;
+                if(bytes && gif->frames.size()>(workingBytes-tiles)/bytes)throw std::runtime_error("GIF frames exceed the import allocation budget");
+                retained=tiles;
+                for(size_t i=0;i<gif->frames.size();++i){
+                    imaging::checkCancelled(options);
+                    auto& frame=gif->frames[i];
+                    auto frameRaster=raster;
+                    if(i){imaging::validate(frame.image);if(frame.image.width!=decoded.image.width||frame.image.height!=decoded.image.height)throw std::runtime_error("GIF frame dimensions differ");frameRaster=Raster::fromRgba(int(frame.image.width),int(frame.image.height),frame.image.pixels.data(),frame.image.stride,options.cancelled);}
+                    frames.frames.push_back({std::move(frameRaster),int(frame.delayCentiseconds)*10});
+                }
+                animation=std::move(frames);
+            }
             if(!result.after.document){Document document;document.cmykProfile=decoded.metadata.cmykProfile;document.id=newId();document.width=raster->width;document.height=raster->height;result.after.document=std::move(document);}
             auto& document=*result.after.document;
             const Point center=point.value_or(Point{document.width/2.,document.height/2.});
-            Layer layer;layer.id=newId();layer.name=QFileInfo(QString::fromStdWString(path.wstring())).completeBaseName().toUtf8().toStdString();layer.raster=std::move(raster);
+            Layer layer;layer.id=newId();layer.name=QFileInfo(QString::fromStdWString(path.wstring())).completeBaseName().toUtf8().toStdString();layer.raster=std::move(raster);layer.animation=std::move(animation);
             if(decoded.deep){if(!decoded.deep->valid()||decoded.deep->width!=layer.raster->width||decoded.deep->height!=layer.raster->height)throw std::runtime_error("HDR import grid is invalid");layer.deep=decoded.deep;}
             layer.transform={std::floor(center.x-layer.raster->width/2.),std::floor(center.y-layer.raster->height/2.),double(layer.raster->width),double(layer.raster->height)};
             for(const auto& active:document.layers)if(active.id==result.after.active){layer.parentId=active.group?active.id:active.parentId;break;}

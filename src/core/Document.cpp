@@ -19,7 +19,7 @@ static std::atomic<uint64_t> materializations{0};
 uint64_t Raster::materializationCount(){return materializations.load();}
 void Raster::resetMaterializationCount(){materializations.store(0);}
 namespace {
-void sizeCheck(int w,int h){if(w<1||h<1||w>30000||h>30000||uint64_t(w)*uint64_t(h)>100000000)throw std::runtime_error("Raster dimensions exceed supported budget");}
+void sizeCheck(int w,int h){if(w<1||h<1||w>30000||h>30000||uint64_t(w)*uint64_t(h)>maxRasterPixels)throw std::runtime_error("Raster dimensions exceed supported budget");}
 uint8_t byte(double n){return uint8_t(std::clamp(std::lround(n),0L,255L));}
 using Color=std::array<double,3>;
 double lum(Color c){return .3*c[0]+.59*c[1]+.11*c[2];}
@@ -166,6 +166,22 @@ void validateDocument(const Document& d) {
                 throw std::runtime_error("Invalid raster tile storage");
             imagePixels += uint64_t(layer.raster->width) * layer.raster->height;
         }
+        if (layer.animation) {
+            const auto& animation = *layer.animation;
+            if (layer.group || !layer.adjustmentJson.empty() || layer.text || !layer.shapeJson.empty() || layer.deep || !layer.raster ||
+                animation.frames.empty() || animation.frames.size() > 4096 || animation.selectedFrame >= animation.frames.size())
+                throw std::runtime_error("Invalid animated layer");
+            for (size_t i = 0; i < animation.frames.size(); ++i) {
+                const auto& frame = animation.frames[i];
+                if (!frame.raster || frame.delayMs < 0 || frame.delayMs > 655350)
+                    throw std::runtime_error("Invalid animation frame");
+                sizeCheck(frame.raster->width, frame.raster->height);
+                if (frame.raster->tiles.size() != size_t((frame.raster->width+255)/256)*((frame.raster->height+255)/256) ||
+                    std::any_of(frame.raster->tiles.begin(), frame.raster->tiles.end(), [](const auto& tile){return !tile;}))
+                    throw std::runtime_error("Invalid animation frame tiles");
+                if (i != animation.selectedFrame) imagePixels += uint64_t(frame.raster->width)*frame.raster->height;
+            }
+        }
         if (layer.deep && (!layer.raster || !layer.deep->valid() || layer.deep->width != layer.raster->width || layer.deep->height != layer.raster->height))
             throw std::runtime_error("Invalid 16-bit layer pixels");
         if (layer.mask) {
@@ -178,7 +194,7 @@ void validateDocument(const Document& d) {
                 throw std::runtime_error("Invalid mask");
         }
     }
-    if (imagePixels > 100000000 || maskPixels > 100000000)
+    if (imagePixels > maxDocumentImagePixels || maskPixels > maxRasterPixels)
         throw std::runtime_error("Project pixel budget exceeded");
     if(d.selection && d.selection->coverage) {
         const auto& coverage=*d.selection->coverage;
@@ -241,6 +257,15 @@ void History::end(const std::optional<Document>& d,const std::string& active) {
     pending_.reset();
     depth_ = 0;
 }
+void History::end(std::optional<Document>& d,const std::string& active) {
+    // Pixel tools replace the currently presented raster. Capture that edit in
+    // the selected animation frame before recording the resulting snapshot.
+    if (depth_ && d) for (auto& layer : d->layers) {
+        if (layer.animation && layer.raster && layer.animation->selectedFrame < layer.animation->frames.size())
+            layer.animation->frames[layer.animation->selectedFrame].raster = layer.raster;
+    }
+    end(static_cast<const std::optional<Document>&>(d),active);
+}
 std::optional<Snapshot> History::cancel() noexcept {
     static_assert(std::is_nothrow_move_constructible_v<std::optional<Snapshot>>);
     auto result = std::move(pending_);
@@ -289,6 +314,9 @@ size_t History::retainedBytes(const std::optional<Document>& doc,std::span<const
         for(const auto&layer:document->layers){
             if(layer.raster)for(const auto&tile:layer.raster->tiles)
                 if(seen.insert(tile.get()).second&&count)bytes+=sizeof(Raster::Tile);
+            if(layer.animation)for(const auto&frame:layer.animation->frames)if(frame.raster)
+                for(const auto&tile:frame.raster->tiles)
+                    if(seen.insert(tile.get()).second&&count)bytes+=sizeof(Raster::Tile);
             if(layer.mask&&layer.mask->raster&&seen.insert(layer.mask->raster.get()).second&&count)
                 bytes+=layer.mask->raster->pixels.size();
             if(layer.deep&&seen.insert(layer.deep.get()).second&&count)bytes+=layer.deep->samples.size()*sizeof(std::uint16_t);

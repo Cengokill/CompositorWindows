@@ -1,6 +1,7 @@
 #include "filters/PixelFilters.h"
 #include "graphics/PixelAlgorithms.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -143,6 +144,25 @@ void testCoverageAndPlacement(){
     for(Point pixel:{Point{0,0},Point{10,6}}){auto before=placed.fromUnit({pixel.x/10,pixel.y/6});auto after=commit.transform.fromUnit({(pixel.x-commit.sourceBounds.x)/commit.sourceBounds.width,(pixel.y-commit.sourceBounds.y)/commit.sourceBounds.height});require(nearlyEqual(before.x,after.x)&&nearlyEqual(before.y,after.y),"trim keeps original pixel placement");}
 }
 void testRgbSplit(){
+    const auto impulse=image(65,65,[](int x,int y){return x==32&&y==32?Pixel{255,255,255,255}:Pixel{};});
+    Settings direction;
+    const auto horizontal=runPixels(Kind::RgbSplit,*impulse,direction,1,0);
+    require(horizontal->pixel(38,32).r>horizontal->pixel(38,32).b&&
+            horizontal->pixel(26,32).b>horizontal->pixel(26,32).r&&horizontal->pixel(32,26).a==0,
+            "RGB Split angle zero puts red right and blue left");
+    direction.rgbSplitAngle=90;
+    const auto vertical=runPixels(Kind::RgbSplit,*impulse,direction,1,0);
+    require(vertical->pixel(32,26).r>vertical->pixel(32,26).b&&
+            vertical->pixel(32,38).b>vertical->pixel(32,38).r&&vertical->pixel(38,32).a==0,
+            "RGB Split angle 90 puts red above and blue below");
+    direction.rgbSplitAngle=0;direction.rgbSplitDistance=0;direction.rgbSplitBlur=24;
+    const auto streak=runPixels(Kind::RgbSplit,*impulse,direction,1,0);
+    require(streak->pixel(24,32).a>0&&streak->pixel(40,32).a>0&&
+            streak->pixel(16,32).a==0&&streak->pixel(48,32).a==0,"RGB Split blur streak is centered on the impulse");
+    double mass=0,moment=0;
+    for(int x=0;x<65;++x){const auto a=streak->pixel(x,32).a;mass+=a;moment+=(x-32)*a;}
+    require(std::abs(moment/mass)<1,"RGB Split blur does not shift the impulse");
+
     auto source=image(64,32,[](int x,int){return x<32?Pixel{200,80,40,255}:Pixel{40,80,200,255};});
     Settings s;s.rgbSplitDistance=0;s.rgbSplitBlur=0;
     require(runPixels(Kind::RgbSplit,*source,s,1,0)->rgba()==source->rgba(),"zero RGB Split is identity");
@@ -165,6 +185,28 @@ void testRgbSplit(){
     q.settings.rgbSplitDistance=0;q.settings.rgbSplitBlur=0;require(!apply(q).changed,"neutral RGB Split apply is identity");
     q.settings.rgbSplitDistance=12;int polls=0;q.limits.cancelled=[&]{return ++polls>8;};fails([&]{apply(q);},"RGB Split cancellation");
     q.limits={};q.deepSource=makeDeep(64,32);fails([&]{apply(q);},"HDR RGB Split must fail");
+    auto maximum=request(Kind::RgbSplit,source);
+    maximum.transform={0,0,64,32};maximum.canvasWidth=64;maximum.canvasHeight=32;
+    maximum.settings.rgbSplitRadial=true;maximum.settings.rgbSplitDistance=200;maximum.settings.rgbSplitBlur=400;
+    maximum.retainedBlurMargin=blurMargin(Kind::RgbSplit,maximum.settings);
+    require(apply(maximum).changed,"maximum radial RGB Split accepts the panel's retained margin");
+    maximum.settings.rgbSplitRadial=false;
+    require(apply(maximum).changed,"returning to Linear accepts the previously retained radial margin");
+    maximum.retainedBlurMargin+=1;
+    fails([&]{apply(maximum);},"RGB Split still rejects a margin above its maximum");
+
+    const auto channels=image(2,1,[](int x,int){return x==0?Pixel{64,32,96,128}:Pixel{};});
+    const auto planes=splitChannels(*channels);
+    const std::array<std::uint8_t,4> intensities{128,64,191,128};
+    for(std::size_t i=0;i<planes.size();++i){
+        const auto v=intensities[i];
+        require(planes[i]->pixel(0,0)==Pixel{v,v,v,255}&&planes[i]->pixel(1,0)==Pixel{0,0,0,255},
+                "split channels store opaque straight grayscale and handle transparent pixels");
+    }
+    Limits splitLimit;splitLimit.maxWorkingBytes=4*sizeof(Raster::Tile);
+    fails([&]{splitChannels(*channels,splitLimit);},"split budget includes four tiled outputs and the temporary plane");
+    int splitPolls=0;splitLimit={};splitLimit.cancelled=[&]{return ++splitPolls>3;};
+    fails([&]{splitChannels(*channels,splitLimit);},"channel extraction checks cancellation after producing the first plane");
     auto bright=image(32,32,[](int x,int y){return x==16&&y==16?Pixel{255,255,255,255}:Pixel{20,20,20,255};});
     Settings bloom;bloom.bloom=80;bloom.bloomThreshold=.5;
     auto filterBloom=runPixels(Kind::Bloom,*bright,bloom,1,0);

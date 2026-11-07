@@ -44,6 +44,10 @@ class QMimeData;
 class QTimer;
 class QUrl;
 class QInputMethodEvent;
+class QDockWidget;
+class QListWidget;
+class QSpinBox;
+class QToolButton;
 
 namespace compositor {
 namespace ui {class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
@@ -88,6 +92,15 @@ private:
     bool managingProjectOpen_{},selectingProjectForOpen_{};
     QTabWidget* tabs_{};
     QTreeWidget* layers_{};
+    QDockWidget* gifTimeline_{};
+    QListWidget* gifFrames_{};
+    QSpinBox* gifDelay_{};
+    QToolButton *gifPlay_{},*gifDuplicate_{},*gifDelete_{};
+    QTimer* gifTimer_{};
+    EditorProject* gifPlaybackProject_{};
+    std::string gifPlaybackLayer_;
+    std::string gifShownLayer_;
+    std::vector<AnimationFrame> gifShownFrames_;
     QComboBox* blend_{};
     ui::TrackSlider* opacity_{};
     ui::LayerOpacityField* opacityPercent_{};
@@ -270,6 +283,10 @@ private:
     void chooseCmykProfile();
     void refreshCmykActions();
     void refresh(bool render=true,bool rebuildLayers=true);
+    void setupGifTimeline();
+    void refreshGifTimeline();
+    void stopGifPlayback();
+    void selectGifFrame(size_t index);
     void edit(const char* name,const std::function<void(Document&)>& operation,bool rebuildLayers=true);
     QAction* action(QMenu*,const QString&,const QKeySequence&,std::function<void()>);
     void newDialog();

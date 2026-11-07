@@ -319,8 +319,10 @@ void styleWorkspace(QMainWindow* window) {
     for(auto* bar:window->findChildren<QToolBar*>()){bar->setMovable(false);bar->setFloatable(false);}
     for(auto* dock:window->findChildren<QDockWidget*>()) {
         dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-        auto* title=new QWidget(dock);title->setObjectName("sectionTitle");auto* layout=new QHBoxLayout(title);
-        layout->setContentsMargins(14,12,14,12);layout->addWidget(new QLabel(dock->windowTitle(),title));layout->addStretch();dock->setTitleBarWidget(title);
+        if(!dock->titleBarWidget()){
+            auto* title=new QWidget(dock);title->setObjectName("sectionTitle");auto* layout=new QHBoxLayout(title);
+            layout->setContentsMargins(14,12,14,12);layout->addWidget(new QLabel(dock->windowTitle(),title));layout->addStretch();dock->setTitleBarWidget(title);
+        }
         if(dock->widget()&&dock->widget()->layout())dock->widget()->layout()->setContentsMargins(12,10,12,12);
     }
     auto menus=menu->actions();auto findMenu=[&](const QString& label)->QMenu*{for(auto* action:menus)if(action->text().remove('&')==label)return action->menu();return nullptr;};

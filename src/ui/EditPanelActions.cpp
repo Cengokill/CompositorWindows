@@ -3,6 +3,8 @@
 #include <QDialog>
 #include <QStatusBar>
 #include <QTimer>
+#include <algorithm>
+#include <iterator>
 
 namespace compositor {
 namespace {
@@ -65,21 +67,40 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
     host.commit=[this,owner,present,state,action](ui::EditPanelResult value){
         if(!present()||current()!=owner||!owner->document)return;
         auto target=std::find_if(owner->document->layers.begin(),owner->document->layers.end(),[&](const Layer& l){return l.id==state->original.id;});
-        auto rendered=std::find_if(value.document.layers.begin(),value.document.layers.end(),[&](const Layer& l){return l.id==state->original.id;});
-        if(target==owner->document->layers.end()||rendered==value.document.layers.end())return;
-        if(!state->live&&(target->raster!=state->original.raster||target->deep!=state->original.deep||
-            (editPanel_&&editPanel_->kind()!=ui::EditPanelSession::Kind::Hue&&target->transform!=state->original.transform)))return;
-        Document prepared=value.replaceDocument?value.document:*owner->document;
-        if(!value.replaceDocument){
-            auto& changed=prepared.layers[size_t(target-owner->document->layers.begin())];
+        const bool inserting=!value.insertAfterTarget.empty();
+        if(target==owner->document->layers.end()||
+            (!state->live&&(target->raster!=state->original.raster||target->deep!=state->original.deep||
+            (editPanel_&&editPanel_->kind()!=ui::EditPanelSession::Kind::Hue&&target->transform!=state->original.transform)))){
+            if(inserting)throw std::runtime_error("The source layer changed before Split to Layers finished");
+            return;
+        }
+        Document prepared=*owner->document;
+        const auto index=target-owner->document->layers.begin();
+        std::size_t channelBytes=0;
+        if(inserting){
+            for(auto& layer:value.insertAfterTarget){
+                layer.parentId=target->parentId;
+                layer.transform=target->transform;
+                channelBytes+=layer.raster->retainedBytes();
+            }
+            prepared.layers.insert(prepared.layers.begin()+index+1,std::make_move_iterator(value.insertAfterTarget.begin()),
+                                   std::make_move_iterator(value.insertAfterTarget.end()));
+        }else{
+            auto rendered=std::find_if(value.document.layers.begin(),value.document.layers.end(),[&](const Layer& l){return l.id==state->original.id;});
+            if(rendered==value.document.layers.end())return;
+            auto& changed=prepared.layers[size_t(index)];
             if(state->live)changed.adjustmentJson=rendered->adjustmentJson;
             else if(value.mergeLayer)changed=value.mergeLayer(*target);
             else {changed.raster=rendered->raster;changed.deep=rendered->deep;changed.shapeJson=rendered->shapeJson;}
         }
         validateDocument(prepared);
-        if(!state->live)owner->history.begin(action,owner->document,owner->active);
+        const auto previousMinimum=owner->history.minimumEntries;
+        // The four new planes can exceed the soft history budget after Undo.
+        if(channelBytes>owner->history.byteLimit)owner->history.minimumEntries=std::max(previousMinimum,std::size_t{1});
+        try{if(!state->live)owner->history.begin(inserting?"Split to Layers":action,owner->document,owner->active);}
+        catch(...){owner->history.minimumEntries=previousMinimum;throw;}
         try{owner->document=std::move(prepared);owner->history.end(owner->document,owner->active);state->livePending=false;if(value.maskSelected)owner->maskSelected=true;}
-        catch(...){if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}state->livePending=false;throw;}
+        catch(...){owner->history.minimumEntries=previousMinimum;if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}state->livePending=false;throw;}
     };
     host.closed=[this,owner,present,state]{
         editPanel_=nullptr;
