@@ -13,14 +13,14 @@ effects_tools::PaletteColor asPalette(QColor c){return {c.redF(),c.greenF(),c.bl
 QColor color(effects_tools::PaletteColor c){return QColor::fromRgbF(c.red,c.green,c.blue);}
 Pixel bytes(QColor c){return {uint8_t(c.red()),uint8_t(c.green()),uint8_t(c.blue()),255};}
 }
-void MainWindow::setupPaletteControls(QToolBar* tools){
+void MainWindow::setupPaletteControls(QWidget* tools){
     std::array<QAction*,4> actions{};
     const std::array<const char*,4> labels{"Foreground","Background","Swap (X)","Default (D)"};
     for(size_t index=0;index<actions.size();++index){
         auto* item=new QAction(labels[index],this);actions[index]=item;
         bindCommand(item,"Tools",labels[index],[this,index]{if(index<2)openPalette(index==1);else if(index==2)swapPalette();else resetPalette();});addAction(item);
     }
-    paletteSwatches_=new ui::PaletteSwatches(actions,tools);tools->addWidget(paletteSwatches_);
+    paletteSwatches_=new ui::PaletteSwatches(actions,tools);
 }
 void MainWindow::refreshPaletteControls(){
     if(!paletteSwatches_)return;

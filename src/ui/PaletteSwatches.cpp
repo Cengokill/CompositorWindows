@@ -2,6 +2,7 @@
 #include <QAction>
 #include <QPainter>
 #include <QPainterPath>
+#include <QShowEvent>
 #include <QToolButton>
 
 namespace compositor::ui {
@@ -59,7 +60,14 @@ PaletteSwatches::PaletteSwatches(const std::array<QAction*,4>& actions,QWidget* 
     const std::array<const char*,4> tips{"Foreground color","Background color","Swap foreground and background (X)","Default colors (D)"};
     for(size_t index=0;index<buttons_.size();++index){actions[index]->setToolTip(tips[index]);buttons_[index]->setDefaultAction(actions[index]);buttons_[index]->setAccessibleName(names[index]);buttons_[index]->setToolTip(tips[index]);}
     setTabOrder(buttons_[0],buttons_[1]);setTabOrder(buttons_[1],buttons_[2]);setTabOrder(buttons_[2],buttons_[3]);
+    buttons_[1]->stackUnder(buttons_[0]);
+    buttons_[0]->raise();
     setColors(Qt::black,Qt::white);
+}
+void PaletteSwatches::showEvent(QShowEvent* event){
+    QWidget::showEvent(event);
+    buttons_[1]->stackUnder(buttons_[0]);
+    buttons_[0]->raise();
 }
 void PaletteSwatches::setColors(QColor foreground,QColor background){static_cast<SwatchButton*>(buttons_[0])->setColor(foreground);static_cast<SwatchButton*>(buttons_[1])->setColor(background);}
 QWidget* PaletteSwatches::swatch(bool background)const{return buttons_[size_t(background)];}

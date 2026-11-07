@@ -141,6 +141,7 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::opt
         publishBrush(stroke_->preview());
         lastBrushPoint_=point;lastBrushLayer_=l->id;lastBrushMask_=strokeMask_;
         refreshBrushControls();
+        if(commands_)commands_->refresh();
         if(p->canvas)p->canvas->update();
     }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;

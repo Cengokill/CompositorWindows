@@ -6,8 +6,10 @@
 #include "ProjectChrome.h"
 #include "EditorIcons.h"
 #include "VisualStyle.h"
+#include "PaletteSwatches.h"
 #include <QSettings>
 #include <QToolButton>
+#include <QStyle>
 #include <QLineEdit>
 #include <QLabel>
 #include <QHBoxLayout>
@@ -19,6 +21,11 @@
 #include <QDockWidget>
 #include <QToolBar>
 #include <QFormLayout>
+#include <QGridLayout>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QResizeEvent>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -43,6 +50,77 @@
 #include <unordered_map>
 
 namespace compositor {
+namespace {
+class ResponsiveToolRail final : public QScrollArea {
+public:
+    explicit ResponsiveToolRail(QToolBar* bar) : QScrollArea(bar), bar_(bar), contents_(new QWidget), grid_(new QGridLayout(contents_)) {
+        setObjectName("responsiveToolRail");
+        viewport()->setObjectName("toolRailViewport");
+        contents_->setObjectName("toolRailContents");
+        setStyleSheet("QScrollArea#responsiveToolRail, QWidget#toolRailViewport, QWidget#toolRailContents { background: transparent; border: 0; }");
+        setFrameShape(QFrame::NoFrame);
+        setWidgetResizable(false);
+        setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setMinimumSize(0, 0);
+        grid_->setContentsMargins(0, 0, 0, 0);
+        grid_->setHorizontalSpacing(2);
+        grid_->setVerticalSpacing(2);
+        grid_->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+        setWidget(contents_);
+    }
+    void addTool(QToolButton* button) { buttons_.push_back(button); }
+    void setPalette(QWidget* palette) { palette_ = palette; updateLayout(); }
+protected:
+    void resizeEvent(QResizeEvent* event) override { QScrollArea::resizeEvent(event); updateLayout(); }
+    bool event(QEvent* event) override {
+        const bool result = QScrollArea::event(event);
+        if (event->type() == QEvent::StyleChange || event->type() == QEvent::FontChange ||
+            event->type() == QEvent::ScreenChangeInternal || event->type() == QEvent::Show)
+            QTimer::singleShot(0, this, [this] { updateLayout(); });
+        return result;
+    }
+private:
+    void updateLayout() {
+        if (!palette_ || buttons_.empty() || viewport()->height() <= 0) return;
+        const int spacing = grid_->verticalSpacing();
+        const auto effectiveSize = [](QWidget* widget) {
+            return widget->sizeHint().expandedTo(widget->minimumSize()).boundedTo(widget->maximumSize());
+        };
+        int oneColumnHeight = effectiveSize(palette_).height() + int(buttons_.size()) * spacing;
+        for (auto* button : buttons_) oneColumnHeight += effectiveSize(button).height();
+        auto apply=[&](int columns){
+            if (columns != columns_) {
+                columns_ = columns;
+                for (size_t index = 0; index < buttons_.size(); ++index)
+                    grid_->addWidget(buttons_[index], int(index) / columns, int(index) % columns, Qt::AlignHCenter);
+                grid_->addWidget(palette_, (int(buttons_.size()) + columns - 1) / columns, 0, 1, columns, Qt::AlignHCenter);
+            }
+            grid_->invalidate();
+            const QSize required = grid_->minimumSize();
+            const int contentWidth = qMax(columns == 1 ? 40 : 74, required.width());
+            contents_->setFixedSize(contentWidth, required.height());
+            // Include the styled toolbar layout margins, not just its CSS padding.
+            const auto margins = bar_->layout()->contentsMargins();
+            const int scrollbarWidth = required.height() > viewport()->height()
+                ? verticalScrollBar()->sizeHint().width() : 0;
+            const int railWidth = contentWidth + margins.left() + margins.right()
+                + 2 * frameWidth() + scrollbarWidth;
+            if (bar_->width() != railWidth) bar_->setFixedWidth(railWidth);
+        };
+        apply(viewport()->height() > oneColumnHeight ? 1 : 2);
+        if (columns_ == 1 && contents_->height() > viewport()->height()) apply(2);
+    }
+    QToolBar* bar_;
+    QWidget* contents_;
+    QGridLayout* grid_;
+    std::vector<QToolButton*> buttons_;
+    QWidget* palette_{};
+    int columns_{};
+};
+}
 static QImage imageOf(const Raster&r){auto bytes=r.rgba();return QImage(bytes.data(),r.width,r.height,r.width*4,QImage::Format_RGBA8888_Premultiplied).copy();}
 EditorProject* MainWindow::current(){int i=tabs_->currentIndex();return i<0||i>=int(projects_.size())?nullptr:projects_[i].get();}
 Layer* MainWindow::active(){auto*p=current();if(!p||!p->document)return nullptr;for(auto&l:p->document->layers)if(l.id==p->active)return &l;return nullptr;}
@@ -71,6 +149,7 @@ tools->setStyleSheet(R"(
     QToolBar#tools { border: 0; border-right: 1px solid palette(mid); padding: 8px 7px; spacing: 2px; }
     QToolBar#tools QToolButton[editorToolButton="true"] {
         background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0;
+        min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
     }
     QToolBar#tools QToolButton[editorToolButton="true"]:hover { background: rgba(128,128,128,32); }
     QToolBar#tools QToolButton[editorToolButton="true"]:checked {
@@ -79,6 +158,8 @@ tools->setStyleSheet(R"(
     QToolBar#tools QToolButton[editorToolButton="true"]:focus { border: 1px solid palette(highlight); }
 )");
 addToolBar(Qt::LeftToolBarArea,tools);
+auto* rail = new ResponsiveToolRail(tools);
+tools->addWidget(rail);
 struct ToolEntry { const char* label; Tool tool; ui::EditorIcon icon; };
 const ToolEntry entries[]{
     {"Move (V)",Tool::Move,ui::EditorIcon::Move},
@@ -101,22 +182,28 @@ const ToolEntry entries[]{
 };
 for (const auto& entry : entries) {
     const bool alternate = entry.tool==Tool::Polygon || entry.tool==Tool::Eraser;
-    auto* a = alternate ? new QAction(ui::editorIcon(entry.icon),entry.label,tools)
-                        : tools->addAction(ui::editorIcon(entry.icon),entry.label);
-    if(alternate)addAction(a);
+    auto* a = new QAction(ui::editorIcon(entry.icon),entry.label,tools);
+    addAction(a);
     a->setCheckable(true);
     a->setToolTip(entry.label);
     a->setProperty("editorTool",int(entry.tool));
     bindCommand(a,"Tools",entry.label,[this,t=entry.tool]{selectTool(t==Tool::Brush&&brushMode_==ProjectBrushMode::Erase?Tool::Eraser:t);});
     if(entry.tool==Tool::Brush)commands_->releaseShortcut(a);
-    if(auto* button=qobject_cast<QToolButton*>(tools->widgetForAction(a))) {
+    if(!alternate) {
+        auto* button = new QToolButton;
+        button->setDefaultAction(a);
+        button->setIconSize({22,22});
         button->setProperty("editorToolButton",true);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
         button->setAccessibleName(entry.label);
         button->setFixedSize(36,36);
+        rail->addTool(button);
     }
 }
 auto*brushKey=new QAction("Brush (B)",this);bindCommand(brushKey,"Tools","Brush (B)",[this]{selectTool(Tool::Brush);});addAction(brushKey);
-setupPaletteControls(tools);
+setupPaletteControls(rail);
+rail->setPalette(paletteSwatches_);
 setupGifTimeline();
 auto*dock=new QDockWidget("Layers",this);dock->setObjectName("layersDock");auto* layerHeader=new QWidget(dock);layerHeader->setObjectName("sectionTitle");auto* layerHeaderLayout=new QHBoxLayout(layerHeader);layerHeaderLayout->setContentsMargins(8,2,8,2);layerHeaderLayout->setSpacing(4);
 auto* layerTitle=new QLabel("Layers",layerHeader);layerTitle->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);auto* layerSearch=new QLineEdit(layerHeader);layerSearch->setMinimumWidth(0);layerSearch->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);layerSearch->setObjectName("layerSearch");layerSearch->setAccessibleName("Search layers by name");layerSearch->setPlaceholderText("Search Layers");layerSearch->hide();
