@@ -202,6 +202,9 @@ struct LayerRenderPreview {
     std::function<std::optional<std::vector<Damage>>(const LayerRenderPreview*)> damageComparedWith;
 };
 std::string newId();
+inline constexpr std::uint64_t maxRasterPixels = 100'000'000;
+// One imported raster plus four Split to Layers channel copies of a max-size image.
+inline constexpr std::uint64_t maxDocumentImagePixels = 5 * maxRasterPixels;
 void validateDocument(const Document&);
 Pixel blendPixel(Pixel destination,Pixel source,Blend mode);
 class IRasterBackend {

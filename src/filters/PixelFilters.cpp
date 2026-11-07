@@ -176,18 +176,19 @@ template<class T> std::vector<T> rgbSplit(const std::vector<T>& source,int w,int
             const double px=x+.5,py=y+.5;
             const double ax=s.rgbSplitRadial?(px-center.x)/reach:dx,ay=s.rgbSplitRadial?(py-center.y)/reach:dy;
             const double docX=s.rgbSplitOriginX+px*s.rgbSplitUnitsPerPixel,docY=s.rgbSplitOriginY+py*s.rgbSplitUnitsPerPixel;
-            const float jitter=float(std::fmod(std::sin(docX*12.9898+docY*78.233)*43758.5453,1.));
+            const double noise=std::sin(docX*12.9898+docY*78.233)*43758.5453;
+            const float jitter=float(noise-std::floor(noise));
             float color[3]{},alpha[3]{},total[3]{};
             for(int i=0;i<spectral;++i){
                 const float t=spectral==1?0.f:(float(i)+jitter)/float(spectral)*2.f-1.f;
                 auto hermite=[](float e0,float e1,float x){const float u=std::clamp((x-e0)/(e1-e0),0.f,1.f);return u*u*(3.f-2.f*u);};
                 const float weight[3]{hermite(-.3f,1.f,t),1.f-hermite(0.f,1.f,std::abs(t))+.05f,hermite(-.3f,1.f,-t)};
                 for(int j=0;j<streaks;++j){
-                    const float u=streaks==1?0.f:(float(j)+jitter)/float(streaks);
+                    const float u=streaks==1?0.f:(float(j)+jitter)/float(streaks)-.5f;
                     const double sx=px-ax*distance*t-ax*blurAmt*u,sy=py-ay*distance*t-ay*blurAmt*u;
+                    const float a=float(sample(source,w,h,sx-.5,sy-.5,3,clamp));
                     for(int c=0;c<3;++c){
                         const float rgb=float(sample(source,w,h,sx-.5,sy-.5,c,clamp));
-                        const float a=float(sample(source,w,h,sx-.5,sy-.5,3,clamp));
                         color[c]+=weight[c]*rgb;alpha[c]+=weight[c]*a;total[c]+=weight[c];
                     }
                 }
@@ -566,8 +567,37 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
     }
     return blendDeepSelection(std::move(result),source,selection,limits);
 }
+std::array<std::shared_ptr<const Raster>,4> splitChannels(const Raster& source,const Limits& limits){
+    cancel(limits);
+    const int width=source.width,height=source.height;
+    gateSize(width,height);
+    const auto pixels=std::size_t(width)*height;
+    std::array<std::shared_ptr<const Raster>,4> planes;
+    const auto peakBytes=pixels*4+planes.size()*estimatedWorkingBytes(width,height,0);
+    if(peakBytes>limits.maxWorkingBytes)throw std::runtime_error("Split to Layers exceeds transient allocation budget");
+    std::vector<std::uint8_t> gray(pixels*4,255);
+    for(std::size_t channel=0;channel<planes.size();++channel){
+        for(int y=0;y<height;++y){
+            cancel(limits);
+            auto* row=gray.data()+std::size_t(y)*width*4;
+            for(int x=0;x<width;++x){
+                const auto p=source.pixel(x,y);
+                const std::array values{p.r,p.g,p.b,p.a};
+                auto* dst=row+std::size_t(x)*4;
+                dst[0]=dst[1]=dst[2]=values[channel];
+                dst[3]=channel<3?p.a:255;
+            }
+            if(channel<3)graphics::unpremultiplyOpaque({{row,std::size_t(width)*4},std::uint32_t(width),1,std::size_t(width)*4});
+        }
+        planes[channel]=Raster::fromRgba(width,height,gray.data(),std::size_t(width)*4,limits.cancelled);
+    }
+    return planes;
+}
 Result apply(const Request& request){
-    kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>1002)throw std::runtime_error("Invalid retained blur margin");
+    kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);
+    // RGB Split's largest radial preview may be retained after switching back to Linear.
+    const auto maxRetainedMargin=request.kind==Kind::RgbSplit?blurMargin(request.kind,Settings{.rgbSplitDistance=200,.rgbSplitBlur=400,.rgbSplitRadial=true}):1002;
+    if(!std::isfinite(request.retainedBlurMargin)||request.retainedBlurMargin<0||request.retainedBlurMargin>maxRetainedMargin)throw std::runtime_error("Invalid retained blur margin");
     Result result{request.source,request.transform,{0,0,original.width,original.height},1,false,{}};auto settings=request.settings.normalized();if(request.selection){if(!request.selection->coverage)throw std::runtime_error("Present selection must have coverage");checkSelection(*request.selection->coverage);if(std::abs(std::int64_t(request.selection->originX))>30000||std::abs(std::int64_t(request.selection->originY))>30000)throw std::runtime_error("Source selection origin exceeds supported extent");if(empty(*request.selection->coverage))return result;}
     if(request.kind==Kind::CameraRaw)return applyCameraRaw(request,std::move(result));
     if(request.kind==Kind::ContentAwareFill&&!request.selection)throw std::runtime_error("Content-Aware Fill needs a selection");if(request.kind==Kind::LensCorrection&&settings.distortion==0)return result;if(finishingIdentity(request.kind,settings))return result;
