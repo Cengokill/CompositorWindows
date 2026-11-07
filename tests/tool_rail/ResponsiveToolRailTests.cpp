@@ -24,12 +24,16 @@ void paletteFullyVisible(MainWindow& window, QScrollArea* rail){
     require(palette&&foreground,"Palette controls missing");
     require(QTest::qWaitFor([&]{
         rail->verticalScrollBar()->setValue(rail->verticalScrollBar()->maximum());
-        return palette->visibleRegion().contains(palette->rect()) &&
+        return rail->viewport()->width() >= rail->widget()->width() &&
+               palette->visibleRegion().contains(palette->rect()) &&
                foreground->visibleRegion().contains(foreground->rect());
     },std::chrono::seconds(3)),"Palette or foreground swatch is clipped");
 }
-void waitWidth(QToolBar* bar,int width){
-    require(QTest::qWaitFor([=]{return bar->width()==width;},std::chrono::seconds(3)),"Rail did not change columns");
+void waitColumns(QToolButton* first,QToolButton* second,int columns){
+    require(QTest::qWaitFor([=]{
+        return columns==1 ? first->y()<second->y()
+                          : first->y()==second->y()&&first->x()<second->x();
+    },std::chrono::seconds(3)),"Rail did not change columns");
 }
 }
 int main(int argc,char** argv){
@@ -46,21 +50,27 @@ int main(int argc,char** argv){
         auto* bar=window.findChild<QToolBar*>("tools");
         auto* rail=window.findChild<QScrollArea*>("responsiveToolRail");
         require(bar&&rail,"Rail missing");
-        window.resize(1500,1100);window.show();waitWidth(bar,56);
-        paletteFullyVisible(window,rail);
+        window.resize(1500,1100);window.show();
         auto* move=tool(window,"tool.move");auto* marquee=tool(window,"tool.marquee");
+        waitColumns(move,marquee,1);
+        paletteFullyVisible(window,rail);
         auto* brush=tool(window,"tool.brush");
         require(move->y()<marquee->y(),"Tall rail is not one column");
         QTest::mouseClick(brush,Qt::LeftButton);
         require(brush->defaultAction()->isChecked(),"Brush not selected");
-        window.resize(1500,600);waitWidth(bar,90);
+        window.resize(1500,600);waitColumns(move,marquee,2);
         require(move->y()==marquee->y()&&move->x()<marquee->x(),"Compact rail order incorrect");
         paletteFullyVisible(window,rail);
+        for(auto* button:rail->findChildren<QToolButton*>()){
+            if(!button->property("editorToolButton").toBool())continue;
+            rail->ensureWidgetVisible(button,0,0);
+            require(QTest::qWaitFor([&]{return button->visibleRegion().contains(button->rect());},std::chrono::seconds(3)),"Tool button is clipped");
+        }
         require(brush->defaultAction()->isChecked(),"Selection lost on resize");
         require(project.history.undoCount()==0,"Resize changed history");
-        window.resize(1500,1100);waitWidth(bar,56);
+        window.resize(1500,1100);waitColumns(move,marquee,1);
         require(move->y()<marquee->y()&&brush->defaultAction()->isChecked(),"Tall layout did not restore");
-        rail->setFixedHeight(120);waitWidth(bar,90);
+        rail->setFixedHeight(120);waitColumns(move,marquee,2);
         require(QTest::qWaitFor([&]{return rail->verticalScrollBar()->maximum()>0;},std::chrono::seconds(3)),"Compact rail does not scroll");
         rail->verticalScrollBar()->setValue(rail->verticalScrollBar()->maximum());
         paletteFullyVisible(window,rail);

@@ -23,6 +23,7 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QResizeEvent>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -54,6 +55,9 @@ class ResponsiveToolRail final : public QScrollArea {
 public:
     explicit ResponsiveToolRail(QToolBar* bar) : QScrollArea(bar), bar_(bar), contents_(new QWidget), grid_(new QGridLayout(contents_)) {
         setObjectName("responsiveToolRail");
+        viewport()->setObjectName("toolRailViewport");
+        contents_->setObjectName("toolRailContents");
+        setStyleSheet("QScrollArea#responsiveToolRail, QWidget#toolRailViewport, QWidget#toolRailContents { background: transparent; border: 0; }");
         setFrameShape(QFrame::NoFrame);
         setWidgetResizable(false);
         setAlignment(Qt::AlignHCenter | Qt::AlignTop);
@@ -93,11 +97,17 @@ private:
                 for (size_t index = 0; index < buttons_.size(); ++index)
                     grid_->addWidget(buttons_[index], int(index) / columns, int(index) % columns, Qt::AlignHCenter);
                 grid_->addWidget(palette_, (int(buttons_.size()) + columns - 1) / columns, 0, 1, columns, Qt::AlignHCenter);
-                bar_->setFixedWidth(columns == 1 ? 56 : 90);
             }
             grid_->invalidate();
             const QSize required = grid_->minimumSize();
-            contents_->setFixedSize(qMax(columns == 1 ? 40 : 74, required.width()), required.height());
+            const int contentWidth = qMax(columns == 1 ? 40 : 74, required.width());
+            contents_->setFixedSize(contentWidth, required.height());
+            // The toolbar's horizontal padding and border need 16 logical pixels.
+            // When scrolling, reserve the scrollbar's width outside the content.
+            const int scrollbarWidth = required.height() > viewport()->height()
+                ? verticalScrollBar()->sizeHint().width() : 0;
+            const int railWidth = contentWidth + 16 + scrollbarWidth;
+            if (bar_->width() != railWidth) bar_->setFixedWidth(railWidth);
         };
         apply(viewport()->height() > oneColumnHeight ? 1 : 2);
         if (columns_ == 1 && contents_->height() > viewport()->height()) apply(2);
