@@ -800,14 +800,21 @@ void MainWindow::exportImage(){
     showPageSize();layout.setRowVisible(&pageSize,false);
     QLabel preview;preview.setObjectName("exportPreview");preview.setMinimumSize(520,320);preview.setAlignment(Qt::AlignCenter);layout.addRow(&preview);
     ui::TrackSlider previewZoom(Qt::Horizontal);previewZoom.setObjectName("exportPreviewZoom");previewZoom.setRange(25,400);previewZoom.setDefaultValue(100);previewZoom.setValue(100);layout.addRow("Preview zoom",&previewZoom);QPixmap previewSource;auto showPreview=[&]{if(previewSource.isNull())return;preview.setPixmap(previewSource.scaled(previewSource.size()*previewZoom.value()/100.,Qt::KeepAspectRatio,Qt::SmoothTransformation));};
+    QPushButton animatedPreview("Play");animatedPreview.setObjectName("exportAnimatedPreview");animatedPreview.setEnabled(false);layout.addRow("Animated preview",&animatedPreview);
+    QTimer animationTimer;animationTimer.setSingleShot(true);
+    std::vector<std::pair<QImage,int>> previewFrames;size_t previewFrame=0;bool playing=false;
+    auto stopAnimation=[&]{animationTimer.stop();playing=false;animatedPreview.setText("Play");};
+    auto showFrame=[&]{if(previewFrames.empty())return;previewSource=QPixmap::fromImage(previewFrames[previewFrame].first);showPreview();dialog.setProperty("animatedPreviewFrame",int(previewFrame));};
+    connect(&animationTimer,&QTimer::timeout,&dialog,[&]{if(!playing||previewFrames.empty())return;previewFrame=(previewFrame+1)%previewFrames.size();showFrame();animationTimer.start(std::max(20,previewFrames[previewFrame].second));});
+    connect(&animatedPreview,&QPushButton::clicked,&dialog,[&]{if(playing){stopAnimation();return;}if(previewFrames.size()<2)return;playing=true;animatedPreview.setText("Pause");animationTimer.start(std::max(20,previewFrames[previewFrame].second));});
     QLabel bytesLabel;bytesLabel.setObjectName("exportEncodedSize");layout.addRow("Encoded size",&bytesLabel);
     QDialogButtonBox buttons(QDialogButtonBox::Save|QDialogButtonBox::Cancel);buttons.setObjectName("exportButtons");layout.addRow(&buttons);
-    struct Prepared {imaging::StreamingExportResult result;QString path,error;bool cancelled{};};
+    struct Prepared {imaging::StreamingExportResult result;std::vector<std::pair<QImage,int>> frames;QString path,error;bool cancelled{};};
     QFutureWatcher<Prepared> watcher;QTimer debounce,progress;debounce.setSingleShot(true);debounce.setInterval(200);progress.setInterval(80);
     auto cancel=std::make_shared<std::atomic_bool>(false);auto percent=std::make_shared<std::atomic_uint32_t>(0);
     quint64 generation=0,runningGeneration=0;bool running=false,closed=false;QString readyPath;
     std::function<void()> start;
-    auto changed=[&]{++generation;cancel->store(true);readyPath.clear();buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();};
+    auto changed=[&]{stopAnimation();previewFrames.clear();previewFrame=0;animatedPreview.setEnabled(false);++generation;cancel->store(true);readyPath.clear();buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();};
     start=[&]{
         if(running||closed)return;
         if(colorMode.currentIndex()==1&&cmykAllowed()&&!outputProfile){bytesLabel.setText("Choose a CMYK output profile");return;}
@@ -851,6 +858,13 @@ void MainWindow::exportImage(){
                 if(scaled.isNull())throw std::runtime_error("Cannot create GIF preview");
                 auto& preview=out.result.preview;preview.width=uint32_t(scaled.width());preview.height=uint32_t(scaled.height());preview.stride=size_t(preview.width)*4;preview.pixels.resize(preview.stride*preview.height);
                 for(uint32_t y=0;y<preview.height;++y)std::memcpy(preview.pixels.data()+y*preview.stride,scaled.constScanLine(int(y)),preview.stride);
+                // Keep bounded, downscaled copies for animation; the export itself
+                // remains the full-resolution encoded file prepared above.
+                const double maxPixels=double(32*1024*1024/4)/frames.frames.size();
+                const double ratio=std::min({1.,520./document.width,320./document.height,std::sqrt(maxPixels/(double(document.width)*document.height))});
+                const int previewWidth=std::max(1,int(document.width*ratio)),previewHeight=std::max(1,int(document.height*ratio));
+                out.frames.reserve(frames.frames.size());
+                for(const auto& frame:frames.frames){if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();const auto& image=frame.image;QImage view(image.pixels.data(),int(image.width),int(image.height),qsizetype(image.stride),QImage::Format_RGBA8888_Premultiplied);auto small=view.scaled(previewWidth,previewHeight,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);if(small.isNull())throw std::runtime_error("Cannot create animated GIF preview");out.frames.emplace_back(std::move(small),int(frame.delayCentiseconds)*10);}
                 imaging::encodeGif(nativePath(path),frames,options.cancelled);
                 out.result.encodedBytes=std::filesystem::file_size(nativePath(path));percent->store(100);
             }
@@ -865,12 +879,13 @@ void MainWindow::exportImage(){
         QImage shown(image.pixels.data(),int(image.width),int(image.height),qsizetype(image.stride),QImage::Format_RGBA8888_Premultiplied);
         if(shown.isNull()){bytesLabel.setText("Cannot display export preview");return;}
         previewSource=QPixmap::fromImage(shown.copy());showPreview();readyPath=prepared.path;
+        previewFrames=std::move(prepared.frames);previewFrame=0;animatedPreview.setEnabled(kind()==ExportKind::Gif&&previewFrames.size()>1);if(!previewFrames.empty())showFrame();
         bytesLabel.setText(QString::number(prepared.result.encodedBytes)+" bytes");buttons.button(QDialogButtonBox::Save)->setEnabled(true);
         dialog.setProperty("readyExportPath",readyPath);dialog.setProperty("readyExportGeneration",generation);
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
-    auto applyKind=[&]{const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);};
+    auto applyKind=[&]{const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
     connect(&colorMode,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&profileButton,&QPushButton::clicked,&dialog,[&]{const auto path=chooseNativeCmykProfilePath();if(path.isEmpty())return;try{auto profile=imaging::readCmykProfile(nativePath(path));outputProfile=std::move(profile);profileButton.setText(QString::fromStdString(outputProfile->name));changed();}catch(const std::exception& error){QMessageBox::critical(&dialog,"CMYK profile",error.what());}});
     connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
@@ -881,7 +896,7 @@ void MainWindow::exportImage(){
     connect(&buttons,&QDialogButtonBox::accepted,&dialog,[&]{if(!readyPath.isEmpty()&&!running)dialog.accept();});
     connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
     applyKind();changed();progress.start();
-    const auto response=dialog.exec();closed=true;debounce.stop();progress.stop();cancel->store(true);watcher.waitForFinished();
+    const auto response=dialog.exec();closed=true;stopAnimation();debounce.stop();progress.stop();cancel->store(true);watcher.waitForFinished();
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     const auto chosen=kind();
     if(chosen==ExportKind::Jpeg)settings.setValue("jpegExportQuality",quality.value()/100.);
