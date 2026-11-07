@@ -319,16 +319,15 @@ void LayerPanelController::applyFilter(const PanelState& state) {
         if((query.isEmpty() || QString::fromStdString(layer.name).contains(query,Qt::CaseInsensitive)) &&
            (!selectedOnly_ || selected.contains(layer.id))) matches.insert(layer.id);
     }
-    // Retain matching folders' descendants and the ancestors of every result.
-    std::function<bool(QTreeWidgetItem*,bool)> visit=[&](QTreeWidgetItem* item,bool matchedAncestor) {
-        const bool matched=matches.contains(idOf(item));
-        bool visible=matchedAncestor||matched;
+    // Keep ancestors of matching rows for context.
+    std::function<bool(QTreeWidgetItem*)> visit=[&](QTreeWidgetItem* item) {
+        bool visible=matches.contains(idOf(item));
         for(int i=0;i<item->childCount();++i)
-            visible=visit(item->child(i),matchedAncestor||matched)||visible;
+            visible=visit(item->child(i))||visible;
         item->setHidden(active&&!visible);
         return visible;
     };
-    for(int i=0;i<tree_->topLevelItemCount();++i) visit(tree_->topLevelItem(i),false);
+    for(int i=0;i<tree_->topLevelItemCount();++i) visit(tree_->topLevelItem(i));
 }
 void LayerPanelController::syncVisibilityChrome(){const auto state=host_.state();if(!state.document)return;QSignalBlocker block(tree_);for(QTreeWidgetItemIterator it(tree_);*it;++it){const auto* layer=findLayer(*state.document,idOf(*it));if(!layer)continue;(*it)->setCheckState(0,layer->visible?Qt::Checked:Qt::Unchecked);(*it)->setForeground(0,layer->visible?QBrush():QBrush(QColor(125,125,125)));}}
 void LayerPanelController::updateSelection(){const auto state=host_.state();const bool editable=!host_.canEdit||host_.canEdit();QSignalBlocker block(tree_);for(QTreeWidgetItemIterator it(tree_);*it;++it){auto* item=*it;auto flags=item->flags();flags.setFlag(Qt::ItemIsEditable,editable);flags.setFlag(Qt::ItemIsUserCheckable,editable);flags.setFlag(Qt::ItemIsSelectable,editable);item->setFlags(flags);const auto id=idOf(item);item->setSelected(std::find(state.selection.ids.begin(),state.selection.ids.end(),id)!=state.selection.ids.end());item->setExpanded(filtering()||!state.collapsed.contains(id));if(id==state.selection.primary)tree_->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);item->setBackground(1,id==state.selection.primary&&!state.maskSelected?QBrush(QColor(85,125,165)):QBrush());item->setBackground(3,id==state.selection.primary&&state.maskSelected?QBrush(QColor(85,125,165)):QBrush());}applyFilter(state);if(auto* parent=tree_->parentWidget())if(auto* combo=parent->findChild<QComboBox*>("layerEditTarget")){QSignalBlocker comboBlock(combo);const auto*l=state.document?findLayer(*state.document,state.selection.primary):nullptr;const bool hasMask=l&&l->mask&&state.selection.ids.size()==1;combo->setVisible(hasMask);combo->setEnabled(hasMask&&(!host_.targetEnabled||host_.targetEnabled()));combo->setCurrentIndex(state.maskSelected?1:0);}}
