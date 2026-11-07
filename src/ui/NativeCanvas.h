@@ -203,7 +203,9 @@ public:
     struct PointerSample {
         QPointF position;
         std::optional<double> pressure;
-        PointerSample(QPointF point,std::optional<double> penPressure={}) : position(point),pressure(penPressure) {}
+        PointerSample(QPointF point,std::optional<double> penPressure) : position(point),pressure(penPressure) {}
+        PointerSample(QPointF point,double penPressure) : position(point),pressure(penPressure) {}
+        PointerSample(QPointF point) : position(point) {}
         PointerSample(double x,double y) : position(x,y) {}
     };
     std::function<void(PointerSample,Qt::KeyboardModifiers)> pointerDown,pointerMove,pointerUp;

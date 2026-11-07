@@ -148,6 +148,17 @@ struct TextContent {
     std::optional<double> boxWidth,boxHeight;
     bool operator==(const TextContent&) const = default;
 };
+// Frames use immutable rasters so document history can share unchanged pixels.
+struct AnimationFrame {
+    std::shared_ptr<const Raster> raster;
+    int delayMs{100};
+    bool operator==(const AnimationFrame&) const = default;
+};
+struct GifAnimation {
+    std::vector<AnimationFrame> frames;
+    size_t selectedFrame{};
+    bool operator==(const GifAnimation&) const = default;
+};
 struct Layer {
     std::string id,name{"Layer"},parentId,maskSourceId;
     bool visible{true},group{};
@@ -155,6 +166,8 @@ struct Layer {
     Blend blend{Blend::Normal};
     Transform transform;
     std::shared_ptr<const Raster> raster;
+    // The selected frame is presented through raster for existing renderers and editors.
+    std::optional<GifAnimation> animation;
     // Optional unsigned 16-bit or HDR pixels; raster is their SDR presentation.
     std::shared_ptr<const DeepImage> deep;
     std::optional<Mask> mask;
@@ -269,6 +282,7 @@ public:
     size_t minimumEntries{};
     void begin(std::string name,const std::optional<Document>& doc,const std::string& active);
     void end(const std::optional<Document>& doc,const std::string& active);
+    void end(std::optional<Document>& doc,const std::string& active);
     std::optional<Snapshot> cancel() noexcept;
     std::optional<Snapshot> undo();
     std::optional<Snapshot> redo();
