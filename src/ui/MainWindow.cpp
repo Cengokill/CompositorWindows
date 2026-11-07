@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QHBoxLayout>
 #include <QShortcut>
+#include <QSizePolicy>
 #include <QApplication>
 #include <QMenuBar>
 #include <QStatusBar>
@@ -117,9 +118,9 @@ for (const auto& entry : entries) {
 auto*brushKey=new QAction("Brush (B)",this);bindCommand(brushKey,"Tools","Brush (B)",[this]{selectTool(Tool::Brush);});addAction(brushKey);
 setupPaletteControls(tools);
 auto*dock=new QDockWidget("Layers",this);dock->setObjectName("layersDock");auto* layerHeader=new QWidget(dock);layerHeader->setObjectName("sectionTitle");auto* layerHeaderLayout=new QHBoxLayout(layerHeader);layerHeaderLayout->setContentsMargins(8,2,8,2);layerHeaderLayout->setSpacing(4);
-auto* layerTitle=new QLabel("Layers",layerHeader);auto* layerSearch=new QLineEdit(layerHeader);layerSearch->setObjectName("layerSearch");layerSearch->setAccessibleName("Search layers by name");layerSearch->setPlaceholderText("Search Layers");layerSearch->hide();
-auto* layerSearchButton=new QToolButton(layerHeader);layerSearchButton->setObjectName("layerSearchButton");layerSearchButton->setText("Search");layerSearchButton->setAccessibleName("Search layers");layerSearchButton->setToolTip("Search layers by name");
-auto* layerSelected=new QToolButton(layerHeader);layerSelected->setObjectName("layerSelectedFilter");layerSelected->setText("Selected");layerSelected->setCheckable(true);layerSelected->setAccessibleName("Show selected layers only");layerSelected->setToolTip("Show selected layers only");
+auto* layerTitle=new QLabel("Layers",layerHeader);layerTitle->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);auto* layerSearch=new QLineEdit(layerHeader);layerSearch->setMinimumWidth(0);layerSearch->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);layerSearch->setObjectName("layerSearch");layerSearch->setAccessibleName("Search layers by name");layerSearch->setPlaceholderText("Search Layers");layerSearch->hide();
+auto* layerSearchButton=new QToolButton(layerHeader);layerSearchButton->setObjectName("layerSearchButton");layerSearchButton->setText("Search");layerSearchButton->setFixedWidth(54);layerSearchButton->setStyleSheet("QToolButton { padding-left: 3px; padding-right: 3px; }");layerSearchButton->setAccessibleName("Search layers");layerSearchButton->setToolTip("Search layers by name");
+auto* layerSelected=new QToolButton(layerHeader);layerSelected->setObjectName("layerSelectedFilter");layerSelected->setText("Selected");layerSelected->setFixedWidth(70);layerSelected->setStyleSheet("QToolButton { padding-left: 3px; padding-right: 3px; }");layerSelected->setCheckable(true);layerSelected->setAccessibleName("Show selected layers only");layerSelected->setToolTip("Show selected layers only");
 layerHeaderLayout->addWidget(layerTitle,1);layerHeaderLayout->addWidget(layerSearch,1);layerHeaderLayout->addWidget(layerSearchButton);layerHeaderLayout->addWidget(layerSelected);dock->setTitleBarWidget(layerHeader);
 auto refreshLayerFilter=[this,layerSearch,layerSelected]{if(auto* controller=ui::LayerPanelController::find(layers_))controller->setFilter(layerSearch->text(),layerSelected->isChecked());};
 connect(layerSearch,&QLineEdit::textChanged,this,[refreshLayerFilter](const QString&){refreshLayerFilter();});connect(layerSelected,&QToolButton::toggled,this,[refreshLayerFilter](bool){refreshLayerFilter();});
