@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
         auto* play = control<QToolButton>(window, "gifPlay");
         auto* delay = control<QSpinBox>(window, "gifFrameDelay");
         check(frames->count() == 2, "Frame list is missing imported frames");
+        check(frames->item(0)->text().contains("40 ms")&&frames->item(1)->text().contains("70 ms"),"Frame delays are not visible");
         const auto initialHistory = project.history.undoCount();
         frames->setCurrentRow(1);
         check(project.document->layers[0].raster == blue && project.history.undoCount() == initialHistory,
@@ -55,9 +56,11 @@ int main(int argc, char** argv) {
         delay->setValue(240); QMetaObject::invokeMethod(delay, "editingFinished", Qt::DirectConnection);
         check(project.document->layers[0].animation->frames[project.document->layers[0].animation->selectedFrame].delayMs == 240,
               "Frame duration did not change");
+        check(frames->currentItem()&&frames->currentItem()->text().contains("240 ms"),"Frame label did not update after editing its delay");
         action(window, "Undo");
         check(project.document->layers[0].animation->frames[project.document->layers[0].animation->selectedFrame].delayMs != 240,
               "Undo did not restore duration");
+        check(frames->currentItem()&&!frames->currentItem()->text().contains("240 ms"),"Frame label did not update after undo");
         const auto before = project.document->layers[0].animation->selectedFrame;
         const auto depth = project.history.undoCount(); play->click();
         check(QTest::qWaitFor([&] { return project.document->layers[0].animation->selectedFrame != before; }, 1000),

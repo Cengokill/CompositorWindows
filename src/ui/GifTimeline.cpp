@@ -76,7 +76,7 @@ void MainWindow::setupGifTimeline() {
     gifFrames_->setAccessibleName("GIF frames"); gifFrames_->setViewMode(QListView::IconMode);
     gifFrames_->setFlow(QListView::LeftToRight); gifFrames_->setWrapping(false);
     gifFrames_->setMovement(QListView::Static); gifFrames_->setIconSize({48, 48});
-    gifFrames_->setResizeMode(QListView::Adjust); gifFrames_->setFixedHeight(92);
+    gifFrames_->setResizeMode(QListView::Adjust); gifFrames_->setFixedHeight(110);
     layout->addWidget(gifFrames_); gifTimeline_->setWidget(contents);
     addDockWidget(Qt::BottomDockWidgetArea, gifTimeline_); gifTimeline_->hide();
 
@@ -169,7 +169,7 @@ void MainWindow::refreshGifTimeline() {
     if (rebuild) {
         QSignalBlocker block(gifFrames_); gifFrames_->clear();
         for (size_t i = 0; i < animation.frames.size(); ++i) {
-            auto* item = new QListWidgetItem(frameIcon(animation.frames[i].raster), QString::number(i + 1), gifFrames_);
+            auto* item = new QListWidgetItem(frameIcon(animation.frames[i].raster), QString("%1\n%2 ms").arg(i + 1).arg(animation.frames[i].delayMs), gifFrames_);
             item->setToolTip(QString("Frame %1 · %2 ms").arg(i + 1).arg(animation.frames[i].delayMs));
         }
         gifShownLayer_ = layer->id; gifShownFrames_ = animation.frames;
