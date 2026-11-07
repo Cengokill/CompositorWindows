@@ -163,6 +163,9 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("layer.clipping","Layer","Create / Release Clipping Mask","Ctrl+Alt+G",C::Layer,G::Clipping,P::FinishAppearance,"Compositor/CompositorApp.swift:232");
         add("layer.merge","Layer","Merge Layers","Ctrl+E",C::Layer,G::Merge,P::FinishAppearance,"Compositor/CompositorApp.swift:254");
         add("layer.copy_project","Layer","Copy Layer to Project…","",C::Workspace,G::OtherProject,P::FinishAppearance,"Compositor/Document/ProjectWorkspace.swift:158");
+        const char* effectLabels[]{"Stroke","Drop Shadow","Color Overlay","Inner Shadow","Outer Glow","Inner Glow"};
+        const char* effectIds[]{"layer.effect.stroke","layer.effect.drop_shadow","layer.effect.color_overlay","layer.effect.inner_shadow","layer.effect.outer_glow","layer.effect.inner_glow"};
+        for(int i=0;i<6;++i)add(effectIds[i],"Effects",effectLabels[i],"",C::Layer,G::SingleLayer,P::FinishAppearance,"Windows layer effects");
         const char*maskLabels[]{"Add White Mask (Reveal Selection)","Add Black Mask (Hide Selection)","Reveal All","Hide All","Enable / Disable Mask","Link / Unlink Mask","Delete Mask","Edit Image","Edit Mask","Select Image Alpha","Select Mask Black Areas"};
         const char*maskIds[]{"mask.add_white","mask.add_black","mask.reveal_all","mask.hide_all","mask.enabled","mask.linked","mask.delete","mask.edit_image","mask.edit_mask","mask.load_alpha","mask.load_black"};
         for(int i=0;i<11;++i)add(maskIds[i],"Mask",maskLabels[i],"",C::Layer,i<4?G::AddMask:i==7?G::SingleLayer:i==9?G::ImageAlpha:G::Mask,P::None,"Compositor/Document/LayerMask.swift:221");

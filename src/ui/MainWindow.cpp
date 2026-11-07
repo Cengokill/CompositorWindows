@@ -9,6 +9,7 @@
 #include "PaletteSwatches.h"
 #include <QSettings>
 #include <QToolButton>
+#include <QStyle>
 #include <QLineEdit>
 #include <QLabel>
 #include <QHBoxLayout>
@@ -54,10 +55,11 @@ public:
     explicit ResponsiveToolRail(QToolBar* bar) : QScrollArea(bar), bar_(bar), contents_(new QWidget), grid_(new QGridLayout(contents_)) {
         setObjectName("responsiveToolRail");
         setFrameShape(QFrame::NoFrame);
-        setWidgetResizable(true);
+        setWidgetResizable(false);
+        setAlignment(Qt::AlignHCenter | Qt::AlignTop);
         setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setMinimumSize(0, 0);
         grid_->setContentsMargins(0, 0, 0, 0);
         grid_->setHorizontalSpacing(2);
@@ -79,17 +81,21 @@ protected:
 private:
     void updateLayout() {
         if (!palette_ || buttons_.empty() || viewport()->height() <= 0) return;
-        int oneColumnHeight = palette_->height();
-        for (auto* button : buttons_) oneColumnHeight += button->height();
-        oneColumnHeight += int(buttons_.size()) * grid_->verticalSpacing();
-        const int columns = viewport()->height() >= oneColumnHeight ? 1 : 2;
-        if (columns == columns_) return;
-        columns_ = columns;
-        for (size_t index = 0; index < buttons_.size(); ++index)
-            grid_->addWidget(buttons_[index], int(index) / columns, int(index) % columns, Qt::AlignHCenter);
-        grid_->addWidget(palette_, (int(buttons_.size()) + columns - 1) / columns, 0, 1, columns, Qt::AlignHCenter);
-        grid_->invalidate();
-        bar_->setFixedWidth(columns == 1 ? 56 : 90);
+        const int spacing = grid_->verticalSpacing();
+        const int oneColumnHeight = 42 + int(buttons_.size()) * (36 + spacing);
+        auto apply=[&](int columns){
+            if (columns != columns_) {
+                columns_ = columns;
+                for (size_t index = 0; index < buttons_.size(); ++index)
+                    grid_->addWidget(buttons_[index], int(index) / columns, int(index) % columns, Qt::AlignHCenter);
+                grid_->addWidget(palette_, (int(buttons_.size()) + columns - 1) / columns, 0, 1, columns, Qt::AlignHCenter);
+                bar_->setFixedWidth(columns == 1 ? 56 : 90);
+            }
+            const int toolRows = (int(buttons_.size()) + columns - 1) / columns;
+            contents_->setFixedSize(columns == 1 ? 40 : 74, toolRows * 36 + 42 + toolRows * spacing);
+        };
+        apply(viewport()->height() > oneColumnHeight ? 1 : 2);
+        if (columns_ == 1 && contents_->height() > viewport()->height()) apply(2);
     }
     QToolBar* bar_;
     QWidget* contents_;
@@ -127,6 +133,7 @@ tools->setStyleSheet(R"(
     QToolBar#tools { border: 0; border-right: 1px solid palette(mid); padding: 8px 7px; spacing: 2px; }
     QToolBar#tools QToolButton[editorToolButton="true"] {
         background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0;
+        min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
     }
     QToolBar#tools QToolButton[editorToolButton="true"]:hover { background: rgba(128,128,128,32); }
     QToolBar#tools QToolButton[editorToolButton="true"]:checked {
@@ -171,6 +178,8 @@ for (const auto& entry : entries) {
         button->setDefaultAction(a);
         button->setIconSize({22,22});
         button->setProperty("editorToolButton",true);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
         button->setAccessibleName(entry.label);
         button->setFixedSize(36,36);
         rail->addTool(button);
