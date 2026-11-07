@@ -115,14 +115,24 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::opt
         if(!pressure){settings.pressureSize=false;settings.pressureOpacity=false;}
         const double strength=pressure.value_or(1);
         uint64_t remaining=100000000;
+        uint64_t animationBudget=maxDocumentImagePixels;
         for(const auto&layer:p->document->layers)if(layer.id!=l->id){
             if(strokeMask_&&layer.mask&&layer.mask->raster)remaining-=uint64_t(layer.mask->raster->width)*layer.mask->raster->height;
             else if(!strokeMask_&&layer.raster)remaining-=uint64_t(layer.raster->width)*layer.raster->height;
         }
+        if(!strokeMask_&&l->animation){
+            for(const auto& layer:p->document->layers)if(layer.id!=l->id){
+                if(layer.raster)animationBudget-=uint64_t(layer.raster->width)*layer.raster->height;
+                if(layer.animation)for(size_t i=0;i<layer.animation->frames.size();++i)if(i!=layer.animation->selectedFrame){
+                    const auto& raster=*layer.animation->frames[i].raster;
+                    animationBudget-=uint64_t(raster.width)*raster.height;
+                }
+            }
+        }
         if(!strokeMask_&&l->mask){uint64_t maskBudget=100000000;for(const auto&layer:p->document->layers)if(layer.id!=l->id&&layer.mask&&layer.mask->raster)maskBudget-=uint64_t(layer.mask->raster->width)*layer.mask->raster->height;remaining=std::min(remaining,maskBudget);}
         p->brushLayerId=l->id;
         const auto accelerator=(settings.pressureSize||settings.pressureOpacity||l->animation)?std::shared_ptr<graphics::D3D11BrushCoverage>{}:brushGpu_;
-        stroke_=std::make_unique<graphics::GrowingBrushSession>(*l,settings,p->document->width,p->document->height,accelerator,p->document->selection?p->document->selection->coverage:nullptr,strokeMask_,remaining);
+        stroke_=std::make_unique<graphics::GrowingBrushSession>(*l,settings,p->document->width,p->document->height,accelerator,p->document->selection?p->document->selection->coverage:nullptr,strokeMask_,remaining,graphics::GrowingTileCompositor{},animationBudget);
         if(p->canvas)p->canvas->setNavigatorDeferred(true);
         if(modifiers.testFlag(Qt::ShiftModifier)&&lastBrushPoint_&&lastBrushLayer_==l->id&&lastBrushMask_==strokeMask_){
             stroke_->begin(*lastBrushPoint_,strength);

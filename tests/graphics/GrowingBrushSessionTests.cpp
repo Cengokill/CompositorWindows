@@ -104,6 +104,38 @@ void gif_transparent_no_ghost(){
         REQUIRE(result.raster->pixel(200,185).a>0&&stroke.acceleratorError().empty());
     }
 }
+void gif_growth_preserves_frames(){
+    for(size_t selected:{size_t(0),size_t(1)}){
+        auto base=layer(32,24,{100,0,0,255});
+        auto other=Raster::filled(32,24,{0,100,0,255});
+        base.animation=GifAnimation{{{base.raster,120},{other,240}},selected};
+        base.raster=base.animation->frames[selected].raster;
+        base.transform={120,100,64,48,30,true,false,Transform::Sampling::Nearest};
+        Document doc;doc.id=newId();doc.width=300;doc.height=300;doc.layers={base};
+        std::optional<Document> current=doc;History history;history.begin("Brush",current,base.id);
+        GrowingBrushSession stroke(base,settings(),300,300);
+        stroke.begin(base.transform.fromUnit({-.2,.5}));
+        const auto snapshot=stroke.commit();const auto bounds=snapshot->sourceBounds();
+        REQUIRE(bounds.x<0);
+        auto changed=snapshot->materializeLayer();
+        REQUIRE(changed.animation->frames[selected].raster==changed.raster);
+        const auto& untouched=*changed.animation->frames[1-selected].raster;
+        REQUIRE(untouched.width==bounds.width&&untouched.height==bounds.height);
+        REQUIRE(untouched.pixel(-bounds.x, -bounds.y)==base.animation->frames[1-selected].raster->pixel(0,0));
+        REQUIRE(untouched.pixel(0,-bounds.y)==Pixel{});
+        auto before=base.transform.fromUnit({.25,.75});
+        auto after=changed.transform.fromUnit({(.25*32-bounds.x)/bounds.width,(.75*24-bounds.y)/bounds.height});
+        REQUIRE(std::hypot(before.x-after.x,before.y-after.y)<1e-7);
+        current->layers[0]=changed;history.end(current,base.id);
+        REQUIRE(history.undo()->document==doc);
+        auto redone=history.redo()->document;
+        REQUIRE(redone->layers[0].animation==changed.animation&&redone->layers[0].transform==changed.transform);
+        GrowingBrushSession limited(base,settings(),300,300,{},{},false,100000000,{},uint64_t(32*24*2));
+        limited.begin(base.transform.fromUnit({-.2,.5}));
+        bool rejected=false;try{limited.commit()->materializeLayer();}catch(const std::runtime_error&){rejected=true;}
+        REQUIRE(rejected&&base.animation->frames[1-selected].raster==doc.layers[0].animation->frames[1-selected].raster);
+    }
+}
 void empty_erase_noop(){Layer blank;blank.id=newId();blank.transform={0,0,30000,30000};auto s=settings();s.erase=true;GrowingBrushSession stroke(blank,s,30000,30000);stroke.begin({100,100});REQUIRE(!stroke.commit()->changed()&&stroke.preview()->materializeLayer()==blank);auto l=layer(20,20,{10,20,30,255});GrowingBrushSession erase(l,s,20,20);erase.begin({10,10});auto done=erase.commit();REQUIRE(done->sourceBounds()==BrushSourceRect{0,0,20,20}&&done->pixel(10,10).a==0);}
 void gpu_equivalence(){auto shader=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"shaders"/"BrushCoverage.hlsl";auto gpu=std::make_shared<D3D11BrushCoverage>(shader,true);std::cout<<"BACKEND "<<gpu->adapterName()<<'\n';auto original=layer(520,360,{10,20,30,64});original.transform={100,100,520,360};auto s=settings();s.radius=27;s.hardness=.3;s.opacity=.47;GrowingBrushSession cpu(original,s,800,600),warp(original,s,800,600,gpu);cpu.begin({70,140});warp.begin({70,140});for(Point p:{Point{40,260},{240,220},{470,410},{680,300}}){cpu.append(p);warp.append(p);}auto a=cpu.commit(),b=warp.commit();REQUIRE(a->sourceBounds()==b->sourceBounds()&&a->transform()==b->transform());auto bounds=a->sourceBounds();int maximumError=0;for(int y=bounds.y;y<bounds.y+bounds.height;++y)for(int x=bounds.x;x<bounds.x+bounds.width;++x){auto p=a->pixel(x,y),q=b->pixel(x,y);for(auto error:{std::abs(int(p.r)-q.r),std::abs(int(p.g)-q.g),std::abs(int(p.b)-q.b),std::abs(int(p.a)-q.a)})maximumError=std::max(maximumError,error);}std::cout<<"MAX_BYTE_ERROR "<<maximumError<<'\n';REQUIRE(maximumError<=1&&warp.acceleratorError().empty()&&warp.metrics().coverage.acceleratorFallbacks==0);}
 void invalid_sample(){Layer l;l.id=newId();l.transform={0,0,100,100};GrowingBrushSession stroke(l,settings(),100,100);int rejected=0;for(int value:{std::numeric_limits<int>::min(),std::numeric_limits<int>::max()})try{stroke.preview()->pixel(value,0);}catch(const std::exception&){++rejected;}try{stroke.preview()->sample(0,0,30000,30000);}catch(const std::exception&){++rejected;}REQUIRE(rejected==3);}
@@ -143,4 +175,4 @@ void benchmarkViewport(std::shared_ptr<D3D11BrushCoverage> gpu,const char* backe
 }
 void viewport_benchmark_cpu(){benchmarkViewport({},"CPU");}
 void viewport_benchmark_warp(){auto shader=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"shaders"/"BrushCoverage.hlsl";auto gpu=std::make_shared<D3D11BrushCoverage>(shader,true);std::cout<<"BACKEND "<<gpu->adapterName()<<'\n';benchmarkViewport(gpu,"WARP");}
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"deep_brush",deep_brush},{"pen_pressure",pen_pressure},{"unchanged_grid",unchanged_grid},{"blank_30000",blank_30000},{"growth_padding_masks",growth_padding_masks},{"transformed_growth",transformed_growth},{"selection_cancel_mask",selection_cancel_mask},{"atomic_budget",atomic_budget},{"immutable_history",immutable_history},{"gif_transparent_no_ghost",gif_transparent_no_ghost},{"empty_erase_noop",empty_erase_noop},{"gpu_equivalence",gpu_equivalence},{"invalid_sample",invalid_sample},{"viewport_image",viewport_image},{"viewport_transformed",viewport_transformed},{"viewport_mask",viewport_mask},{"region_row_copies",region_row_copies},{"small_source_growth",small_source_growth},{"benchmark",benchmark},{"viewport_benchmark_cpu",viewport_benchmark_cpu},{"viewport_benchmark_warp",viewport_benchmark_warp}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify growing brush check");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"deep_brush",deep_brush},{"pen_pressure",pen_pressure},{"unchanged_grid",unchanged_grid},{"blank_30000",blank_30000},{"growth_padding_masks",growth_padding_masks},{"transformed_growth",transformed_growth},{"selection_cancel_mask",selection_cancel_mask},{"atomic_budget",atomic_budget},{"immutable_history",immutable_history},{"gif_transparent_no_ghost",gif_transparent_no_ghost},{"gif_growth_preserves_frames",gif_growth_preserves_frames},{"empty_erase_noop",empty_erase_noop},{"gpu_equivalence",gpu_equivalence},{"invalid_sample",invalid_sample},{"viewport_image",viewport_image},{"viewport_transformed",viewport_transformed},{"viewport_mask",viewport_mask},{"region_row_copies",region_row_copies},{"small_source_growth",small_source_growth},{"benchmark",benchmark},{"viewport_benchmark_cpu",viewport_benchmark_cpu},{"viewport_benchmark_warp",viewport_benchmark_warp}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify growing brush check");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
