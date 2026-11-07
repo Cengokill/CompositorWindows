@@ -59,9 +59,9 @@ void text_layer_icon(){
 }
 void search_and_selected_filter(){
     MainWindow w(true);auto d=example();
-    d.layers[0].name="Folder";d.layers[0].group=true;d.layers[0].raster.reset();
-    d.layers[1].name="Blue sky";d.layers[1].parentId="a";
-    d.layers[2].name="Red sun";d.layers[2].parentId="a";
+    d.layers[0].name="Folder 1";d.layers[0].group=true;d.layers[0].raster.reset();
+    d.layers[1].name="Blue sky 1";d.layers[1].parentId="a";
+    d.layers[2].name="Red sun 2";d.layers[2].parentId="a";
     auto& p=w.addProject(d);p.active="b";p.selected={"b","c"};p.collapsedGroups.insert("a");
     auto* c=controller(w);c->rebuild();w.show();QApplication::processEvents();const auto before=*p.document;const auto undo=p.history.undoCount();
     auto* search=w.findChild<QLineEdit*>("layerSearch");auto* button=w.findChild<QToolButton*>("layerSearchButton");auto* selected=w.findChild<QToolButton*>("layerSelectedFilter");
@@ -71,9 +71,14 @@ void search_and_selected_filter(){
     check(p.selected.size()==2&&p.active=="b","filter changed selection");
     const auto exposed=c->exposedVisibilityControls();check(std::find(exposed.begin(),exposed.end(),"c")==exposed.end(),"hidden row exposed to accessibility");
     std::unique_ptr<QMimeData> payload(c->dragMime());check(!c->accepts(payload.get(),QPoint(-10,-10),{}),"filtered empty-space drop must be rejected");
-    search->setText("folder");check(!item(w,"b")->isHidden()&&!item(w,"c")->isHidden(),"matched folder did not retain children");
+    search->setText("1");check(!item(w,"a")->isHidden()&&!item(w,"b")->isHidden()&&item(w,"c")->isHidden(),"matching folder exposed a nonmatching child");
+    search->setText("2");check(!item(w,"a")->isHidden()&&item(w,"b")->isHidden()&&!item(w,"c")->isHidden(),"matching child lost its parent context");
+    search->setText("folder");check(!item(w,"a")->isHidden()&&item(w,"b")->isHidden()&&item(w,"c")->isHidden(),"folder search exposed nonmatching children");
     search->setText("missing");check(item(w,"a")->isHidden(),"empty results still displayed a row");
-    search->clear();selected->click();check(!item(w,"b")->isHidden()&&!item(w,"c")->isHidden(),"selected filter lost selected rows");
+    search->clear();p.active="a";p.selected={"a"};selected->click();
+    check(!item(w,"a")->isHidden()&&item(w,"b")->isHidden()&&item(w,"c")->isHidden(),"selected folder exposed unselected children");
+    p.active="b";p.selected={"b","c"};c->updateSelection();
+    check(!item(w,"b")->isHidden()&&!item(w,"c")->isHidden(),"selected filter lost selected rows");
     p.active="c";p.selected={"c"};c->updateSelection();check(item(w,"b")->isHidden()&&!item(w,"c")->isHidden(),"selected filter did not follow selection");
     search->setText("blue");check(item(w,"a")->isHidden(),"search and selected filter must both match");
     button->click();selected->click();check(!item(w,"a")->isHidden()&&!item(w,"b")->isHidden()&&!item(w,"a")->isExpanded(),"clearing filters did not restore tree");
