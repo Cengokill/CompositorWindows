@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <unordered_map>
 #include <propvarutil.h>
 
 namespace compositor::imaging {
@@ -68,6 +69,112 @@ void validateFrame(const RgbaImage& image, const std::function<bool()>& check) {
             if (p[0]>p[3] || p[1]>p[3] || p[2]>p[3]) throw std::runtime_error("GIF frame is not premultiplied");
         }
     }
+}
+unsigned straight(const std::uint8_t* p,int c){return std::min(255U,(unsigned(p[c])*255U+p[3]/2)/p[3]);}
+struct GifPalette {
+    std::array<std::array<std::uint8_t,3>,256> colors{};
+    unsigned count{};
+    bool transparent{};
+    std::unordered_map<unsigned,unsigned> exact;
+};
+unsigned packedRgb(unsigned r,unsigned g,unsigned b){return (r<<16)|(g<<8)|b;}
+unsigned nearestIndex(const GifPalette& palette,unsigned r,unsigned g,unsigned b){
+    if(auto found=palette.exact.find(packedRgb(r,g,b));found!=palette.exact.end())return found->second;
+    unsigned best=palette.transparent?1:0,bestD=~0u;
+    for(unsigned i=palette.transparent?1:0;i<palette.count;++i){
+        const int dr=int(palette.colors[i][0])-int(r),dg=int(palette.colors[i][1])-int(g),db=int(palette.colors[i][2])-int(b);
+        const unsigned d=unsigned(dr*dr+dg*dg+db*db);
+        if(d<bestD){bestD=d;best=i;if(!d)break;}
+    }
+    return best;
+}
+GifPalette makePalette(const RgbaImage& image,const std::function<bool()>& check){
+    GifPalette palette;
+    bool anyTransparent=false;
+    for(unsigned y=0;y<image.height;++y){
+        detail::cancelled(check);
+        for(unsigned x=0;x<image.width;++x)if(image.pixels[std::size_t(y)*image.stride+std::size_t(x)*4+3]<128)anyTransparent=true;
+    }
+    palette.transparent=anyTransparent;
+    const unsigned maxColors=anyTransparent?255u:256u;
+    const unsigned first=anyTransparent?1u:0u;
+    std::vector<std::array<std::uint8_t,3>> unique;
+    std::unordered_map<unsigned,unsigned> indexOf;
+    std::vector<std::uint32_t> n(32768),sr(32768),sg(32768),sb(32768);
+    bool overflow=false;
+    for(unsigned y=0;y<image.height;++y){
+        detail::cancelled(check);
+        for(unsigned x=0;x<image.width;++x){
+            const auto* p=image.pixels.data()+std::size_t(y)*image.stride+std::size_t(x)*4;
+            if(p[3]<128)continue;
+            const unsigned r=straight(p,0),g=straight(p,1),b=straight(p,2),key=packedRgb(r,g,b);
+            if(!overflow&&indexOf.emplace(key,unsigned(unique.size())).second){
+                unique.push_back({std::uint8_t(r),std::uint8_t(g),std::uint8_t(b)});
+                if(unique.size()>maxColors)overflow=true;
+            }
+            const unsigned i=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
+            n[i]+=1;sr[i]+=r;sg[i]+=g;sb[i]+=b;
+        }
+    }
+    if(!overflow){
+        palette.count=first+unsigned(unique.size());
+        for(unsigned i=0;i<unique.size();++i){
+            palette.colors[first+i]=unique[i];
+            palette.exact[packedRgb(unique[i][0],unique[i][1],unique[i][2])]=first+i;
+        }
+        if(!palette.count)palette.count=1;
+        return palette;
+    }
+    struct Box{int r0,r1,g0,g1,b0,b1;std::uint32_t pop;};
+    auto shrink=[&](Box box){
+        Box out{31,0,31,0,31,0,0};
+        for(int r=box.r0;r<=box.r1;++r)for(int g=box.g0;g<=box.g1;++g)for(int b=box.b0;b<=box.b1;++b){
+            const unsigned i=unsigned((r<<10)|(g<<5)|b);if(!n[i])continue;
+            out.r0=std::min(out.r0,r);out.r1=std::max(out.r1,r);out.g0=std::min(out.g0,g);out.g1=std::max(out.g1,g);out.b0=std::min(out.b0,b);out.b1=std::max(out.b1,b);out.pop+=n[i];
+        }
+        return out.pop?out:box;
+    };
+    std::vector<Box> boxes{shrink({0,31,0,31,0,31,0})};
+    while(boxes.size()<maxColors){
+        detail::cancelled(check);
+        size_t split=boxes.size();int bestRange=-1;std::uint32_t bestPop=0;
+        for(size_t i=0;i<boxes.size();++i){
+            const auto& box=boxes[i];
+            const int range=std::max({box.r1-box.r0,box.g1-box.g0,box.b1-box.b0});
+            if(range<=0||box.pop<2)continue;
+            if(range>bestRange||(range==bestRange&&box.pop>bestPop)){bestRange=range;bestPop=box.pop;split=i;}
+        }
+        if(split==boxes.size())break;
+        Box box=boxes[split];
+        const int dr=box.r1-box.r0,dg=box.g1-box.g0,db=box.b1-box.b0;
+        const int axis=dr>=dg&&dr>=db?0:dg>=db?1:2;
+        std::array<std::uint32_t,32> along{};
+        for(int r=box.r0;r<=box.r1;++r)for(int g=box.g0;g<=box.g1;++g)for(int b=box.b0;b<=box.b1;++b){
+            const unsigned i=unsigned((r<<10)|(g<<5)|b);if(!n[i])continue;
+            along[unsigned(axis==0?r:axis==1?g:b)]+=n[i];
+        }
+        const int lo=axis==0?box.r0:axis==1?box.g0:box.b0,hi=axis==0?box.r1:axis==1?box.g1:box.b1;
+        std::uint32_t run=0;int mid=lo;
+        for(int k=lo;k<hi;++k){run+=along[unsigned(k)];if(run*2>=box.pop){mid=k;break;}}
+        Box left=box,right=box;
+        if(axis==0){left.r1=mid;right.r0=mid+1;}else if(axis==1){left.g1=mid;right.g0=mid+1;}else{left.b1=mid;right.b0=mid+1;}
+        left=shrink(left);right=shrink(right);
+        if(!left.pop||!right.pop)break;
+        boxes[split]=left;boxes.push_back(right);
+    }
+    palette.count=first;
+    for(const auto& box:boxes){
+        if(palette.count>=first+maxColors)break;
+        std::uint64_t r=0,g=0,b=0,pop=0;
+        for(int br=box.r0;br<=box.r1;++br)for(int bg=box.g0;bg<=box.g1;++bg)for(int bb=box.b0;bb<=box.b1;++bb){
+            const unsigned i=unsigned((br<<10)|(bg<<5)|bb);r+=sr[i];g+=sg[i];b+=sb[i];pop+=n[i];
+        }
+        if(!pop)continue;
+        palette.colors[palette.count]={std::uint8_t((r+pop/2)/pop),std::uint8_t((g+pop/2)/pop),std::uint8_t((b+pop/2)/pop)};
+        ++palette.count;
+    }
+    if(palette.count<=first)palette.count=first+1;
+    return palette;
 }
 }
 
@@ -163,18 +270,17 @@ void encodeGif(const std::filesystem::path& destination, const GifAnimation& ani
     {
         std::ofstream out(temporary.path,std::ios::binary|std::ios::trunc);
         if (!out) throw std::runtime_error("Cannot open GIF export");
-        writeText(out,"GIF89a",6);writeWord(out,width);writeWord(out,height);writeByte(out,0xF7);writeByte(out,0);writeByte(out,0);
-        // Index 0 is transparent. Indices 1..216 form an RGB 6x6x6 cube.
-        writeByte(out,0);writeByte(out,0);writeByte(out,0);
-        for (unsigned r=0;r<6;++r) for (unsigned g=0;g<6;++g) for (unsigned b=0;b<6;++b) {writeByte(out,r*51);writeByte(out,g*51);writeByte(out,b*51);}
-        for (unsigned i=217;i<256;++i) {writeByte(out,0);writeByte(out,0);writeByte(out,0);}
+        writeText(out,"GIF89a",6);writeWord(out,width);writeWord(out,height);writeByte(out,0x70);writeByte(out,0);writeByte(out,0);
         // NETSCAPE loop count 0 = loop forever.
         writeByte(out,0x21);writeByte(out,0xff);writeByte(out,11);writeText(out,"NETSCAPE2.0",11);writeByte(out,3);writeByte(out,1);writeWord(out,0);writeByte(out,0);
         for (const auto& frame:animation.frames) {
             detail::cancelled(cancelled);
-            // Disposal 2 clears the previous full frame to transparent index 0.
-            writeByte(out,0x21);writeByte(out,0xf9);writeByte(out,4);writeByte(out,0x09);writeWord(out,frame.delayCentiseconds);writeByte(out,0);writeByte(out,0);
-            writeByte(out,0x2c);writeWord(out,0);writeWord(out,0);writeWord(out,width);writeWord(out,height);writeByte(out,0);writeByte(out,8);
+            const auto palette=makePalette(frame.image,cancelled);
+            // Disposal 2 clears the previous full frame. Index 0 is transparent when used.
+            writeByte(out,0x21);writeByte(out,0xf9);writeByte(out,4);writeByte(out,palette.transparent?0x09:0x08);writeWord(out,frame.delayCentiseconds);writeByte(out,0);writeByte(out,0);
+            writeByte(out,0x2c);writeWord(out,0);writeWord(out,0);writeWord(out,width);writeWord(out,height);writeByte(out,0x87);
+            for(unsigned i=0;i<256;++i){writeByte(out,palette.colors[i][0]);writeByte(out,palette.colors[i][1]);writeByte(out,palette.colors[i][2]);}
+            writeByte(out,8);
             SubBlocks blocks{out};
             // Literal-only LZW keeps encoding bounded. Periodic clear codes keep
             // the dictionary below 512 entries, so all codes stay nine bits wide.
@@ -185,17 +291,15 @@ void encodeGif(const std::filesystem::path& destination, const GifAnimation& ani
                 for (unsigned x=0;x<width;++x) {
                     const auto* p=frame.image.pixels.data()+std::size_t(y)*frame.image.stride+std::size_t(x)*4;
                     unsigned index=0;
-                    if (p[3]>=128) {
-                        auto q=[&](int c){ const unsigned straight=std::min(255U,(unsigned(p[c])*255U+p[3]/2)/p[3]);return (straight*5+127)/255; };
-                        index=1+q(0)*36+q(1)*6+q(2);
-                    }
+                    if(p[3]>=128)index=nearestIndex(palette,straight(p,0),straight(p,1),straight(p,2));
+                    else if(!palette.transparent)index=nearestIndex(palette,0,0,0);
                     if (literals == 200) { blocks.code(256); literals=0; }
                     blocks.code(index); ++literals;
                 }
             }
             blocks.code(257);blocks.finish();
         }
-        writeByte(out,0x3b);out.flush();if (!out) throw std::runtime_error("Failed writing GIF export");
+        writeByte(out,0x3b);if (!out) throw std::runtime_error("Failed writing GIF export");
     }
     temporary.replace(destination,cancelled);
 }

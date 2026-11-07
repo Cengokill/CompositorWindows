@@ -13,8 +13,9 @@ struct GifAnimation {
     std::vector<GifFrame> frames;
 };
 GifAnimation decodeGif(const std::filesystem::path&, const ImportOptions& = {});
-// Quantizes to a fixed 216-color palette and one transparent entry. Every frame
-// is written in full, with disposal-to-background. An interrupted operation
-// leaves an existing destination untouched.
+// Quantizes each frame to at most 256 colors, keeping an exact palette when the
+// frame has that many unique opaque colors. Fully transparent pixels stay binary.
+// Every frame is written in full, with disposal-to-background. An interrupted
+// operation leaves an existing destination untouched.
 void encodeGif(const std::filesystem::path&, const GifAnimation&, const std::function<bool()>& cancelled = {});
 }

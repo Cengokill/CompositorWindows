@@ -45,6 +45,19 @@ int main(int argc,char** argv) {
         std::ofstream invalid(bad,std::ios::binary);invalid<<"GIF89a";invalid.close();rejected=false;
         try { decodeGif(bad); } catch (const std::exception&) { rejected=true; }
         require(rejected,"Truncated GIF accepted");
+        GifAnimation skin{{{frame(200,120,80,0),7}}};
+        const auto skinPath=std::filesystem::path(temp.path().toStdWString())/L"skin.gif";
+        encodeGif(skinPath,skin);
+        auto kept=decodeGif(skinPath);
+        require(kept.frames.size()==1&&kept.frames[0].image.pixels==skin.frames[0].image.pixels,"GIF export quantized colors that fit in the palette");
+        RgbaImage many{16,16,64,std::vector<std::uint8_t>(1024)};
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<16;++x){
+            auto* p=many.pixels.data()+y*many.stride+x*4;p[0]=std::uint8_t(x*16);p[1]=std::uint8_t(y*16);p[2]=std::uint8_t(x+y);p[3]=255;
+        }
+        const auto densePath=std::filesystem::path(temp.path().toStdWString())/L"dense.gif";
+        encodeGif(densePath,{{{many,10}}});
+        auto dense=decodeGif(densePath);
+        require(dense.frames.size()==1&&dense.frames[0].image.pixels==many.pixels,"GIF export lost a 256-color frame");
         // Generated with Pillow from three 3x2 RGBA frames; the second frame
         // occupies only one pixel and uses restore-previous disposal.
         const unsigned char fixture[]{71,73,70,56,57,97,3,0,2,0,129,0,0,255,0,0,0,0,0,0,0,0,0,0,0,33,249,4,4,5,0,0,0,44,0,0,0,0,3,0,2,0,0,8,6,0,1,8,28,24,16,0,33,249,4,13,8,0,2,0,44,1,0,0,0,1,0,1,0,129,255,0,0,0,255,0,0,0,0,0,0,0,8,4,0,3,4,4,0,33,249,4,5,12,0,2,0,44,0,0,0,0,2,0,2,0,129,255,0,0,0,0,255,0,0,0,0,0,0,8,7,0,5,0,8,32,32,32,0,59};
