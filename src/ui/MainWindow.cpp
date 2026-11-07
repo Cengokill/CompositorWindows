@@ -82,7 +82,11 @@ private:
     void updateLayout() {
         if (!palette_ || buttons_.empty() || viewport()->height() <= 0) return;
         const int spacing = grid_->verticalSpacing();
-        const int oneColumnHeight = 42 + int(buttons_.size()) * (36 + spacing);
+        const auto effectiveSize = [](QWidget* widget) {
+            return widget->sizeHint().expandedTo(widget->minimumSize()).boundedTo(widget->maximumSize());
+        };
+        int oneColumnHeight = effectiveSize(palette_).height() + int(buttons_.size()) * spacing;
+        for (auto* button : buttons_) oneColumnHeight += effectiveSize(button).height();
         auto apply=[&](int columns){
             if (columns != columns_) {
                 columns_ = columns;
@@ -91,8 +95,9 @@ private:
                 grid_->addWidget(palette_, (int(buttons_.size()) + columns - 1) / columns, 0, 1, columns, Qt::AlignHCenter);
                 bar_->setFixedWidth(columns == 1 ? 56 : 90);
             }
-            const int toolRows = (int(buttons_.size()) + columns - 1) / columns;
-            contents_->setFixedSize(columns == 1 ? 40 : 74, toolRows * 36 + 42 + toolRows * spacing);
+            grid_->invalidate();
+            const QSize required = grid_->minimumSize();
+            contents_->setFixedSize(qMax(columns == 1 ? 40 : 74, required.width()), required.height());
         };
         apply(viewport()->height() > oneColumnHeight ? 1 : 2);
         if (columns_ == 1 && contents_->height() > viewport()->height()) apply(2);

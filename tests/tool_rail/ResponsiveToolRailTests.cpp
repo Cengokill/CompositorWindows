@@ -18,6 +18,16 @@ QToolButton* tool(MainWindow& window,const char* id){
         if(button->defaultAction()&&button->defaultAction()->property("commandId")==id)return button;
     throw std::runtime_error("Tool button missing");
 }
+void paletteFullyVisible(MainWindow& window, QScrollArea* rail){
+    auto* palette=window.findChild<QWidget*>("paletteSwatches");
+    auto* foreground=tool(window,"palette.foreground");
+    require(palette&&foreground,"Palette controls missing");
+    require(QTest::qWaitFor([&]{
+        rail->verticalScrollBar()->setValue(rail->verticalScrollBar()->maximum());
+        return palette->visibleRegion().contains(palette->rect()) &&
+               foreground->visibleRegion().contains(foreground->rect());
+    },std::chrono::seconds(3)),"Palette or foreground swatch is clipped");
+}
 void waitWidth(QToolBar* bar,int width){
     require(QTest::qWaitFor([=]{return bar->width()==width;},std::chrono::seconds(3)),"Rail did not change columns");
 }
@@ -37,6 +47,7 @@ int main(int argc,char** argv){
         auto* rail=window.findChild<QScrollArea*>("responsiveToolRail");
         require(bar&&rail,"Rail missing");
         window.resize(1500,1100);window.show();waitWidth(bar,56);
+        paletteFullyVisible(window,rail);
         auto* move=tool(window,"tool.move");auto* marquee=tool(window,"tool.marquee");
         auto* brush=tool(window,"tool.brush");
         require(move->y()<marquee->y(),"Tall rail is not one column");
@@ -44,6 +55,7 @@ int main(int argc,char** argv){
         require(brush->defaultAction()->isChecked(),"Brush not selected");
         window.resize(1500,600);waitWidth(bar,90);
         require(move->y()==marquee->y()&&move->x()<marquee->x(),"Compact rail order incorrect");
+        paletteFullyVisible(window,rail);
         require(brush->defaultAction()->isChecked(),"Selection lost on resize");
         require(project.history.undoCount()==0,"Resize changed history");
         window.resize(1500,1100);waitWidth(bar,56);
@@ -51,8 +63,7 @@ int main(int argc,char** argv){
         rail->setFixedHeight(120);waitWidth(bar,90);
         require(QTest::qWaitFor([&]{return rail->verticalScrollBar()->maximum()>0;},std::chrono::seconds(3)),"Compact rail does not scroll");
         rail->verticalScrollBar()->setValue(rail->verticalScrollBar()->maximum());
-        auto* palette=window.findChild<QWidget*>("paletteSwatches");
-        require(palette&&palette->isVisible()&&!palette->visibleRegion().isEmpty(),"Palette unreachable when scrolled");
+        paletteFullyVisible(window,rail);
         std::cout<<"PASS responsive tool rail\n";return 0;
     }catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}
 }
