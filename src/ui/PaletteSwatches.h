@@ -14,5 +14,7 @@ public:
     explicit PaletteSwatches(const std::array<QAction*,4>& actions,QWidget* parent=nullptr);
     void setColors(QColor foreground,QColor background);
     QWidget* swatch(bool background)const;
+protected:
+    void showEvent(QShowEvent*)override;
 };
 }

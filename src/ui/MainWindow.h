@@ -334,7 +334,7 @@ private:
     void cancelTemporaryHand();
     void setupBrushControls();
     void openPalette(bool background=false);
-    void setupPaletteControls(QToolBar*);
+    void setupPaletteControls(QWidget*);
     void refreshPaletteControls();
     void openEditPanelColor(effects_tools::PaletteColor,const QString&,std::function<void(effects_tools::PaletteColor)>);
     void closeEditPanelColor(bool commit);
