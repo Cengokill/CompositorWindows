@@ -864,7 +864,7 @@ void MainWindow::exportImage(){
                 const double ratio=std::min({1.,520./document.width,320./document.height,std::sqrt(maxPixels/(double(document.width)*document.height))});
                 const int previewWidth=std::max(1,int(document.width*ratio)),previewHeight=std::max(1,int(document.height*ratio));
                 out.frames.reserve(frames.frames.size());
-                for(const auto& frame:frames.frames){if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();const auto& image=frame.image;QImage view(image.pixels.data(),int(image.width),int(image.height),qsizetype(image.stride),QImage::Format_RGBA8888_Premultiplied);auto scaledFrame=view.scaled(previewWidth,previewHeight,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);if(scaledFrame.isNull())throw std::runtime_error("Cannot create animated GIF preview");out.frames.emplace_back(std::move(scaledFrame),int(frame.delayCentiseconds)*10);}
+                for(const auto& frame:frames.frames){if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();const auto& image=frame.image;QImage view(image.pixels.data(),int(image.width),int(image.height),qsizetype(image.stride),QImage::Format_RGBA8888_Premultiplied);auto scaledFrame=view.scaled(previewWidth,previewHeight,Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_ARGB32_Premultiplied);if(scaledFrame.isNull())throw std::runtime_error("Cannot create animated GIF preview");out.frames.emplace_back(scaledFrame.copy(),int(frame.delayCentiseconds)*10);}
                 imaging::encodeGif(nativePath(path),frames,options.cancelled);
                 out.result.encodedBytes=std::filesystem::file_size(nativePath(path));percent->store(100);
             }

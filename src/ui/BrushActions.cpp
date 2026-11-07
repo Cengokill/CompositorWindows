@@ -110,6 +110,8 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::opt
     try{
         if(!brushGpu_){auto shader=QDir(QApplication::applicationDirPath()).filePath("shaders/BrushCoverage.hlsl");if(!QFileInfo::exists(shader))shader=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/shaders/BrushCoverage.hlsl";try{brushGpu_=std::make_shared<graphics::D3D11BrushCoverage>(std::filesystem::path(shader.toStdWString()),warp_);}catch(const std::exception&e){statusBar()->showMessage(QString("Using software brush: ")+e.what());}}
         auto settings=brushSettings_;settings.color={uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue())};settings.opacity*=foreground_.alphaF();settings.erase=tool_==Tool::Eraser&&!strokeMask_;if(strokeMask_){auto v=uint8_t(maskPaintWhite_?255:0);settings.color={v,v,v};settings.opacity=brushSettings_.opacity;}
+        if(auto* size=findChild<QToolButton*>(pressureSizeControl))settings.pressureSize=size->isChecked();
+        if(auto* opacity=findChild<QToolButton*>(pressureOpacityControl))settings.pressureOpacity=opacity->isChecked();
         if(!pressure){settings.pressureSize=false;settings.pressureOpacity=false;}
         const double strength=pressure.value_or(1);
         uint64_t remaining=100000000;
@@ -119,7 +121,8 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::opt
         }
         if(!strokeMask_&&l->mask){uint64_t maskBudget=100000000;for(const auto&layer:p->document->layers)if(layer.id!=l->id&&layer.mask&&layer.mask->raster)maskBudget-=uint64_t(layer.mask->raster->width)*layer.mask->raster->height;remaining=std::min(remaining,maskBudget);}
         p->brushLayerId=l->id;
-        stroke_=std::make_unique<graphics::GrowingBrushSession>(*l,settings,p->document->width,p->document->height,brushGpu_,p->document->selection?p->document->selection->coverage:nullptr,strokeMask_,remaining);
+        const auto accelerator=(settings.pressureSize||settings.pressureOpacity||l->animation)?std::shared_ptr<graphics::D3D11BrushCoverage>{}:brushGpu_;
+        stroke_=std::make_unique<graphics::GrowingBrushSession>(*l,settings,p->document->width,p->document->height,accelerator,p->document->selection?p->document->selection->coverage:nullptr,strokeMask_,remaining);
         if(p->canvas)p->canvas->setNavigatorDeferred(true);
         if(modifiers.testFlag(Qt::ShiftModifier)&&lastBrushPoint_&&lastBrushLayer_==l->id&&lastBrushMask_==strokeMask_){
             stroke_->begin(*lastBrushPoint_,strength);

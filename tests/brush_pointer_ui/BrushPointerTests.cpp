@@ -36,7 +36,7 @@ int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir prefere
             l.animation=GifAnimation{{{l.raster,1000},{l.raster,1000}},0};d.layers.push_back(l);
             MainWindow window(warp);auto& project=window.addProject(d);auto& canvas=*project.canvas;key(window,Qt::Key_B);
             require(bool(canvas.viewportProvider),"Missing viewport provider");
-            auto checkOrigin=[&]{auto frame=canvas.viewportProvider(0,0,360,360,1);require(frame.raster&&frame.raster->pixel(0,0)==Pixel{50,60,70,255},"Brush preview painted origin");};
+            auto checkOrigin=[&]{auto frame=canvas.viewportProvider(0,0,360,360,1);require(bool(frame.raster)&&frame.raster->pixel(0,0)==Pixel{50,60,70,255},"Brush preview painted origin");};
             checkOrigin();canvas.pointerDown({180,180},{});checkOrigin();
             for(int i=1;i<=12;++i){canvas.pointerMove({180.+i,180.+i},{});checkOrigin();}
             canvas.pointerUp({192,192},{});checkOrigin();
@@ -57,12 +57,12 @@ int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir prefere
         brushTip(window)[0]->setValue(16);
         auto& canvas=*project.canvas;
         const QPointF point(24.5,24.5);
-        canvas.pointerDown({point,.25},{});
+        canvas.pointerDown({point,0.25},{});
         require(project.brushPreview&&!size->isEnabled()&&!opacity->isEnabled(),"Pressure controls remained editable during the stroke");
         canvas.pointerCancel();
         require(!project.brushPreview&&project.document==original&&project.history.undoCount()==0,"Cancelling pen stroke changed the project");
-        canvas.pointerDown({point,.25},{});
-        canvas.pointerUp({point,.25},{});
+        canvas.pointerDown({point,0.25},{});
+        canvas.pointerUp({point,0.25},{});
         require(project.history.undoCount()==1&&!project.brushPreview,"Pen stroke did not create exactly one undo entry");
         const auto painted=project.document;
         const auto raster=painted->layers[0].raster;

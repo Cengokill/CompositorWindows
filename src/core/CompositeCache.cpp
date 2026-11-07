@@ -21,7 +21,9 @@ Bounds bounds(const Transform& transform,double x,double y,double width,double h
 std::vector<Bounds> paintedBounds(const Document& doc,double units=1,const LayerRenderPreview* preview=nullptr){
     std::unordered_map<std::string,const Layer*> byId;for(const auto& layer:doc.layers)byId.emplace(layer.id,&layer);
     std::vector<Bounds> result;
-    for(const auto& layer:doc.layers){if(!layer.raster||!layer.visible||layer.opacity==0)continue;bool visible=true;auto parent=layer.parentId;while(!parent.empty()){auto ancestor=byId.at(parent);if(!ancestor->visible){visible=false;break;}parent=ancestor->parentId;}if(visible){auto source=preview&&preview->layer.id==layer.id&&preview->imageSource?preview->imageSource:graphics::samplingSource(layer.raster);const int level=layer.transform.sampling==Transform::Sampling::Nearest?0:graphics::DownsampleCache::levelFor(layer.transform.width/(units*source->width));auto grid=graphics::samplingGrid(*source,level);result.push_back(bounds(layer.transform,double(grid.x)/source->width,double(grid.y)/source->height,double(grid.width*grid.step)/source->width,double(grid.height*grid.step)/source->height));}}
+    for(const auto& layer:doc.layers){
+        const Layer& visual=preview&&preview->layer.id==layer.id?preview->layer:layer;
+        if(!visual.raster||!visual.visible||visual.opacity==0)continue;bool visible=true;auto parent=visual.parentId;while(!parent.empty()){auto ancestor=byId.at(parent);if(!ancestor->visible){visible=false;break;}parent=ancestor->parentId;}if(visible){auto source=preview&&preview->layer.id==layer.id&&preview->imageSource?preview->imageSource:graphics::samplingSource(visual.raster);const int level=visual.transform.sampling==Transform::Sampling::Nearest?0:graphics::DownsampleCache::levelFor(visual.transform.width/(units*source->width));auto grid=graphics::samplingGrid(*source,level);result.push_back(bounds(visual.transform,double(grid.x)/source->width,double(grid.y)/source->height,double(grid.width*grid.step)/source->width,double(grid.height*grid.step)/source->height));}}
     return result;
 }
 bool touches(const std::vector<Bounds>& painted,double x,double y,double width,double height){return std::any_of(painted.begin(),painted.end(),[&](Bounds b){return b.right>x&&b.bottom>y&&b.left<x+width&&b.top<y+height;});}
@@ -213,7 +215,7 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
 CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview,const std::function<bool()>& cancelled){
     lastViewportComposedTiles_=0;
     Document doc=input;
-    if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");*found=preview->layer;}
+    if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");}
     validateDocument(doc);
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(width)||!std::isfinite(height)||!std::isfinite(x+width)||!std::isfinite(y+height)||width<0||height<0||
        !std::isfinite(requestedUnits)||requestedUnits<1./32||requestedUnits>30000||maxVisibleTiles<1||maxVisibleTiles>16384||maxRetainedTiles<maxVisibleTiles||maxRetainedTiles>16384)
