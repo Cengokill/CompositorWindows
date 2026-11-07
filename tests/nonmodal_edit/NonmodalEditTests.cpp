@@ -28,7 +28,7 @@
 using namespace compositor;
 namespace {
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
-template<class Fn>void wait(Fn predicate,const char* message){QElapsedTimer elapsed;elapsed.start();while(!predicate()){if(elapsed.elapsed()>6000)throw std::runtime_error(message);QApplication::processEvents(QEventLoop::AllEvents,20);QTest::qWait(1);}}
+template<class Fn>void wait(Fn predicate,const char* message,int ms=6000){QElapsedTimer elapsed;elapsed.start();while(!predicate()){if(elapsed.elapsed()>ms)throw std::runtime_error(message);QApplication::processEvents(QEventLoop::AllEvents,20);QTest::qWait(1);}}
 QAction* action(MainWindow& window,const char* id){for(auto* value:window.findChildren<QAction*>())if(value->property("commandId")==id)return value;throw std::runtime_error(std::string("missing action ")+id);}
 void trigger(MainWindow& window,const char* id){auto* value=action(window,id);require(value->isEnabled(),"requested action enabled");value->trigger();}
 template<class T>T* control(QObject& owner,const char* name){for(auto* object:owner.findChildren<QObject*>())if(object->objectName()==name)if(auto* result=dynamic_cast<T*>(object))return result;throw std::runtime_error("named panel control");}
@@ -197,24 +197,37 @@ void rgb_split_canvas_cancel_layers(){
             beforePng->at(16,12)[2]==30007&&beforePng->at(16,12)[3]==65535,
             "16-bit PNG export preserves sub-byte samples after Split and reopen");
 
+    Document photo;photo.id=newId();photo.width=photo.height=5000;
+    Layer sourceLayer;sourceLayer.id=newId();sourceLayer.name="Source";
+    sourceLayer.transform={0,0,5000,5000};sourceLayer.raster=Raster::filled(5000,5000,{128,64,191,255});
+    photo.layers.push_back(sourceLayer);
+    auto planes=filters::splitChannels(*sourceLayer.raster,{});
+    for(std::size_t i=0;i<planes.size();++i){
+        Layer channel;channel.id=newId();channel.name="Channel";channel.visible=false;
+        channel.transform=sourceLayer.transform;channel.raster=planes[i];photo.layers.push_back(std::move(channel));
+    }
+    validateDocument(photo);
+
     auto crowded=fixture();
     auto source=makeDeep(64,48,DeepImage::Format::Unorm16);
     crowded.layers[0].deep=source;crowded.layers[0].raster=rasterFromDeep(*source);
     const auto large=Raster::filled(5000,5000,{}),almost=Raster::filled(5000,4999,{});
-    for(int i=0;i<4;++i){Layer layer;layer.id=newId();layer.name="Hidden";layer.visible=false;
-        layer.transform={0,0,1,1};layer.raster=i==3?almost:large;crowded.layers.insert(crowded.layers.begin(),std::move(layer));}
+    for(int i=0;i<20;++i){Layer layer;layer.id=newId();layer.name="Hidden";layer.visible=false;
+        layer.transform={0,0,1,1};layer.raster=i==19?almost:large;crowded.layers.insert(crowded.layers.begin(),std::move(layer));}
     Fixture full(std::move(crowded));
     panel(full.window,"filter.rgb_split","RGB Split",[&](QDialog& p){
-        ready(p);bool confirmed=false,warned=false;
+        bool confirmed=false,warned=false;
         QTimer prompts;QObject::connect(&prompts,&QTimer::timeout,&full.window,[&]{
             if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){
                 if(box->windowTitle()=="Create 8-Bit Channels"){confirmed=true;box->button(QMessageBox::Ok)->click();}
                 else if(box->windowTitle()=="Cannot Split to Layers"){
-                    warned=box->text().contains("100-megapixel");box->button(QMessageBox::Ok)->click();
+                    warned=box->text().contains("500-megapixel");box->button(QMessageBox::Ok)->click();
                 }
             }
         });
-        prompts.start(5);control<QPushButton>(p,"rgbSplitToLayers")->click();prompts.stop();
+        prompts.start(5);control<QPushButton>(p,"rgbSplitToLayers")->click();
+        wait([&]{return warned||!p.isVisible();},"Split budget warning did not appear after 16-bit confirmation");
+        prompts.stop();
         require(confirmed&&warned&&p.isVisible(),"Split explains when the project pixel limit prevents channel creation");
         full.unchanged();
     });
