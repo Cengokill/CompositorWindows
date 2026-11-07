@@ -44,6 +44,9 @@ void MainWindow::setupDrawingActions(){
     auto*cancel=bar->addAction("Cancel Gradient");cancel->setObjectName("cancelGradient");bindCommand(cancel,"Drawing Options","Cancel Gradient",[this]{cancelGradient();});commands_->releaseShortcut(cancel);auto*apply=bar->addAction("Apply Gradient");apply->setObjectName("applyGradient");bindCommand(apply,"Drawing Options","Apply Gradient",[this]{applyGradient();});commands_->releaseShortcut(apply);
     auto*shape=bar->addAction("Shape (U)");bindCommand(shape,"Tools","Shape (U)",[this]{selectTool(Tool::Shape);refresh(false);});commands_->releaseShortcut(shape);auto*kind=new QComboBox;kind->setObjectName("shapeKind");kind->addItems({"Rectangle","Ellipse","Line"});bar->addWidget(kind);connect(kind,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;cancelShape();shapeStyle_.kind=editing::ShapeKind(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
     auto*radius=new ui::PropertyNumber;radius->releaseFocus=[this]{if(canvas())canvas()->setFocus();};radius->setObjectName("shapeCornerRadius");radius->setRange(0,5000);radius->setDecimals(0);radius->setAccessibleName("Corner radius");radius->setSuffix(" px radius");bar->addWidget(radius);connect(radius,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.cornerRadius=v;applyShapeStyleToSelection();});connect(radius,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});
+    auto* lineWidth=new ui::PropertyNumber;lineWidth->releaseFocus=[this]{if(canvas())canvas()->setFocus();};lineWidth->setObjectName("shapeLineWidth");lineWidth->setRange(.1,500);lineWidth->setDecimals(1);lineWidth->setAccessibleName("Line width");lineWidth->setSuffix(" px");bar->addWidget(lineWidth);connect(lineWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.lineWidth=v;applyShapeStyleToSelection();});connect(lineWidth,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});
+    auto* lineStyle=new QComboBox;lineStyle->setObjectName("shapeLineStyle");lineStyle->setAccessibleName("Line style");lineStyle->addItems({"Solid","Dashed","Long Dash","Dash Dot","Long Dash Dot","Dotted"});bar->addWidget(lineStyle);connect(lineStyle,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineStyle=editing::ShapeLineStyle(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
+    auto* lineCap=new QComboBox;lineCap->setObjectName("shapeLineCap");lineCap->setAccessibleName("Line cap");lineCap->addItems({"Round","Square"});bar->addWidget(lineCap);connect(lineCap,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineCap=editing::ShapeLineCap(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
     auto* smoothing=new QCheckBox("Smooth Corners");
     smoothing->setObjectName("shapeSmoothing");
     smoothing->setToolTip("Smooth the transitions into rounded corners. Requires a corner radius above zero.");
@@ -64,6 +67,7 @@ void MainWindow::setupDrawingActions(){
         edit("Shape Style",[&](Document&){
             auto style=shapeStyle_;
             const auto stored=editing::decodeShapeStyle(active()->shapeJson);
+            if(style.kind==editing::ShapeKind::Line&&stored.kind==editing::ShapeKind::Line){style.startX=stored.startX;style.startY=stored.startY;style.endX=stored.endX;style.endY=stored.endY;}
             if(style.kind!=editing::ShapeKind::Rectangle)style.smoothing=false;
             else if(stored.kind==editing::ShapeKind::Rectangle)style.smoothing=stored.smoothing;
             if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;
@@ -114,9 +118,16 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     // Snapping runs before dragBox so Shift's square and Alt's centered constraints still hold on the final geometry.
     const auto corner=snapGesturePoint(point,modifiers);
     shapeDraftRect_=editing::dragBox(press_,corner,modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier));
+    if(shapeDraftStyle_.kind==editing::ShapeKind::Line){shapeDraftStyle_.startX=corner.x<press_.x?1:0;shapeDraftStyle_.endX=1-shapeDraftStyle_.startX;shapeDraftStyle_.startY=corner.y<press_.y?1:0;shapeDraftStyle_.endY=1-shapeDraftStyle_.startY;}
     if(!finish){refresh(false,false);return true;}
-    const auto rect=*shapeDraftRect_;auto style=shapeDraftStyle_;cancelShape();
-    if(!canEditLayers()||rect.width<1||rect.height<1){refresh(false,false);return true;}
+    auto rect=*shapeDraftRect_;auto style=shapeDraftStyle_;cancelShape();
+    if(!canEditLayers()||(style.kind==editing::ShapeKind::Line?(rect.width<1&&rect.height<1):(rect.width<1||rect.height<1))){refresh(false,false);return true;}
+    if(style.kind==editing::ShapeKind::Line){
+        const double padding=std::ceil(style.lineWidth/std::sqrt(2.)+1);
+        const double sx=rect.x+style.startX*rect.width,sy=rect.y+style.startY*rect.height,ex=rect.x+style.endX*rect.width,ey=rect.y+style.endY*rect.height;
+        rect={rect.x-padding,rect.y-padding,std::ceil(rect.width+2*padding)+1,std::ceil(rect.height+2*padding)+1};
+        style.startX=(sx-rect.x)/(rect.width-1);style.startY=(sy-rect.y)/(rect.height-1);style.endX=(ex-rect.x)/(rect.width-1);style.endY=(ey-rect.y)/(rect.height-1);
+    }
     style.red=foreground_.redF();style.green=foreground_.greenF();style.blue=foreground_.blueF();
     auto layer=editing::createShapeLayer(rect,style,editing::nextShapeName(*p->document,style.kind));
     if(!layer){refresh(false,false);return true;}
@@ -131,7 +142,7 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     auto previousSelected=p->selected;const bool previousMask=p->maskSelected;finishOpacityEdit();finishShapeStyleEdit();
     // Keep the tool preferences and remember the actual committed style separately.
     shapeStyleLayer_=activeId;shapeStyleSynced_=committedStyle;
-    try{edit(style.kind==editing::ShapeKind::Rectangle?"Rectangle":"Ellipse",[&](Document& document){document=std::move(next);p->active=std::move(activeId);p->selected=std::move(selected);p->maskSelected=false;});}
+    try{edit(style.kind==editing::ShapeKind::Rectangle?"Rectangle":style.kind==editing::ShapeKind::Ellipse?"Ellipse":"Line",[&](Document& document){document=std::move(next);p->active=std::move(activeId);p->selected=std::move(selected);p->maskSelected=false;});}
     catch(...){p->selected=std::move(previousSelected);p->maskSelected=previousMask;throw;}
     return true;
 }
@@ -152,6 +163,10 @@ void MainWindow::refreshShapeControls(){
     const bool controls=tool_==Tool::Shape||shapeLayer;
     if(auto* kind=findChild<QComboBox*>("shapeKind")){const QSignalBlocker block(kind);kind->setCurrentIndex(int(shapeStyle_.kind));kind->setVisible(controls);}
     const bool rectangleControls=controls&&shapeStyle_.kind==editing::ShapeKind::Rectangle;
+    const bool lineControls=controls&&shapeStyle_.kind==editing::ShapeKind::Line;
+    if(auto* width=findChild<QDoubleSpinBox*>("shapeLineWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.lineWidth);width->setVisible(lineControls);}
+    if(auto* style=findChild<QComboBox*>("shapeLineStyle")){const QSignalBlocker block(style);style->setCurrentIndex(int(shapeStyle_.lineStyle));style->setVisible(lineControls);}
+    if(auto* cap=findChild<QComboBox*>("shapeLineCap")){const QSignalBlocker block(cap);cap->setCurrentIndex(int(shapeStyle_.lineCap));cap->setVisible(lineControls);}
     if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);radius->setVisible(rectangleControls);}
     if(auto* smoothing=findChild<QCheckBox*>("shapeSmoothing")){
         const QSignalBlocker block(smoothing);
@@ -164,7 +179,7 @@ void MainWindow::refreshShapeControls(){
     if(auto* width=findChild<QDoubleSpinBox*>("shapeStrokeWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.strokeWidth);width->setVisible(strokable&&shapeStyle_.strokeEnabled);}
     if(auto* color=findChild<QPushButton*>("shapeStrokeColor"))color->setVisible(strokable&&shapeStyle_.strokeEnabled);
     if(!canvas())return;std::optional<NativeCanvas::ShapeDraftOverlay> overlay;
-    if(tool_==Tool::Shape&&!shapeDraftId_.empty()&&shapeDraftRect_&&shapeDraftRect_->width>0&&shapeDraftRect_->height>0)
+    if(tool_==Tool::Shape&&!shapeDraftId_.empty()&&shapeDraftRect_&&(shapeDraftStyle_.kind==editing::ShapeKind::Line?(shapeDraftRect_->width>0||shapeDraftRect_->height>0):(shapeDraftRect_->width>0&&shapeDraftRect_->height>0)))
         overlay=NativeCanvas::ShapeDraftOverlay{*shapeDraftRect_,shapeDraftStyle_,{uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue()),255}};
     canvas()->setShapeDraft(std::move(overlay));
 }
@@ -174,6 +189,7 @@ void MainWindow::applyShapeStyleToSelection(std::optional<bool> smoothing){
     const auto stored=editing::decodeShapeStyle(active()->shapeJson);
     const bool smoothingOnly=smoothing.has_value()&&shapeStyle_.kind==stored.kind;
     auto style=smoothingOnly?stored:shapeStyle_;style.red=stored.red;style.green=stored.green;style.blue=stored.blue;
+    if(style.kind==editing::ShapeKind::Line&&stored.kind==editing::ShapeKind::Line){style.startX=stored.startX;style.startY=stored.startY;style.endX=stored.endX;style.endY=stored.endY;}
     if(style.kind!=editing::ShapeKind::Rectangle)style.smoothing=false;
     else if(stored.kind==editing::ShapeKind::Rectangle)style.smoothing=smoothing.value_or(stored.smoothing);
     if(style.kind==editing::ShapeKind::Line)style.strokeEnabled=false;
