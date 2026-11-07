@@ -102,11 +102,12 @@ private:
             const QSize required = grid_->minimumSize();
             const int contentWidth = qMax(columns == 1 ? 40 : 74, required.width());
             contents_->setFixedSize(contentWidth, required.height());
-            // The toolbar's horizontal padding and border need 16 logical pixels.
-            // When scrolling, reserve the scrollbar's width outside the content.
+            // Include the styled toolbar layout margins, not just its CSS padding.
+            const auto margins = bar_->layout()->contentsMargins();
             const int scrollbarWidth = required.height() > viewport()->height()
                 ? verticalScrollBar()->sizeHint().width() : 0;
-            const int railWidth = contentWidth + 16 + scrollbarWidth;
+            const int railWidth = contentWidth + margins.left() + margins.right()
+                + 2 * frameWidth() + scrollbarWidth;
             if (bar_->width() != railWidth) bar_->setFixedWidth(railWidth);
         };
         apply(viewport()->height() > oneColumnHeight ? 1 : 2);
