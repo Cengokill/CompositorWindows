@@ -95,6 +95,15 @@ void folder_arrow_and_visibility_are_independent(){
     QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,eyeRect.center());QApplication::processEvents();
     check(!layer(p,"folder").visible&&p.history.undoCount()==undo+1,"clicking the eye did not toggle visibility");
     check(item(w,"folder")->isExpanded(),"clicking the eye collapsed the folder");
+    view->setCurrentItem(item(w,"folder"),0);view->setFocus();
+    QTest::keyClick(view,Qt::Key_Left);QApplication::processEvents();
+    check(!item(w,"folder")->isExpanded()&&p.collapsedGroups.contains("folder"),"keyboard collapse did not update saved state");
+    QTest::keyClick(view,Qt::Key_Right);QApplication::processEvents();
+    check(item(w,"folder")->isExpanded()&&!p.collapsedGroups.contains("folder"),"keyboard expansion did not update saved state");
+    controller(w)->updateSelection();
+    check(item(w,"folder")->isExpanded()&&!p.collapsedGroups.contains("folder"),"refresh lost keyboard expansion");
+    controller(w)->rebuild();
+    check(item(w,"folder")->isExpanded()&&!p.collapsedGroups.contains("folder"),"rebuild lost keyboard expansion");
 }
 void visibility_swipe(){MainWindow w(true);auto&p=w.addProject(example());w.show();QApplication::processEvents();const auto before=p.document;const auto active=p.active;auto start=eyePoint(w,"c"),middle=eyePoint(w,"b"),last=eyePoint(w,"a");mouse(w,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);check(!layer(p,"c").visible&&p.history.undoCount()==0,"press must preview first eye in open transaction");mouse(w,QEvent::MouseMove,middle,Qt::NoButton,Qt::LeftButton);mouse(w,QEvent::MouseMove,last,Qt::NoButton,Qt::LeftButton);mouse(w,QEvent::MouseMove,middle,Qt::NoButton,Qt::LeftButton);mouse(w,QEvent::MouseButtonRelease,QPoint(-15,-15),Qt::LeftButton,Qt::NoButton);check(!layer(p,"a").visible&&!layer(p,"b").visible&&!layer(p,"c").visible,"swipe must assign same state without toggling revisited rows");check(p.history.undoCount()==1&&p.history.undoName()=="Hide Layer"&&p.active==active,"eye swipe history or selection changed");const auto undo=p.history.undo();check(undo&&undo->document==before,"eye swipe Undo did not restore exact document");}
 Document scrollExample(int count){

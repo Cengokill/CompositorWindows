@@ -164,7 +164,6 @@ LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(
     connect(tree_,&QTreeWidget::itemClicked,this,[this](QTreeWidgetItem* item,int col){if(!rebuilding_&&col==0&&item&&(!host_.canEdit||host_.canEdit())){auto s=host_.state();if(s.maskSelected)host_.select(s.selection,false);}});
     connect(tree_,&QTreeWidget::itemCollapsed,this,[this](QTreeWidgetItem* item){if(!rebuilding_){if(filtering()||(host_.canEdit&&!host_.canEdit())){updateSelection();return;}invoke([&]{host_.collapse(idOf(item),true);});}});
     connect(tree_,&QTreeWidget::itemExpanded,this,[this](QTreeWidgetItem* item){if(!rebuilding_){if(filtering()||(host_.canEdit&&!host_.canEdit())){updateSelection();return;}
-        if(QApplication::mouseButtons()==Qt::NoButton)return;
         invoke([&]{host_.collapse(idOf(item),false);});}});
     connect(tree_,&QTreeWidget::customContextMenuRequested,this,[this](QPoint p){if(host_.canEdit&&!host_.canEdit())return;invoke([&]{contextMenu(p);});});
     tree_->setMouseTracking(true);tree_->viewport()->setMouseTracking(true);tree_->viewport()->setCursor(Qt::ArrowCursor);qApp->installEventFilter(this);
