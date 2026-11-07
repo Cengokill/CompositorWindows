@@ -363,7 +363,7 @@ class FilterPanel final:public ui::EditPanelSession {
                     if(index==3){pixels[i]=pixels[i+1]=pixels[i+2]=value;pixels[i+3]=255;}
                     else{pixels[i]=pixels[i+1]=pixels[i+2]=value;pixels[i+3]=p.a;}
                 }
-                Layer layer=original_;layer.id=newId();layer.name=name;layer.visible=false;layer.raster=Raster::fromRgba(source.width,source.height,pixels.data(),std::size_t(source.width)*4);layer.deep.reset();layer.shapeJson.clear();layer.text.reset();
+                Layer layer=original_;layer.id=newId();layer.name=name;layer.visible=false;layer.raster=Raster::fromRgba(source.width,source.height,pixels.data(),std::size_t(source.width)*4);layer.animation.reset();layer.deep.reset();layer.shapeJson.clear();layer.text.reset();
                 return layer;
             };
             const auto at=found-next.layers.begin()+1;
