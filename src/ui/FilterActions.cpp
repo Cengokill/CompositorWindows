@@ -207,6 +207,43 @@ class FilterPanel final:public ui::EditPanelSession {
     static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     bool autoBalancePending()const{return balanceRunning_&&raw_&&raw_->whiteBalanceIsAuto();}
     void retire(){if(closed_&&!running_&&!balanceRunning_)deleteLater();}
+    void beginSplitToLayers(QPushButton* split){
+        if(closed_||committing_||splitLayers_||!split)return;
+        const auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
+        if(!current)return;
+        auto target=std::find_if(current->layers.begin(),current->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
+        if(target==current->layers.end()||!target->raster||target->raster!=original_.raster||
+           target->deep!=original_.deep||target->transform!=original_.transform){
+            status_.setText("The source layer changed. Reopen RGB Split to split its channels.");
+            return;
+        }
+        const auto pixelCount=[](const Raster& raster){return std::uint64_t(raster.width)*raster.height;};
+        auto pixels=4*pixelCount(*target->raster);
+        for(const auto& layer:current->layers)if(layer.raster)pixels+=pixelCount(*layer.raster);
+        if(pixels>maxDocumentImagePixels){
+            QMessageBox warning(QMessageBox::Warning,"Cannot Split to Layers",
+                QString("The four channel layers would exceed the project's combined %1-megapixel image limit. Reduce the image size or remove other image layers before trying again.")
+                    .arg(maxDocumentImagePixels/1'000'000),
+                QMessageBox::Ok,&dialog_);
+            warning.setProperty("studioChrome",true);warning.exec();
+            return;
+        }
+        splitLayers_=true;
+        ++version_;
+        rgbDragging_=false;
+        cancelled_->store(true);
+        debounce_.stop();
+        apply_->setEnabled(false);
+        split->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
+        completedPreview_.reset();
+        clearGuideOverlay();
+        status_.setText("Splitting channels…");
+        publishPreview();
+        start();
+    }
     void change(){
         if(closed_||committing_||splitLayers_)return;
         ++version_;
@@ -455,40 +492,12 @@ public:
                     QMessageBox confirmation(QMessageBox::Question,"Create 8-Bit Channels","Create 8-bit channel layers from this 16-bit source? The source keeps its 16-bit pixels.",QMessageBox::Ok|QMessageBox::Cancel,&dialog_);
                     confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
                     if(confirmation.exec()!=QMessageBox::Ok||closed_)return;
-                }
-                const auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
-                if(!current)return;
-                auto target=std::find_if(current->layers.begin(),current->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
-                if(target==current->layers.end()||!target->raster||target->raster!=original_.raster||
-                   target->deep!=original_.deep||target->transform!=original_.transform){
-                    status_.setText("The source layer changed. Reopen RGB Split to split its channels.");
+                    // The OK click that closed the 16-bit prompt can also dismiss a
+                    // nested warning. Continue after that dialog has fully left.
+                    QTimer::singleShot(0,&dialog_,[this,split]{beginSplitToLayers(split);});
                     return;
                 }
-                const auto pixelCount=[](const Raster& raster){return std::uint64_t(raster.width)*raster.height;};
-                auto pixels=4*pixelCount(*target->raster);
-                for(const auto& layer:current->layers)if(layer.raster)pixels+=pixelCount(*layer.raster);
-                if(pixels>maxDocumentImagePixels){
-                    QMessageBox warning(QMessageBox::Warning,"Cannot Split to Layers",
-                        "The four channel layers would exceed the project's combined 100-megapixel image limit. Reduce the image size or remove other image layers before trying again.",
-                        QMessageBox::Ok,&dialog_);
-                    warning.setProperty("studioChrome",true);warning.exec();
-                    return;
-                }
-                splitLayers_=true;
-                ++version_;
-                rgbDragging_=false;
-                cancelled_->store(true);
-                debounce_.stop();
-                apply_->setEnabled(false);
-                split->setEnabled(false);
-                for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
-                for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
-                for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
-                completedPreview_.reset();
-                clearGuideOverlay();
-                status_.setText("Splitting channels…");
-                publishPreview();
-                start();
+                beginSplitToLayers(split);
             });
             break;
         }

@@ -19,7 +19,7 @@ static std::atomic<uint64_t> materializations{0};
 uint64_t Raster::materializationCount(){return materializations.load();}
 void Raster::resetMaterializationCount(){materializations.store(0);}
 namespace {
-void sizeCheck(int w,int h){if(w<1||h<1||w>30000||h>30000||uint64_t(w)*uint64_t(h)>100000000)throw std::runtime_error("Raster dimensions exceed supported budget");}
+void sizeCheck(int w,int h){if(w<1||h<1||w>30000||h>30000||uint64_t(w)*uint64_t(h)>maxRasterPixels)throw std::runtime_error("Raster dimensions exceed supported budget");}
 uint8_t byte(double n){return uint8_t(std::clamp(std::lround(n),0L,255L));}
 using Color=std::array<double,3>;
 double lum(Color c){return .3*c[0]+.59*c[1]+.11*c[2];}
@@ -178,7 +178,7 @@ void validateDocument(const Document& d) {
                 throw std::runtime_error("Invalid mask");
         }
     }
-    if (imagePixels > maxDocumentImagePixels || maskPixels > 100000000)
+    if (imagePixels > maxDocumentImagePixels || maskPixels > maxRasterPixels)
         throw std::runtime_error("Project pixel budget exceeded");
     if(d.selection && d.selection->coverage) {
         const auto& coverage=*d.selection->coverage;
