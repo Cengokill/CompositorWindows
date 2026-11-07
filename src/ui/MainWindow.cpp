@@ -6,6 +6,7 @@
 #include "ProjectChrome.h"
 #include "EditorIcons.h"
 #include "VisualStyle.h"
+#include "PaletteSwatches.h"
 #include <QSettings>
 #include <QToolButton>
 #include <QApplication>
@@ -14,6 +15,10 @@
 #include <QDockWidget>
 #include <QToolBar>
 #include <QFormLayout>
+#include <QGridLayout>
+#include <QScrollArea>
+#include <QResizeEvent>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -38,6 +43,57 @@
 #include <unordered_map>
 
 namespace compositor {
+namespace {
+class ResponsiveToolRail final : public QScrollArea {
+public:
+    explicit ResponsiveToolRail(QToolBar* bar) : QScrollArea(bar), bar_(bar), contents_(new QWidget), grid_(new QGridLayout(contents_)) {
+        setObjectName("responsiveToolRail");
+        setFrameShape(QFrame::NoFrame);
+        setWidgetResizable(true);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        setMinimumSize(0, 0);
+        grid_->setContentsMargins(0, 0, 0, 0);
+        grid_->setHorizontalSpacing(2);
+        grid_->setVerticalSpacing(2);
+        grid_->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+        setWidget(contents_);
+    }
+    void addTool(QToolButton* button) { buttons_.push_back(button); }
+    void setPalette(QWidget* palette) { palette_ = palette; updateLayout(); }
+protected:
+    void resizeEvent(QResizeEvent* event) override { QScrollArea::resizeEvent(event); updateLayout(); }
+    bool event(QEvent* event) override {
+        const bool result = QScrollArea::event(event);
+        if (event->type() == QEvent::StyleChange || event->type() == QEvent::FontChange ||
+            event->type() == QEvent::ScreenChangeInternal || event->type() == QEvent::Show)
+            QTimer::singleShot(0, this, [this] { updateLayout(); });
+        return result;
+    }
+private:
+    void updateLayout() {
+        if (!palette_ || buttons_.empty() || viewport()->height() <= 0) return;
+        int oneColumnHeight = palette_->height();
+        for (auto* button : buttons_) oneColumnHeight += button->height();
+        oneColumnHeight += int(buttons_.size()) * grid_->verticalSpacing();
+        const int columns = viewport()->height() >= oneColumnHeight ? 1 : 2;
+        if (columns == columns_) return;
+        columns_ = columns;
+        for (size_t index = 0; index < buttons_.size(); ++index)
+            grid_->addWidget(buttons_[index], int(index) / columns, int(index) % columns, Qt::AlignHCenter);
+        grid_->addWidget(palette_, (int(buttons_.size()) + columns - 1) / columns, 0, 1, columns, Qt::AlignHCenter);
+        grid_->invalidate();
+        bar_->setFixedWidth(columns == 1 ? 56 : 90);
+    }
+    QToolBar* bar_;
+    QWidget* contents_;
+    QGridLayout* grid_;
+    std::vector<QToolButton*> buttons_;
+    QWidget* palette_{};
+    int columns_{};
+};
+}
 static QImage imageOf(const Raster&r){auto bytes=r.rgba();return QImage(bytes.data(),r.width,r.height,r.width*4,QImage::Format_RGBA8888_Premultiplied).copy();}
 EditorProject* MainWindow::current(){int i=tabs_->currentIndex();return i<0||i>=int(projects_.size())?nullptr:projects_[i].get();}
 Layer* MainWindow::active(){auto*p=current();if(!p||!p->document)return nullptr;for(auto&l:p->document->layers)if(l.id==p->active)return &l;return nullptr;}
@@ -74,6 +130,8 @@ tools->setStyleSheet(R"(
     QToolBar#tools QToolButton[editorToolButton="true"]:focus { border: 1px solid palette(highlight); }
 )");
 addToolBar(Qt::LeftToolBarArea,tools);
+auto* rail = new ResponsiveToolRail(tools);
+tools->addWidget(rail);
 struct ToolEntry { const char* label; Tool tool; ui::EditorIcon icon; };
 const ToolEntry entries[]{
     {"Move (V)",Tool::Move,ui::EditorIcon::Move},
@@ -96,22 +154,26 @@ const ToolEntry entries[]{
 };
 for (const auto& entry : entries) {
     const bool alternate = entry.tool==Tool::Polygon || entry.tool==Tool::Eraser;
-    auto* a = alternate ? new QAction(ui::editorIcon(entry.icon),entry.label,tools)
-                        : tools->addAction(ui::editorIcon(entry.icon),entry.label);
-    if(alternate)addAction(a);
+    auto* a = new QAction(ui::editorIcon(entry.icon),entry.label,tools);
+    addAction(a);
     a->setCheckable(true);
     a->setToolTip(entry.label);
     a->setProperty("editorTool",int(entry.tool));
     bindCommand(a,"Tools",entry.label,[this,t=entry.tool]{selectTool(t==Tool::Brush&&brushMode_==ProjectBrushMode::Erase?Tool::Eraser:t);});
     if(entry.tool==Tool::Brush)commands_->releaseShortcut(a);
-    if(auto* button=qobject_cast<QToolButton*>(tools->widgetForAction(a))) {
+    if(!alternate) {
+        auto* button = new QToolButton;
+        button->setDefaultAction(a);
+        button->setIconSize({22,22});
         button->setProperty("editorToolButton",true);
         button->setAccessibleName(entry.label);
         button->setFixedSize(36,36);
+        rail->addTool(button);
     }
 }
 auto*brushKey=new QAction("Brush (B)",this);bindCommand(brushKey,"Tools","Brush (B)",[this]{selectTool(Tool::Brush);});addAction(brushKey);
-setupPaletteControls(tools);
+setupPaletteControls(rail);
+rail->setPalette(paletteSwatches_);
 auto*dock=new QDockWidget("Layers",this);dock->setObjectName("layersDock");auto*panel=new QWidget;auto*layout=new QVBoxLayout(panel);auto*blendPicker=new ui::PreviewComboBox;blend_=blendPicker;blendPicker->preview=[this](int index){if(index>=0&&index<int(blendNames.size()))previewBlendMode(Blend(index));};blendPicker->dismissed=[this]{previewBlendMode({});};blend_->setObjectName("layerBlend");blend_->setAccessibleName("Layer blend mode");for(auto n:blendNames)blend_->addItem(n);layout->addWidget(blend_);opacity_=new ui::TrackSlider(Qt::Horizontal);opacity_->setObjectName("layerOpacity");opacity_->setRange(0,100);opacity_->setDefaultValue(100);opacity_->withdrawPressStep=[this]{withdrawOpacityPress();};opacity_->setAccessibleName("Layer opacity");layout->addWidget(createLayerOpacityControl());layers_=new QTreeWidget;layers_->setHeaderHidden(true);layers_->setAccessibleName("Layer list");layout->addWidget(layers_);dock->setWidget(panel);addDockWidget(Qt::RightDockWidgetArea,dock);connect(layers_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem*i){if(refreshing_||!i)return;auto id=i->data(0,Qt::UserRole).toString().toStdString();bool visible=i->checkState(0)==Qt::Checked;edit("Layer Visibility",[&](Document&d){for(auto&l:d.layers)if(l.id==id){l.visible=visible;if(!i->text(0).trimmed().isEmpty())l.name=i->text(0).trimmed().toStdString();}});});connect(blend_,&QComboBox::currentIndexChanged,this,[this](int i){if(!refreshing_&&i>=0&&i<int(blendNames.size()))setLayerBlendMode(Blend(i));});connect(opacity_,&QSlider::sliderPressed,this,[this]{opacityPressUndoCount_.reset();if(!canEditAppearance())return;finishOpacityEdit();opacityOwner_=current();if(opacityOwner_){opacityPressUndoCount_=opacityOwner_->history.undoCount();opacityOwner_->history.begin("Layer Opacity",opacityOwner_->document,opacityOwner_->active);}});connect(opacity_,&QSlider::sliderReleased,this,[this]{finishOpacityEdit();refresh(false);});connect(opacity_,&QSlider::valueChanged,this,[this](int v){if(!refreshing_&&canEditAppearance())edit("Layer Opacity",[&](Document&){active()->opacity=v/100.;});});
 auto*inspector=new QDockWidget("Transform",this);inspector->setObjectName("transformDock");auto*formWidget=new QWidget;auto*form=new QFormLayout(formWidget);const char*names[]{"X","Y","Width","Height","Angle"};for(int i=0;i<5;++i){auto*spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};spin->setCompactDisplay(true);spin->setDecimals(3);spin->setRange(i==2||i==3?1:-1000000,i==2||i==3?300000:1000000);spin->setAccessibleName(names[i]);geometry_[i]=spin;form->addRow(names[i],spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){if(!refreshing_)editTransformGeometry(i,value);});}inspector->setWidget(formWidget);addDockWidget(Qt::RightDockWidgetArea,inspector);setupBrushControls();setupAdjustmentActions();setupSelectionActions();setupLayerActions();setupTransformActions();setupDrawingActions();setupTypeControls();setupRetouchActions();{QSettings settings;commands_->restoreShortcuts(settings);}statusBar()->showMessage("Create a canvas or import an image");ui::installProjectChrome(this,tabs_,dock,layers_);ui::styleWorkspace(this);refresh(false);addEmptyProject(false);}
 void MainWindow::restoreHistorySnapshot(Snapshot snapshot){
