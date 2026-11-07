@@ -64,6 +64,9 @@ void search_and_selected_filter(){
     d.layers[2].name="Red sun 2";d.layers[2].parentId="a";
     auto& p=w.addProject(d);p.active="b";p.selected={"b","c"};p.collapsedGroups.insert("a");
     auto* c=controller(w);c->rebuild();w.show();QApplication::processEvents();const auto before=*p.document;const auto undo=p.history.undoCount();
+    check(!item(w,"a")->isExpanded()&&p.collapsedGroups.contains("a"),"showing the panel expanded the selected layer's collapsed folder");
+    c->updateSelection();QApplication::processEvents();
+    check(!item(w,"a")->isExpanded()&&p.collapsedGroups.contains("a"),"selection refresh expanded the selected layer's collapsed folder");
     auto* search=w.findChild<QLineEdit*>("layerSearch");auto* button=w.findChild<QToolButton*>("layerSearchButton");auto* selected=w.findChild<QToolButton*>("layerSelectedFilter");
     check(search&&button&&selected,"filter controls missing");button->click();search->setText("  BLUE  ");
     check(!item(w,"a")->isHidden()&&!item(w,"b")->isHidden()&&item(w,"c")->isHidden(),"search context or case matching failed");
