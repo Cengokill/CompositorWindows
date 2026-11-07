@@ -383,7 +383,14 @@ if(shapeDraft_&&documentWidth_>0&&documentHeight_>0){
     check(context_->CreateSolidColorBrush(D2D1::ColorF(draft.fill.r/255.f,draft.fill.g/255.f,draft.fill.b/255.f,draft.fill.a/255.f),&fill),"Shape draft fill");
     check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0,.6f),&outline),"Shape draft outline");
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    if(draft.style.kind==editing::ShapeKind::Line){context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),fill.Get(),std::max(1.f,float(draft.style.lineWidth*pointsPerPixel())));context_->DrawLine(D2D1::Point2F(bounds.left,bounds.top),D2D1::Point2F(bounds.right,bounds.bottom),outline.Get(),1);}
+    if(draft.style.kind==editing::ShapeKind::Line){
+        auto point=[&](double x,double y){return D2D1::Point2F(float(bounds.left+x*(bounds.right-bounds.left)),float(bounds.top+y*(bounds.bottom-bounds.top)));};
+        const auto cap=draft.style.lineCap==editing::ShapeLineCap::Round?D2D1_CAP_STYLE_ROUND:D2D1_CAP_STYLE_SQUARE;
+        const auto pattern=editing::shapeLinePattern(draft.style.lineStyle);std::vector<float> dashes;for(size_t i=0;i<pattern.size();++i)dashes.push_back(float(i%2?pattern[i]+1:std::max(.001,pattern[i]-1)));
+        D2D1_STROKE_STYLE_PROPERTIES properties=D2D1::StrokeStyleProperties(cap,cap,cap,D2D1_LINE_JOIN_MITER,10,pattern.empty()?D2D1_DASH_STYLE_SOLID:D2D1_DASH_STYLE_CUSTOM,0);
+        ComPtr<ID2D1StrokeStyle> stroke;check(factory_->CreateStrokeStyle(properties,dashes.empty()?nullptr:dashes.data(),UINT32(dashes.size()),&stroke),"Line draft stroke");
+        context_->DrawLine(point(draft.style.startX,draft.style.startY),point(draft.style.endX,draft.style.endY),fill.Get(),float(std::max(1.,draft.style.lineWidth)*pointsPerPixel()),stroke.Get());
+    }
     else if(draft.style.kind==editing::ShapeKind::Ellipse){const auto ellipse=D2D1::Ellipse(D2D1::Point2F((bounds.left+bounds.right)/2,(bounds.top+bounds.bottom)/2),(bounds.right-bounds.left)/2,(bounds.bottom-bounds.top)/2);context_->FillEllipse(ellipse,fill.Get());context_->DrawEllipse(ellipse,outline.Get(),1);}
     else{
         const auto geometry=editing::rectangleShapeOutline({0,0,draft.rect.width,draft.rect.height},draft.style);

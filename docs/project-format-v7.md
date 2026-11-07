@@ -56,9 +56,9 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 17
+## Windows reader through version 19
 
-The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–17 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
+The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–19 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
 | Version | Additional content |
 |---|---|
@@ -72,8 +72,12 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 15 | A document CMYK profile, stored as `cmyk.icc` with its name and SHA-256 digest in `cmykProfile` (details below). |
 | 16 | Progressive Blur, Bloom / Glow, and RGB Split adjustment layers, stored with optional `filterLayerSettings`. |
 | 17 | A rectangle shape with `smoothing: true`. A missing, null, or false value uses ordinary corners and does not raise the version. |
+| 18 | A Windows animated GIF layer, described below. |
+| 19 | A line with a non-default `lineStyle` or `lineCap`. The reader accepts these fields from version 15; Windows writes version 19 so older Windows readers do not silently discard them. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
+
+For line shapes, `lineStyle` is `Solid`, `Dashed`, `Long Dash`, `Dash Dot`, `Long Dash Dot`, or `Dotted`, and `lineCap` is `Round` or `Square`. Missing or null fields mean Solid and Round. Non-default values are written only for lines. Mac project exchange has not been verified.
 
 Blend names keep the original 13, then append `Linear Burn`, `Linear Dodge`, `Soft Light`, `Hard Light`, `Vivid Light`, `Linear Light`, `Pin Light`, `Hard Mix`, `Exclusion`, `Subtract`, and `Divide`. A folder may store opacity 0–1 from version 8 and still has to stay in Normal. Its opacity multiplies descendants.
 
@@ -91,7 +95,7 @@ Bloom / Glow uses amount and radius. The destructive **Filters > Bloom** command
 
 ## Windows CMYK profile extension (version 15)
 
-A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–17. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
+A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–19. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
 
 The optional top-level `cmykProfile` object contains `file` (exactly `cmyk.icc`), `name` (nonempty, at most 1024 characters), and `sha256` (64 lowercase hexadecimal digits). The ICC bytes live in that regular file at the package root, are limited to 16 MiB, and must match the digest. The profile must describe a CMYK output device with XYZ or Lab PCS and support both RGB conversion directions. Invalid, missing, oversized, mismatched or reparse-point assets fail loading before image decoding. A manifest below version 15 carrying this field is rejected. A version 15 manifest may omit it.
 

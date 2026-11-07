@@ -42,6 +42,13 @@ static int versionOf(const std::filesystem::path& path) {
 }
 static Document base() { Document d; d.id = newId(); d.width = 8; d.height = 8; d.resolution = 72; return d; }
 static Layer pixelLayer() { Layer l; l.id = newId(); l.name = "Paint"; l.transform = {0, 0, 4, 4}; l.raster = Raster::filled(4, 4, {255, 0, 0, 255}); return l; }
+static void line_export_contract(){
+    QTemporaryDir dir;check(dir.isValid(),"temporary directory");ProjectStore store(makeWicProjectCodec());
+    Document d=base();d.width=100;d.height=20;editing::ShapeStyle style{editing::ShapeKind::Line,1,0,0,0,4,.1,.5,.9,.5};style.lineStyle=editing::ShapeLineStyle::Dashed;style.lineCap=editing::ShapeLineCap::Square;
+    d.layers.push_back(*editing::createShapeLayer({0,0,100,20},style,"Line"));const auto project=std::filesystem::path(dir.filePath("line.comp").toStdWString());store.save(project,d,d.layers[0].id);auto reopened=store.load(project).document;
+    const auto png=std::filesystem::path(dir.filePath("line.png").toStdWString());imaging::ExportOptions options;options.format=imaging::ImageFormat::Png;exportDocumentAtomic(reopened,png,options);auto decoded=imaging::WicCodec::decode(png).image;
+    auto alpha=[&](int x,int y){return decoded.pixels[(size_t(y)*decoded.width+x)*4+3];};check(alpha(13,10)==255&&alpha(24,10)==0&&alpha(33,10)==255,"Exported dashed line pixels are wrong");
+}
 // LibRaw failure classes reported by raw_develop.cpp for a file it cannot open or decode.
 static bool isRawRejection(const std::string& message) {
     return message.find("Unsupported RAW file") != std::string::npos || message.find("Malformed RAW file") != std::string::npos || message.find("Cannot read RAW file") != std::string::npos;
@@ -743,6 +750,6 @@ int main(int argc, char** argv) {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { if(argc>1&&std::string(argv[1])=="--line-export"){line_export_contract();return 0;} if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }
