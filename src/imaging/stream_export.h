@@ -36,7 +36,7 @@ ExportSize scaledExportSize(std::uint32_t width, std::uint32_t height, double sc
 // PNG/TIFF preview is averaged from the losslessly encoded samples (CMYK is converted back to RGB). JPEG preview is
 // decoded from the finished JPEG through WIC's bounded native downscaling interface.
 StreamingExportResult encodeRowsAtomic(const std::filesystem::path&, std::uint32_t width, std::uint32_t height,
-    const RgbaRows&, const ExportOptions& = {}, const StreamExportLimits& = {}, const ExportProgress& = {});
+    const RgbaRows&, const ExportOptions& = {}, const StreamExportLimits& = {}, const ExportProgress& = {}, bool straightPng = false);
 // One-page PDF of the flattened canvas (ExportOptions::format must be Pdf). `rows` supplies the canvas at width x height,
 // as for encodeRowsAtomic. The page holds the canvas at options.scale, laid out at options.dpi so that its printed size
 // is pixels / dpi inches, over an opaque options.matte* background that shows through transparent pixels. The pixels are

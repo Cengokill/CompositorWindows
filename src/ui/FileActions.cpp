@@ -212,13 +212,13 @@ QString chooseNativeSaveDestination(MainWindow* window,const QString& directory,
     return *path;
 }
 // The Format combo's entries, in order. The index is also what the export tests select.
-enum class ExportKind {Png,Jpeg,Pdf,Tiff,Exr,Gif};
+enum class ExportKind {Png,Jpeg,Pdf,Tiff,Exr,ChannelPack,Gif};
 QString withExportSuffix(QString path,ExportKind kind){
     QFileInfo info(path);
     const auto suffix=info.suffix().toLower();
     switch(kind){
     case ExportKind::Jpeg:if(suffix=="jpg"||suffix=="jpeg")return path;break;
-    case ExportKind::Png:if(suffix=="png")return path;break;
+    case ExportKind::Png:case ExportKind::ChannelPack:if(suffix=="png")return path;break;
     case ExportKind::Pdf:if(suffix=="pdf")return path;break;
     case ExportKind::Tiff:if(suffix=="tif"||suffix=="tiff")return path;break;
     case ExportKind::Exr:if(suffix=="exr")return path;break;
@@ -778,10 +778,23 @@ void MainWindow::exportImage(){
     struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
     QTemporaryDir temp;if(!temp.isValid())throw std::runtime_error("Cannot create image export storage");
     QDialog dialog(this);dialog.setObjectName("imageExportDialog");dialog.setWindowTitle("Export Image");QFormLayout layout(&dialog);
-    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF","TIFF","OpenEXR"});if(animated)format.addItem("GIF");layout.addRow("Format",&format);
+    QComboBox format;format.setObjectName("exportFormat");format.addItems({"PNG","JPEG","PDF","TIFF","OpenEXR","Channel Pack"});if(animated)format.addItem("GIF");layout.addRow("Format",&format);
     const auto kind=[&]{return ExportKind(format.currentIndex());};
     // OpenEXR keeps linear float pixels and ignores the output profile, so CMYK is offered for the other formats only.
-    const auto cmykAllowed=[&]{return kind()!=ExportKind::Png&&kind()!=ExportKind::Exr&&kind()!=ExportKind::Gif;};
+    const auto cmykAllowed=[&]{return kind()!=ExportKind::Png&&kind()!=ExportKind::Exr&&kind()!=ExportKind::ChannelPack&&kind()!=ExportKind::Gif;};
+    std::array<QComboBox,4> channels;
+    const std::array<const char*,4> labels{"Red","Green","Blue","Alpha"};
+    const std::array<QStringList,4> names{QStringList{"r","red"},QStringList{"g","green"},QStringList{"b","blue"},QStringList{"a","alpha"}};
+    for (size_t c=0;c<channels.size();++c) {
+        auto& box=channels[c]; box.setObjectName(QString("exportChannel%1").arg(labels[c]));
+        box.addItem("Black",QString()); box.addItem("White",QString("white"));
+        int selected=c==3?1:0;
+        for (const auto& layer:snapshot.layers) if (layer.adjustmentJson.empty()) {
+            box.addItem(QString::fromStdString(layer.name),QString("L")+QString::fromStdString(layer.id));
+            if(names[c].contains(QString::fromStdString(layer.name).trimmed().toLower())) selected=box.count()-1;
+        }
+        box.setCurrentIndex(selected); layout.addRow(labels[c],&box);
+    }
     QComboBox colorMode;colorMode.setObjectName("exportColorMode");colorMode.addItems({"RGB","CMYK"});layout.addRow("Color mode",&colorMode);
     CmykProfilePtr outputProfile=snapshot.cmykProfile;
     QPushButton profileButton(outputProfile?QString::fromStdString(outputProfile->name):"Choose CMYK profile…");profileButton.setObjectName("exportCmykProfile");layout.addRow("Profile",&profileButton);
@@ -819,13 +832,16 @@ void MainWindow::exportImage(){
         if(running||closed)return;
         if(colorMode.currentIndex()==1&&cmykAllowed()&&!outputProfile){bytesLabel.setText("Choose a CMYK output profile");return;}
         running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);percent->store(0);
-        imaging::ExportOptions options;options.format=kind()==ExportKind::Png?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:kind()==ExportKind::Tiff?imaging::ImageFormat::Tiff:kind()==ExportKind::Exr?imaging::ImageFormat::Exr:imaging::ImageFormat::Pdf;options.cmykProfile=colorMode.currentIndex()==1&&cmykAllowed()?outputProfile:nullptr;options.jpegQuality=quality.value()/100.;
+        imaging::ExportOptions options;options.format=(kind()==ExportKind::Png||kind()==ExportKind::ChannelPack)?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:kind()==ExportKind::Tiff?imaging::ImageFormat::Tiff:kind()==ExportKind::Exr?imaging::ImageFormat::Exr:imaging::ImageFormat::Pdf;options.cmykProfile=colorMode.currentIndex()==1&&cmykAllowed()?outputProfile:nullptr;options.jpegQuality=quality.value()/100.;
         if(kind()==ExportKind::Pdf)options.scale=scale.currentData().toDouble();
         options.matteR=uint8_t(matteColor.red());options.matteG=uint8_t(matteColor.green());options.matteB=uint8_t(matteColor.blue());options.cancelled=[flag=cancel]{return flag->load();};
         const bool gif=kind()==ExportKind::Gif;
-        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg(kind()==ExportKind::Png?"png":kind()==ExportKind::Jpeg?"jpg":kind()==ExportKind::Tiff?"tif":kind()==ExportKind::Exr?"exr":gif?"gif":"pdf"));
-        watcher.setFuture(QtConcurrent::run([snapshot,path,options,percent,gif,animated,activeLayer]{Prepared out;out.path=path;try{
-            if(!gif)out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});
+        const bool pack=kind()==ExportKind::ChannelPack;
+        std::array<std::string,4> sources;for(size_t c=0;c<channels.size();++c)sources[c]=channels[c].currentData().toString().toStdString();
+        const auto path=temp.filePath(QString("preview-%1.%2").arg(generation).arg((kind()==ExportKind::Png||pack)?"png":kind()==ExportKind::Jpeg?"jpg":kind()==ExportKind::Tiff?"tif":kind()==ExportKind::Exr?"exr":gif?"gif":"pdf"));
+        watcher.setFuture(QtConcurrent::run([snapshot,path,options,percent,gif,pack,sources,animated,activeLayer]{Prepared out;out.path=path;try{
+            if(pack)out.result=exportChannelPackAtomic(snapshot,nativePath(path),sources,options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});
+            else if(!gif)out.result=exportDocumentAtomic(snapshot,nativePath(path),options,{},[percent](uint32_t done,uint32_t total){percent->store(total?uint32_t(100ULL*done/total):0);});
             else{
                 auto document=snapshot;
                 std::vector<size_t> layers;for(size_t i=0;i<document.layers.size();++i)if(document.layers[i].animation)layers.push_back(i);
@@ -885,7 +901,8 @@ void MainWindow::exportImage(){
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
-    auto applyKind=[&]{const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
+    auto applyKind=[&]{for(auto& box:channels)layout.setRowVisible(&box,kind()==ExportKind::ChannelPack);const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
+    for(auto& box:channels)connect(&box,&QComboBox::currentIndexChanged,&dialog,changed);
     connect(&colorMode,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&profileButton,&QPushButton::clicked,&dialog,[&]{const auto path=chooseNativeCmykProfilePath();if(path.isEmpty())return;try{auto profile=imaging::readCmykProfile(nativePath(path));outputProfile=std::move(profile);profileButton.setText(QString::fromStdString(outputProfile->name));changed();}catch(const std::exception& error){QMessageBox::critical(&dialog,"CMYK profile",error.what());}});
     connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
@@ -900,7 +917,7 @@ void MainWindow::exportImage(){
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     const auto chosen=kind();
     if(chosen==ExportKind::Jpeg)settings.setValue("jpegExportQuality",quality.value()/100.);
-    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+(chosen==ExportKind::Png?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Tiff?".tif":chosen==ExportKind::Exr?".exr":chosen==ExportKind::Gif?".gif":".pdf");
+    const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+((chosen==ExportKind::Png||chosen==ExportKind::ChannelPack)?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Tiff?".tif":chosen==ExportKind::Exr?".exr":chosen==ExportKind::Gif?".gif":".pdf");
     const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
     QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;

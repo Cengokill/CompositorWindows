@@ -96,12 +96,13 @@ void validateExportExtent(std::uint32_t width, std::uint32_t height) {
 }
 
 StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination, std::uint32_t width, std::uint32_t height,
-    const RgbaRows& rows, const ExportOptions& options, const StreamExportLimits& limits, const ExportProgress& progress) {
+    const RgbaRows& rows, const ExportOptions& options, const StreamExportLimits& limits, const ExportProgress& progress, bool straightPng) {
     validateExportExtent(width, height);
     if (!rows || !std::isfinite(options.dpi) || options.dpi <= 0 || !std::isfinite(options.jpegQuality) ||
         (options.format != ImageFormat::Png && options.format != ImageFormat::Jpeg && options.format != ImageFormat::Tiff) || !limits.stripeRows || limits.stripeRows > 256 ||
         limits.previewWidth > 1000 || limits.previewHeight > 1000 || limits.maxBufferBytes > 1024ULL * 1024 * 1024)
         throw std::invalid_argument("Invalid streaming image export settings");
+    if(straightPng && (options.format != ImageFormat::Png || options.cmykProfile)) throw std::invalid_argument("Straight pixels require RGB PNG");
     if(options.cmykProfile&&options.format==ImageFormat::Png)throw std::invalid_argument("PNG does not support CMYK output");
     std::unique_ptr<CmykTransform> color;if(options.cmykProfile)color=std::make_unique<CmykTransform>(options.cmykProfile);
     cancelled(options.cancelled);
@@ -163,14 +164,14 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
                 for (UINT x = 0; x < width; ++x) {
                     const auto* p = rgba.data() + (std::size_t(row) * width + x) * 4;
                     auto* q = encoded.data() + (std::size_t(row) * width + x) * channels;
-                    if (p[0] > p[3] || p[1] > p[3] || p[2] > p[3]) throw std::runtime_error("Export rows contain invalid premultiplied pixels");
+                    if (!straightPng && (p[0] > p[3] || p[1] > p[3] || p[2] > p[3])) throw std::runtime_error("Export rows contain invalid premultiplied pixels");
                     for (UINT c = 0; c < 3; ++c) q[2 - c] = channels == 3 ? std::uint8_t(std::min(255U, unsigned(p[c]) + (unsigned(matte[c]) * (255 - p[3]) + 127) / 255))
-                        : p[3] ? std::uint8_t(std::min(255U, (unsigned(p[c]) * 255 + p[3] / 2) / p[3])) : 0;
+                        : straightPng ? p[c] : p[3] ? std::uint8_t(std::min(255U, (unsigned(p[c]) * 255 + p[3] / 2) / p[3])) : 0;
                     if (channels == 4) q[3] = p[3];
                     if (losslessPreview) {
                         auto& sum = sums[std::size_t(std::uint64_t(y + row) * previewHeight / height) * previewWidth + previewX[x]];
-                        for (UINT c = 0; c < 3; ++c) sum[c] += (unsigned(q[2 - c]) * p[3] + 127) / 255;
-                        sum[3] += p[3];
+                        for (UINT c = 0; c < 3; ++c) sum[c] += straightPng ? q[2 - c] : (unsigned(q[2 - c]) * p[3] + 127) / 255;
+                        sum[3] += straightPng ? 255 : p[3];
                     }
                 }
             }
