@@ -698,7 +698,7 @@ namespace {
 // Lists layers whose Photoshop vector content stayed pixels or was omitted. Cancel imports nothing from the file.
 bool confirmPhotoshopWarnings(QWidget* parent,const QString& file,const std::vector<std::string>& warnings){
     QStringList details;for(const auto& warning:warnings)details<<QString::fromStdString(warning);
-    QMessageBox message(QMessageBox::Warning,"Import PSD",QString("%1 layer(s) in %2 are not fully editable after import.").arg(int(warnings.size())).arg(file),QMessageBox::NoButton,parent);
+    QMessageBox message(QMessageBox::Warning,"Import PSD",QString("%1 import warning(s) in %2.").arg(int(warnings.size())).arg(file),QMessageBox::NoButton,parent);
     message.setObjectName("psdImportWarnings");message.setDetailedText(details.join("\n"));
     auto* proceed=message.addButton("Continue",QMessageBox::AcceptRole);proceed->setObjectName("psdContinueButton");
     auto* cancel=message.addButton("Cancel",QMessageBox::RejectRole);cancel->setObjectName("psdCancelButton");
@@ -711,6 +711,10 @@ MainWindow::PhotoshopResult MainWindow::importPhotoshop(const QString& path,Cmyk
         auto imported=imaging::readPsd(nativePath(path),std::move(fallback));
         if(!imported.warnings.empty()&&!confirmPhotoshopWarnings(this,QFileInfo(path).fileName(),imported.warnings))return PhotoshopResult::Cancelled;
         applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();
+        if(!imported.artboards.empty()){
+            for(auto& board:imported.artboards)addProject(std::move(board.document),QString::fromStdString(board.name),false);
+            refresh();return PhotoshopResult::Imported;
+        }
         auto& project=addProject(std::move(imported.document),QFileInfo(path).fileName(),false);
         if(project.document){project.active=project.document->layers.back().id;project.selected={project.active};}
         refresh();project.canvas->fit();
