@@ -1,3 +1,7 @@
+# Compositor Windows 1.5.6
+
+Animated GIF layers, Photoshop artboards in separate documents, Channel Pack PNG export, multipage PDF import, pen pressure controls, searchable layers and fonts, editable line styles, smooth rectangle corners and a responsive toolbar are new in this release. See the [release notes on GitHub](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.6) for details and screenshots.
+
 # Compositor Windows 1.2.0
 
 - **File → Focus Stack Images** combines 2 to 16 photos of the same size into a layer or a new document.

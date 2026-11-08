@@ -8,6 +8,8 @@
 #include <QSpinBox>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
+#include <QTimer>
 #include <QTest>
 #include <QJsonObject>
 #include <QSet>
@@ -22,6 +24,7 @@ ui::CommandRegistry& registry(MainWindow&w){for(auto*object:w.findChildren<QObje
 QAction*command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
 Document example(bool raster=true,bool visible=true){Document d;d.id=newId();d.width=96;d.height=64;Layer layer;layer.id=newId();layer.name="Image";layer.transform={0,0,96,64};layer.visible=visible;if(raster)layer.raster=Raster::filled(96,64,{140,70,35,255});d.layers.push_back(layer);return d;}
 void gradient(MainWindow&w,EditorProject&p){command(w,"tool.gradient")->trigger();p.canvas->pointerDown({8,30},{});p.canvas->pointerMove({80,30},{});p.canvas->pointerUp({80,30},{});registry(w).refresh();check(command(w,"gradient.apply")->isEnabled(),"gradient was not left pending");}
+void about_version(){MainWindow w(true);QCoreApplication::setApplicationVersion("1.5.6");QString text;QTimer::singleShot(0,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){text=box->text();box->accept();}});command(w,"app.about")->trigger();check(text.contains("Compositor Windows 1.5.6"),"About must display the application version");}
 void registered_actions(){MainWindow w(true);w.addProject(example());for(auto*object:w.findChildren<QObject*>())check(!object->property("unregisteredCommand").toBool(),"host requested an uncatalogued command");size_t leaves=0;for(auto*menu:w.findChildren<QMenu*>())for(auto*action:menu->actions())if(!action->menu()&&!action->isSeparator()){++leaves;check(!action->property("commandId").toString().isEmpty(),"menu leaf has no command id");}check(leaves>65,"menu inventory unexpectedly small");auto*tools=w.findChild<QToolBar*>("tools");check(tools,"tools toolbar missing");auto* widget=tools->findChild<QWidget*>("paletteSwatches");check(widget,"palette tool rail container missing");
     QSet<QString> ids;const auto buttons=widget->findChildren<QToolButton*>();check(buttons.size()==4,"palette container must expose exactly four actionable controls");
     for(auto*button:buttons){auto* leaf=button->defaultAction();check(leaf,"palette control has no default action");const auto id=leaf->property("commandId").toString();check(!id.isEmpty()&&ui::commandSpecById(id),"palette control action is not catalogued");bool bound=false;for(const auto& entry:registry(w).manifest()){const auto object=entry.toObject();if(object["id"].toString()==id&&object["object_name"].toString()==leaf->objectName())bound=true;}check(bound,"palette control action is not registered");ids.insert(id);}
@@ -47,4 +50,4 @@ void command_palette(){
     QTest::keyClicks(&field,"bml");check(field.text()=="bml","tool letters remain reserved after palette");
 }
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
