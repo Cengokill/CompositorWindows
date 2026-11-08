@@ -30,10 +30,47 @@ std::shared_ptr<const GrayRaster> mask(int w,int h,const std::function<std::uint
 Request request(Kind k,std::shared_ptr<const Raster> source){Request q;q.kind=k;q.source=std::move(source);q.transform={10,20,double(q.source->width),double(q.source->height)};return q;}
 graphics::Rgba8View view(std::vector<std::uint8_t>& p,int w,int h){return {p,std::uint32_t(w),std::uint32_t(h),std::size_t(w)*4};}
 void testSettings(){
+    LensEffectSettings lens;lens.threshold=std::numeric_limits<double>::quiet_NaN();lens.starPoints=7;lens.prismCopies=12;lens.bokehRadius=-1;
+    auto normalizedLens=lens.normalized();require(normalizedLens.threshold==90&&normalizedLens.starPoints==6&&normalizedLens.prismCopies==8&&normalizedLens.bokehRadius==.5,"lens effect settings normalization");
+    lens.effect=LensEffect::Prism;lens.prismAmount=0;require(lens.isIdentity(),"zero prism amount is identity");
+    lens.effect=LensEffect::Bokeh;require(!lens.isIdentity(),"bokeh remains active");
     Settings s;s.radius=std::numeric_limits<double>::quiet_NaN();s.angle=200;s.distance=-2;s.amount=std::numeric_limits<double>::infinity();s.distortion=-120;
     auto n=s.normalized();require(n.radius==1&&n.angle==90&&n.distance==1&&n.amount==10&&n.distortion==-100,"source settings normalization");
     s.radius=300;s.amount=-4;s.distance=3000;n=s.normalized();require(n.radius==250&&n.amount==.1&&n.distance==2000,"source setting limits");
     s.radius=3;s.distance=16;require(blurMargin(Kind::GaussianBlur,s)==11&&blurMargin(Kind::MotionBlur,s)==10,"source blur margins");
+}
+void testLensEffects(){
+    auto source=image(48,32,[](int x,int y){auto v=std::uint8_t(x>=20&&x<25&&y>=12&&y<17?255:10);return Pixel{v,v,v,255};});
+    auto lowAlpha=image(64,64,[](int x,int y){return x>=24&&x<40&&y>=24&&y<40?Pixel{4,4,4,4}:Pixel{0,0,0,255};});
+    auto opaque=image(64,64,[](int x,int y){return x>=24&&x<40&&y>=24&&y<40?Pixel{255,255,255,255}:Pixel{0,0,0,255};});
+    for(auto effect:{LensEffect::AnamorphicFlare,LensEffect::Starburst,LensEffect::Mist,LensEffect::Prism,LensEffect::Bokeh}){
+        Settings settings;settings.lens.effect=effect;settings.lens.bokehRadius=6;
+        auto lowJob=request(Kind::LensEffects,lowAlpha);lowJob.settings=settings;auto low=apply(lowJob);
+        auto opaqueJob=request(Kind::LensEffects,opaque);opaqueJob.settings=settings;auto full=apply(opaqueJob);
+        int lowPeak=0,fullPeak=0;
+        for(int y=0;y<64;++y)for(int x=0;x<64;++x)if(x<24||x>=40||y<24||y>=40){lowPeak=std::max(lowPeak,int(low.raster->pixel(x,y).r));fullPeak=std::max(fullPeak,int(full.raster->pixel(x,y).r));}
+        require(fullPeak>10&&lowPeak*3<fullPeak*2,"lens spatial light must account for source alpha");
+    }
+    for(auto effect:{LensEffect::AnamorphicFlare,LensEffect::Starburst,LensEffect::Mist,LensEffect::Prism,LensEffect::Bokeh}){
+        Settings s;s.lens.effect=effect;s.lens.bokehRadius=6;
+        auto q=request(Kind::LensEffects,source);q.settings=s;
+        auto out=apply(q);require(out.changed&&out.transform==q.transform,"lens output and placement");require(out.raster->rgba()!=source->rgba(),"lens mode changes pixels");
+        auto selected=mask(48,32,[](int x,int){return std::uint8_t(x<24?255:0);});q.selection=SourceSelection{selected};auto covered=apply(q);
+        for(int y=0;y<32;++y)for(int x=24;x<48;++x)require(covered.raster->pixel(x,y)==source->pixel(x,y),"lens preserves unselected pixels");
+        auto transparent=image(48,32,[](int x,int){return x<24?Pixel{64,32,16,128}:Pixel{};});q=request(Kind::LensEffects,transparent);q.settings=s;auto alpha=apply(q);
+        for(int y=0;y<32;++y)for(int x=0;x<48;++x){auto pixel=alpha.raster->pixel(x,y);require(pixel.a==transparent->pixel(x,y).a&&pixel.r<=pixel.a&&pixel.g<=pixel.a&&pixel.b<=pixel.a,"lens retains premultiplied alpha");}
+        q.limits.cancelled=[] {return true;};fails([&]{apply(q);},"lens cancellation ignored");q.limits.cancelled={};q.limits.maxWorkingBytes=1;fails([&]{apply(q);},"lens budget ignored");
+    }
+    for(auto shape:{BokehShape::Round,BokehShape::Hexagon,BokehShape::Oval,BokehShape::CatsEye}){
+        auto q=request(Kind::LensEffects,source);q.settings.lens.effect=LensEffect::Bokeh;q.settings.lens.bokehShape=shape;q.settings.lens.bokehRadius=6;q.settings.lens.bokehRing=100;q.settings.lens.bokehBrightness=100;require(apply(q).raster->pixel(22,14).a==255,"bokeh shape maximum output");
+    }
+    auto deep=makeDeep(48,32,DeepImage::Format::Unorm16);for(int y=0;y<32;++y)for(int x=0;x<48;++x)deep->setPixel(x,y,{.3f,.2f,.1f,.5f});
+    auto deepJob=request(Kind::LensEffects,rasterFromDeep(*deep));deepJob.deepSource=deep;deepJob.settings.lens.effect=LensEffect::Mist;auto deepResult=apply(deepJob);require(deepResult.deep&&deepResult.deep->format==DeepImage::Format::Unorm16&&deepResult.deep->pixel(0,0)[3]==deep->pixel(0,0)[3],"lens retains 16-bit storage and alpha");
+    auto extreme=request(Kind::LensEffects,source);extreme.settings.lens.threshold=100;extreme.settings.lens.flareLength=100;require(apply(extreme).changed,"lens maximum threshold");int probes=0;extreme.limits.cancelled=[&]{return ++probes>12;};fails([&]{apply(extreme);},"lens mid-render cancellation ignored");
+    Settings prism;prism.lens.effect=LensEffect::Prism;prism.lens.prismCopies=1;prism.lens.prismOffset=25;prism.lens.prismAngle=0;prism.lens.prismAmount=100;
+    auto out=runPixels(Kind::LensEffects,*source,prism,1,0);require(out->pixel(34,14).g>200&&out->pixel(10,14).g==10,"prism copies go right");
+    prism.lens.prismBothWays=true;out=runPixels(Kind::LensEffects,*source,prism,1,0);require(out->pixel(10,14).g>200,"prism both ways");
+    prism.lens.prismAmount=0;auto q=request(Kind::LensEffects,source);q.settings=prism;require(!apply(q).changed,"lens identity has no edit");
 }
 void testDither(){
     auto white=image(8,8,[](int,int){return Pixel{255,255,255,255};});Settings s;s.ditherLevels=4;s.ditherStyle=0;
@@ -264,6 +301,10 @@ std::uint64_t peakProcessBytes() {
     return std::uint64_t(usage.ru_maxrss) * 1024;
 #endif
 }
+int benchmarkLens(){
+    auto source=image(1024,768,[](int x,int y){auto v=std::uint8_t((x%97<8&&y%83<8)?255:20);return Pixel{v,v,v,255};});
+    for(auto effect:{LensEffect::AnamorphicFlare,LensEffect::Starburst,LensEffect::Mist,LensEffect::Prism,LensEffect::Bokeh}){auto q=request(Kind::LensEffects,source);q.settings.lens.effect=effect;auto start=std::chrono::steady_clock::now();auto result=apply(q);require(result.changed,"lens benchmark output");std::cout<<"lens mode="<<int(effect)<<" 1024x768 ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()<<" peak_process_mib="<<double(peakProcessBytes())/(1024*1024)<<'\n';}return 0;
+}
 int benchmarkCameraRaw() {
     using Clock = std::chrono::steady_clock;
     auto elapsed = [](Clock::time_point start) {
@@ -312,5 +353,5 @@ int benchmarkCameraRaw() {
     return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

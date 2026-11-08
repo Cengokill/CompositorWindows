@@ -151,3 +151,11 @@ Painting/erasing, fill, gradients, resizing and layer merges retain HDR. Retouch
 Save Project stores HDR layers as EXR assets in `.comp` format v13 or later; masks remain PNG. A stroked shape still requires v14. Existing Windows builds that only understand PNG project assets cannot open these HDR projects. Mac exchange is unverified.
 
 Choose **OpenEXR** in Export Image to retain highlights in a flattened, ZIP-compressed scene-linear FLOAT RGBA file. The preview is SDR; JPEG quality, matte and PDF scale do not apply. PNG, JPEG and PDF export HDR documents as SDR. Cancelling HDR preflight, an edit preview, or EXR encoding does not install its prepared result. Export replaces an existing destination only after encoding succeeds. Working-memory checks can reject a large HDR decode, padded filter, or merge before its buffers are allocated.
+
+### Lens Effects
+
+Choose **Filters > Lens Effects** on a pixel layer. Anamorphic Flare and Starburst draw streaks from bright sources; Threshold selects those sources, with values above 95 favouring concentrated bright areas. Mist scatters light. Prism echoes the image along Angle; Copies, Offset, Blur and Both ways control the echoes. Bokeh blurs through a Round, Hexagon, Oval or Cat's Eye aperture.
+
+Preview shows the current settings; Apply renders the full layer and creates one undo step. Cancel discards the preview. A selection limits the changed pixels, masks keep their placement, and the original alpha is retained. Last Filter repeats the applied settings in this project. Save the project after Apply to retain the resulting pixels. HDR layers require conversion to 16-bit first.
+
+The Windows CPU renderer uses bounded sampling and approximate Gaussian blurs. Preview uses at most 512 pixels on its longer side. The transient-memory estimate is 192 bytes per pixel, within the existing filter budget, so a large full-resolution Apply can be rejected before kernel allocation. Reduced previews retain proportional effect sizes, but fine highlights and aperture edges may differ at full resolution. Core Image pixel parity has not been verified.

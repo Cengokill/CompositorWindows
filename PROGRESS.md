@@ -10,4 +10,6 @@ The published 1.5.6 package identifies source commit `1e92d596e8e295c89a68768f30
 
 Maintenance intent: stay aligned with Robbie's core features, editing behavior, design, and project format. The Windows preview now implements the observable behavior from upstream 1.0.4 through 1.4.5 that applies on this port: the later blend modes, folder opacity, guides, finishing adjustments and filters, CPU layer effects, DirectWrite text, line shapes, and PSD, SVG, and RAW import. The dependency pin remains `a19db901` until a project written by the Mac 1.4.5 tree is read here. Mac exchange is unverified. The Metal compositor is not ported; rendering stays on the existing CPU and Direct3D paths.
 
+Lens Effects (#83) now has a destructive pixel filter with five modes, per-project applied settings, live reduced preview and the existing selection/history pipeline. The software renderer follows the v1.5.8 settings contract; its bounded sampling is not verified Core Image parity. Editable Lens Effects layers remain outside this change (#97).
+
 Keep this as the single current checkpoint. Follow AGENTS.md for documentation boundaries. No implementation backlog is implied by historical reports or old tests; start with the user's current request.

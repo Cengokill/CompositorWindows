@@ -19,6 +19,7 @@
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QPushButton>
 #include <QTimer>
 #include <QFutureWatcher>
@@ -116,7 +117,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
 }
-QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split"};}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
@@ -237,7 +238,8 @@ class FilterPanel final:public ui::EditPanelSession {
         split->setEnabled(false);
         for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
         for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
-        for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QComboBox*>())control->setEnabled(false);
+            for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
         completedPreview_.reset();
         clearGuideOverlay();
         status_.setText("Splitting channels…");
@@ -345,7 +347,7 @@ class FilterPanel final:public ui::EditPanelSession {
             if(job.preview)runningViewport_=viewportOnly?std::move(viewportOnly):currentRawViewport();
             job.cameraRawRetainedPreviewBytes=retainedPreviewBytes_;
         }
-        if((job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit)&&job.preview)job.previewMaxEdge=512;
+        if((job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit||job.kind==filters::Kind::LensEffects)&&job.preview)job.previewMaxEdge=512;
         if(!existingGrade)status_.setText(committing_?"Applying filter…":"Updating preview…");
         const int navigatorEdge=existingGrade?std::exchange(pendingNavigatorEdge_,0):0;
         worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_,selection=rawSelection_,
@@ -462,6 +464,22 @@ public:
         case filters::Kind::MotionBlur:number("Angle",request_.settings.angle,-90,90,1,factory.angle);number("Distance",request_.settings.distance,1,2000,1,factory.distance);break;
         case filters::Kind::AddNoise:{number("Amount",request_.settings.amount,.1,400,1,factory.amount);auto* gaussian=new QCheckBox("Gaussian");auto* mono=new QCheckBox("Monochromatic");gaussian->setChecked(request_.settings.gaussian);mono->setChecked(request_.settings.monochromatic);fields_.addRow(gaussian);fields_.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.gaussian=value;change();});connect(mono,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.monochromatic=value;change();});break;}
         case filters::Kind::LensCorrection:number("Distortion",request_.settings.distortion,-100,100,1,factory.distortion);break;
+        case filters::Kind::LensEffects:{
+            auto* mode=new QComboBox;mode->setObjectName("lensEffectMode");mode->addItems({"Anamorphic Flare","Starburst","Mist","Prism","Bokeh"});mode->setCurrentIndex(int(request_.settings.lens.effect));fields_.addRow("Effect",mode);
+            auto& v=request_.settings.lens;const auto& d=factory.lens;
+            std::array<std::pair<int,int>,5> rows;
+            auto begin=[&](int i){rows[i].first=fields_.rowCount();};auto end=[&](int i){rows[i].second=fields_.rowCount();};
+            begin(0);number("Threshold",v.threshold,50,100,1,d.threshold);number("Strength",v.flareAmount,0,100,1,d.flareAmount);number("Length",v.flareLength,1,100,1,d.flareLength);number("Blue",v.flareBlue,0,100,1,d.flareBlue);end(0);
+            begin(1);number("Star strength",v.starAmount,0,100,1,d.starAmount);number("Star length",v.starLength,2,40,1,d.starLength);number("Star angle",v.starAngle,-180,180,1,d.starAngle);
+            auto* points=new QComboBox;points->setObjectName("lensStarPoints");points->addItems({"4","6","8","12","14"});points->setCurrentText(QString::number(v.starPoints));fields_.addRow("Points",points);connect(points,&QComboBox::currentTextChanged,&dialog_,[this](const QString& text){request_.settings.lens.starPoints=text.toInt();change();});end(1);
+            begin(2);number("Mist strength",v.mistStrength,0,100,1,d.mistStrength);number("Size",v.mistSize,0,100,1,d.mistSize);end(2);
+            begin(3);number("Prism strength",v.prismAmount,0,100,1,d.prismAmount);number("Copies",v.prismCopies,1,8,0,d.prismCopies);number("Offset",v.prismOffset,0,50,1,d.prismOffset);number("Prism angle",v.prismAngle,-180,180,1,d.prismAngle);number("Blur",v.prismBlur,0,100,1,d.prismBlur);
+            auto* both=new QCheckBox("Both ways");both->setChecked(v.prismBothWays);fields_.addRow(both);connect(both,&QCheckBox::toggled,&dialog_,[this](bool checked){request_.settings.lens.prismBothWays=checked;change();});end(3);
+            begin(4);number("Radius",v.bokehRadius,.5,6,1,d.bokehRadius);number("Brightness",v.bokehBrightness,0,100,1,d.bokehBrightness);number("Ring",v.bokehRing,0,100,1,d.bokehRing);
+            auto* shape=new QComboBox;shape->setObjectName("lensBokehShape");shape->addItems({"Round","Hexagon","Oval","Cat's Eye"});shape->setCurrentIndex(int(v.bokehShape));fields_.addRow("Shape",shape);connect(shape,&QComboBox::currentIndexChanged,&dialog_,[this](int index){request_.settings.lens.bokehShape=filters::BokehShape(index);change();});end(4);
+            auto show=[this,rows](int index){for(int i=0;i<5;++i)for(int row=rows[i].first;row<rows[i].second;++row)fields_.setRowVisible(row,i==index||(i==0&&row==rows[0].first&&index==1));};show(mode->currentIndex());
+            connect(mode,&QComboBox::currentIndexChanged,&dialog_,[this,show](int index){request_.settings.lens.effect=filters::LensEffect(index);show(index);dialog_.adjustSize();change();});break;
+        }
         case filters::Kind::ContentAwareFill:break;
         case filters::Kind::Vignette:number("Strength",request_.settings.vignette,0,100,1,factory.vignette);number("Midpoint",request_.settings.vignetteMidpoint,0,1,2,factory.vignetteMidpoint);break;
         case filters::Kind::Bloom:number("Strength",request_.settings.bloom,0,100,1,factory.bloom);number("Threshold",request_.settings.bloomThreshold,0,1,2,factory.bloomThreshold);break;
@@ -614,11 +632,13 @@ public:
                 }
                 request_.cameraRaw=std::move(rendered);request_.cameraRawView={};
             }else if(request_.kind==filters::Kind::LensCorrection&&request_.settings.distortion==0){dialog_.reject();return;}
+            else if(request_.kind==filters::Kind::LensEffects&&request_.settings.lens.isIdentity()){dialog_.reject();return;}
             else if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitDistance==0&&request_.settings.rgbSplitBlur==0){dialog_.reject();return;}
             if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
             if(!raw_&&remember_)remember_(request_.settings.normalized());committing_=true;apply_->setEnabled(false);buttons_.button(QDialogButtonBox::Cancel)->setEnabled(false);
             for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
+            for(auto* control:dialog_.findChildren<QComboBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
             preview_.setEnabled(false);debounce_.stop();
             if(!raw_)publishPreview();
