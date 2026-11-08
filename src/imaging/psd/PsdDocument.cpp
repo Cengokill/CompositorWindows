@@ -777,6 +777,13 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
             uint64_t retainedPixels=0,retainedMaskPixels=0,retainedBytes=0;
             for (auto& record : records) {
                 const auto* activeBoard=record.owner;
+                if (hasArtboard && !activeBoard) {
+                    for (const auto& channel : record.channels) {
+                        if (in.at > sectionEnd || channel.second > sectionEnd-in.at) throw std::runtime_error("Invalid PSD channel length");
+                        in.skip(channel.second);
+                    }
+                    continue;
+                }
                 if (activeBoard && !record.closer) {
                     if (record.clipped || (record.group && record.hasMask)) throw std::runtime_error("Photoshop artboard contains an unsupported clipping or group mask");
                     if (!record.artboard && !record.blendWarning.empty()) warnings.push_back(record.name + ": " + record.blendWarning);

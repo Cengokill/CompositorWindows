@@ -602,6 +602,21 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
             require(output->pixel(1,1)==Pixel{255,0,0,255}&&output->pixel(0,0)==Pixel{},"Artboard export differs after reopen");
         }
     });
+    test("psd_artboard_ignores_unsupported_outside_channels",[&]{
+        for(bool psb:{false,true}){
+            auto outside=solidPsdLayer(1,1,1,1,0,255,0,PsdFixtureCompression::Unsupported);outside.name="Outside";
+            auto pixel=solidPsdLayer(1,1,1,1,255,0,0);pixel.name="Inside";
+            const auto board=sectionLayer("Board",1,{{"artb",artboardRect(0,0,8,8)}});
+            const auto bytes=psdFixture(20,10,{outside,sectionLayer("end",3),pixel,board,outside},psb);
+            const auto imported=imaging::readPsd(bytes.data(),bytes.size());
+            require(imported.artboards.size()==1&&imported.warnings.empty(),"Excluded layer prevented artboard import");
+            const auto& layers=imported.artboards[0].document.layers;
+            require(layers.size()==1&&layers[0].name=="Inside"&&layers[0].raster&&layers[0].raster->pixel(0,0)==Pixel{255,0,0,255},"Artboard content changed");
+            const auto badInside=psdFixture(20,10,{sectionLayer("end",3),outside,board},psb);
+            bool rejected=false;try{imaging::readPsd(badInside.data(),badInside.size());}catch(const std::exception&){rejected=true;}
+            require(rejected,"Unsupported artboard channel was accepted");
+        }
+    });
     test("psd_malformed_artboard_is_rejected",[&]{
         auto bytes=psdFixture(20,10,{sectionLayer("end",3),plainLayer(),sectionLayer("Bad",1,{{"artb",{0,0,0,16}}})});
         bool rejected=false;try{imaging::readPsd(bytes.data(),bytes.size());}catch(const std::exception&){rejected=true;}require(rejected,"Malformed artboard was silently imported");
