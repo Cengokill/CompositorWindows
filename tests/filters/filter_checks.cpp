@@ -41,6 +41,16 @@ void testSettings(){
 }
 void testLensEffects(){
     auto source=image(48,32,[](int x,int y){auto v=std::uint8_t(x>=20&&x<25&&y>=12&&y<17?255:10);return Pixel{v,v,v,255};});
+    auto lowAlpha=image(64,64,[](int x,int y){return x>=24&&x<40&&y>=24&&y<40?Pixel{4,4,4,4}:Pixel{0,0,0,255};});
+    auto opaque=image(64,64,[](int x,int y){return x>=24&&x<40&&y>=24&&y<40?Pixel{255,255,255,255}:Pixel{0,0,0,255};});
+    for(auto effect:{LensEffect::AnamorphicFlare,LensEffect::Starburst,LensEffect::Mist,LensEffect::Prism,LensEffect::Bokeh}){
+        Settings settings;settings.lens.effect=effect;settings.lens.bokehRadius=6;
+        auto lowJob=request(Kind::LensEffects,lowAlpha);lowJob.settings=settings;auto low=apply(lowJob);
+        auto opaqueJob=request(Kind::LensEffects,opaque);opaqueJob.settings=settings;auto full=apply(opaqueJob);
+        int lowPeak=0,fullPeak=0;
+        for(int y=0;y<64;++y)for(int x=0;x<64;++x)if(x<24||x>=40||y<24||y>=40){lowPeak=std::max(lowPeak,int(low.raster->pixel(x,y).r));fullPeak=std::max(fullPeak,int(full.raster->pixel(x,y).r));}
+        require(fullPeak>10&&lowPeak*3<fullPeak*2,"lens spatial light must account for source alpha");
+    }
     for(auto effect:{LensEffect::AnamorphicFlare,LensEffect::Starburst,LensEffect::Mist,LensEffect::Prism,LensEffect::Bokeh}){
         Settings s;s.lens.effect=effect;s.lens.bokehRadius=6;
         auto q=request(Kind::LensEffects,source);q.settings=s;

@@ -151,7 +151,7 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
         double lum=a>0?(.2126*input[i]+.7152*input[i+1]+.0722*input[i+2])/a:0;
         double t=s.effect==LensEffect::Bokeh?.8:s.effect==LensEffect::Mist?.75:std::min(.95,s.threshold/100);
         double weight=std::clamp((lum-t)/(1-t),0.,1.);weight=weight*weight*(3-2*weight);
-        for(int c=0;c<3;++c){light[i+c]=float(a>0?linear(input[i+c]/a):0);high[i+c]=float(light[i+c]*weight);}light[i+3]=high[i+3]=1;
+        for(int c=0;c<3;++c){light[i+c]=float(a>0?linear(input[i+c]/a)*a:0);high[i+c]=float(light[i+c]*weight);}light[i+3]=high[i+3]=1;
     }}
     if(s.threshold>95&&(s.effect==LensEffect::AnamorphicFlare||s.effect==LensEffect::Starburst)){
         auto density=fastGaussian(high,w,h,side*.03*(s.threshold-95)/5,limits,{true,true,true,true});double peak=0;
@@ -196,7 +196,7 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
             }}
         }
     }
-    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(std::clamp(gamma(result[i+c]),0.,1.)*a);result[i+3]=float(a);}}
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(a>0?std::clamp(gamma(result[i+c]/a),0.,1.)*a:0);result[i+3]=float(a);}}
     return result;
 }
 bool finishingIdentity(Kind kind,const Settings& s){
