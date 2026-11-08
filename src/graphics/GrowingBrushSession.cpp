@@ -120,10 +120,9 @@ std::shared_ptr<const LayerRenderPreview> GrowingBrushSnapshot::renderPreview()c
     if(!impl_->changed)return {};
     auto preview=std::make_shared<LayerRenderPreview>();preview->layer=impl_->original;preview->layer.animation.reset();preview->identity=impl_;preview->lineage=impl_->counters;
     const auto state=impl_;
-    // Document compositing maps unit coordinates through the live layer transform.
-    // A crop-sized image source stretched over the original transform would paint
-    // the dab across the whole layer, including pixels the stroke never touched.
-    const auto bounds=(!state->mask&&state->original.raster)?BrushSourceRect{0,0,state->baseWidth,state->baseHeight}:state->crop;
+    // The source grid and live transform must describe the same grown crop,
+    // including painted pixels outside the original layer bounds.
+    const auto bounds=state->crop;
     const auto readRow=[state,bounds](int x,int y,int count,Pixel* output){std::fill_n(output,count,Pixel{});state->copyRow(bounds.x+x,bounds.y+y,count,output);};
     const auto rawSource=[&](){auto source=std::make_shared<SamplingSource>();source->width=bounds.width;source->height=bounds.height;const auto origin=state->alignment();source->alignmentX=int(origin.x)-bounds.x;source->alignmentY=int(origin.y)-bounds.y;source->identity=state;
         source->reuseDomain=state->counters;
@@ -165,7 +164,7 @@ std::shared_ptr<const LayerRenderPreview> GrowingBrushSnapshot::renderPreview()c
         preview->mask=[state,bounds](Point unit,Transform::Sampling sampling,uint8_t exterior){return sampleMaskPixels(bounds.width,bounds.height,[&](int x,int y){return state->pixel(bounds.x+x,bounds.y+y).r;},unit,sampling,exterior);};
         auto source=rawSource();source->gray=[state,bounds](int x,int y){return state->pixel(bounds.x+x,bounds.y+y).r;};source->readRow=readRow;preview->maskSource=std::move(source);
     }else{
-        preview->layer.transform=state->original.raster?state->base:state->placed();preview->layer.shapeJson.clear();
+        preview->layer.transform=state->placed();preview->layer.shapeJson.clear();
         // The image handle marks a visible image for graph/culling validation;
         // all reads are overridden below. Blank virtual canvases allocate one tile.
         if(!preview->layer.raster)preview->layer.raster=Raster::filled(1,1);

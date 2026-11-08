@@ -22,14 +22,14 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.2.0
+## What's new in 1.5.6
 
 See the [release notes](docs/release-notes.md) for details.
 
-- **Focus stacking.** Combine photos taken at different focus distances into one sharper image.
-- **RAW and 16-bit editing.** Open Camera Raw directly from RAW Development. The filter adds adaptive Shadows and previews at native resolution when memory allows. Most edits retain 16-bit precision.
-- **HDR and CMYK.** Keep HDR highlights through editing and OpenEXR export. Use ICC profiles to import, proof and export CMYK images.
-- **Filters and adjustment layers.** Use Progressive Blur and RGB Split as filters, or add editable Progressive Blur, Bloom / Glow and RGB Split layers.
+- **Animated GIFs.** Edit frames and their timing, preview playback and export GIFs.
+- **More import and export options.** Open Photoshop artboards in separate documents, import PDF pages as layers and pack layers into PNG channels.
+- **Find layers and fonts.** Search the layer list, show selected layers and preview installed fonts from a searchable picker.
+- **Drawing controls.** Use pen pressure for brush size and opacity, smooth rectangle corners and editable line styles. The toolbar adapts to the window height.
 
 <img width="1024" alt="RAW Development with a live preview and the Camera Raw button" src="https://github.com/user-attachments/assets/14fd198a-286b-459e-8086-5ebfd2843f8d" />
 
