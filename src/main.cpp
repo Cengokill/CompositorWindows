@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "ui/WhatsNew.h"
 #include "AppLogging.h"
 #include "persistence/ProjectStore.h"
 #include "imaging/wic_codec.h"
@@ -21,6 +22,7 @@ int main(int argc,char**argv){
         .arg(QCoreApplication::applicationFilePath(),app.arguments().join(" | ")));
     app.setProperty("manualUpdatesOnly", true);
     const auto args=app.arguments();
+    if(args.contains("--check-release-notes"))return compositor::ui::installedReleaseNotes().empty()?2:0;
     if(args.contains("--update-health-check")){
         try{
             auto model=QApplication::applicationDirPath()+"/models/birefnet-lite.onnx";
@@ -50,8 +52,10 @@ int main(int argc,char**argv){
         QTimer::singleShot(200,&app,[&,dir]{try{window.exerciseNativeUi(dir);app.exit(0);}catch(const std::exception&e){QFile error(dir+"/failure.txt");if(error.open(QIODevice::WriteOnly))error.write(e.what());app.exit(1);}});
     }else{
         QStringList paths;for(int i=1;i<args.size();++i)if(!args[i].startsWith("--"))paths.append(args[i]);
-        QTimer::singleShot(0,&window,[&window,paths]{window.receiveDropPaths(paths);});
-        window.startAutomaticUpdateChecks();
+        QTimer::singleShot(0,&window,[&window,paths]{
+            window.receiveDropPaths(paths);
+            window.startWhatsNew([&window]{window.startAutomaticUpdateChecks();});
+        });
     }
     return app.exec();
 }

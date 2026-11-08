@@ -1,8 +1,20 @@
 # Compositor Windows 1.5.6
 
-Animated GIF layers, Photoshop artboards in separate documents, Channel Pack PNG export, multipage PDF import, pen pressure controls, searchable layers and fonts, editable line styles, smooth rectangle corners and a responsive toolbar are new in this release. See the [release notes on GitHub](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.6) for details and screenshots.
+## New features
 
-The About dialog displays the release version. Live brush and Clone Stamp previews retain painted pixels outside the original layer bounds.
+Animated GIF layers, Photoshop artboards in separate documents, Channel Pack PNG export and multipage PDF import are new in this release.
+
+## Improvements
+
+Pen pressure controls, searchable layers and fonts, editable line styles, smooth rectangle corners and a responsive toolbar are new in this release. The About dialog displays the release version.
+
+## Fixes
+
+Live brush and Clone Stamp previews retain painted pixels outside the original layer bounds.
+
+## Release details
+
+See the [release notes on GitHub](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.6) for details and screenshots.
 
 # Compositor Windows 1.2.0
 

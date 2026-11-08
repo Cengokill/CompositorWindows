@@ -32,6 +32,8 @@ if($manifest.schema -eq 2){
  Record 'matching_application_source' ((Get-FileHash -LiteralPath $sourceArchive).Hash -ieq $manifest.sourceSha256 -and (Get-FileHash -LiteralPath (Join-Path $portable 'sources\CompositorWindows-source.zip')).Hash -ieq $manifest.sourceSha256) @{sha256=$manifest.sourceSha256}
  $health=RunApp $application @('--update-health-check') 'portable-health'
  Record 'portable_clean_path_health' ($health.exitCode -eq 0) $health
+ $notes=RunApp $application @('--check-release-notes') 'portable-release-notes'
+ Record 'portable_release_notes' ($notes.exitCode -eq 0) $notes
  $native=Join-Path $run 'native'
  $ui=RunApp $application @('--warp','--ui-test','--evidence',$native) 'portable-native'
  Record 'portable_native_workflow' ($ui.exitCode -eq 0) $ui

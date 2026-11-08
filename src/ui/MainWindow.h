@@ -507,6 +507,8 @@ public:
     NativeCanvas* canvas(){auto*p=current();return p?p->canvas:nullptr;}
     QString brushAdapterName()const{return brushGpu_?QString::fromStdString(brushGpu_->adapterName()):QString{};}
     void exerciseNativeUi(const QString& evidenceDirectory);
+    // Wait for startup imports and dialogs, then present the installed release if due.
+    void startWhatsNew(std::function<void()> finished={});
     // Test seam: holds the next background save on the worker before it writes.
     void setProjectSaveBeforeWriteForTesting(std::function<void()> hook){projectSaveBeforeWrite_=std::move(hook);}
     // Daily stable-release check: first after initialDelayMs, then re-evaluated every intervalMs.
