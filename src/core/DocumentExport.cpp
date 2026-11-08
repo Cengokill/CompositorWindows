@@ -188,4 +188,57 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     result.maxRenderPixelBytes = renderBound;
     return result;
 }
+
+imaging::StreamingExportResult exportChannelPackAtomic(const Document& document, const std::filesystem::path& path,
+    const std::array<std::string, 4>& sources, imaging::ExportOptions options,
+    const imaging::StreamExportLimits& limits, const imaging::ExportProgress& progress) {
+    imaging::validateExportExtent(std::uint32_t(document.width), std::uint32_t(document.height));
+    validateDocument(document);
+    std::array<Document, 4> isolated;
+    for (size_t c = 0; c < sources.size(); ++c) {
+        if (sources[c].empty() || sources[c] == "white") continue;
+        if (sources[c][0] != 'L') throw std::invalid_argument("Invalid channel source");
+        const auto id = sources[c].substr(1);
+        const auto find = [&](const std::string& key) { return std::find_if(document.layers.begin(), document.layers.end(), [&](const Layer& l) { return l.id == key; }); };
+        if (find(id) == document.layers.end()) throw std::invalid_argument("Channel source layer is missing");
+        isolated[c] = document;
+        for (auto& layer : isolated[c].layers) {
+            bool ancestor = false, descendant = false;
+            auto current = find(id);
+            while (current != document.layers.end()) { if (current->id == layer.id) { ancestor = true; break; } if (current->parentId.empty()) break; current = find(current->parentId); }
+            current = find(layer.id);
+            while (current != document.layers.end() && !current->parentId.empty()) { if (current->parentId == id) { descendant = true; break; } current = find(current->parentId); }
+            if (ancestor) layer.visible = true;
+            else if (!descendant) layer.visible = false;
+        }
+    }
+    options.format = imaging::ImageFormat::Png; options.cmykProfile = nullptr; options.dpi = document.resolution;
+    SoftwareRenderer renderer; std::size_t renderBound = 0;
+    auto rows = [&](std::uint32_t top, std::uint32_t count, std::span<std::uint8_t> output, std::size_t stride) {
+        for (size_t c = 0; c < sources.size(); ++c) {
+            if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
+            if (sources[c].empty() || sources[c] == "white") {
+                for (std::uint32_t y = 0; y < count; ++y) for (int x = 0; x < document.width; ++x) output[size_t(y)*stride+size_t(x)*4+c] = sources[c].empty() ? 0 : 255;
+                continue;
+            }
+            const auto& source = isolated[c]; const int margin = effects::adjustmentStackPadding(source);
+            for (int left = 0; left < document.width; left += 1024) {
+                if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
+                const int width = std::min(1024, document.width-left);
+                if (width > 30000-2*margin || count > std::uint32_t(30000-2*margin) || std::uint64_t(width+2*margin)*(count+2*margin)>100000000) throw std::runtime_error("Adjustment export padding exceeds render budget");
+                const bool hdr = std::any_of(source.layers.begin(), source.layers.end(), [](const Layer& l){return l.deep && l.deep->isHdr();});
+                auto raster = hdr ? rasterFromDeep(*renderer.renderDeep(source,left,int(top),width,int(count),options.cancelled)) : renderer.render(source,left-margin,int(top)-margin,width+2*margin,int(count)+2*margin);
+                const int offset = hdr ? 0 : margin;
+                renderBound = std::max(renderBound, size_t(width+2*margin)*(count+2*margin)*(hdr?80:9)+raster->retainedBytes()*3+1024*1024);
+                for (std::uint32_t y=0;y<count;++y) for (int x=0;x<width;++x) {
+                    const auto p = raster->pixel(x+offset,int(y)+offset);
+                    output[size_t(y)*stride+size_t(left+x)*4+c] = std::uint8_t(std::clamp(std::lround(.2126*p.r+.7152*p.g+.0722*p.b),0L,255L));
+                }
+            }
+        }
+    };
+    auto result = imaging::encodeRowsAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height), rows, options, limits, progress, true);
+    result.maxRenderPixelBytes = renderBound; return result;
+}
+
 }
