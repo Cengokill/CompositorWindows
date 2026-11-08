@@ -7,8 +7,24 @@
 #include <optional>
 #include <string>
 namespace compositor::filters {
-enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit };
+enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit,LensEffects };
+enum class LensEffect { AnamorphicFlare,Starburst,Mist,Prism,Bokeh };
+enum class BokehShape { Round,Hexagon,Oval,CatsEye };
+struct LensEffectSettings {
+    LensEffect effect{LensEffect::AnamorphicFlare};
+    double threshold{90},flareAmount{50},flareLength{60},flareBlue{80};
+    double starAmount{50},starLength{12},starAngle{15};
+    int starPoints{6};
+    double mistStrength{50},mistSize{30};
+    double prismAmount{80},prismCopies{5},prismOffset{6},prismAngle{180},prismBlur{};
+    bool prismBothWays{};
+    double bokehRadius{2},bokehBrightness{50},bokehRing{100};
+    BokehShape bokehShape{BokehShape::Round};
+    LensEffectSettings normalized() const;
+    bool isIdentity() const;
+};
 struct Settings {
+    LensEffectSettings lens;
     double radius{1},angle{0},distance{10},amount{10},distortion{0};
     bool gaussian{},monochromatic{};
     double vignette{},vignetteMidpoint{.5},vignetteFeather{.5};

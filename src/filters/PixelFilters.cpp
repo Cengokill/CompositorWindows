@@ -29,7 +29,7 @@ std::size_t count(int w,int h,const Limits& l,std::uint64_t bytesPerPixel=24){
 void checkSelection(const GrayRaster& m){if(m.width<1||m.height<1||m.width>30000||m.height>30000||std::uint64_t(m.width)*m.height>100000000||m.pixels.size()!=std::size_t(m.width)*m.height)throw std::runtime_error("Invalid source selection storage");}
 bool empty(const GrayRaster& m){return std::none_of(m.pixels.begin(),m.pixels.end(),[](auto p){return p!=0;});}
 double normalized(double value,double low,double high,double fallback){return std::isfinite(value)?std::clamp(value,low,high):fallback;}
-void kindCheck(Kind k){switch(k){case Kind::GaussianBlur:case Kind::MotionBlur:case Kind::AddNoise:case Kind::LensCorrection:case Kind::ContentAwareFill:case Kind::Vignette:case Kind::Bloom:case Kind::TonalContrast:case Kind::Dither:case Kind::Scanlines:case Kind::CameraRaw:case Kind::ProgressiveBlur:case Kind::RgbSplit:return;}throw std::runtime_error("Unsupported filter kind");}
+void kindCheck(Kind k){switch(k){case Kind::GaussianBlur:case Kind::MotionBlur:case Kind::AddNoise:case Kind::LensCorrection:case Kind::ContentAwareFill:case Kind::Vignette:case Kind::Bloom:case Kind::TonalContrast:case Kind::Dither:case Kind::Scanlines:case Kind::CameraRaw:case Kind::ProgressiveBlur:case Kind::RgbSplit:case Kind::LensEffects:return;}throw std::runtime_error("Unsupported filter kind");}
 bool spreads(Kind k){return k==Kind::GaussianBlur||k==Kind::MotionBlur||k==Kind::ProgressiveBlur||k==Kind::RgbSplit;}
 graphics::Rgba8View view(std::vector<std::uint8_t>& v,int w,int h){return {v,std::uint32_t(w),std::uint32_t(h),std::size_t(w)*4};}
 std::uint8_t byte(double x){return std::uint8_t(std::clamp(std::floor(x+.5),0.,255.));}
@@ -136,8 +136,72 @@ template<class T> std::vector<T> motion(const std::vector<T>& source,int w,int h
     auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);const double a=angle*std::numbers::pi/180,dx=std::cos(a),dy=-std::sin(a);std::vector<T> out(source.size());
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&63)==0)cancel(limits);std::array<double,4> sum{};for(int k=-r;k<=r;++k)for(int c=0;c<4;++c)sum[c]+=sample(source,w,h,x+k*dx,y+k*dy,c,clamp)*weights[k+r];for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum[c]);}}return out;
 }
+// Behavioral reference: upstream LensEffects.swift v1.5.8, blob
+// 2a519f5ce8fd0e504eae78b065a1e70891fa124c (MIT, notice above).
+// Software implementation of the v1.5.8 optical behavior. Fixed quadrature
+// bounds work independently of radius; Core Image raster parity is unverified.
+std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const LensEffectSettings& raw,const Limits& limits){
+    const auto s=raw.normalized();if(s.isIdentity())return input;
+    count(w,h,limits,192);const double side=std::max(w,h);
+    auto linear=[](double v){return v<=.04045?v/12.92:std::pow((v+.055)/1.055,2.4);};
+    auto gamma=[](double v){v=std::max(0.,v);return v<=.0031308?v*12.92:1.055*std::pow(v,1/2.4)-.055;};
+    std::vector<float> light(input.size()),high(input.size()),result;
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){
+        auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];
+        double lum=a>0?(.2126*input[i]+.7152*input[i+1]+.0722*input[i+2])/a:0;
+        double t=s.effect==LensEffect::Bokeh?.8:s.effect==LensEffect::Mist?.75:std::min(.95,s.threshold/100);
+        double weight=std::clamp((lum-t)/(1-t),0.,1.);weight=weight*weight*(3-2*weight);
+        for(int c=0;c<3;++c){light[i+c]=float(a>0?linear(input[i+c]/a):0);high[i+c]=float(light[i+c]*weight);}light[i+3]=high[i+3]=1;
+    }}
+    if(s.threshold>95&&(s.effect==LensEffect::AnamorphicFlare||s.effect==LensEffect::Starburst)){
+        auto density=fastGaussian(high,w,h,side*.03*(s.threshold-95)/5,limits,{true,true,true,true});double peak=0;
+        for(std::size_t i=0;i<density.size();i+=4)peak=std::max(peak,.2126*density[i]+.7152*density[i+1]+.0722*density[i+2]);
+        if(peak>.001)for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double v=(.2126*density[i]+.7152*density[i+1]+.0722*density[i+2])/peak,cut=.25+.6*(s.threshold-95)/5;double weight=std::clamp((v-cut+.05)/.1,0.,1.);for(int c=0;c<3;++c)high[i+c]*=float(weight);}}
+    }
+    result=light;
+    if(s.effect==LensEffect::Prism){
+        double theta=s.prismAngle*std::numbers::pi/180,dx=std::cos(theta),dy=-std::sin(theta);
+        for(int copy=int(s.prismCopies);copy>=1;--copy){
+            std::vector<float> ghost(input.size());
+            for(int way:{1,-1}){if(way==-1&&!s.prismBothWays)continue;
+                for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double shift=way*side*(s.prismOffset*copy/100+(1-c)*.003);auto i=(std::size_t(y)*w+x)*4+c;ghost[i]=std::max(ghost[i],float(sample(light,w,h,x-dx*shift,y-dy*shift,c,{})));}}
+            }
+            if(s.prismBlur>0)ghost=fastGaussian(ghost,w,h,side*s.prismBlur/10000*copy,limits,{true,true,true,true});
+            double fade=std::pow(.78,copy-1)*s.prismAmount/100;
+            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=std::max(result[i],float(ghost[i]*fade));}}
+        }
+    }else if(s.effect==LensEffect::Mist){
+        double size=side*(.2+s.mistSize/100*1.8)/100,strength=s.mistStrength/100,scatter=strength*.4;
+        auto near=fastGaussian(light,w,h,size*.6,limits,{true,true,true,true});auto far=fastGaussian(light,w,h,size*4,limits,{true,true,true,true});auto glow=fastGaussian(high,w,h,size*1.5,limits,{true,true,true,true});
+        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=float(light[i]*(1-scatter)+near[i]*scatter*.6+far[i]*scatter*.4+glow[i]*strength*.35);}}
+    }else if(s.effect==LensEffect::Bokeh){
+        double radius=side*s.bokehRadius/100,ring=s.bokehRing/100;constexpr int samples=96;
+        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sum[3]{},bright[3]{},total=0;
+            for(int k=0;k<samples;++k){double theta=k*2.399963229728653,rad=std::sqrt((k+.5)/samples);
+                if(s.bokehShape==BokehShape::Hexagon)rad*=std::cos(std::numbers::pi/6)/std::cos(std::remainder(theta,std::numbers::pi/3));
+                double xx=std::cos(theta)*rad,yy=std::sin(theta)*rad;
+                if(s.bokehShape==BokehShape::Oval)xx*=.5;
+                if(s.bokehShape==BokehShape::CatsEye)xx*=1-.65*std::min(1.,std::hypot((x+.5-w/2.)/(w/2.),(y+.5-h/2.)/(h/2.)));
+                double weight=1+ring*4*std::pow(rad,8);total+=weight;
+                for(int c=0;c<3;++c){sum[c]+=sample(light,w,h,x+xx*radius,y+yy*radius,c,{true,true,true,true})*weight;bright[c]+=sample(high,w,h,x+xx*radius,y+yy*radius,c,{true,true,true,true})*weight;}
+            }
+            auto i=(std::size_t(y)*w+x)*4;for(int c=0;c<3;++c){double b=bright[c]/total*(12+s.bokehBrightness*.7);result[i+c]=float(sum[c]/total+.8*(1-std::exp(-b/.8)));}
+        }}
+    }else{
+        bool flare=s.effect==LensEffect::AnamorphicFlare;int spokes=flare?1:s.starPoints/2;double amount=(flare?s.flareAmount:s.starAmount)/50;
+        for(int spoke=0;spoke<spokes;++spoke){double theta=flare?0:(s.starAngle+spoke*180./spokes)*std::numbers::pi/180,reach=side*(flare?s.flareLength:s.starLength)/100;
+            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double sum=0,total=0,stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;
+                for(int k=-32;k<=32;++k){double t=k/32.,weight=std::exp(-4.5*t*t);total+=weight;sum+=sample(high,w,h,x+t*reach*stretch*std::cos(theta),y-t*reach*stretch*std::sin(theta),c,{})*weight;}
+                double coating=flare?1-s.flareBlue/100*(c==0?.9:c==1?.62:0):1;result[(std::size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
+            }}
+        }
+    }
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(std::clamp(gamma(result[i+c]),0.,1.)*a);result[i+3]=float(a);}}
+    return result;
+}
 bool finishingIdentity(Kind kind,const Settings& s){
     switch(kind){
+    case Kind::LensEffects:return s.lens.isIdentity();
     case Kind::Vignette:return s.vignette==0;
     case Kind::Bloom:return s.bloomGlow?s.bloomAmount==0:s.bloom==0;
     case Kind::TonalContrast:return s.tonal==0;
@@ -331,8 +395,26 @@ std::shared_ptr<const Raster> resize(const Raster& source,PixelRect bounds,int w
 }
 PixelRect coverageBounds(const SourceSelection& selected){const auto&m=*selected.coverage;int loX=m.width,loY=m.height,hiX=0,hiY=0;for(int y=0;y<m.height;++y)for(int x=0;x<m.width;++x)if(m.pixel(x,y)){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}return {selected.originX+loX,selected.originY+loY,hiX-loX,hiY-loY};}
 }
-Settings Settings::normalized()const{auto out=*this;out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);out.bloomAmount=filters::normalized(bloomAmount,0,100,40);out.bloomRadius=filters::normalized(bloomRadius,1,150,24);out.rgbSplitDistance=filters::normalized(rgbSplitDistance,0,200,10);out.rgbSplitBlur=filters::normalized(rgbSplitBlur,0,400,0);out.rgbSplitAngle=filters::normalized(rgbSplitAngle,-180,180,0);out.rgbSplitReach=filters::normalized(rgbSplitReach,1e-9,3200000,1000);for(auto* point:{&out.progressiveStart,&out.progressiveEnd,&out.rgbSplitCenter})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
-bool supportsHdr(Kind kind){return kind!=Kind::LensCorrection&&kind!=Kind::ContentAwareFill&&kind!=Kind::Bloom&&kind!=Kind::TonalContrast&&kind!=Kind::Scanlines&&kind!=Kind::RgbSplit;}
+LensEffectSettings LensEffectSettings::normalized() const {
+    auto out=*this;
+    switch(effect){case LensEffect::AnamorphicFlare:case LensEffect::Starburst:case LensEffect::Mist:case LensEffect::Prism:case LensEffect::Bokeh:break;default:out.effect=LensEffect::AnamorphicFlare;}
+    switch(bokehShape){case BokehShape::Round:case BokehShape::Hexagon:case BokehShape::Oval:case BokehShape::CatsEye:break;default:out.bokehShape=BokehShape::Round;}
+    out.threshold=filters::normalized(threshold,50,100,90);
+    out.flareAmount=filters::normalized(flareAmount,0,100,50);out.flareLength=filters::normalized(flareLength,1,100,60);out.flareBlue=filters::normalized(flareBlue,0,100,80);
+    out.starAmount=filters::normalized(starAmount,0,100,50);out.starLength=filters::normalized(starLength,2,40,12);out.starAngle=filters::normalized(starAngle,-180,180,15);
+    if(starPoints!=4&&starPoints!=6&&starPoints!=8&&starPoints!=12&&starPoints!=14)out.starPoints=6;
+    out.mistStrength=filters::normalized(mistStrength,0,100,50);out.mistSize=filters::normalized(mistSize,0,100,30);
+    out.prismAmount=filters::normalized(prismAmount,0,100,80);out.prismCopies=std::round(filters::normalized(prismCopies,1,8,5));out.prismOffset=filters::normalized(prismOffset,0,50,6);out.prismAngle=filters::normalized(prismAngle,-180,180,180);out.prismBlur=filters::normalized(prismBlur,0,100,0);
+    out.bokehRadius=filters::normalized(bokehRadius,.5,6,2);out.bokehBrightness=filters::normalized(bokehBrightness,0,100,50);out.bokehRing=filters::normalized(bokehRing,0,100,100);
+    return out;
+}
+bool LensEffectSettings::isIdentity() const {
+    const auto s=normalized();
+    switch(s.effect){case LensEffect::AnamorphicFlare:return s.flareAmount==0;case LensEffect::Starburst:return s.starAmount==0;case LensEffect::Mist:return s.mistStrength==0;case LensEffect::Prism:return s.prismAmount==0;case LensEffect::Bokeh:return false;}
+    return false;
+}
+Settings Settings::normalized()const{auto out=*this;out.lens=lens.normalized();out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);out.bloomAmount=filters::normalized(bloomAmount,0,100,40);out.bloomRadius=filters::normalized(bloomRadius,1,150,24);out.rgbSplitDistance=filters::normalized(rgbSplitDistance,0,200,10);out.rgbSplitBlur=filters::normalized(rgbSplitBlur,0,400,0);out.rgbSplitAngle=filters::normalized(rgbSplitAngle,-180,180,0);out.rgbSplitReach=filters::normalized(rgbSplitReach,1e-9,3200000,1000);for(auto* point:{&out.progressiveStart,&out.progressiveEnd,&out.rgbSplitCenter})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
+bool supportsHdr(Kind kind){return kind!=Kind::LensEffects&&kind!=Kind::LensCorrection&&kind!=Kind::ContentAwareFill&&kind!=Kind::Bloom&&kind!=Kind::TonalContrast&&kind!=Kind::Scanlines&&kind!=Kind::RgbSplit;}
 double blurMargin(Kind kind,const Settings& raw){kindCheck(kind);auto s=raw.normalized();return kind==Kind::GaussianBlur?s.radius*3+2:kind==Kind::MotionBlur?s.distance/2+2:kind==Kind::ProgressiveBlur?std::max(s.progressiveFrom,s.progressiveTo)*3+2:kind==Kind::RgbSplit?(s.rgbSplitDistance+s.rgbSplitBlur)*(s.rgbSplitRadial?2:1)+2:kind==Kind::Bloom&&s.bloomGlow?s.bloomRadius*3+2:0;}
 LayerSides canvasTouchingSides(const Transform& placed,int sourceWidth,int sourceHeight,int canvasWidth,int canvasHeight){
     LayerSides sides{};
@@ -370,7 +452,7 @@ Transform placedGrid(const Transform& placed,int originalWidth,int originalHeigh
     if(!placed.valid()||originalWidth<1||originalHeight<1||rect.width<1||rect.height<1)throw std::runtime_error("Invalid filter placement");auto out=placed;out.width=rect.width*placed.width/originalWidth;out.height=rect.height*placed.height/originalHeight;auto middle=placed.fromUnit({(rect.x+rect.width/2.)/originalWidth,(rect.y+rect.height/2.)/originalHeight});out.x=middle.x-out.width/2;out.y=middle.y-out.height/2;if(!out.valid())throw std::runtime_error("Expanded filter transform exceeds document limits");return out;
 }
 std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Settings& raw,double scale,std::uint32_t seed,const GrayRaster* selection,const Limits& limits,LayerSides clamp){
-    kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?96:kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>64)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
+    kindCheck(kind);cancel(limits);count(source.width,source.height,limits,kind==Kind::LensEffects?192:kind==Kind::ProgressiveBlur?96:kind==Kind::ContentAwareFill?32:24);if(!std::isfinite(scale)||scale<=0||scale>64)throw std::runtime_error("Invalid filter preview scale");if(selection){checkSelection(*selection);if(selection->width!=source.width||selection->height!=source.height)throw std::runtime_error("Filter selection dimensions differ");}
     if(kind==Kind::ContentAwareFill&&!selection)throw std::runtime_error("Content-Aware Fill needs a selection");const auto s=raw.normalized();auto original=source.rgba();cancel(limits);const int w=source.width,h=source.height;if(finishingIdentity(kind,s))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);auto result=original;cancel(limits);
     if(selection&&empty(*selection))return Raster::fromRgba(w,h,original.data(),std::size_t(w)*4);
     switch(kind){
@@ -386,6 +468,7 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
         case Kind::TonalContrast:tonalContrast(result,w,h,s,limits);break;
         case Kind::Dither:dither(result,w,h,s,seed);break;
         case Kind::Scanlines:scanlines(result,w,h,s,limits);break;
+        case Kind::LensEffects:{std::vector<float> input(original.size());for(std::size_t i=0;i<input.size();++i)input[i]=original[i]/255.f;auto output=lensPixels(input,w,h,s.lens,limits);for(std::size_t i=0;i<output.size();++i)result[i]=byte(output[i]*255);break;}
         case Kind::CameraRaw:break;
     }
     cancel(limits);if(selection)for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=std::size_t(y)*w+x;unsigned coverage=selection->pixels[i];for(int c=0;c<4;++c)result[i*4+c]=std::uint8_t((unsigned(result[i*4+c])*coverage+unsigned(original[i*4+c])*(255-coverage)+127)/255);}}
@@ -542,7 +625,7 @@ Result applyCameraRaw(const Request& request, Result result) {
 }
 std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source,const Settings& raw,double scale,uint32_t seed,const GrayRaster* selection,const Limits& limits,const CameraRawSettings& cameraRaw,const CameraRawView& cameraView,LayerSides clamp){
     if(!source.valid())throw std::runtime_error("Invalid HDR filter source");
-    count(source.width,source.height,limits,kind==Kind::ProgressiveBlur?160:64);cancel(limits);const auto settings=raw.normalized();
+    count(source.width,source.height,limits,kind==Kind::LensEffects?192:kind==Kind::ProgressiveBlur?160:64);cancel(limits);const auto settings=raw.normalized();
     if(selection&&(selection->width!=source.width||selection->height!=source.height||!selection->validStorage()))throw std::runtime_error("HDR selection must match source grid");
     if(source.isHdr()&&!supportsHdr(kind))throw std::runtime_error("Convert the HDR layer to SDR before this spatial filter");
     if(kind==Kind::LensCorrection||kind==Kind::ContentAwareFill)throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
@@ -561,6 +644,7 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
         else if(kind==Kind::Bloom)bloomFloat(pixels,source.width,source.height,settings,scale,limits);
         else if(kind==Kind::TonalContrast)tonalFloat(pixels,source.width,source.height,settings,limits);
         else if(kind==Kind::Dither)ditherFloat(pixels,source.width,source.height,settings,seed);
+        else if(kind==Kind::LensEffects)pixels=lensPixels(pixels,source.width,source.height,settings.lens,limits);
         else if(kind==Kind::Scanlines)scanlinesFloat(pixels,source.width,source.height,settings,limits);
         else throw std::runtime_error("Unsupported deep filter kind");
         result=deepFromFloats(source,pixels,limits);
@@ -606,7 +690,7 @@ Result apply(const Request& request){
     if(grows)bounds=filterWorkingBounds(request);
     if(request.kind==Kind::ContentAwareFill){auto selection=coverageBounds(*request.selection);int loX=std::min(0,selection.x),loY=std::min(0,selection.y);bounds={loX,loY,std::max(original.width,selection.x+selection.width)-loX,std::max(original.height,selection.y+selection.height)-loY};}
     gateSize(bounds.width,bounds.height);
-    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=(request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit)&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
+    auto placed=placedGrid(request.transform,original.width,original.height,bounds);const double previewEdge=(request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit||request.kind==Kind::LensEffects)&&request.previewMaxEdge>0?request.previewMaxEdge:2048.;double factor=request.preview&&request.kind!=Kind::AddNoise&&request.kind!=Kind::ContentAwareFill?std::min(1.,previewEdge/std::max(bounds.width,bounds.height)):1.;
     if(request.kind==Kind::ProgressiveBlur||request.kind==Kind::RgbSplit){
         const int w=factor<1?std::max(1,int(bounds.width*factor)):bounds.width;
         const int h=factor<1?std::max(1,int(bounds.height*factor)):bounds.height;
@@ -647,7 +731,7 @@ Result apply(const Request& request){
     if(grows&&!request.preview){int loX=output->width,loY=output->height,hiX=0,hiY=0;for(int y=0;y<output->height;++y){cancel(request.limits);for(int x=0;x<output->width;++x)if(deepOutput?deepOutput->pixel(x,y)[3]>0:output->pixel(x,y).a!=0){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
         if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}if(deepOutput){auto crop=makeDeep(w,h,deepOutput->format);for(int y=0;y<h;++y)for(int x=0;x<w;++x)crop->setPixel(x,y,deepOutput->pixel(x+loX,y+loY));deepOutput=crop;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
     }
-    cancel(request.limits);result.deep=deepOutput;result.raster=output;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=true;result.implementation=grows||request.kind==Kind::RgbSplit||request.kind==Kind::Bloom?"analytic software kernel; Mac raster comparison pending":"pinned upstream C algorithm";return result;
+    cancel(request.limits);result.deep=deepOutput;result.raster=output;result.transform=placed;result.sourceBounds=bounds;result.previewScale=factor;result.changed=true;result.implementation=request.kind==Kind::LensEffects||grows||request.kind==Kind::RgbSplit||request.kind==Kind::Bloom?"analytic software kernel; Mac raster comparison pending":"pinned upstream C algorithm";return result;
 }
 }
 
