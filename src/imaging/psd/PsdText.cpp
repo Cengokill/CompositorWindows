@@ -33,6 +33,7 @@ struct Cursor {
     const uint8_t* data{};
     size_t size{}, at{};
     bool ok{true};
+    unsigned depth{};
     size_t remaining() const { return at > size ? 0 : size - at; }
     bool need(size_t n) { if (!ok || n > remaining()) { ok = false; return false; } return true; }
     uint8_t u8() { if (!need(1)) return 0; return data[at++]; }
@@ -165,6 +166,9 @@ std::optional<bool> boolOf(const Engine* value) { return value && value->kind ==
 const std::string* stringOf(const Engine* value) { return value && value->kind == Engine::Kind::String ? &value->text : nullptr; }
 std::optional<Descriptor> descriptorValue(Cursor& in, const std::string& type);
 std::optional<std::map<std::string, Descriptor>> descriptorMap(Cursor& in, bool versioned) {
+    if (in.depth >= 32) return std::nullopt;
+    ++in.depth;
+    struct DepthGuard { Cursor& cursor; ~DepthGuard() { --cursor.depth; } } guard{in};
     if (versioned && in.u32() != 16) return std::nullopt;
     if (!in.ok) return std::nullopt;
     in.utf16(); auto klass = in.identifier(); (void)klass; auto count = in.u32();
@@ -193,6 +197,9 @@ bool skipReference(Cursor& in) {
     return true;
 }
 std::optional<Descriptor> descriptorValue(Cursor& in, const std::string& type) {
+    if (in.depth >= 32) return std::nullopt;
+    ++in.depth;
+    struct DepthGuard { Cursor& cursor; ~DepthGuard() { --cursor.depth; } } guard{in};
     Descriptor value;
     if (type == "doub" || type == "UntF") { if (type == "UntF") in.ascii(4); value.kind = Descriptor::Kind::Number; value.number = in.f64(); }
     else if (type == "long") { value.kind = Descriptor::Kind::Number; value.number = in.i32(); }
@@ -305,6 +312,21 @@ ImportedFace faceFromRun(const Engine* run, const Engine* fonts, double scale, d
 bool sameFace(const ImportedFace& left, const ImportedFace& right) {
     return left.family == right.family && left.style == right.style && std::abs(left.size - right.size) < 1e-4;
 }
+}
+std::optional<PhotoshopArtboardRect> readPhotoshopArtboard(const uint8_t* data, size_t size) {
+    if (!data || !size || size > 8000000) return std::nullopt;
+    Cursor in{data, size}; auto map=descriptorMap(in,true);
+    if (!map) return std::nullopt;
+    auto box=field(*map,"artboardRect");
+    if (!box || box->kind != Descriptor::Kind::Map) return std::nullopt;
+    auto l=side(*box,"Left"), t=side(*box,"Top "), r=side(*box,"Rght"), b=side(*box,"Btom");
+    if (!l || !t || !r || !b) return std::nullopt;
+    std::optional<int> background;
+    if (const auto* value=field(*map,"artboardBackgroundType")) {
+        if (value->kind!=Descriptor::Kind::Number || !std::isfinite(value->number) || value->number<0 || value->number>255 || std::floor(value->number)!=value->number) return std::nullopt;
+        background=int(value->number);
+    }
+    return PhotoshopArtboardRect{*l,*t,*r,*b,background};
 }
 PhotoshopText readPhotoshopText(const uint8_t* data, size_t size) {
     PhotoshopText result; result.note = rasterNote;

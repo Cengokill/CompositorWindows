@@ -79,7 +79,7 @@ void finish(MainWindow&w){auto*q=ui::ImportQueue::find(&w);require(q,"Missing ac
 QPoint canvasPoint(MainWindow&w,Point p){auto*c=w.canvas();const auto view=c->viewMapping().toView(p);return c->mapTo(&w,QPoint(int(std::round(view.x)),int(std::round(view.y))));}
 enum class PsdFixtureCompression { Raw, PackBits, Zip, ZipPrediction, ZipFixedHuffman, Unsupported };
 using PsdFixtureBlocks=std::vector<std::pair<std::string,std::vector<uint8_t>>>;
-struct PsdFixtureLayer { int top{},left{},bottom{},right{}; std::array<std::vector<uint8_t>,3> channels; std::array<uint8_t,3> solidChannels{}; bool generatedSolid{}; PsdFixtureCompression compression{PsdFixtureCompression::Raw}; std::string name{"Fixture"}; uint8_t opacity{255}; bool hidden{}; PsdFixtureBlocks blocks; };
+struct PsdFixtureLayer { int top{},left{},bottom{},right{}; std::array<std::vector<uint8_t>,3> channels; std::array<uint8_t,3> solidChannels{}; bool generatedSolid{}; PsdFixtureCompression compression{PsdFixtureCompression::Raw}; std::string name{"Fixture"}; uint8_t opacity{255}; bool hidden{}; PsdFixtureBlocks blocks; std::vector<uint8_t> mask; int maskLeft{},maskTop{},maskRight{},maskBottom{}; };
 void psdU16(std::vector<uint8_t>& out,uint16_t value){out.push_back(uint8_t(value>>8));out.push_back(uint8_t(value));}
 void psdU32(std::vector<uint8_t>& out,uint32_t value){for(int shift=24;shift>=0;shift-=8)out.push_back(uint8_t(value>>shift));}
 void psdU64(std::vector<uint8_t>& out,uint64_t value){for(int shift=56;shift>=0;shift-=8)out.push_back(uint8_t(value>>shift));}
@@ -141,10 +141,11 @@ std::vector<uint8_t> psdChannelData(const PsdFixtureLayer& layer,size_t channel,
 std::vector<uint8_t> psdFixture(int documentWidth,int documentHeight,const std::vector<PsdFixtureLayer>& layers,bool psb=false){
     std::vector<std::vector<uint8_t>> records,channelData;
     for(const auto& layer:layers){const size_t width=size_t(int64_t(layer.right)-layer.left),height=size_t(int64_t(layer.bottom)-layer.top);std::vector<uint8_t> record;
-        psdU32(record,uint32_t(layer.top));psdU32(record,uint32_t(layer.left));psdU32(record,uint32_t(layer.bottom));psdU32(record,uint32_t(layer.right));psdU16(record,3);
+        psdU32(record,uint32_t(layer.top));psdU32(record,uint32_t(layer.left));psdU32(record,uint32_t(layer.bottom));psdU32(record,uint32_t(layer.right));psdU16(record,layer.mask.empty()?3:4);
         for(int channel=0;channel<3;++channel){auto packed=psdChannelData(layer,size_t(channel),width,height,psb);psdU16(record,uint16_t(channel));if(psb)psdU64(record,uint64_t(packed.size()));else psdU32(record,uint32_t(packed.size()));channelData.push_back(std::move(packed));}
+        if(!layer.mask.empty()){std::vector<uint8_t> packed;psdU16(packed,0);packed.insert(packed.end(),layer.mask.begin(),layer.mask.end());psdU16(record,uint16_t(-2));if(psb)psdU64(record,packed.size());else psdU32(record,uint32_t(packed.size()));channelData.push_back(std::move(packed));}
         record.insert(record.end(),{'8','B','I','M','n','o','r','m'});record.push_back(layer.opacity);record.push_back(0);record.push_back(layer.hidden?0x02:0);record.push_back(0);
-        std::vector<uint8_t> extra;psdU32(extra,0);psdU32(extra,0);extra.push_back(uint8_t(layer.name.size()));extra.insert(extra.end(),layer.name.begin(),layer.name.end());while(extra.size()%4)extra.push_back(0);
+        std::vector<uint8_t> extra;if(layer.mask.empty())psdU32(extra,0);else{psdU32(extra,20);psdU32(extra,uint32_t(layer.maskTop));psdU32(extra,uint32_t(layer.maskLeft));psdU32(extra,uint32_t(layer.maskBottom));psdU32(extra,uint32_t(layer.maskRight));extra.insert(extra.end(),4,0);}psdU32(extra,0);extra.push_back(uint8_t(layer.name.size()));extra.insert(extra.end(),layer.name.begin(),layer.name.end());while(extra.size()%4)extra.push_back(0);
         for(const auto& [key,data]:layer.blocks){extra.insert(extra.end(),{'8','B','I','M'});extra.insert(extra.end(),key.begin(),key.end());psdU32(extra,uint32_t(data.size()));extra.insert(extra.end(),data.begin(),data.end());if(data.size()%2)extra.push_back(0);}
         psdU32(record,uint32_t(extra.size()));record.insert(record.end(),extra.begin(),extra.end());records.push_back(std::move(record));
     }
@@ -198,6 +199,14 @@ void putBits(std::vector<uint8_t>& out,double value){uint64_t bits;std::memcpy(&
 void putUnit(std::vector<uint8_t>& out,const char* key,double value){putKey(out,key);putTag(out,"UntF");putTag(out,"#Pxl");putBits(out,value);}
 void putDouble(std::vector<uint8_t>& out,const char* key,double value){putKey(out,key);putTag(out,"doub");putBits(out,value);}
 void putLong(std::vector<uint8_t>& out,const char* key,uint32_t value){putKey(out,key);putTag(out,"long");psdU32(out,value);}
+std::vector<uint8_t> artboardRect(double left,double top,double right,double bottom){
+    std::vector<uint8_t> out;psdU32(out,16);psdU32(out,0);putKey(out,"null");psdU32(out,1);
+    putKey(out,"artboardRect");putTag(out,"Objc");psdU32(out,0);putKey(out,"classFloatRect");psdU32(out,4);
+    putDouble(out,"Top ",top);putDouble(out,"Left",left);putDouble(out,"Btom",bottom);putDouble(out,"Rght",right);return out;
+}
+PsdFixtureLayer sectionLayer(const char* name,uint32_t kind,PsdFixtureBlocks extra={}){
+    PsdFixtureLayer layer;layer.name=name;std::vector<uint8_t> section;psdU32(section,kind);layer.blocks={{"lsct",section}};layer.blocks.insert(layer.blocks.end(),extra.begin(),extra.end());return layer;
+}
 void putBool(std::vector<uint8_t>& out,const char* key,bool value){putKey(out,key);putTag(out,"bool");out.push_back(value?1:0);}
 Knot sharp(double x,double y){return {x,y,x,y,x,y};}
 std::vector<Knot> rectangleKnots(double l,double t,double r,double b){return {sharp(l,t),sharp(r,t),sharp(r,b),sharp(l,b)};}
@@ -566,6 +575,63 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
     test("qt_cancel_preserves_existing_document_and_undo",[&]{MainWindow w(true);auto d=document();Layer old;old.id="old";old.transform={0,0,128,128};old.raster=Raster::filled(128,128,{20,30,40,255});d.layers={old};auto&p=w.addProject(d);w.show();QApplication::processEvents();const auto before=p.document;QMimeData mime;mime.setUrls({QUrl::fromLocalFile(first),QUrl::fromLocalFile(second)});require(drop(w,mime,canvasPoint(w,{64,64})),"Cancel test drop rejected");auto*q=ui::ImportQueue::find(&w);require(q,"Queue absent");q->cancel(p.canvas);finish(w);require(p.document==before&&p.history.undoCount()==0&&!p.importing,"Cancelled native import altered original/history");});
     test("qt_bitmap_drop_lifetime_and_empty_tab_external_routing",[&]{MainWindow w(true);auto&p=w.addProject(document());w.show();QApplication::processEvents();QImage bitmap(8,6,QImage::Format_ARGB32);bitmap.fill(QColor(255,0,0,128));{QMimeData mime;mime.setImageData(bitmap);require(drop(w,mime,canvasPoint(w,{64,64})),"Bitmap drop rejected");}finish(w);require(p.document->layers.size()==1&&p.document->layers[0].raster->width==8&&p.document->layers[0].raster->pixel(0,0)==Pixel{128,0,0,128},"Copied bitmap lifetime/premultiplication failed");MainWindow external(true);external.openPath(first);external.openPath(second);finish(external);auto*tabs=external.findChild<QTabWidget*>();require(tabs&&tabs->count()==2,"Rapid external images reused an already reserved empty tab");});
     test("default_100mp_budget_side_and_corrupt_partial_failure",[&]{auto d=document();Layer full;full.id="full-budget";full.transform={0,0,10000,10000};full.raster=Raster::filled(10000,10000);d.layers={full};ui::ImportState before{d,full.id};auto result=ui::prepareImportBatch(before,{{path(first)}});require(result.imported==0&&result.errors.size()==1&&result.after==before,"100MP document limit underflowed or changed original");imaging::ImportOptions tiny;tiny.maxSide=63;result=ui::prepareImportBatch({},{{path(first)}},ui::decodeImportImage,tiny);require(result.imported==0&&result.errors.size()==1,"Side budget bypassed by batch decoder");auto corrupt=temporary.filePath("corrupt.jpg");QFile file(corrupt);require(file.open(QIODevice::WriteOnly)&&file.write("not an image")==12,"Could not write corrupt fixture");file.close();result=ui::prepareImportBatch({},{{path(corrupt),path(first)}});require(result.imported==1&&result.errors.size()==1&&result.after.document->width==64,"Corrupt first image prevented later success");});
+    test("psd_artboards_open_as_separate_tabs",[&]{
+        auto a=solidPsdLayer(1,1,1,1,255,0,0);a.name="Red";
+        auto b=solidPsdLayer(11,1,1,1,0,0,255);b.name="Blue";
+        const auto bytes=psdFixture(20,10,{sectionLayer("end",3),a,sectionLayer("Phone",1,{{"artb",artboardRect(0,0,8,8)}}),sectionLayer("end",3),b,sectionLayer("Tablet",1,{{"artb",artboardRect(10,0,18,8)}})});
+        const QString file=temporary.filePath("artboards.psd");QFile out(file);require(out.open(QIODevice::WriteOnly)&&out.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"PSD fixture write failed");out.close();
+        MainWindow w(true);w.show();QApplication::processEvents();w.openPath(file);auto* tabs=w.findChild<QTabWidget*>();
+        require(tabs&&tabs->count()==2,"Artboards did not open as separate tabs");
+        require(tabs->tabText(0)=="Phone"&&tabs->tabText(1)=="Tablet","Artboard tab names or order changed");
+    });
+    test("psd_artboard_bounds_membership_save_and_export",[&]{
+        for(bool psb:{false,true}){
+            auto pixel=solidPsdLayer(-9,-4,1,1,255,0,0);pixel.name="Red";
+            pixel.maskLeft=-10;pixel.maskTop=-5;pixel.maskRight=-8;pixel.maskBottom=-3;pixel.mask={255,255,255,255};
+            auto outside=solidPsdLayer(1,1,1,1,0,255,0);outside.name="Outside";
+            const auto bytes=psdFixture(20,10,{sectionLayer("end",3),pixel,sectionLayer("Board",1,{{"artb",artboardRect(-10,-5,-2,3)}}),outside},psb);
+            auto imported=imaging::readPsd(bytes.data(),bytes.size());
+            require(imported.artboards.size()==1,"Artboard missing");const auto& board=imported.artboards[0];
+            require(board.document.width==8&&board.document.height==8&&board.document.layers.size()==1,"Artboard dimensions or membership changed");
+            require(board.document.layers[0].transform.x==1&&board.document.layers[0].transform.y==1,"Artboard layer placement changed");
+            require(board.document.layers[0].mask&&board.document.layers[0].mask->placement&&board.document.layers[0].mask->placement->x==0&&board.document.layers[0].mask->placement->y==0,"Artboard mask placement changed");
+            const auto comp=path(temporary.filePath(psb?"board-psb.comp":"board-psd.comp"));ProjectStore store(makeWicProjectCodec());
+            store.save(comp,board.document,board.document.layers[0].id);auto reopened=store.load(comp);
+            const auto png=path(temporary.filePath(psb?"board-psb.png":"board-psd.png"));exportDocumentAtomic(reopened.document,png);
+            auto decoded=imaging::WicCodec::decode(png);auto output=Raster::fromRgba(int(decoded.image.width),int(decoded.image.height),decoded.image.pixels.data(),decoded.image.stride);
+            require(output->pixel(1,1)==Pixel{255,0,0,255}&&output->pixel(0,0)==Pixel{},"Artboard export differs after reopen");
+        }
+    });
+    test("psd_malformed_artboard_is_rejected",[&]{
+        auto bytes=psdFixture(20,10,{sectionLayer("end",3),plainLayer(),sectionLayer("Bad",1,{{"artb",{0,0,0,16}}})});
+        bool rejected=false;try{imaging::readPsd(bytes.data(),bytes.size());}catch(const std::exception&){rejected=true;}require(rejected,"Malformed artboard was silently imported");
+    });
+    test("psd_artboard_nested_folder_keeps_hierarchy",[&]{
+        auto pixel=solidPsdLayer(11,1,1,1,4,5,6);pixel.name="Pixel";
+        const auto bytes=psdFixture(20,10,{sectionLayer("end",3),sectionLayer("end",3),pixel,sectionLayer("Folder",1),sectionLayer("Board",1,{{"artb",artboardRect(10,0,18,8)}})});
+        const auto imported=imaging::readPsd(bytes.data(),bytes.size());require(imported.artboards.size()==1,"Artboard missing");const auto& layers=imported.artboards[0].document.layers;
+        require(layers.size()==2&&layers[1].group&&layers[0].parentId==layers[1].id&&layers[0].transform.x==1,"Nested folder or placement changed");
+    });
+    // Optional ag-psd test/read-write/artboards/src.psd, kept outside this repository.
+    if (const auto fixture=qEnvironmentVariable("COMPOSITOR_ARTBOARD_FIXTURE");!fixture.isEmpty()) test("psd_external_artboard_fixture",[&]{
+        const auto imported=imaging::readPsd(path(fixture));
+        require(imported.artboards.size()==3,"External fixture did not produce three artboards");
+        require(imported.artboards[0].name=="white board"&&imported.artboards[1].name=="transparent board"&&imported.artboards[2].name=="custom board","External artboard order or names changed");
+        require(hasWarning(imported,"background becomes transparent"),"External fixture background conversion was not reported");
+    });
+    // Optional photoshop-style-guide/styleguide-artboards-EN.psd, which exceeds the layer limit.
+    if (const auto fixture=qEnvironmentVariable("COMPOSITOR_LARGE_PSD_FIXTURE");!fixture.isEmpty()) test("psd_external_layer_limit_warns_before_flattening",[&]{
+        const auto imported=imaging::readPsd(path(fixture));
+        require(imported.artboards.empty()&&hasWarning(imported,"Layer records could not be imported")&&imported.report.find("Too many PSD layers")!=std::string::npos,"Layer-limit fallback did not report flattening");
+    });
+    test("psd_artboard_warning_cancel_keeps_workspace",[&]{
+        auto shape=solidPsdLayer(1,1,2,2,0,0,255);shape.name="Gradient";shape.blocks=shapeBlocks(origination(1,1,1,3,3),vectorPath({rectangleKnots(1,1,3,3)},20,10),gradientFill());
+        const auto bytes=psdFixture(20,10,{sectionLayer("end",3),shape,sectionLayer("Board",1,{{"artb",artboardRect(0,0,8,8)}})});
+        const QString file=temporary.filePath("artboard-warning.psd");QFile out(file);require(out.open(QIODevice::WriteOnly)&&out.write(reinterpret_cast<const char*>(bytes.data()),qint64(bytes.size()))==qint64(bytes.size()),"PSD fixture write failed");out.close();
+        MainWindow w(true);auto& project=w.addProject(document());w.show();QApplication::processEvents();auto* tabs=w.findChild<QTabWidget*>();const auto before=project.document;const int count=tabs->count();
+        require(answerPsdWarnings("psdCancelButton",[&]{w.openPath(file);}),"Artboard warning did not appear");
+        require(tabs->count()==count&&project.document==before&&project.history.undoCount()==0,"Cancelled artboard import changed workspace");
+    });
     test("psd_in_limit_partial_layer_preserves_pixels_and_position",[&]{
         auto layer=solidPsdLayer(-1,-1,4,4,0,40,80);for(int y=0;y<4;++y)for(int x=0;x<4;++x)layer.channels[0][size_t(y)*4+x]=uint8_t(y*10+x);
         const auto bytes=psdFixture(2,2,{layer});const auto imported=imaging::readPsd(bytes.data(),bytes.size());

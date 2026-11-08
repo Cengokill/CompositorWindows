@@ -677,7 +677,9 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
     std::unique_ptr<CmykTransform> color;if(profile)color=std::make_unique<CmykTransform>(profile);
     PsdImport result; result.document.cmykProfile=profile; result.document.id = newId(); result.document.width = int(width); result.document.height = int(height); result.document.resolution = 72; std::string report; std::vector<std::string> warnings;
     if (depth == 16) report += "16-bit channels were preserved.\n";
-    bool mergedTransparency=false;
+    bool mergedTransparency=false, hasArtboard=false;
+    struct Board { std::string id, name; PhotoshopArtboardRect bounds; };
+    std::vector<Board> boards;
     auto section = in.wide();if(cmyk&&section>in.size-in.at)throw std::runtime_error("Truncated CMYK layer section"); auto sectionEnd = in.at + size_t(std::min<uint64_t>(section, in.size > in.at ? in.size - in.at : 0));
     if (section) {
         try {
@@ -707,14 +709,14 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
             if (!depthLayers && info) in.at = infoAt;
             if (depthLayers || info) {
             const auto signedCount=in.i16();mergedTransparency=signedCount<0;auto count = std::abs(signedCount); if (count > 256) throw std::runtime_error("Too many PSD layers");
-            struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name; bool group{}, closer{}, visible{true}, hasMask{}; int maskTop{}, maskLeft{}, maskBottom{}, maskRight{}; uint8_t maskFlags{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::vector<uint8_t> typeTool, fill, solidFill, geometry, strokeData, vectorPath; };
+            struct Record { int top, left, bottom, right; Blend blend; uint8_t opacity; std::string name, blendWarning, id, parentId; bool group{}, closer{}, visible{true}, hasMask{}, clipped{}; int maskTop{}, maskLeft{}, maskBottom{}, maskRight{}; uint8_t maskFlags{}; std::optional<PhotoshopArtboardRect> artboard; const PhotoshopArtboardRect* owner{}; std::vector<std::pair<int16_t, uint64_t>> channels; std::vector<uint8_t> typeTool, fill, solidFill, geometry, strokeData, vectorPath; };
             std::vector<Record> records;
             for (int i = 0; i < count; ++i) {
                 Record record; record.top = in.i32(); record.left = in.i32(); record.bottom = in.i32(); record.right = in.i32();
                 auto channelCount = in.u16(); if (channelCount > 16) throw std::runtime_error("Too many PSD channels");
                 for (int c = 0; c < channelCount; ++c) { auto id = in.i16(); auto length = in.wide();if(cmyk&&std::any_of(record.channels.begin(),record.channels.end(),[id](const auto& channel){return channel.first==id;}))throw std::runtime_error("Duplicate CMYK PSD channel"); record.channels.push_back({id, length}); }
-                if (in.ascii(4) != "8BIM") throw std::runtime_error("Invalid PSD blend signature"); record.blend = blendOf(in.ascii(4), report);
-                record.opacity = in.u8(); in.u8(); record.visible = (in.u8() & 0x02) == 0; in.u8(); auto extra = in.u32(); auto extraEnd = in.at + extra;
+                if (in.ascii(4) != "8BIM") throw std::runtime_error("Invalid PSD blend signature"); record.blend = blendOf(in.ascii(4), record.blendWarning); report += record.blendWarning;
+                record.opacity = in.u8(); record.clipped = in.u8()!=0; record.visible = (in.u8() & 0x02) == 0; in.u8(); auto extra = in.u32(); auto extraEnd = in.at + extra;
                 if (extraEnd > in.size) extraEnd = in.size;
                 auto maskSize = in.u32(); auto maskAt = in.at;
                 if (maskSize >= 20 && maskAt + maskSize <= extraEnd) {
@@ -727,6 +729,12 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
                     auto signature = in.ascii(4);
                     if (signature != "8BIM" && signature != "8B64") { in.at -= 4; break; }
                     auto key = in.ascii(4); auto length = wideExtra(in.psb, signature, key) ? in.u64() : in.u32(); auto start = in.at;
+                    if (key == "artb" || key == "artd" || key == "abdd") {
+                        hasArtboard=true;
+                        if (record.artboard || start > extraEnd || length > extraEnd-start) throw std::runtime_error("Invalid Photoshop artboard descriptor");
+                        record.artboard=readPhotoshopArtboard(in.data+start,size_t(length));
+                        if (!record.artboard) throw std::runtime_error("Unsupported or malformed Photoshop artboard descriptor");
+                    }
                     if (key == "lsct" || key == "lsdk") { auto kind = length >= 4 ? in.u32() : 0; record.group = kind == 1 || kind == 2; record.closer = kind == 3; }
                     else if (key == "luni" && length >= 4 && extraEnd >= in.at + 4) {
                         auto characters = in.u32();
@@ -746,9 +754,38 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
                 }
                 in.at = extraEnd; records.push_back(std::move(record));
             }
+            for (const auto& record : records) if (record.artboard) {
+                const auto& r=*record.artboard;
+                if (r.backgroundType && *r.backgroundType!=3) warnings.push_back(record.name + ": the artboard background becomes transparent.");
+                const double l=std::floor(r.left), t=std::floor(r.top), rr=std::ceil(r.right), b=std::ceil(r.bottom);
+                if (!record.group || record.hasMask || !record.visible || record.opacity != 255 || r.right<=r.left || r.bottom<=r.top || l < -2147483648. || t < -2147483648. || rr > 2147483647. || b > 2147483647. || rr-l>30000 || b-t>30000 || (rr-l)*(b-t)>100000000)
+                    throw std::runtime_error("Unsupported Photoshop artboard bounds or folder properties");
+            }
+            if (hasArtboard) {
+                std::vector<Record*> ancestors;
+                for (auto it=records.rbegin();it!=records.rend();++it) {
+                    auto& record=*it;
+                    if (record.closer) { if (ancestors.empty()) throw std::runtime_error("Invalid Photoshop folder hierarchy"); ancestors.pop_back(); continue; }
+                    record.id=newId();
+                    if (!ancestors.empty()) { record.parentId=ancestors.back()->id; record.owner=ancestors.back()->owner; }
+                    if (record.artboard) { if (record.owner) throw std::runtime_error("Nested Photoshop artboards are unsupported"); record.owner=&*record.artboard; }
+                    if (record.group) ancestors.push_back(&record);
+                }
+                if (!ancestors.empty()) throw std::runtime_error("Invalid Photoshop folder hierarchy");
+            }
             std::vector<std::string> folders;
             uint64_t retainedPixels=0,retainedMaskPixels=0,retainedBytes=0;
             for (auto& record : records) {
+                const auto* activeBoard=record.owner;
+                if (activeBoard && !record.closer) {
+                    if (record.clipped || (record.group && record.hasMask)) throw std::runtime_error("Photoshop artboard contains an unsupported clipping or group mask");
+                    if (!record.artboard && !record.blendWarning.empty()) warnings.push_back(record.name + ": " + record.blendWarning);
+                    if (record.group && !record.artboard && record.blend != Blend::Normal) warnings.push_back(record.name + ": folder blend mode becomes Normal.");
+                }
+                const int64_t clipLeft=activeBoard?int64_t(std::floor(activeBoard->left)):0;
+                const int64_t clipTop=activeBoard?int64_t(std::floor(activeBoard->top)):0;
+                const int64_t clipRight=activeBoard?int64_t(std::ceil(activeBoard->right)):result.document.width;
+                const int64_t clipBottom=activeBoard?int64_t(std::ceil(activeBoard->bottom)):result.document.height;
                 // A shape's solid fill may be stored as a SoCo block, whose payload lacks the "SoCo" prefix that the vscg form carries.
                 // Only a layer with vector geometry is a shape, so a plain solid-colour fill layer keeps its existing handling.
                 if (record.fill.empty() && !record.geometry.empty() && !record.solidFill.empty()) {
@@ -758,17 +795,17 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
                 }
                 const int64_t sourceWidth = int64_t(record.right) - record.left;
                 const int64_t sourceHeight = int64_t(record.bottom) - record.top;
-                const int64_t visibleLeft = std::max<int64_t>(record.left, 0);
-                const int64_t visibleTop = std::max<int64_t>(record.top, 0);
-                const int64_t visibleRight = std::min<int64_t>(record.right, result.document.width);
-                const int64_t visibleBottom = std::min<int64_t>(record.bottom, result.document.height);
+                const int64_t visibleLeft = std::max<int64_t>(record.left, clipLeft);
+                const int64_t visibleTop = std::max<int64_t>(record.top, clipTop);
+                const int64_t visibleRight = std::min<int64_t>(record.right, clipRight);
+                const int64_t visibleBottom = std::min<int64_t>(record.bottom, clipBottom);
                 const int cropWidth = visibleRight > visibleLeft ? int(visibleRight - visibleLeft) : 0;
                 const int cropHeight = visibleBottom > visibleTop ? int(visibleBottom - visibleTop) : 0;
                 const uint64_t cropLeft = visibleRight > visibleLeft ? uint64_t(visibleLeft - record.left) : 0;
                 const uint64_t cropTop = visibleBottom > visibleTop ? uint64_t(visibleTop - record.top) : 0;
                 const uint64_t cropPixels = uint64_t(cropWidth) * uint64_t(cropHeight);
-                const bool hasVisibleLayer = cropWidth > 0 && cropHeight > 0;
                 const bool sourceFits = sourceWidth > 0 && sourceHeight > 0 && sourceWidth <= 30000 && sourceHeight <= 30000 && uint64_t(sourceWidth) * uint64_t(sourceHeight) <= 100000000;
+                const bool hasVisibleLayer = (cropWidth > 0 && cropHeight > 0) || (activeBoard && sourceFits);
                 const bool cropFits = hasVisibleLayer && cropWidth <= 30000 && cropHeight <= 30000 && cropPixels <= 100000000;
                 const bool cropOversizedSource = !sourceFits;
                 const int decodeWidth = sourceFits ? int(sourceWidth) : cropWidth;
@@ -779,10 +816,10 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
 
                 const int64_t maskSourceWidth = int64_t(record.maskRight) - record.maskLeft;
                 const int64_t maskSourceHeight = int64_t(record.maskBottom) - record.maskTop;
-                const int64_t maskVisibleLeft = std::max<int64_t>(record.maskLeft, 0);
-                const int64_t maskVisibleTop = std::max<int64_t>(record.maskTop, 0);
-                const int64_t maskVisibleRight = std::min<int64_t>(record.maskRight, result.document.width);
-                const int64_t maskVisibleBottom = std::min<int64_t>(record.maskBottom, result.document.height);
+                const int64_t maskVisibleLeft = std::max<int64_t>(record.maskLeft, clipLeft);
+                const int64_t maskVisibleTop = std::max<int64_t>(record.maskTop, clipTop);
+                const int64_t maskVisibleRight = std::min<int64_t>(record.maskRight, clipRight);
+                const int64_t maskVisibleBottom = std::min<int64_t>(record.maskBottom, clipBottom);
                 const int maskCropWidth = maskVisibleRight > maskVisibleLeft ? int(maskVisibleRight - maskVisibleLeft) : 0;
                 const int maskCropHeight = maskVisibleBottom > maskVisibleTop ? int(maskVisibleBottom - maskVisibleTop) : 0;
                 const uint64_t maskCropLeft = maskVisibleRight > maskVisibleLeft ? uint64_t(maskVisibleLeft - record.maskLeft) : 0;
@@ -829,23 +866,26 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
                             else if(id==3){key=std::move(plane);key16=std::move(samples);}
                             else { alpha = std::move(plane); alpha16 = std::move(samples); }
                         }
-                    } catch (const std::exception& error) { if(cmyk)throw; report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded (" + error.what() + ").\n"; }
+                    } catch (const std::exception& error) { if(cmyk||hasArtboard)throw; report += (record.name.empty() ? "Layer" : record.name) + ": a channel could not be decoded (" + error.what() + ").\n"; }
                     const size_t end = start > in.size || length > in.size - start ? in.size : start + size_t(length);
                     in.at = end;
                 }
                 try {
-                if (record.closer) { if (!folders.empty()) folders.pop_back(); continue; }
+                if (record.closer) { if (!hasArtboard && !folders.empty()) folders.pop_back(); continue; }
                 if (!record.group && !hasVisibleLayer && !hasVectorData && record.typeTool.empty()) continue;
                 if (!record.group && !sourceFits && !cropFits && !hasVectorData && record.typeTool.empty()) continue;
+                if (activeBoard && !record.group && hasVisibleLayer && (sourceFits || cropFits) && (red.size()!=decodedPixels || green.size()!=decodedPixels || blue.size()!=decodedPixels) && !hasVectorData && record.typeTool.empty())
+                    throw std::runtime_error("Photoshop artboard layer has missing color channels");
                 if(color&&!record.group&&!record.closer&&hasVisibleLayer)convertInks(*color,decodeWidth,red,green,blue,key,red16,green16,blue16,key16);
-                Layer layer; layer.id = newId(); layer.name = record.name.empty() ? "Layer" : record.name; layer.opacity = record.opacity / 255.; layer.blend = record.group ? Blend::Normal : record.blend; layer.group = record.group; layer.visible = record.visible;
+                Layer layer; layer.id = hasArtboard ? record.id : newId(); layer.name = record.name.empty() ? "Layer" : record.name; layer.opacity = record.opacity / 255.; layer.blend = record.group ? Blend::Normal : record.blend; layer.group = record.group; layer.visible = record.visible;
                 layer.transform = record.group
                     ? Transform{double(record.left), double(record.top), double(std::max<int64_t>(sourceWidth, 1)), double(std::max<int64_t>(sourceHeight, 1))}
                     : cropOversizedSource && cropFits
                         ? Transform{double(visibleLeft), double(visibleTop), double(cropWidth), double(cropHeight)}
                         : Transform{double(record.left), double(record.top), double(std::max<int64_t>(sourceWidth, 1)), double(std::max<int64_t>(sourceHeight, 1))};
-                layer.parentId = folders.empty() ? std::string{} : folders.back();
-                if (record.group) folders.push_back(layer.id);
+                layer.parentId = hasArtboard ? record.parentId : folders.empty() ? std::string{} : folders.back();
+                if (record.artboard) boards.push_back({layer.id,layer.name,*record.artboard});
+                if (record.group && !hasArtboard) folders.push_back(layer.id);
                 else if ((sourceFits || cropFits) && red.size() == size_t(decodedPixels) && green.size() == red.size() && blue.size() == red.size()) installImage(layer, decodeWidth, decodeHeight, red, green, blue, alpha, red16, green16, blue16, alpha16);
                 std::string shapeReason;
                 if (!cmyk && !record.group && !record.closer && !record.fill.empty()) shapeReason = convertVectorShape(layer, record.fill, record.geometry, record.vectorPath, record.strokeData, result.document.width, result.document.height);
@@ -863,20 +903,46 @@ PsdImport readPsd(const uint8_t* bytes, size_t size,CmykProfilePtr fallback) {
                     layer.mask = std::move(mask);
                 }
                 if(cmyk&&!record.group&&(hasVectorData||!record.typeTool.empty()))warnings.push_back(layer.name+": CMYK text/vector content remains rasterized.");
-                if (!cmyk && !record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); } if (imported.editable) { if (layer.raster) layer.text = imported.text; else { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; } } } }
+                if (!cmyk && !record.group && !record.typeTool.empty()) { auto imported = readPhotoshopText(record.typeTool.data(), record.typeTool.size()); if (!imported.note.empty()) { report += layer.name + ": " + imported.note; if (imported.note.back() != '\n') report.push_back('\n'); if(activeBoard) warnings.push_back(layer.name + ": " + imported.note); } if (imported.editable) { if (layer.raster) layer.text = imported.text; else { try { auto drawn = text::rasterize(imported.text); layer.text = imported.text; layer.raster = drawn.raster; layer.transform.x = imported.x; layer.transform.y = imported.y; layer.transform.width = drawn.width; layer.transform.height = drawn.height; } catch (const std::exception&) { layer.text.reset(); report += layer.name + ": Editable Photoshop text becomes pixels and can't be retyped.\n"; if(activeBoard) warnings.push_back(layer.name + ": Text could not be made editable."); } } } }
                 if (layer.group || layer.raster || layer.text || layer.mask) result.document.layers.push_back(std::move(layer));
-                } catch (const std::exception& error) { if(cmyk)throw; report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(sourceWidth) + "x" + std::to_string(sourceHeight) + "): " + error.what() + "\n"; }
+                } catch (const std::exception& error) { if(cmyk||hasArtboard)throw; report += (record.name.empty() ? "Layer" : record.name) + " (" + std::to_string(sourceWidth) + "x" + std::to_string(sourceHeight) + "): " + error.what() + "\n"; }
             }
             in.at = std::max(in.at, infoEnd);
             }
         } catch (const std::exception& error) {
-            if(cmyk)throw;
+            if(cmyk||hasArtboard)throw;
             report += std::string("Layer records were skipped: ") + error.what() + "\n";
             result.document.layers.clear();
             warnings.clear();
+            warnings.push_back(std::string("Layer records could not be imported; only the merged image may be available: ") + error.what());
         }
     }
     in.at = std::max(in.at, sectionEnd);
+    if (hasArtboard) {
+        for (const auto& board : boards) {
+            const auto left=std::floor(board.bounds.left), top=std::floor(board.bounds.top);
+            Document doc; doc.id=newId(); doc.width=int(std::ceil(board.bounds.right)-left); doc.height=int(std::ceil(board.bounds.bottom)-top); doc.resolution=result.document.resolution; doc.cmykProfile=profile;
+            for (const auto& source : result.document.layers) {
+                if (source.id==board.id) continue;
+                auto parent=source.parentId;
+                while (!parent.empty() && parent!=board.id) {
+                    auto found=std::find_if(result.document.layers.begin(),result.document.layers.end(),[&](const Layer& l){return l.id==parent;});
+                    if (found==result.document.layers.end()) throw std::runtime_error("Invalid Photoshop folder hierarchy");
+                    if (std::any_of(boards.begin(),boards.end(),[&](const Board& other){return other.id==parent;})) break;
+                    parent=found->parentId;
+                }
+                if (parent!=board.id) continue;
+                auto layer=source;
+                if (layer.parentId==board.id) layer.parentId.clear();
+                layer.transform.x-=left; layer.transform.y-=top;
+                if (layer.mask && layer.mask->placement) { layer.mask->placement->x-=left; layer.mask->placement->y-=top; }
+                doc.layers.push_back(std::move(layer));
+            }
+            validateDocument(doc); result.artboards.push_back({board.name,std::move(doc)});
+        }
+        if (result.artboards.empty()) throw std::runtime_error("No supported Photoshop artboards");
+        result.warnings=std::move(warnings); result.report=std::move(report); return result;
+    }
     const bool hasImage = std::any_of(result.document.layers.begin(), result.document.layers.end(), [](const Layer& layer) { return layer.raster || layer.text; });
     if (!hasImage) {
         result.document.layers.clear();
