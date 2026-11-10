@@ -1,3 +1,16 @@
+# Compositor Windows 1.5.8
+
+## New features
+
+- Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh with **Filters > Lens Effects**. Preview the result, apply it to the pixel layer and undo it in one step.
+- Read **What's New** after an update, with release notes embedded for offline use. The first launch initializes the local version history silently.
+
+## Release details
+
+Lens Effects uses a reduced preview and renders the full layer on Apply. Large images can be slow or exceed the filter memory budget. Editable Lens Effects layers and pixel parity with the Mac renderer are not included. The project format is unchanged.
+
+See the [release notes on GitHub](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.8) for screenshots and pull requests.
+
 # Compositor Windows 1.5.6
 
 ## New features
