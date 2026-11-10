@@ -259,7 +259,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
             reloadControls.push_back([this,spin,key]{spin->setValue(vignetteSettings()[key].toDouble());});
         }
         auto* color=new QPushButton;color->setObjectName("vignetteColor");color->setAccessibleName("Vignette color");
-        auto update=[this,color]{auto c=vignetteSettings()["color"].toObject();color->setText(QColor::fromRgbF(c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()).name());};
+        auto update=[this,color]{auto c=vignetteSettings()["color"].toObject();const auto hex=QColor::fromRgbF(c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()).name();color->setToolTip(hex);color->setAccessibleDescription(hex);color->setStyleSheet(QString("QPushButton#vignetteColor { background: %1; border: 1px solid #777b84; border-radius: 4px; } QPushButton#vignetteColor:hover { border-color: #bfc9d8; } QPushButton#vignetteColor:pressed, QPushButton#vignetteColor:focus { border-color: #78b0f7; }").arg(hex));};
         update();reloadControls.push_back(update);form.addRow("Color",color);
         QObject::connect(color,&QPushButton::clicked,&dialog,[this,update]{
             const auto c=vignetteSettings()["color"].toObject();
