@@ -42,6 +42,28 @@ static int versionOf(const std::filesystem::path& path) {
 }
 static Document base() { Document d; d.id = newId(); d.width = 8; d.height = 8; d.resolution = 72; return d; }
 static Layer pixelLayer() { Layer l; l.id = newId(); l.name = "Paint"; l.transform = {0, 0, 4, 4}; l.raster = Raster::filled(4, 4, {255, 0, 0, 255}); return l; }
+
+static void vignette_contract(){
+    QTemporaryDir dir;check(dir.isValid(),"vignette temporary directory");ProjectStore store(makeWicProjectCodec());
+    Document d=base();d.width=513;d.height=73;auto photo=pixelLayer();photo.transform={0,0,513,73};photo.raster=Raster::filled(513,73,{80,60,40,128});d.layers={photo};
+    Layer v;v.id=newId();v.name="Vignette";v.transform=photo.transform;v.opacity=.65;
+    auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Vignette"))).object();
+    auto group=json["filterLayerSettings"].toObject();auto settings=group["vignette"].toObject();settings["amount"]=78;settings["midpoint"]=23;settings["roundness"]=-30;settings["feather"]=42;settings["highlights"]=63;settings["color"]=QJsonObject{{"red",.2},{"green",.7},{"blue",.1}};group["vignette"]=settings;json["filterLayerSettings"]=group;
+    v.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();
+    auto mask=std::make_shared<GrayRaster>();mask->width=513;mask->height=73;mask->pixels.assign(513*73,255);for(int y=0;y<73;++y)for(int x=0;x<100;++x)mask->pixels[size_t(y)*513+x]=0;v.mask=Mask{mask,true,true,{}};d.layers.push_back(v);
+    const auto original=d;const auto rendered=SoftwareRenderer().render(d,0,0,513,73);const auto expected=rendered->rgba();check(expected!=photo.raster->rgba(),"vignette changes composite");
+    auto package=std::filesystem::path(dir.filePath("vignette.comp").toStdWString());store.save(package,d,v.id);auto loaded=store.load(package);check(loaded.readVersion==20,"vignette requires Windows v20");
+    check(loaded.document.layers[1].adjustmentJson==v.adjustmentJson&&loaded.document.layers[1].mask->raster->pixels==mask->pixels&&loaded.document.layers[1].opacity==v.opacity,"vignette parameters mask opacity roundtrip");
+    check(loaded.document.layers[0].raster->rgba()==photo.raster->rgba(),"source pixels retained");check(SoftwareRenderer().render(loaded.document,0,0,513,73)->rgba()==expected,"reopened composite");
+    auto reordered=d;std::swap(reordered.layers[0],reordered.layers[1]);check(SoftwareRenderer().render(reordered,0,0,513,73)->rgba()==photo.raster->rgba(),"vignette follows stack order");
+    for(int y=0;y<73;y+=11){auto region=SoftwareRenderer().render(loaded.document,0,y,513,std::min(11,73-y));for(int row=0;row<region->height;++row)for(int x=0;x<513;++x)check(region->pixel(x,row)==rendered->pixel(x,y+row),"regional masked opacity composite");}
+    check(d==original,"render and save do not change document");
+    QFile file(QString::fromStdWString((package/L"manifest.json").wstring()));check(file.open(QIODevice::ReadOnly),"manifest read");auto manifest=QJsonDocument::fromJson(file.readAll()).object();file.close();
+    auto reject=[&](QJsonObject value){check(file.open(QIODevice::WriteOnly|QIODevice::Truncate),"manifest write");file.write(QJsonDocument(value).toJson());file.close();bool rejected=false;try{store.load(package);}catch(const std::exception&){rejected=true;}check(rejected,"malformed or old vignette accepted");};
+    auto old=manifest;old["version"]=19;reject(old);
+    for(auto key:{"amount","midpoint","roundness","feather","highlights","color"}){auto bad=manifest;auto layers=bad["layers"].toArray();auto layer=layers[1].toObject();auto a=layer["adjustment"].toObject();auto f=a["filterLayerSettings"].toObject();auto value=f["vignette"].toObject();value[key]=key==std::string("color")?QJsonValue("invalid"):QJsonValue(101);f["vignette"]=value;a["filterLayerSettings"]=f;layer["adjustment"]=a;layers[1]=layer;bad["layers"]=layers;reject(bad);}
+}
+
 static void line_export_contract(){
     QTemporaryDir dir;check(dir.isValid(),"temporary directory");ProjectStore store(makeWicProjectCodec());
     Document d=base();d.width=100;d.height=20;editing::ShapeStyle style{editing::ShapeKind::Line,1,0,0,0,4,.1,.5,.9,.5};style.lineStyle=editing::ShapeLineStyle::Dashed;style.lineCap=editing::ShapeLineCap::Square;
@@ -750,6 +772,6 @@ int main(int argc, char** argv) {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { if(argc>1&&std::string(argv[1])=="--line-export"){line_export_contract();return 0;} if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { if(argc>1&&std::string(argv[1])=="--vignette"){vignette_contract();std::cout<<"PASS migration.vignette\n";return 0;} if(argc>1&&std::string(argv[1])=="--line-export"){line_export_contract();return 0;} if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

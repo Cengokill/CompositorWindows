@@ -188,6 +188,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     }
     Object filterLayer(){auto o=settings["filterLayerSettings"].toObject();if(o.isEmpty()){o=Object{{"progressiveFrom",0},{"progressiveTo",20},{"progressiveRadial",false},{"progressiveInverted",false},{"bloomAmount",40},{"bloomRadius",24},{"rgbSplitDistance",10},{"rgbSplitBlur",0},{"rgbSplitAngle",0},{"rgbSplitRadial",false},{"rgbSplitReach",1000}};settings["filterLayerSettings"]=o;}return o;}
     void writeFilterLayer(Object o){settings["filterLayerSettings"]=o;}
+    Object vignetteSettings(){auto layer=filterLayer();if(layer["vignette"].isNull()||layer["vignette"].isUndefined()){layer["vignette"]=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Vignette"))).object()["filterLayerSettings"].toObject()["vignette"];writeFilterLayer(layer);}return layer["vignette"].toObject();}
+    void writeVignette(Object value){auto layer=filterLayer();layer["vignette"]=value;writeFilterLayer(layer);}
     void syncGuideOverlay(){
         auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas)return;
         if(kind!="Progressive Blur"&&kind!="RGB Split"){canvas->setCameraRawGuides({});return;}
@@ -231,7 +233,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        const bool filterLike=kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
+        const bool filterLike=kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
         if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"||filterLike){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=filterLike?((label=="Radius"||label=="Distance"||label=="Amount")&&lo>0):(label=="Gamma"||label=="Size");const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
@@ -249,6 +251,22 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto property=[&](const QString&group,const QString&key,const QString&label,double fallback,double lo,double hi,int decimals){auto* spin=number(label,settings[group].toObject().value(key).toDouble(fallback),lo,hi,decimals,fallback,[&,group,key](double v){auto o=settings[group].toObject();o[key]=v;settings[group]=o;});reloadControls.push_back([this,spin,group,key,fallback]{spin->setValue(settings[group].toObject().value(key).toDouble(fallback));});return spin;};
     if(kind=="Exposure"){
         property("exposureSettings","exposure","Exposure",0,-20,20,2);property("exposureSettings","offset","Offset",0,-.5,.5,4);property("exposureSettings","gamma","Gamma",1,.01,9.99,2);
+    }else if(kind=="Vignette"){
+        const auto values=vignetteSettings();
+        for(const auto& item:std::array<std::pair<const char*,const char*>,5>{{{"amount","Amount"},{"midpoint","Midpoint"},{"roundness","Roundness"},{"feather","Feather"},{"highlights","Highlights"}}}){
+            const QString key=item.first,label=item.second;const double fallback=values[key].toDouble();
+            auto* spin=number(label,fallback,key=="roundness"?-100:0,100,1,fallback,[this,key](double value){auto v=vignetteSettings();v[key]=value;writeVignette(v);});
+            reloadControls.push_back([this,spin,key]{spin->setValue(vignetteSettings()[key].toDouble());});
+        }
+        auto* color=new QPushButton;color->setObjectName("vignetteColor");color->setAccessibleName("Vignette color");
+        auto update=[this,color]{auto c=vignetteSettings()["color"].toObject();color->setText(QColor::fromRgbF(c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()).name());};
+        update();reloadControls.push_back(update);form.addRow("Color",color);
+        QObject::connect(color,&QPushButton::clicked,&dialog,[this,update]{
+            const auto c=vignetteSettings()["color"].toObject();
+            auto store=[owner=QPointer<AdjustmentPanel>(this),update](effects_tools::PaletteColor color){if(!owner||owner->closed_||owner->committing_)return;auto v=owner->vignetteSettings();v["color"]=Object{{"red",color.red},{"green",color.green},{"blue",color.blue}};owner->writeVignette(v);update();owner->changed();};
+            if(host_.openColor){host_.openColor({c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()},"Color Picker (Vignette)",store);return;}
+            auto picked=QColorDialog::getColor(QColor::fromRgbF(c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()),&dialog,"Vignette color");if(picked.isValid())store({picked.redF(),picked.greenF(),picked.blueF()});
+        });
     }else if(kind=="Grain"){
         property("grainSettings","amount","Amount",25,0,100,1);property("grainSettings","size","Size",1.5,.5,20,2);property("grainSettings","roughness","Roughness",50,0,100,1);
     }else if(kind=="Color Balance"){

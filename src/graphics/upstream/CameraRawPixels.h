@@ -6,6 +6,9 @@ typedef struct {
     int (*check)(void *);
     void *context;
 } CameraRawCancel;
+// Shared document-relative falloff for editable Vignette layers.
+double vignette_mask_at(double px, double py, double width, double height,
+                        double midpoint, double roundness, double feather);
 // Camera Raw's Light and Color groups on premultiplied RGBA. Amounts use Camera Raw's ranges.
 // `clipping` 0 renders the grade; 1 is the highlight-clip view; 2 is the shadow-clip view.
 void adjust_camera_raw(uint8_t *rgba, size_t width, size_t height, size_t stride,

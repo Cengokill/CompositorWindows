@@ -12,6 +12,8 @@ Maintenance intent: stay aligned with Robbie's core features, editing behavior, 
 
 Lens Effects (#83) now has a destructive pixel filter with five modes, per-project applied settings, live reduced preview and the existing selection/history pipeline. The software renderer follows the v1.5.8 settings contract; its bounded sampling is not verified Core Image parity. Editable Lens Effects layers remain outside this change (#97).
 
+Vignette adjustment layers (#95) retain six editable settings, use document-relative falloff for regional rendering, and preserve source pixels and coverage. They use the existing live adjustment history and mask pipeline and require Windows project format v20. The destructive Vignette filter keeps its earlier behavior; Mac exchange remains unverified.
+
 What's New displays embedded release notes after an update, once startup imports and dialogs finish. The first launch initializes local version history silently. The 1.5.8 release includes these notes offline; the project format and upstream pin are unchanged.
 
 Keep this as the single current checkpoint. Follow AGENTS.md for documentation boundaries. No implementation backlog is implied by historical reports or old tests; start with the user's current request.

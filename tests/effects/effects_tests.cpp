@@ -78,5 +78,24 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
     auto split=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(lens),nullptr,{0,0,1,3,1});
     check(split&&split->format==DeepImage::Format::Unorm16&&split->samples!=deep->samples,"RGB Split ignored 16-bit pixels");
  }
+ else if(test=="vignette_contract"){
+    auto o=settings("Vignette");auto g=o["filterLayerSettings"].toObject();auto v=g["vignette"].toObject();
+    v["amount"]=80;v["midpoint"]=0;v["roundness"]=-100;v["feather"]=100;v["highlights"]=0;v["color"]=QJsonObject{{"red",1},{"green",0},{"blue",.5}};g["vignette"]=v;o["filterLayerSettings"]=g;
+    auto source=Raster::filled(513,65,{40,60,80,128});auto before=source->rgba();auto full=apply(source,o,nullptr,{0,0,1,513,65});
+    for(int y=0;y<65;++y)for(int x=0;x<513;++x){
+        double d=std::max(std::abs((x+.5)/513*2-1),std::abs((y+.5)/65*2-1));double e=.8*d*d*(3-2*d);auto p=full->pixel(x,y);
+        check(p==Pixel{uint8_t(std::lround(40+(128-40)*e)),uint8_t(std::lround(60*(1-e))),uint8_t(std::lround(80+(64-80)*e)),128},"independent colored vignette formula");
+    }
+    for(auto origin:std::array<Point,3>{{{0,0},{255,17},{491,42}}}){auto part=apply(Raster::filled(22,23,{40,60,80,128}),o,nullptr,{origin.x,origin.y,1,513,65});for(int y=0;y<23;++y)for(int x=0;x<22;++x)check(part->pixel(x,y)==full->pixel(int(origin.x)+x,int(origin.y)+y),"regional vignette seam");}
+    auto scaled=apply(Raster::filled(171,13,{40,60,80,128}),o,nullptr,{0,0,3,513,65});for(int y=0;y<13;++y)for(int x=0;x<171;++x)check(scaled->pixel(x,y)==full->pixel(x*3+1,y*3+1),"scaled document coordinates");
+    auto clear=Raster::filled(11,7,{});check(apply(clear,o)->rgba()==clear->rgba(),"vignette creates no coverage");
+    GrayRaster selection{513,65,std::vector<uint8_t>(513*65,0)};for(int y=0;y<65;++y)selection.pixels[size_t(y)*513]=255;auto selected=apply(source,o,&selection);check(selected->pixel(0,0)==full->pixel(0,0)&&selected->pixel(1,0)==source->pixel(1,0),"vignette selection coverage");
+    check(source->rgba()==before,"vignette modifies immutable source");
+    v["amount"]=0;g["vignette"]=v;o["filterLayerSettings"]=g;check(apply(source,o)==source,"zero amount preserves snapshot");
+    v["amount"]=80;v["highlights"]=100;g["vignette"]=v;o["filterLayerSettings"]=g;auto white=Raster::filled(5,3,{255,255,255,255});check(apply(white,o)->rgba()==white->rgba(),"highlight protection");
+    for(const char* key:{"amount","midpoint","roundness","feather","highlights"}){auto invalid=v;invalid[key]=101;auto layer=g;layer["vignette"]=invalid;auto bad=o;bad["filterLayerSettings"]=layer;rejects([&]{validateAdjustmentJson(encode(bad));});invalid.remove(key);layer["vignette"]=invalid;bad["filterLayerSettings"]=layer;rejects([&]{validateAdjustmentJson(encode(bad));});}
+    rejects([&]{applyAdjustment(source,encode(o),nullptr,{},[]{return true;});});
+    for(auto format:{DeepImage::Format::Unorm16,DeepImage::Format::HalfFloat}){auto deep=makeDeep(11,7,format);for(int y=0;y<7;++y)for(int x=0;x<11;++x)deep->setPixel(x,y,{.2f,.3f,.4f,.5f});auto out=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(o),nullptr,{0,0,1,11,7});check(out->format==format&&out->pixel(0,0)[3]==deep->pixel(0,0)[3]&&out->samples!=deep->samples,"deep vignette preserves format and coverage");}
+ }
  else throw std::runtime_error("Unknown case");std::cout<<"PASS "<<test<<"\n";return 0;
  }catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";return 1;}}
