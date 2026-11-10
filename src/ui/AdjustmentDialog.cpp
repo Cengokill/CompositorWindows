@@ -19,6 +19,7 @@
 #include <QScopedValueRollback>
 #include <QLabel>
 #include <QPushButton>
+#include <QToolButton>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
@@ -258,10 +259,10 @@ class AdjustmentPanel final:public ui::EditPanelSession {
             auto* spin=number(label,fallback,key=="roundness"?-100:0,100,1,fallback,[this,key](double value){auto v=vignetteSettings();v[key]=value;writeVignette(v);});
             reloadControls.push_back([this,spin,key]{spin->setValue(vignetteSettings()[key].toDouble());});
         }
-        auto* color=new QPushButton;color->setObjectName("vignetteColor");color->setAccessibleName("Vignette color");
-        auto update=[this,color]{auto c=vignetteSettings()["color"].toObject();const auto hex=QColor::fromRgbF(c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()).name();color->setToolTip(hex);color->setAccessibleDescription(hex);color->setStyleSheet(QString("QPushButton#vignetteColor { background: %1; border: 1px solid #777b84; border-radius: 4px; } QPushButton#vignetteColor:hover { border-color: #bfc9d8; } QPushButton#vignetteColor:pressed, QPushButton#vignetteColor:focus { border-color: #78b0f7; }").arg(hex));};
+        auto* color=new QToolButton;color->setObjectName("vignetteColor");color->setAccessibleName("Vignette color");color->setFixedSize(36,22);
+        auto update=[this,color]{auto c=vignetteSettings()["color"].toObject();const auto hex=QColor::fromRgbF(c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()).name();color->setToolTip(hex);color->setAccessibleDescription(hex);color->setStyleSheet(QString("QToolButton#vignetteColor { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QToolButton#vignetteColor:hover { border-color: #bfc9d8; } QToolButton#vignetteColor:pressed, QToolButton#vignetteColor:focus { border-color: #78b0f7; }").arg(hex));};
         update();reloadControls.push_back(update);form.addRow("Color",color);
-        QObject::connect(color,&QPushButton::clicked,&dialog,[this,update]{
+        QObject::connect(color,&QToolButton::clicked,&dialog,[this,update]{
             const auto c=vignetteSettings()["color"].toObject();
             auto store=[owner=QPointer<AdjustmentPanel>(this),update](effects_tools::PaletteColor color){if(!owner||owner->closed_||owner->committing_)return;auto v=owner->vignetteSettings();v["color"]=Object{{"red",color.red},{"green",color.green},{"blue",color.blue}};owner->writeVignette(v);update();owner->changed();};
             if(host_.openColor){host_.openColor({c["red"].toDouble(),c["green"].toDouble(),c["blue"].toDouble()},"Color Picker (Vignette)",store);return;}

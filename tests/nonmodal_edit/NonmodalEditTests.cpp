@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QPushButton>
+#include <QToolButton>
 #include <QImage>
 #include <QPixmap>
 #include <QJsonDocument>
@@ -246,12 +247,12 @@ void rgb_split_canvas_cancel_layers(){
 }
 
 void vignette_lifecycle(){
-    auto swatch=[](QDialog& panel,const QColor& expected){auto* button=control<QPushButton>(panel,"vignetteColor");auto image=button->grab().toImage();require(button->text().isEmpty()&&image.pixelColor(image.rect().center())==expected,"Vignette displays the selected color as a filled rectangle");};
+    auto swatch=[](QDialog& panel,const QColor& expected){auto* button=control<QToolButton>(panel,"vignetteColor");auto image=button->grab().toImage();if(button->size()!=QSize(36,22))throw std::runtime_error("Vignette swatch size: "+std::to_string(button->width())+"x"+std::to_string(button->height()));require(button->text().isEmpty()&&image.pixelColor(image.rect().center())==expected,"Vignette displays the selected color as a filled rectangle");};
     Fixture f;const auto source=f.project.document->layers[0].raster;
     panel(f.window,"adjust.new.vignette","Vignette",[&](QDialog& p){ready(p);swatch(p,QColor(Qt::black));require(f.project.history.undoCount()==1,"creation is one undo step");field(p,"Amount")->setValue(81);ready(p);p.reject();});
     require(f.project.document->layers.size()==2&&!f.project.effectPreview&&f.project.history.undoCount()==1,"Cancel retains created layer only");
     const auto created=f.project.document;const auto id=f.project.active;
-    panel(f.window,"adjust.edit","Vignette",[&](QDialog& p){require(field(p,"Amount")->value()==35,"Cancel restored defaults");field(p,"Amount")->setValue(81);field(p,"Midpoint")->setValue(18);field(p,"Roundness")->setValue(-42);field(p,"Feather")->setValue(37);field(p,"Highlights")->setValue(67);ready(p);control<QPushButton>(p,"vignetteColor")->click();PaletteDialog* picker=nullptr;for(auto* object:f.window.findChildren<QObject*>())if(auto* candidate=dynamic_cast<PaletteDialog*>(object);candidate&&candidate->isVisible())picker=candidate;require(picker,"Vignette uses shared palette");picker->sample({.2,.6,.8});swatch(p,QColor("#3399cc"));picker->accept();ready(p);require(bool(f.project.effectPreview),"vignette live preview");preview(p)->setChecked(false);ready(p);require(!f.project.effectPreview,"preview off clears overlay");preview(p)->setChecked(true);ready(p);apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"vignette Apply");});
+    panel(f.window,"adjust.edit","Vignette",[&](QDialog& p){require(field(p,"Amount")->value()==35,"Cancel restored defaults");field(p,"Amount")->setValue(81);field(p,"Midpoint")->setValue(18);field(p,"Roundness")->setValue(-42);field(p,"Feather")->setValue(37);field(p,"Highlights")->setValue(67);ready(p);control<QToolButton>(p,"vignetteColor")->click();PaletteDialog* picker=nullptr;for(auto* object:f.window.findChildren<QObject*>())if(auto* candidate=dynamic_cast<PaletteDialog*>(object);candidate&&candidate->isVisible())picker=candidate;require(picker,"Vignette uses shared palette");picker->sample({.2,.6,.8});swatch(p,QColor("#3399cc"));picker->accept();ready(p);require(bool(f.project.effectPreview),"vignette live preview");preview(p)->setChecked(false);ready(p);require(!f.project.effectPreview,"preview off clears overlay");preview(p)->setChecked(true);ready(p);apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"vignette Apply");});
     const auto applied=f.project.document;require(f.project.history.undoCount()==2&&f.project.active==id&&f.project.document->layers[0].raster==source&&!f.project.effectPreview,"Apply preserves source identity history and clears overlay");
     trigger(f.window,"edit.undo");require(f.project.document==created,"first Undo restores creation settings");trigger(f.window,"edit.undo");require(f.project.document==f.before,"second Undo removes created layer");trigger(f.window,"edit.redo");trigger(f.window,"edit.redo");require(f.project.document==applied,"Redo restores applied settings");
     panel(f.window,"adjust.edit","Vignette",[&](QDialog& p){require(field(p,"Roundness")->value()==-42&&field(p,"Highlights")->value()==67,"controls restore existing values");swatch(p,QColor("#3399cc"));field(p,"Amount")->setValue(99);p.reject();});
