@@ -191,6 +191,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     void writeFilterLayer(Object o){settings["filterLayerSettings"]=o;}
     Object vignetteSettings(){auto layer=filterLayer();if(layer["vignette"].isNull()||layer["vignette"].isUndefined()){layer["vignette"]=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Vignette"))).object()["filterLayerSettings"].toObject()["vignette"];writeFilterLayer(layer);}return layer["vignette"].toObject();}
     void writeVignette(Object value){auto layer=filterLayer();layer["vignette"]=value;writeFilterLayer(layer);}
+    Object tonalSettings(){auto layer=filterLayer();if(layer["tonal"].isNull()||layer["tonal"].isUndefined()){layer["tonal"]=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Tonal Contrast"))).object()["filterLayerSettings"].toObject()["tonal"];writeFilterLayer(layer);}return layer["tonal"].toObject();}
+    void writeTonal(Object value){auto layer=filterLayer();layer["tonal"]=value;writeFilterLayer(layer);}
     void syncGuideOverlay(){
         auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas)return;
         if(kind!="Progressive Blur"&&kind!="RGB Split"){canvas->setCameraRawGuides({});return;}
@@ -234,7 +236,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        const bool filterLike=kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
+        const bool filterLike=kind=="Tonal Contrast"||kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
         if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"||filterLike){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=filterLike?((label=="Radius"||label=="Distance"||label=="Amount")&&lo>0):(label=="Gamma"||label=="Size");const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
@@ -252,6 +254,13 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto property=[&](const QString&group,const QString&key,const QString&label,double fallback,double lo,double hi,int decimals){auto* spin=number(label,settings[group].toObject().value(key).toDouble(fallback),lo,hi,decimals,fallback,[&,group,key](double v){auto o=settings[group].toObject();o[key]=v;settings[group]=o;});reloadControls.push_back([this,spin,group,key,fallback]{spin->setValue(settings[group].toObject().value(key).toDouble(fallback));});return spin;};
     if(kind=="Exposure"){
         property("exposureSettings","exposure","Exposure",0,-20,20,2);property("exposureSettings","offset","Offset",0,-.5,.5,4);property("exposureSettings","gamma","Gamma",1,.01,9.99,2);
+    }else if(kind=="Tonal Contrast"){
+        const auto values=tonalSettings();
+        for(const auto& item:std::array<std::pair<const char*,const char*>,5>{{{"amount","Amount"},{"radius","Radius"},{"shadows","Shadows"},{"midtones","Midtones"},{"highlights","Highlights"}}}){
+            const QString key=item.first,label=item.second;const double fallback=values[key].toDouble();
+            auto* spin=number(label,fallback,key=="radius"?1:key=="amount"?0:-100,100,1,fallback,[this,key](double value){auto v=tonalSettings();v[key]=value;writeTonal(v);});
+            reloadControls.push_back([this,spin,key]{spin->setValue(tonalSettings()[key].toDouble());});
+        }
     }else if(kind=="Vignette"){
         const auto values=vignetteSettings();
         for(const auto& item:std::array<std::pair<const char*,const char*>,5>{{{"amount","Amount"},{"midpoint","Midpoint"},{"roundness","Roundness"},{"feather","Feather"},{"highlights","Highlights"}}}){

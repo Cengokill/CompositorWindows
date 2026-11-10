@@ -78,6 +78,17 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
     auto split=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(lens),nullptr,{0,0,1,3,1});
     check(split&&split->format==DeepImage::Format::Unorm16&&split->samples!=deep->samples,"RGB Split ignored 16-bit pixels");
  }
+ else if(test=="tonal_contract"){
+    auto o=settings("Tonal Contrast");auto g=o["filterLayerSettings"].toObject();auto t=g["tonal"].toObject();
+    std::vector<uint8_t> bytes(90*9*4);for(int y=0;y<9;++y)for(int x=0;x<90;++x){auto i=size_t(y*90+x)*4;auto v=uint8_t((x/30)*85+35+(x%2)*20);bytes[i]=bytes[i+1]=bytes[i+2]=v;bytes[i+3]=255;}
+    auto source=Raster::fromRgba(90,9,bytes.data(),90*4);const auto before=source->rgba();t["amount"]=100;t["radius"]=2;
+    for(const char* key:{"shadows","midtones","highlights"}){t["shadows"]=0;t["midtones"]=0;t["highlights"]=0;t[key]=100;g["tonal"]=t;o["filterLayerSettings"]=g;check(apply(source,o)->rgba()!=before,"tone control has no effect");}
+    for(const char* key:{"amount","radius","shadows","midtones","highlights"}){auto invalid=t;invalid[key]=101;auto group=g;group["tonal"]=invalid;auto bad=o;bad["filterLayerSettings"]=group;rejects([&]{validateAdjustmentJson(encode(bad));});invalid.remove(key);group["tonal"]=invalid;bad["filterLayerSettings"]=group;rejects([&]{validateAdjustmentJson(encode(bad));});}
+    t["shadows"]=40;t["midtones"]=60;t["highlights"]=30;g["tonal"]=t;o["filterLayerSettings"]=g;auto full=apply(source,o);GrayRaster mask{90,9,std::vector<uint8_t>(90*9,0)};for(int y=0;y<9;++y)for(int x=45;x<90;++x)mask.pixels[size_t(y)*90+x]=255;auto selected=apply(source,o,&mask);for(int y=0;y<9;++y)for(int x=0;x<90;++x)check(selected->pixel(x,y)==(x<45?source->pixel(x,y):full->pixel(x,y)),"selection mixing");
+    auto deep=makeDeep(90,9,DeepImage::Format::Unorm16);for(int y=0;y<9;++y)for(int x=0;x<90;++x){auto p=source->pixel(x,y);deep->setPixel(x,y,{p.r/255.f,p.g/255.f,p.b/255.f,1});}auto out=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(o),nullptr,{0,0,1,90,9});check(out->format==deep->format&&out->samples!=deep->samples&&out->pixel(1,1)[3]==1,"deep tonal output");
+    rejects([&]{applyAdjustment(source,encode(o),nullptr,{},[]{return true;});});
+    t["amount"]=0;g["tonal"]=t;o["filterLayerSettings"]=g;check(apply(source,o)==source,"zero amount must be identity");check(source->rgba()==before,"source changed");
+ }
  else if(test=="vignette_contract"){
     auto o=settings("Vignette");auto g=o["filterLayerSettings"].toObject();auto v=g["vignette"].toObject();
     v["amount"]=80;v["midpoint"]=0;v["roundness"]=-100;v["feather"]=100;v["highlights"]=0;v["color"]=QJsonObject{{"red",1},{"green",0},{"blue",.5}};g["vignette"]=v;o["filterLayerSettings"]=g;
