@@ -51,7 +51,7 @@ template<class T> std::vector<T> gaussian(const std::vector<T>& source,int w,int
         for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=-r;k<=r;++k){const int yy=along(y+k,h,clamp.top,clamp.bottom);if(yy>=0)sum+=pass[std::size_t(yy)*w+x]*weights[k+r];}output[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum);}}}
     return output;
 }
-void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizontal,int radius,LayerSides clamp,const Limits& limits){
+template<class Sum=float> void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizontal,int radius,LayerSides clamp,const Limits& limits){
     const int lines=horizontal?h:w,length=horizontal?w:h;
     const float inv=1.f/float(radius*2+1);
     const bool lo=horizontal?clamp.left:clamp.top,hi=horizontal?clamp.right:clamp.bottom;
@@ -64,29 +64,29 @@ void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizo
             const int x=horizontal?i:line,y=horizontal?line:i;
             return a[(std::size_t(y)*w+x)*4+c];
         };
-        float sum[4]{};
+        Sum sum[4]{};
         for(int k=-radius;k<=radius;++k)for(int c=0;c<4;++c)sum[c]+=at(k,c);
         for(int pos=0;pos<length;++pos){
             float* dst=&b[(std::size_t(horizontal?line:pos)*w+(horizontal?pos:line))*4];
-            for(int c=0;c<4;++c)dst[c]=sum[c]*inv;
+            for(int c=0;c<4;++c)dst[c]=float(sum[c]*inv);
             for(int c=0;c<4;++c){sum[c]-=at(pos-radius,c);sum[c]+=at(pos+radius+1,c);}
         }
     });
     a.swap(b);
 }
-void fastGaussianFloat(std::vector<float>& a,std::vector<float>& b,int w,int h,double sigma,const Limits& limits,LayerSides clamp){
+template<class Sum=float> void fastGaussianFloat(std::vector<float>& a,std::vector<float>& b,int w,int h,double sigma,const Limits& limits,LayerSides clamp){
     if(sigma<.15)return;
     constexpr int passes=3;
     const double ideal=std::sqrt(12*sigma*sigma/passes+1);
     int small=std::max(1,int(std::floor(ideal)));if((small&1)==0)--small;
     const int large=small+2;
     const int nSmall=std::clamp(int(std::lround((12*sigma*sigma-passes*small*small-4*passes*small-3*passes)/(-4.*small-4))),0,passes);
-    for(int i=0;i<passes;++i){const int radius=((i<nSmall?small:large)-1)/2;boxPass(a,b,w,h,true,radius,clamp,limits);boxPass(a,b,w,h,false,radius,clamp,limits);}
+    for(int i=0;i<passes;++i){const int radius=((i<nSmall?small:large)-1)/2;boxPass<Sum>(a,b,w,h,true,radius,clamp,limits);boxPass<Sum>(a,b,w,h,false,radius,clamp,limits);}
 }
-template<class T> std::vector<T> fastGaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits,LayerSides clamp={}){
+template<class T,class Sum=float> std::vector<T> fastGaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits,LayerSides clamp={}){
     if(sigma<.15)return source;
     std::vector<float> a(source.begin(),source.end()),b(source.size());
-    fastGaussianFloat(a,b,w,h,sigma,limits,clamp);
+    fastGaussianFloat<Sum>(a,b,w,h,sigma,limits,clamp);
     std::vector<T> output(source.size());for(std::size_t i=0;i<source.size();++i)output[i]=blurValue<T>(a[i]);return output;
 }
 template<class T> std::vector<T> progressive(const std::vector<T>& source,int w,int h,const Settings& s,double scale,const Limits& limits,LayerSides clamp={}){
@@ -298,7 +298,7 @@ void bloom(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,doubl
 }
 // Tone weighting follows MetalFinishing.swift at upstream 7b5ba975 (MIT).
 template<class T> void tonalLayerContrast(std::vector<T>& pixels,int w,int h,const TonalLayerSettings& s,double scale,const Limits& limits){
-    auto blurred=gaussian(pixels,w,h,s.radius*scale,limits);
+    auto blurred=fastGaussian<T,double>(pixels,w,h,s.radius*scale,limits);
     const double maximum=std::is_same_v<T,std::uint8_t>?255.:1.;
     auto smooth=[](double x){x=std::clamp(x,0.,1.);return x*x*(3-2*x);};
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){

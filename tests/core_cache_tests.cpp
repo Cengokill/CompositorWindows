@@ -49,6 +49,10 @@ void tonal_adjustment_tile_seam(){
     Layer image;image.id=newId();image.raster=Raster::filled(512,32,{})->replacing(0,0,512,32,pixels.data(),512);image.transform={0,0,512,32,0,false,false,Transform::Sampling::Nearest};Layer tonal;tonal.id=newId();tonal.transform={0,0,512,32};auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Tonal Contrast"))).object();auto group=json["filterLayerSettings"].toObject();auto settings=group["tonal"].toObject();settings["radius"]=4;settings["amount"]=100;group["tonal"]=settings;json["filterLayerSettings"]=group;tonal.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers={image,tonal};
     auto full=SoftwareRenderer().render(d,0,0,512,32);CompositeCache cache;auto tiled=cache.render(d);equal(*tiled,*full);auto scaled=SoftwareRenderer().renderScaled(d,0,0,256,16,2);auto view=cache.renderViewport(d,0,0,512,32,2);equal(*view.raster,*scaled);
     auto overview=SoftwareRenderer().renderScaled(d,0,0,8,1,64);auto left=SoftwareRenderer().renderScaled(d,0,0,4,1,64);auto right=SoftwareRenderer().renderScaled(d,256,0,4,1,64);for(int x=0;x<8;++x)REQUIRE(overview->pixel(x,0)==(x<4?left->pixel(x,0):right->pixel(x-4,0)));
+    settings["radius"]=100;group["tonal"]=settings;json["filterLayerSettings"]=group;d.layers[1].adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();
+    auto largeFull=SoftwareRenderer().render(d,0,0,512,32);CompositeCache largeCache;equal(*largeCache.render(d),*largeFull);
+    settings["amount"]=0;group["tonal"]=settings;json["filterLayerSettings"]=group;d.layers[1].adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();
+    auto identity=SoftwareRenderer().renderScaled(d,0,0,256,256,1./32);d.layers.pop_back();equal(*identity,*SoftwareRenderer().renderScaled(d,0,0,256,256,1./32));
 }
 void rgb_split_adjustment_tile_seam(){
     Document d;d.id=newId();d.width=512;d.height=32;
