@@ -5,6 +5,9 @@
 #include "CameraRaw.h"
 #include "graphics/ParallelBatch.h"
 #include "graphics/PixelAlgorithms.h"
+extern "C" {
+#include "graphics/upstream/CameraRawPixels.h"
+}
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -202,7 +205,7 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
 bool finishingIdentity(Kind kind,const Settings& s){
     switch(kind){
     case Kind::LensEffects:return s.lens.isIdentity();
-    case Kind::Vignette:return s.vignette==0;
+    case Kind::Vignette:return s.vignetteLayer?s.vignetteLayer->amount==0:s.vignette==0;
     case Kind::Bloom:return s.bloomGlow?s.bloomAmount==0:s.bloom==0;
     case Kind::TonalContrast:return s.tonal==0;
     case Kind::Dither:return s.ditherLevels<=0;
@@ -212,6 +215,20 @@ bool finishingIdentity(Kind kind,const Settings& s){
     case Kind::RgbSplit:return s.rgbSplitDistance==0&&s.rgbSplitBlur==0;
     default:return false;
     }
+}
+// Layer behavior from AdjustPixels.c at upstream 02e53989 (MIT): preserve coverage.
+// The standalone Windows filter below retains its earlier empty-layer behavior.
+template<class T>void coloredVignette(std::vector<T>& pixels,int w,int h,const VignetteLayerSettings& s,const Limits& limits){
+    if(!std::isfinite(s.frameX)||!std::isfinite(s.frameY)||!std::isfinite(s.frameWidth)||!std::isfinite(s.frameHeight)||s.frameWidth<=0||s.frameHeight<=0)throw std::runtime_error("Invalid vignette frame");
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){
+        const auto i=(size_t(y)*w+x)*4;const double alpha=pixels[i+3];if(!(alpha>0))continue;
+        const double mask=vignette_mask_at(x+.5-s.frameX,y+.5-s.frameY,s.frameWidth,s.frameHeight,s.midpoint,s.roundness,s.feather);
+        const double r=pixels[i]/alpha,g=pixels[i+1]/alpha,b=pixels[i+2]/alpha;
+        const double bright=std::clamp((.2126*r+.7152*g+.0722*b-.45)/.55,0.,1.);
+        const double effect=s.amount/100*mask*(1-s.highlights/100*bright);
+        for(size_t c=0;c<3;++c){const double value=pixels[i+c]+(s.color[c]*alpha-pixels[i+c])*effect;
+            if constexpr(std::is_same_v<T,uint8_t>)pixels[i+c]=byte(value);else pixels[i+c]=float(value);}
+    }}
 }
 void vignette(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s){
     const double strength=s.vignette/100;
@@ -413,7 +430,7 @@ bool LensEffectSettings::isIdentity() const {
     switch(s.effect){case LensEffect::AnamorphicFlare:return s.flareAmount==0;case LensEffect::Starburst:return s.starAmount==0;case LensEffect::Mist:return s.mistStrength==0;case LensEffect::Prism:return s.prismAmount==0;case LensEffect::Bokeh:return false;}
     return false;
 }
-Settings Settings::normalized()const{auto out=*this;out.lens=lens.normalized();out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);out.bloomAmount=filters::normalized(bloomAmount,0,100,40);out.bloomRadius=filters::normalized(bloomRadius,1,150,24);out.rgbSplitDistance=filters::normalized(rgbSplitDistance,0,200,10);out.rgbSplitBlur=filters::normalized(rgbSplitBlur,0,400,0);out.rgbSplitAngle=filters::normalized(rgbSplitAngle,-180,180,0);out.rgbSplitReach=filters::normalized(rgbSplitReach,1e-9,3200000,1000);for(auto* point:{&out.progressiveStart,&out.progressiveEnd,&out.rgbSplitCenter})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
+Settings Settings::normalized()const{auto out=*this;out.lens=lens.normalized();if(out.vignetteLayer){auto& v=*out.vignetteLayer;v.amount=filters::normalized(v.amount,0,100,35);v.midpoint=filters::normalized(v.midpoint,0,100,50);v.roundness=filters::normalized(v.roundness,-100,100,100);v.feather=filters::normalized(v.feather,0,100,60);v.highlights=filters::normalized(v.highlights,0,100,25);for(auto& c:v.color)c=filters::normalized(c,0,1,0);}out.radius=filters::normalized(radius,.1,250,1);out.angle=filters::normalized(angle,-90,90,0);out.distance=filters::normalized(distance,1,2000,10);out.amount=filters::normalized(amount,.1,400,10);out.distortion=filters::normalized(distortion,-100,100,0);out.vignette=filters::normalized(vignette,0,100,0);out.vignetteMidpoint=filters::normalized(vignetteMidpoint,0,1,.5);out.vignetteFeather=filters::normalized(vignetteFeather,0,1,.5);out.bloom=filters::normalized(bloom,0,100,0);out.bloomThreshold=filters::normalized(bloomThreshold,0,1,.6);out.tonal=filters::normalized(tonal,0,100,0);out.ditherLevels=int(filters::normalized(ditherLevels,0,16,0));out.ditherStyle=int(filters::normalized(ditherStyle,0,2,0));out.scanline=filters::normalized(scanline,0,100,0);out.scanlineGlow=filters::normalized(scanlineGlow,0,100,0);out.progressiveFrom=filters::normalized(progressiveFrom,0,250,0);out.progressiveTo=filters::normalized(progressiveTo,0,250,20);out.bloomAmount=filters::normalized(bloomAmount,0,100,40);out.bloomRadius=filters::normalized(bloomRadius,1,150,24);out.rgbSplitDistance=filters::normalized(rgbSplitDistance,0,200,10);out.rgbSplitBlur=filters::normalized(rgbSplitBlur,0,400,0);out.rgbSplitAngle=filters::normalized(rgbSplitAngle,-180,180,0);out.rgbSplitReach=filters::normalized(rgbSplitReach,1e-9,3200000,1000);for(auto* point:{&out.progressiveStart,&out.progressiveEnd,&out.rgbSplitCenter})if(*point&&(!std::isfinite((*point)->x)||!std::isfinite((*point)->y)))point->reset();return out;}
 bool supportsHdr(Kind kind){return kind!=Kind::LensEffects&&kind!=Kind::LensCorrection&&kind!=Kind::ContentAwareFill&&kind!=Kind::Bloom&&kind!=Kind::TonalContrast&&kind!=Kind::Scanlines&&kind!=Kind::RgbSplit;}
 double blurMargin(Kind kind,const Settings& raw){kindCheck(kind);auto s=raw.normalized();return kind==Kind::GaussianBlur?s.radius*3+2:kind==Kind::MotionBlur?s.distance/2+2:kind==Kind::ProgressiveBlur?std::max(s.progressiveFrom,s.progressiveTo)*3+2:kind==Kind::RgbSplit?(s.rgbSplitDistance+s.rgbSplitBlur)*(s.rgbSplitRadial?2:1)+2:kind==Kind::Bloom&&s.bloomGlow?s.bloomRadius*3+2:0;}
 LayerSides canvasTouchingSides(const Transform& placed,int sourceWidth,int sourceHeight,int canvasWidth,int canvasHeight){
@@ -463,7 +480,7 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
         case Kind::AddNoise:graphics::addNoise(view(result,w,h),float(s.amount),s.gaussian,s.monochromatic,seed,limits.cancelled);break;
         case Kind::LensCorrection:graphics::lensDistort(graphics::readOnly(view(original,w,h)),view(result,w,h),s.distortion/100*.35,limits.cancelled);break;
         case Kind::ContentAwareFill:{graphics::ConstGray8View mask{selection->pixels,std::uint32_t(w),std::uint32_t(h),std::size_t(w)};if(!graphics::contentFill(view(result,w,h),mask,limits.cancelled))throw std::runtime_error("Not enough unselected opaque pixels to synthesize a fill");break;}
-        case Kind::Vignette:vignette(result,w,h,s);break;
+        case Kind::Vignette:if(s.vignetteLayer)coloredVignette(result,w,h,*s.vignetteLayer,limits);else vignette(result,w,h,s);break;
         case Kind::Bloom:bloom(result,w,h,s,scale,limits);break;
         case Kind::TonalContrast:tonalContrast(result,w,h,s,limits);break;
         case Kind::Dither:dither(result,w,h,s,seed);break;
@@ -640,7 +657,7 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
     }else{
         auto pixels=floatsOf(source,limits);
         if(kind==Kind::AddNoise)addNoiseFloat(pixels,source.width,source.height,settings,seed,limits);
-        else if(kind==Kind::Vignette)vignetteFloat(pixels,source.width,source.height,settings);
+        else if(kind==Kind::Vignette){if(settings.vignetteLayer)coloredVignette(pixels,source.width,source.height,*settings.vignetteLayer,limits);else vignetteFloat(pixels,source.width,source.height,settings);}
         else if(kind==Kind::Bloom)bloomFloat(pixels,source.width,source.height,settings,scale,limits);
         else if(kind==Kind::TonalContrast)tonalFloat(pixels,source.width,source.height,settings,limits);
         else if(kind==Kind::Dither)ditherFloat(pixels,source.width,source.height,settings,seed);

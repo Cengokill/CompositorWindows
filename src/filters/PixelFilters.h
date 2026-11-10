@@ -23,7 +23,14 @@ struct LensEffectSettings {
     LensEffectSettings normalized() const;
     bool isIdentity() const;
 };
+struct VignetteLayerSettings {
+    double amount{35},midpoint{50},roundness{100},feather{60},highlights{25};
+    std::array<double,3> color{};
+    // Whole document frame in the working pixel grid, including regional previews.
+    double frameX{},frameY{},frameWidth{},frameHeight{};
+};
 struct Settings {
+    std::optional<VignetteLayerSettings> vignetteLayer;
     LensEffectSettings lens;
     double radius{1},angle{0},distance{10},amount{10},distortion{0};
     bool gaussian{},monochromatic{};

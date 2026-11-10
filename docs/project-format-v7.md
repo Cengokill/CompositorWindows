@@ -56,9 +56,9 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 19
+## Windows reader through version 20
 
-The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–19 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
+The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–20 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
 | Version | Additional content |
 |---|---|
@@ -74,6 +74,7 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 17 | A rectangle shape with `smoothing: true`. A missing, null, or false value uses ordinary corners and does not raise the version. |
 | 18 | A Windows animated GIF layer, described below. |
 | 19 | A line with a non-default `lineStyle` or `lineCap`. The reader accepts these fields from version 15; Windows writes version 19 so older Windows readers do not silently discard them. |
+| 20 | Editable Vignette adjustment layers and their nested settings, described below. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
 
@@ -95,7 +96,7 @@ Bloom / Glow uses amount and radius. The destructive **Filters > Bloom** command
 
 ## Windows CMYK profile extension (version 15)
 
-A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–19. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
+A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–20. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
 
 The optional top-level `cmykProfile` object contains `file` (exactly `cmyk.icc`), `name` (nonempty, at most 1024 characters), and `sha256` (64 lowercase hexadecimal digits). The ICC bytes live in that regular file at the package root, are limited to 16 MiB, and must match the digest. The profile must describe a CMYK output device with XYZ or Lab PCS and support both RGB conversion directions. Invalid, missing, oversized, mismatched or reparse-point assets fail loading before image decoding. A manifest below version 15 carrying this field is rejected. A version 15 manifest may omit it.
 
@@ -106,3 +107,9 @@ The existing staged save and recovery journal include this asset. Proof Colors o
 Windows saves an animated raster layer using its own `windowsGif` extension and raises the project version to 18. This prevents older Windows builds, which support at most version 17, from opening and silently dropping the animation. A document without animated layers keeps the lowest version that represents it. The extension is Windows-specific; exchange with the Mac application has not been verified.
 
 `windowsGif` contains `selectedFrame` (zero-based) and a nonempty `frames` array of up to 4096 entries, each with `imageFile` and an integer `delayMs` from 0 to 655350. The selected frame uses the layer's normal `<UUID>.png` asset; other frames use `<UUID>.frame-<index>.png`. The selected image is the layer's current editable pixels; all frames share its transform, mask, opacity and effects. Each file is an 8-bit PNG. The normal cumulative image-pixel budget counts every frame once. Assets and indices are validated before the project is installed. Projects using the distinct Mac `gif` extension remain explicitly unsupported rather than silently discarding it.
+
+## Windows Vignette adjustment layers (version 20)
+
+A `Vignette` adjustment uses `filterLayerSettings.vignette`: `amount` 0–100, `color` with `red`/ `green`/ `blue` 0–1, `midpoint` 0–100, `roundness` −100–100, `feather` 0–100, and `highlights` 0–100. All six fields are required when the nested object is present. An absent or null object resolves to 35, black, 50, 100, 60 and 25 respectively. Values must be finite numbers in range.
+
+The kind or nested object requires Windows version 20, including when the adjustment is hidden or its amount is zero. Earlier versions carrying either are rejected. Other documents keep their lowest required version. The effect frames the whole document, retains pixel coverage and uses ordinary adjustment masks, opacity and stacking. The existing destructive Vignette filter retains its separate behavior. Windows v20 is independent of upstream's format numbering; Mac exchange remains unverified.

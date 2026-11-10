@@ -243,7 +243,7 @@ static void effects_dehaze(double *r, double *g, double *b, double amount) {
 }
 
 /// The vignette's strength at a point `px`, `py` of a `width` × `height` frame (0 at its middle, 1 past its edges).
-static double vignette_mask_at(double px, double py, double width, double height,
+double vignette_mask_at(double px, double py, double width, double height,
                                double midpoint, double roundness, double feather) {
     double nx = px / width * 2.0 - 1.0;
     double ny = py / height * 2.0 - 1.0;
