@@ -1,3 +1,9 @@
+# Compositor Windows 1.5.9
+
+## Improvements
+
+The application icon uses the updated Compositor artwork.
+
 # Compositor Windows 1.5.8
 
 ## New features

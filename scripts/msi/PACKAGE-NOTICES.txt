@@ -26,5 +26,6 @@ Windows system components are supplied by Windows 11.
 
 The MSI installer is produced with WiX 5.0.2 under the Microsoft Reciprocal
 License; WIX-LICENSE.txt contains the installer tool's notices. The portable
-application requires neither WiX nor .NET. The original geometric app icon
-is covered by the application MIT license. No Apple icons are used.
+application requires neither WiX nor .NET. The app icon is adapted from
+Compositor artwork at commit d9cdb815b9b195cba4f4dbeb6bca1805f0608a24 and
+is covered by the application MIT license.

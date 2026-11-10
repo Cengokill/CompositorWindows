@@ -147,7 +147,7 @@ void panel_release_check(){
 // The version comes from CMake project(VERSION) only: the generated header, the value
 // CTest passes from PROJECT_VERSION and the Compositor.exe version resource must agree.
 void app_version(const QString& projectVersion,const QString& executable){
-    require(QString(COMPOSITOR_VERSION_STRING)=="1.5.8","generated version is 1.5.8");
+    require(QString(COMPOSITOR_VERSION_STRING)=="1.5.9","generated version is 1.5.9");
     require(projectVersion==COMPOSITOR_VERSION_STRING,"generated version matches CMake PROJECT_VERSION");
     require(update::Version{1,0,0}<update::Version::parse(COMPOSITOR_VERSION_STRING),"release v1.0 is not offered to this build");
     const auto path=executable.toStdWString();DWORD handle=0;const DWORD size=GetFileVersionInfoSizeW(path.c_str(),&handle);require(size>0,"Compositor.exe has a version resource");
