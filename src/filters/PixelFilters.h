@@ -29,8 +29,12 @@ struct VignetteLayerSettings {
     // Whole document frame in the working pixel grid, including regional previews.
     double frameX{},frameY{},frameWidth{},frameHeight{};
 };
+struct TonalLayerSettings {
+    double amount{50},radius{16},shadows{40},midtones{60},highlights{30};
+};
 struct Settings {
     std::optional<VignetteLayerSettings> vignetteLayer;
+    std::optional<TonalLayerSettings> tonalLayer;
     LensEffectSettings lens;
     double radius{1},angle{0},distance{10},amount{10},distortion{0};
     bool gaussian{},monochromatic{};

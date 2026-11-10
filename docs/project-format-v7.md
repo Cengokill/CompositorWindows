@@ -56,7 +56,7 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 20
+## Windows reader through version 21
 
 The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–20 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
@@ -75,6 +75,7 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 18 | A Windows animated GIF layer, described below. |
 | 19 | A line with a non-default `lineStyle` or `lineCap`. The reader accepts these fields from version 15; Windows writes version 19 so older Windows readers do not silently discard them. |
 | 20 | Editable Vignette adjustment layers and their nested settings, described below. |
+| 21 | Editable Tonal Contrast adjustment layers and their nested settings, described below. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
 
@@ -113,3 +114,7 @@ Windows saves an animated raster layer using its own `windowsGif` extension and 
 A `Vignette` adjustment uses `filterLayerSettings.vignette`: `amount` 0–100, `color` with `red`/ `green`/ `blue` 0–1, `midpoint` 0–100, `roundness` −100–100, `feather` 0–100, and `highlights` 0–100. All six fields are required when the nested object is present. An absent or null object resolves to 35, black, 50, 100, 60 and 25 respectively. Values must be finite numbers in range.
 
 The kind or nested object requires Windows version 20, including when the adjustment is hidden or its amount is zero. Earlier versions carrying either are rejected. Other documents keep their lowest required version. The effect frames the whole document, retains pixel coverage and uses ordinary adjustment masks, opacity and stacking. The existing destructive Vignette filter retains its separate behavior. Windows v20 is independent of upstream's format numbering; Mac exchange remains unverified.
+
+## Windows Tonal Contrast adjustment layers (version 21)
+
+A `Tonal Contrast` adjustment requires `filterLayerSettings.tonal` with finite numeric fields `amount` (0–100), `radius` (1–100 document pixels), and `shadows`, `midtones`, and `highlights` (−100–100). New layers use 50, 16, 40, 60, and 30 respectively. The kind or nested object requires Windows version 21; older projects remain readable. The existing destructive filter keeps its separate settings and behavior. Windows version 21 is independent of the Mac format and exchange has not been verified.

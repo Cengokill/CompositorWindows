@@ -2,6 +2,7 @@
 // Filters.swift and ContentFill.swift. Copyright (c) 2026 Wonder Assembly LLC.
 // MIT license retained in dependencies/imaging/notices/Compositor-MIT.txt.
 #include "PixelFilters.h"
+#include <type_traits>
 #include "CameraRaw.h"
 #include "graphics/ParallelBatch.h"
 #include "graphics/PixelAlgorithms.h"
@@ -50,7 +51,7 @@ template<class T> std::vector<T> gaussian(const std::vector<T>& source,int w,int
         for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=-r;k<=r;++k){const int yy=along(y+k,h,clamp.top,clamp.bottom);if(yy>=0)sum+=pass[std::size_t(yy)*w+x]*weights[k+r];}output[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum);}}}
     return output;
 }
-void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizontal,int radius,LayerSides clamp,const Limits& limits){
+template<class Sum=float> void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizontal,int radius,LayerSides clamp,const Limits& limits){
     const int lines=horizontal?h:w,length=horizontal?w:h;
     const float inv=1.f/float(radius*2+1);
     const bool lo=horizontal?clamp.left:clamp.top,hi=horizontal?clamp.right:clamp.bottom;
@@ -63,29 +64,29 @@ void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizo
             const int x=horizontal?i:line,y=horizontal?line:i;
             return a[(std::size_t(y)*w+x)*4+c];
         };
-        float sum[4]{};
+        Sum sum[4]{};
         for(int k=-radius;k<=radius;++k)for(int c=0;c<4;++c)sum[c]+=at(k,c);
         for(int pos=0;pos<length;++pos){
             float* dst=&b[(std::size_t(horizontal?line:pos)*w+(horizontal?pos:line))*4];
-            for(int c=0;c<4;++c)dst[c]=sum[c]*inv;
+            for(int c=0;c<4;++c)dst[c]=float(sum[c]*inv);
             for(int c=0;c<4;++c){sum[c]-=at(pos-radius,c);sum[c]+=at(pos+radius+1,c);}
         }
     });
     a.swap(b);
 }
-void fastGaussianFloat(std::vector<float>& a,std::vector<float>& b,int w,int h,double sigma,const Limits& limits,LayerSides clamp){
+template<class Sum=float> void fastGaussianFloat(std::vector<float>& a,std::vector<float>& b,int w,int h,double sigma,const Limits& limits,LayerSides clamp){
     if(sigma<.15)return;
     constexpr int passes=3;
     const double ideal=std::sqrt(12*sigma*sigma/passes+1);
     int small=std::max(1,int(std::floor(ideal)));if((small&1)==0)--small;
     const int large=small+2;
     const int nSmall=std::clamp(int(std::lround((12*sigma*sigma-passes*small*small-4*passes*small-3*passes)/(-4.*small-4))),0,passes);
-    for(int i=0;i<passes;++i){const int radius=((i<nSmall?small:large)-1)/2;boxPass(a,b,w,h,true,radius,clamp,limits);boxPass(a,b,w,h,false,radius,clamp,limits);}
+    for(int i=0;i<passes;++i){const int radius=((i<nSmall?small:large)-1)/2;boxPass<Sum>(a,b,w,h,true,radius,clamp,limits);boxPass<Sum>(a,b,w,h,false,radius,clamp,limits);}
 }
-template<class T> std::vector<T> fastGaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits,LayerSides clamp={}){
+template<class T,class Sum=float> std::vector<T> fastGaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits,LayerSides clamp={}){
     if(sigma<.15)return source;
     std::vector<float> a(source.begin(),source.end()),b(source.size());
-    fastGaussianFloat(a,b,w,h,sigma,limits,clamp);
+    fastGaussianFloat<Sum>(a,b,w,h,sigma,limits,clamp);
     std::vector<T> output(source.size());for(std::size_t i=0;i<source.size();++i)output[i]=blurValue<T>(a[i]);return output;
 }
 template<class T> std::vector<T> progressive(const std::vector<T>& source,int w,int h,const Settings& s,double scale,const Limits& limits,LayerSides clamp={}){
@@ -207,7 +208,7 @@ bool finishingIdentity(Kind kind,const Settings& s){
     case Kind::LensEffects:return s.lens.isIdentity();
     case Kind::Vignette:return s.vignetteLayer?s.vignetteLayer->amount==0:s.vignette==0;
     case Kind::Bloom:return s.bloomGlow?s.bloomAmount==0:s.bloom==0;
-    case Kind::TonalContrast:return s.tonal==0;
+    case Kind::TonalContrast:return s.tonalLayer ? s.tonalLayer->amount==0 || (s.tonalLayer->shadows==0 && s.tonalLayer->midtones==0 && s.tonalLayer->highlights==0) : s.tonal==0;
     case Kind::Dither:return s.ditherLevels<=0;
     case Kind::Scanlines:return s.scanline==0&&s.scanlineGlow==0;
     case Kind::CameraRaw:return false;
@@ -295,7 +296,23 @@ void bloom(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,doubl
     const double mix=s.bloomGlow?amount/50:1;
     for(std::size_t i=0;i<pixels.size();i+=4){unsigned a=std::min(255u,unsigned(pixels[i+3])+unsigned(std::clamp(blurred[i+3]*mix,0.,255.)));for(int c=0;c<3;++c)pixels[i+c]=byte(std::min(255.,double(pixels[i+c])+blurred[i+c]*mix));pixels[i+3]=std::uint8_t(a);}
 }
-void tonalContrast(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,const Limits& limits){
+// Tone weighting follows MetalFinishing.swift at upstream 7b5ba975 (MIT).
+template<class T> void tonalLayerContrast(std::vector<T>& pixels,int w,int h,const TonalLayerSettings& s,double scale,const Limits& limits){
+    auto blurred=fastGaussian<T,double>(pixels,w,h,s.radius*scale,limits);
+    const double maximum=std::is_same_v<T,std::uint8_t>?255.:1.;
+    auto smooth=[](double x){x=std::clamp(x,0.,1.);return x*x*(3-2*x);};
+    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){
+        const auto i=(std::size_t(y)*w+x)*4;const double a=pixels[i+3],ba=blurred[i+3];if(a<=0||ba<=0)continue;
+        const double l=(.2126*pixels[i]+.7152*pixels[i+1]+.0722*pixels[i+2])/a;
+        const double base=(.2126*blurred[i]+.7152*blurred[i+1]+.0722*blurred[i+2])/ba;
+        const double sw=1-smooth((base-.15)/.35),hw=smooth((base-.5)/.35),mw=1-sw-hw;
+        const double weight=(s.shadows*sw+s.midtones*mw+s.highlights*hw)/100;
+        const double delta=.18*std::tanh((l-base)*6)*weight*(s.amount/50)*(4*l*(1-l));
+        for(int c=0;c<3;++c)pixels[i+c]=blurValue<T>(std::clamp(double(pixels[i+c])/a+delta,0.,1.)*std::min(a,maximum));
+    }}
+}
+void tonalContrast(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,double scale,const Limits& limits){
+    if(s.tonalLayer){tonalLayerContrast(pixels,w,h,*s.tonalLayer,scale,limits);return;}
     auto blurred=gaussian(pixels,w,h,2.5,limits);double gain=s.tonal/100;
     for(std::size_t i=0;i<pixels.size();i+=4)if(pixels[i+3])for(int c=0;c<3;++c)pixels[i+c]=byte(pixels[i+c]+(int(pixels[i+c])-int(blurred[i+c]))*gain);
 }
@@ -362,7 +379,8 @@ void bloomFloat(std::vector<float>& pixels,int w,int h,const Settings& s,double 
     const double mix=s.bloomGlow?amount/50:1;
     for(size_t i=0;i<pixels.size();i+=4){float a=std::clamp(pixels[i+3]+float(blurred[i+3]*mix),0.f,1.f);for(int c=0;c<3;++c)pixels[i+c]=std::min(a,pixels[i+c]+float(blurred[i+c]*mix));pixels[i+3]=a;}
 }
-void tonalFloat(std::vector<float>& pixels,int w,int h,const Settings& s,const Limits& limits){
+void tonalFloat(std::vector<float>& pixels,int w,int h,const Settings& s,double scale,const Limits& limits){
+    if(s.tonalLayer){tonalLayerContrast(pixels,w,h,*s.tonalLayer,scale,limits);return;}
     auto blurred=gaussian(pixels,w,h,2.5,limits);double gain=s.tonal/100;
     for(size_t i=0;i<pixels.size();i+=4)if(pixels[i+3]>0)for(int c=0;c<3;++c)pixels[i+c]=std::clamp(pixels[i+c]+float((pixels[i+c]-blurred[i+c])*gain),0.f,pixels[i+3]);
 }
@@ -482,7 +500,7 @@ std::shared_ptr<const Raster> runPixels(Kind kind,const Raster& source,const Set
         case Kind::ContentAwareFill:{graphics::ConstGray8View mask{selection->pixels,std::uint32_t(w),std::uint32_t(h),std::size_t(w)};if(!graphics::contentFill(view(result,w,h),mask,limits.cancelled))throw std::runtime_error("Not enough unselected opaque pixels to synthesize a fill");break;}
         case Kind::Vignette:if(s.vignetteLayer)coloredVignette(result,w,h,*s.vignetteLayer,limits);else vignette(result,w,h,s);break;
         case Kind::Bloom:bloom(result,w,h,s,scale,limits);break;
-        case Kind::TonalContrast:tonalContrast(result,w,h,s,limits);break;
+        case Kind::TonalContrast:tonalContrast(result,w,h,s,scale,limits);break;
         case Kind::Dither:dither(result,w,h,s,seed);break;
         case Kind::Scanlines:scanlines(result,w,h,s,limits);break;
         case Kind::LensEffects:{std::vector<float> input(original.size());for(std::size_t i=0;i<input.size();++i)input[i]=original[i]/255.f;auto output=lensPixels(input,w,h,s.lens,limits);for(std::size_t i=0;i<output.size();++i)result[i]=byte(output[i]*255);break;}
@@ -659,7 +677,7 @@ std::shared_ptr<const DeepImage> runDeepPixels(Kind kind,const DeepImage& source
         if(kind==Kind::AddNoise)addNoiseFloat(pixels,source.width,source.height,settings,seed,limits);
         else if(kind==Kind::Vignette){if(settings.vignetteLayer)coloredVignette(pixels,source.width,source.height,*settings.vignetteLayer,limits);else vignetteFloat(pixels,source.width,source.height,settings);}
         else if(kind==Kind::Bloom)bloomFloat(pixels,source.width,source.height,settings,scale,limits);
-        else if(kind==Kind::TonalContrast)tonalFloat(pixels,source.width,source.height,settings,limits);
+        else if(kind==Kind::TonalContrast)tonalFloat(pixels,source.width,source.height,settings,scale,limits);
         else if(kind==Kind::Dither)ditherFloat(pixels,source.width,source.height,settings,seed);
         else if(kind==Kind::LensEffects)pixels=lensPixels(pixels,source.width,source.height,settings.lens,limits);
         else if(kind==Kind::Scanlines)scanlinesFloat(pixels,source.width,source.height,settings,limits);

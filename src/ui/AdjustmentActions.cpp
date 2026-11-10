@@ -23,6 +23,7 @@ void MainWindow::setupAdjustmentActions(){
         action(live,label+"…",{},[this,kind]{adjust(kind,true);});
     }
     action(live,"Vignette…",{},[this]{adjust("Vignette",true);});
+    action(live,"Tonal Contrast…",{},[this]{adjust("Tonal Contrast",true);});
     action(menu,"Edit Adjustment Layer…",{},[this]{if(active()&&!active()->adjustmentJson.empty())adjust({},true,true);});
     auto*filters=menuBar()->addMenu("&Filters");
     lastFilterAction_=action(filters,"Last Filter",{},[this]{repeatLastFilter();});
