@@ -106,7 +106,6 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::opt
     strokeMask_=p->maskSelected;if(strokeMask_&&(!l->mask||!l->mask->enabled))return true;if(!strokeMask_&&(l->group||!l->adjustmentJson.empty()))return true;
     auto visible=layers::entries(*p->document);if(std::none_of(visible.begin(),visible.end(),[&](const auto&item){return item.id==l->id&&item.visible;}))return true;
     if(p->document->selection&&(!p->document->selection->coverage||!p->document->selection->coverage->hasCoverage()))return true;
-    p->history.begin(tool_==Tool::Eraser?"Erase":"Brush",p->document,p->active);
     try{
         if(!brushGpu_){auto shader=QDir(QApplication::applicationDirPath()).filePath("shaders/BrushCoverage.hlsl");if(!QFileInfo::exists(shader))shader=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/shaders/BrushCoverage.hlsl";try{brushGpu_=std::make_shared<graphics::D3D11BrushCoverage>(std::filesystem::path(shader.toStdWString()),warp_);}catch(const std::exception&e){statusBar()->showMessage(QString("Using software brush: ")+e.what());}}
         auto settings=brushSettings_;settings.color={uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue())};settings.opacity*=foreground_.alphaF();settings.erase=tool_==Tool::Eraser&&!strokeMask_;if(strokeMask_){auto v=uint8_t(maskPaintWhite_?255:0);settings.color={v,v,v};settings.opacity=brushSettings_.opacity;}
@@ -143,7 +142,7 @@ bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::opt
         refreshBrushControls();
         if(commands_)commands_->refresh();
         if(p->canvas)p->canvas->update();
-    }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
+    }catch(const std::exception&e){if(stroke_||brushHistoryOpen_)pointerCancel();else{if(p){p->brushPreview.reset();p->brushLayerId.clear();}if(pointerOwner_==p)pointerOwner_=nullptr;}statusBar()->showMessage(e.what());}
     return true;
 }
 void MainWindow::publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapshot> snapshot,bool finish){
@@ -174,8 +173,31 @@ CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,doubl
 }
 bool MainWindow::updateBrush(Point point,bool finish,double pressure){
     if(!stroke_)return false;
-    try{stroke_->append(point,pressure);if(finish){publishBrush(stroke_->commit(),true);stroke_.reset();current()->history.end(current()->document,current()->active);refresh();}else{publishBrush(stroke_->preview());lastBrushPoint_=point;if(auto* view=canvas())view->update();}if(finish)lastBrushPoint_=point;}
-    catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
+    try{
+        stroke_->append(point,pressure);
+        if(!finish){publishBrush(stroke_->preview());lastBrushPoint_=point;if(auto* view=canvas())view->update();return true;}
+        auto snapshot=stroke_->commit();
+        lastBrushPoint_=point;
+        // A press that does not change pixels must not close another open edit.
+        if(!snapshot->changed()){publishBrush(std::move(snapshot),true);stroke_.reset();refresh();return true;}
+        const bool resumeOpacity=opacityOwner_&&opacityOwner_==pointerOwner_&&opacity_->isSliderDown();
+        finishOpacityEdit();
+        finishShapeStyleEdit();
+        auto* project=pointerOwner_?pointerOwner_:current();
+        if(!project||!project->document)throw std::runtime_error("Brush stroke has no document");
+        project->history.begin(tool_==Tool::Eraser?"Erase":"Brush",project->document,project->active);
+        brushHistoryOpen_=true;
+        publishBrush(std::move(snapshot),true);
+        stroke_.reset();
+        project->history.end(project->document,project->active);
+        brushHistoryOpen_=false;
+        if(resumeOpacity){
+            opacityPressUndoCount_=project->history.undoCount();
+            project->history.begin("Layer Opacity",project->document,project->active);
+            opacityOwner_=project;
+        }
+        refresh();
+    }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;
 }
 void MainWindow::keyPressEvent(QKeyEvent*e){

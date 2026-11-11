@@ -1,7 +1,10 @@
 #include "ui/MainWindow.h"
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QKeyEvent>
 #include <QSettings>
+#include <QSlider>
 #include <QTemporaryDir>
 #include <QToolButton>
 #include <functional>
@@ -16,6 +19,20 @@ template<class T>T* control(MainWindow& window,const char* name){auto* value=win
 Document example(){Document document;document.id=newId();document.width=64;document.height=48;Layer layer;layer.id=newId();layer.transform={0,0,64,48};layer.raster=Raster::filled(64,48,{0,0,255,255});document.layers.push_back(layer);return document;}
 QList<QDoubleSpinBox*> brushTip(MainWindow& window){auto* bar=control<QToolBar>(window,"brushOptions");auto controls=bar->findChildren<QDoubleSpinBox*>();require(controls.size()==3,"Brush settings controls differ");return controls;}
 void callbacks(NativeCanvas& canvas){require(bool(canvas.rightPointerDown)&&bool(canvas.rightPointerMove)&&bool(canvas.pointerHover)&&bool(canvas.pointerLeave)&&bool(canvas.navigationAllowed),"Root brush pointer callback missing");}
+void historyCommand(MainWindow& window,const QString& id){
+    for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()==id){
+        require(action->isEnabled(),"History command disabled");
+        action->trigger();return;
+    }
+    throw std::runtime_error("Missing history command");
+}
+Pixel viewportPixel(NativeCanvas& canvas,int x,int y){
+    require(bool(canvas.viewportProvider),"Missing viewport provider");
+    auto frame=canvas.viewportProvider(0,0,64,48,1);
+    require(bool(frame.raster),"Viewport composite missing");
+    return frame.raster->pixel(x,y);
+}
+void dab(NativeCanvas& canvas,QPointF point,Qt::KeyboardModifiers modifiers={}){canvas.pointerDown(point,modifiers);canvas.pointerUp(point,modifiers);}
 }
 int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir preferences;
     if(!preferences.isValid())return 2;
@@ -85,6 +102,113 @@ int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir prefere
         reopened.addProject(example());
         require(control<QToolButton>(reopened,"brushPressureSize")->isChecked()&&
                 control<QToolButton>(reopened,"brushPressureOpacity")->isChecked(),"Pressure preferences were not restored");
+    });
+    test("mouse_strokes_undo_redo_eraser_escape_and_noop",[]{
+        MainWindow window(true);
+        auto& project=window.addProject(example());
+        key(window,Qt::Key_B);
+        brushTip(window)[0]->setValue(8);
+        auto& canvas=*project.canvas;
+        const auto original=*project.document;
+        const Pixel blue{0,0,255,255},black{0,0,0,255};
+        dab(canvas,{16.5,16.5});
+        dab(canvas,{48.5,24.5});
+        require(project.history.undoCount()==2&&project.history.undoName()=="Brush","Two mouse strokes did not record two Brush steps");
+        require(project.document->layers[0].raster->pixel(16,16)==black&&project.document->layers[0].raster->pixel(48,24)==black,"Mouse dabs missed their centers");
+        require(viewportPixel(canvas,16,16)==black&&viewportPixel(canvas,48,24)==black,"Viewport missed a committed dab");
+        historyCommand(window,"edit.undo");
+        require(project.document->layers[0].raster->pixel(16,16)==black&&project.document->layers[0].raster->pixel(48,24)==blue,"Undo removed the first stroke");
+        require(viewportPixel(canvas,16,16)==black&&viewportPixel(canvas,48,24)==blue,"Viewport kept the undone stroke");
+        historyCommand(window,"edit.undo");
+        require(*project.document==original&&viewportPixel(canvas,16,16)==blue&&viewportPixel(canvas,48,24)==blue,"Second undo did not restore the document and viewport");
+        historyCommand(window,"edit.redo");
+        require(project.document->layers[0].raster->pixel(16,16)==black&&project.document->layers[0].raster->pixel(48,24)==blue,"Redo restored more than the first stroke");
+        historyCommand(window,"edit.redo");
+        require(project.document->layers[0].raster->pixel(48,24)==black,"Second redo did not restore the second stroke");
+        const auto beforeShift=project.history.undoCount();
+        dab(canvas,{20.5,40.5},Qt::ShiftModifier);
+        require(project.history.undoCount()==beforeShift+1,"Shift continuation was not one stroke");
+        key(window,Qt::Key_E);
+        const auto beforeErase=*project.document;
+        dab(canvas,{16.5,16.5});
+        require(project.history.undoCount()==beforeShift+2&&project.history.undoName()=="Erase","Eraser stroke was not one Erase step");
+        require(project.document->layers[0].raster->pixel(16,16).a==0,"Eraser left the dab opaque");
+        historyCommand(window,"edit.undo");
+        require(*project.document==beforeErase,"Eraser undo did not restore the painted pixels");
+        const auto beforeEscape=*project.document;
+        const auto escapeCount=project.history.undoCount();
+        canvas.pointerDown({40.5,10.5},{});
+        canvas.pointerMove({44.5,14.5},{});
+        canvas.pointerCancel();
+        require(!project.brushPreview&&*project.document==beforeEscape&&project.history.undoCount()==escapeCount,"Escape changed the document or history");
+        Document blank=example();blank.layers[0].raster=Raster::filled(64,48,{0,0,0,255});
+        auto& plain=window.addProject(blank);
+        key(window,Qt::Key_B);
+        const auto untouched=*plain.document;
+        const auto plainCount=plain.history.undoCount();
+        dab(*plain.canvas,{24.5,24.5});
+        require(*plain.document==untouched&&plain.history.undoCount()==plainCount,"Identical dab added a history step");
+    });
+    test("brush_commits_beside_open_opacity_edit",[]{
+        MainWindow window(true);
+        auto& project=window.addProject(example());
+        key(window,Qt::Key_B);
+        brushTip(window)[0]->setValue(8);
+        auto* opacity=control<QSlider>(window,"layerOpacity");
+        opacity->setSliderDown(true);
+        opacity->setValue(40);
+        closeEnough(project.document->layers[0].opacity,.4,"Opacity press did not edit the layer");
+        require(project.history.undoCount()==0,"Open opacity transaction recorded early");
+        dab(*project.canvas,{16.5,16.5});
+        require(project.history.undoCount()==2&&project.history.undoName()=="Brush","Brush nested inside opacity was not its own step");
+        require(project.document->layers[0].raster->pixel(16,16)==Pixel{0,0,0,255},"Opacity transaction blocked the dab");
+        opacity->setValue(50);
+        opacity->setValue(60);
+        opacity->setSliderDown(false);
+        require(project.history.undoCount()==3&&project.history.undoName()=="Layer Opacity","Remaining opacity drag was not grouped");
+        historyCommand(window,"edit.undo");
+        closeEnough(project.document->layers[0].opacity,.4,"Undo did not restore opacity after the stroke");
+        historyCommand(window,"edit.undo");
+        require(project.document->layers[0].raster->pixel(16,16)==Pixel{0,0,255,255}&&std::abs(project.document->layers[0].opacity-.4)<1e-6,"Undo did not remove only the stroke");
+        historyCommand(window,"edit.undo");
+        closeEnough(project.document->layers[0].opacity,1,"Opacity undo did not restore the layer");
+    });
+    test("mask_stroke_preserves_image_and_undo_restores_mask",[]{
+        Document input=example();
+        input.layers[0].mask=Mask{std::make_shared<GrayRaster>(GrayRaster{64,48,std::vector<uint8_t>(64*48,255)})};
+        MainWindow window(true);
+        auto& project=window.addProject(input);
+        key(window,Qt::Key_B);
+        brushTip(window)[0]->setValue(8);
+        QComboBox* target=nullptr;
+        for(auto* box:window.findChildren<QComboBox*>())if(box->accessibleName()=="Editing target")target=box;
+        require(target,"Mask target missing");
+        target->setCurrentIndex(1);
+        control<QCheckBox>(window,"paintMaskWhite")->setChecked(false);
+        require(project.maskSelected,"Mask target not selected");
+        const auto before=*project.document;
+        dab(*project.canvas,{16.5,16.5});
+        const auto& layer=project.document->layers[0];
+        require(layer.raster==before.layers[0].raster,"Mask stroke changed the image raster");
+        require(layer.mask->raster->pixels[16*64+16]<255,"Mask dab did not change the mask");
+        require(project.history.undoCount()==1&&project.history.undoName()=="Brush","Mask stroke did not record a Brush step");
+        historyCommand(window,"edit.undo");
+        require(*project.document==before&&!project.brushPreview,"Undo did not restore the mask and clear the preview");
+    });
+    test("brush_escape_preserves_open_opacity_edit",[]{
+        MainWindow window(true);
+        auto& project=window.addProject(example());
+        key(window,Qt::Key_B);
+        auto* opacity=control<QSlider>(window,"layerOpacity");
+        opacity->setSliderDown(true);
+        opacity->setValue(40);
+        const Document during=*project.document;
+        project.canvas->pointerDown({16.5,16.5},{});
+        require(bool(project.brushPreview),"Stroke did not start over an open opacity edit");
+        project.canvas->pointerCancel();
+        require(!project.brushPreview&&*project.document==during&&project.history.undoCount()==0,"Escape rolled back the open opacity edit");
+        opacity->setSliderDown(false);
+        require(project.history.undoCount()==1&&project.history.undoName()=="Layer Opacity","Released opacity edit was lost");
     });
     std::cout<<"{\"suite\":\"brush_pointer_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";return failed?1:0;
 }
