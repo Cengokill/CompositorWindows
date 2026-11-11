@@ -233,6 +233,8 @@ private:
     std::optional<Point> lastBrushPoint_;
     std::string lastBrushLayer_;
     bool lastBrushMask_{};
+    // Set only after a finished stroke opens its own history step.
+    bool brushHistoryOpen_{};
     std::unique_ptr<graphics::GrowingBrushSession> stroke_;
     EditorProject* pointerOwner_{};
     std::shared_ptr<graphics::D3D11BrushCoverage> brushGpu_;
