@@ -233,6 +233,11 @@ void lens_global_cache(){
     equal(*cache.render(d),*full);
     auto distant=cache.renderViewport(d,256,0,256,32);
     for(int y=0;y<32;++y)for(int x=0;x<256;++x)REQUIRE(distant.raster->pixel(x,y)==full->pixel(x+256,y));
+    const double beforeOrigin=std::nextafter(-1.,0.);
+    auto nearBoundary=cache.renderViewport(d,beforeOrigin,0,512,32);
+    REQUIRE(nearBoundary.raster);
+    const int offset=int(std::lround(-nearBoundary.documentX/nearBoundary.unitsPerPixel));
+    REQUIRE(nearBoundary.raster->pixel(offset+12,14)==full->pixel(12,14));
     SoftwareRenderer draft({},256);
     constexpr double units=.9,phase=-.23;
     auto first=draft.renderScaled(d,phase,0,256,32,units);
@@ -244,6 +249,14 @@ void lens_global_cache(){
         REQUIRE(first->pixel(x,y)==combined->pixel(x,y));
         REQUIRE(second->pixel(x,y)==combined->pixel(x+256,y));
     }
+    auto portrait=document(1366,2048,{16,16,16,255});portrait.layers[0].opacity=1;
+    std::vector<Pixel> highlight(128*128,{255,255,255,255});
+    portrait.layers[0].raster=portrait.layers[0].raster->replacing(160,256,128,128,highlight.data(),128);
+    lens.transform={0,0,1366,2048};portrait.layers.push_back(lens);
+    CompositeCache portraitPreview;portraitPreview.setLensPreviewMaxEdge(256);
+    auto zoomed=portraitPreview.renderViewport(portrait,0,0,800,700,1./1.5);
+    REQUIRE(zoomed.raster&&zoomed.unitsPerPixel>=1.);
+    REQUIRE(zoomed.raster->pixel(int(350/zoomed.unitsPerPixel),int(320/zoomed.unitsPerPixel)).b>16);
     std::vector<Pixel> dark(12*12,{0,0,0,255});
     d.layers[0].raster=d.layers[0].raster->replacing(4,10,12,12,dark.data(),12);
     auto changed=SoftwareRenderer().render(d,0,0,512,32);

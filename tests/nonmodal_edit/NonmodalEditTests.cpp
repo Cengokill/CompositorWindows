@@ -270,6 +270,41 @@ void lens_adjustment_lifecycle(){
     panel(f.window,"adjust.edit","Lens Effects",[&](QDialog& p){require(control<QComboBox>(p,"lensEffectMode")->currentIndex()==3&&field(p,"Copies")->value()==3,"lens controls restored");control<QComboBox>(p,"lensEffectMode")->setCurrentIndex(4);p.reject();});
     require(f.project.document==applied&&!f.project.effectPreview,"lens edit Cancel");
 }
+void lens_native_canvas(){
+    auto document=fixture({16,16,16,255});
+    document.width=1366;document.height=2048;
+    auto& layer=document.layers.front();
+    layer.transform={0,0,1366,2048};
+    layer.raster=Raster::filled(1366,2048,{16,16,16,255});
+    const std::vector<Pixel> light(96*96,{255,255,255,255});
+    layer.raster=layer.raster->replacing(539,976,96,96,light.data(),96);
+    Fixture f(std::move(document));
+    auto& canvas=*f.project.canvas;
+    canvas.zoomAt(1.5,canvas.contentRect().center());
+    const auto readBlue=[&]{
+        const auto point=canvas.viewMapping().toView({683,1024});
+        const auto frame=canvas.captureRendered();
+        const double dpr=canvas.devicePixelRatioF();
+        return frame.pixelColor(int(point.x*dpr),int(point.y*dpr)).blue();
+    };
+    const int original=readBlue();
+    panel(f.window,"adjust.new.lens_effects","Lens Effects",[&](QDialog& p){
+        ready(p);
+        wait([&]{return readBlue()>original+4;},"Lens Effects never reached the Windows canvas at 150% zoom");
+        field(p,"Strength")->setValue(0);
+        ready(p);
+        wait([&]{return readBlue()==original;},"zero flare strength did not restore the original canvas pixels");
+        field(p,"Strength")->setValue(75);
+        ready(p);
+        wait([&]{return readBlue()>original+4;},"changing flare strength did not update the Windows canvas");
+        apply(p)->click();
+        wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"native Lens Apply did not close");
+    });
+    require(readBlue()>original+4,"Apply lost the flare on the Windows canvas");
+    trigger(f.window,"edit.undo");
+    trigger(f.window,"edit.undo");
+    require(readBlue()==original,"Undo did not restore the original Windows canvas");
+}
 void tonal_lifecycle(){
     Fixture f;const auto source=f.project.document->layers[0].raster;
     panel(f.window,"adjust.new.tonal_contrast","Tonal Contrast",[&](QDialog& p){ready(p);require(f.project.history.undoCount()==1,"creation history");field(p,"Amount")->setValue(81);ready(p);p.reject();});
@@ -373,4 +408,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}

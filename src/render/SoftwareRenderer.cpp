@@ -7,6 +7,10 @@
 
 namespace compositor {
 namespace {
+constexpr uint64_t lensFramePixelBudget=5000000;
+bool lensFrameFits(int width,int height){
+    return width<=30000&&height<=30000&&uint64_t(width)*height<=lensFramePixelBudget;
+}
 graphics::StackRenderer stack(const Document& document,const std::shared_ptr<const LayerRenderPreview>& preview,int lensPreviewMaxEdge,const std::function<bool()>& cancelled={}){
     return graphics::StackRenderer([&document,lensPreviewMaxEdge,cancelled](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){
         return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge},cancelled);
@@ -25,6 +29,11 @@ std::shared_ptr<const Raster> cropRaster(const Raster& source,int ox,int oy,int 
 }
 }
 
+bool SoftwareRenderer::lensViewportFits(const Document& document,int pixelWidth,int pixelHeight,double unitsPerPixel){
+    const int margin=int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel));
+    return lensFrameFits(pixelWidth+2*margin,pixelHeight+2*margin);
+}
+
 std::shared_ptr<const Raster> SoftwareRenderer::renderScaledPatch(const Document& document,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const {
     return graphics::StackRenderer({},preview_,[&document](const Layer& layer,std::shared_ptr<const DeepImage> current,graphics::RenderRegion region){return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height)});}).renderScaledPatch(document,tileX,tileY,offsetX,offsetY,width,height,unitsPerPixel);
 }
@@ -40,7 +49,7 @@ std::shared_ptr<const Raster> SoftwareRenderer::render(const Document& document,
     if(effects::hasLensAdjustment(document)){
         const int margin=effects::adjustmentStackPadding(document);
         const int left=std::min(-margin,x),top=std::min(-margin,y),right=std::max(document.width+margin,x+width),bottom=std::max(document.height+margin,y+height);
-        if(uint64_t(right-left)*(bottom-top)>5000000)throw std::runtime_error("Lens Effects full-image render exceeds working memory budget");
+        if(!lensFrameFits(right-left,bottom-top))throw std::runtime_error("Lens Effects full-image render exceeds working memory budget");
         if(!lensFrame_||!lensDocument_||*lensDocument_!=document||lensX_!=left||lensY_!=top||lensUnits_!=1||lensFrame_->width!=right-left||lensFrame_->height!=bottom-top){
             lensFrame_=stack(document,preview_,lensPreviewMaxEdge_).render(document,left,top,right-left,bottom-top);
             lensDocument_=document;lensX_=left;lensY_=top;lensUnits_=1;
@@ -59,14 +68,14 @@ std::shared_ptr<const Raster> SoftwareRenderer::renderScaled(const Document& doc
         // All viewport tiles share a grid, but fmod on each tile's document
         // coordinates can differ by rounding and even wrap across zero.
         const double tolerance=unitsPerPixel*1e-8;
-        if(std::abs(left)<tolerance||std::abs(left+unitsPerPixel)<tolerance)left=0;
-        if(std::abs(top)<tolerance||std::abs(top+unitsPerPixel)<tolerance)top=0;
+        if(std::abs(left)<tolerance||(x>=0&&std::abs(left+unitsPerPixel)<tolerance))left=0;
+        if(std::abs(top)<tolerance||(y>=0&&std::abs(top+unitsPerPixel)<tolerance))top=0;
         const int margin=int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel));
         left-=margin*unitsPerPixel;top-=margin*unitsPerPixel;
         const int ox=int(std::lround((x-left)/unitsPerPixel)),oy=int(std::lround((y-top)/unitsPerPixel));
         const int fullWidth=std::max(ox+width,int(std::ceil((document.width-left)/unitsPerPixel))+margin);
         const int fullHeight=std::max(oy+height,int(std::ceil((document.height-top)/unitsPerPixel))+margin);
-        if(ox<0||oy<0||fullWidth>30000||fullHeight>30000||uint64_t(fullWidth)*fullHeight>5000000)throw std::runtime_error("Lens Effects full-image preview exceeds working memory budget");
+        if(ox<0||oy<0||!lensFrameFits(fullWidth,fullHeight))throw std::runtime_error("Lens Effects full-image preview exceeds working memory budget");
         if(!lensFrame_||!lensDocument_||*lensDocument_!=document||std::abs(lensX_-left)>tolerance||std::abs(lensY_-top)>tolerance||lensUnits_!=unitsPerPixel||lensFrame_->width!=fullWidth||lensFrame_->height!=fullHeight){
             lensFrame_=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,left,top,fullWidth,fullHeight,unitsPerPixel);
             lensDocument_=document;lensX_=left;lensY_=top;lensUnits_=unitsPerPixel;

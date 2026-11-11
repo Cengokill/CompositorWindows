@@ -228,11 +228,21 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     // Put pixel zero at or immediately before the document origin. The phase
     // remains congruent to the physical viewport origin, including fractional
     // pan. Sparse tile keys then stay nonnegative without a document-sized array.
-    const auto phase=[](double origin,double units){double value=std::fmod(origin,units);if(value>0)value-=units;return value==0?0:value;};
+    const bool lens=lensAdjustment(doc);
+    const auto phase=[lens](double origin,double units){
+        double value=std::fmod(origin,units);
+        if(value>0)value-=units;
+        if(lens&&(std::abs(value)<units*1e-8||std::abs(value+units)<units*1e-8))return 0.;
+        return value==0?0:value;
+    };
     double units=requestedUnits,px{},py{};int pixelWidth{},pixelHeight{},tx0{},ty0{},tx1{},ty1{},patchWidth{},patchHeight{};
     for(;;){px=phase(x,units);py=phase(y,units);pixelWidth=int(std::ceil((doc.width-px)/units));pixelHeight=int(std::ceil((doc.height-py)/units));const double side=256*units;
         tx0=std::max(0,int(std::floor((left-px)/side)));ty0=std::max(0,int(std::floor((top-py)/side)));tx1=int(std::ceil((right-px)/side));ty1=int(std::ceil((bottom-py)/side));
         patchWidth=std::min(pixelWidth,tx1*256)-tx0*256;patchHeight=std::min(pixelHeight,ty1*256)-ty0*256;
+        if(lens&&!SoftwareRenderer::lensViewportFits(doc,pixelWidth,pixelHeight,units)){
+            units=units<1.?1.:units*2;
+            continue;
+        }
         if(size_t(tx1-tx0)*size_t(ty1-ty0)<=maxVisibleTiles&&patchWidth<=30000&&patchHeight<=30000&&uint64_t(patchWidth)*patchHeight<=100000000)break;
         units*=2;
     }
@@ -243,7 +253,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     // Compare canonical documents independently from transient preview metadata.
     // Only retained output entries will be checked against these damage bounds.
     auto compared=compareLayers(viewportPrevious_?&*viewportPrevious_:nullptr,input,units);
-    if(lensAdjustment(doc)&&(!viewportPrevious_||*viewportPrevious_!=input))all=true;
+    if(lens&&(!viewportPrevious_||*viewportPrevious_!=input))all=true;
     if(compared.all)all=true;else damage.insert(damage.end(),compared.regions.begin(),compared.regions.end());
     const auto identity=preview?preview->identity:std::shared_ptr<const void>{};
     if(!all&&identity!=(viewportPreview_?viewportPreview_->identity:std::shared_ptr<const void>{})){

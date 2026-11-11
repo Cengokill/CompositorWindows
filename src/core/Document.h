@@ -234,6 +234,7 @@ class SoftwareRenderer final:public IRasterBackend {
     mutable double lensX_{},lensY_{},lensUnits_{};
 public:
     explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={},int lensPreviewMaxEdge=0):preview_(std::move(preview)),lensPreviewMaxEdge_(lensPreviewMaxEdge){}
+    static bool lensViewportFits(const Document&,int pixelWidth,int pixelHeight,double unitsPerPixel);
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
     std::shared_ptr<const DeepImage> renderDeep(const Document&,int x,int y,int width,int height,const std::function<bool()>& cancelled={}) const override;
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled={}) const;
