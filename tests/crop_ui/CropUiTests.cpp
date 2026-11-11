@@ -86,6 +86,16 @@ void crop_custom_ratio_fits_limits(){
     customDialog(w,[&](QDialog& dialog){customInput(dialog)->setText("30000:1");customButton(dialog,QDialogButtonBox::Ok)->click();});
     REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,10,30000,1});REQUIRE(p.document==d&&p.history.undoCount()==0);
 }
+void crop_ratio_snaps_document_edges(){
+    const struct {int width,height;const char* ratio;} cases[]{{90,160,"9:16"},{160,90,"16:9"}};
+    for(const auto& item:cases){MainWindow w(true);auto d=fixture(item.width,item.height);auto&p=w.addProject(d);cropTool(w,p);auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio);ratio->setCurrentText(item.ratio);
+        drag(p,{double(item.width),double(item.height)},{double(item.width-3),double(item.height-6)});
+        REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,double(item.width),double(item.height)});
+        REQUIRE(p.document==d&&p.history.undoCount()==0&&command(w,"crop.apply")->isEnabled());command(w,"crop.cancel")->trigger();REQUIRE(p.document==d&&p.history.undoCount()==0);
+    }
+    MainWindow w(true);auto d=fixture(90,160);auto&p=w.addProject(d);cropTool(w,p);w.findChild<QComboBox*>("cropRatioChoice")->setCurrentText("9:16");
+    drag(p,{90,160},{87,154},Qt::ControlModifier);REQUIRE(p.canvas->cropOverlay()!=editing::Rect{0,0,90,160}&&p.document==d&&p.history.undoCount()==0);
+}
 void crop_enter_and_return_apply(){
     for(const auto key:{Qt::Key_Enter,Qt::Key_Return}){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);
         const auto modifiers=key==Qt::Key_Enter?Qt::KeypadModifier:Qt::NoModifier;QKeyEvent event(QEvent::KeyPress,key,modifiers);QApplication::sendEvent(&w,&event);
@@ -93,4 +103,4 @@ void crop_enter_and_return_apply(){
         REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,40,30});
     }
 }
-int main(int argc,char**argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> tests{{"crop_fresh_entry_fullframe_free",crop_fresh_entry_fullframe_free},{"crop_cancel_retains_document",crop_cancel_retains_document},{"crop_pending_dimensions",crop_pending_dimensions},{"crop_square_corner_hit",crop_square_corner_hit},{"crop_control_disables_snap",crop_control_disables_snap},{"crop_eight_dip_snap_distance",crop_eight_dip_snap_distance},{"crop_invalid_drag_keeps_last_valid",crop_invalid_drag_keeps_last_valid},{"crop_entire_edge_hit",crop_entire_edge_hit},{"crop_apply_once",crop_apply_once},{"crop_ratio_menu_and_presets",crop_ratio_menu_and_presets},{"crop_custom_ratio_validates_and_cancels",crop_custom_ratio_validates_and_cancels},{"crop_custom_ratio_apply_undo_redo",crop_custom_ratio_apply_undo_redo},{"crop_custom_ratio_fits_limits",crop_custom_ratio_fits_limits},{"crop_enter_and_return_apply",crop_enter_and_return_apply}};if(argc>1&&!tests.contains(argv[1]))return 2;int passed=0,failed=0;for(const auto&[name,test]:tests){if(argc>1&&name!=argv[1])continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+int main(int argc,char**argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> tests{{"crop_fresh_entry_fullframe_free",crop_fresh_entry_fullframe_free},{"crop_cancel_retains_document",crop_cancel_retains_document},{"crop_pending_dimensions",crop_pending_dimensions},{"crop_square_corner_hit",crop_square_corner_hit},{"crop_control_disables_snap",crop_control_disables_snap},{"crop_eight_dip_snap_distance",crop_eight_dip_snap_distance},{"crop_invalid_drag_keeps_last_valid",crop_invalid_drag_keeps_last_valid},{"crop_entire_edge_hit",crop_entire_edge_hit},{"crop_apply_once",crop_apply_once},{"crop_ratio_menu_and_presets",crop_ratio_menu_and_presets},{"crop_custom_ratio_validates_and_cancels",crop_custom_ratio_validates_and_cancels},{"crop_custom_ratio_apply_undo_redo",crop_custom_ratio_apply_undo_redo},{"crop_custom_ratio_fits_limits",crop_custom_ratio_fits_limits},{"crop_ratio_snaps_document_edges",crop_ratio_snaps_document_edges},{"crop_enter_and_return_apply",crop_enter_and_return_apply}};if(argc>1&&!tests.contains(argv[1]))return 2;int passed=0,failed=0;for(const auto&[name,test]:tests){if(argc>1&&name!=argv[1])continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

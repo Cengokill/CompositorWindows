@@ -59,6 +59,7 @@ struct CropSnap {
     std::vector<double> xs,ys;
     double tolerance{};
     double gridX{},gridY{}; // Zero disables grid lines on that axis.
+    Rect documentBounds{}; // Empty when document-edge snapping is disabled.
     Rect apply(Rect,const CropDrag&,Point,std::optional<double> ratio = {},bool symmetric = false) const;
 };
 CropSnap cropSnapTargets(const Document&,const SnapPolicy&,const LayoutGrid&,double tolerance);
