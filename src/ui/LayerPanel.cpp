@@ -118,6 +118,10 @@ namespace {
 class LayerRowDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
+    bool editorEvent(QEvent* event,QAbstractItemModel* model,const QStyleOptionViewItem& option,const QModelIndex& index) override {
+        if(index.column()==0&&(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonRelease||event->type()==QEvent::MouseButtonDblClick))return false;
+        return QStyledItemDelegate::editorEvent(event,model,option,index);
+    }
     void paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const override {
         QStyleOptionViewItem opt(option);initStyleOption(&opt,index);
         const bool activeTarget=index.data(Qt::BackgroundRole).value<QBrush>().style()!=Qt::NoBrush;
