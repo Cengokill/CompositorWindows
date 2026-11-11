@@ -125,7 +125,7 @@ PreviewResult makePreview(Document doc,std::string active,const std::string&json
         }
         check();validateDocument(doc);
         const auto previewKind=QJsonDocument::fromJson(QByteArray::fromStdString(json)).object()["kind"].toString();
-        result.image=fittedDocumentPreview(showPreview?doc:before,previewKind=="Lens Effects"&&!full?QSize{320,240}:QSize{600,460});
+        if(!(full&&live&&previewKind=="Lens Effects"))result.image=fittedDocumentPreview(showPreview?doc:before,previewKind=="Lens Effects"&&!full?QSize{320,240}:QSize{600,460});
         check();result.value=AdjustmentDialogResult{std::move(doc),std::move(active)};
     }catch(const std::exception&e){result.error=e.what();}
     return result;

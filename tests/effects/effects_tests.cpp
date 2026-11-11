@@ -88,6 +88,10 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
         check(apply(source,o)->rgba()==filters::runPixels(filters::Kind::LensEffects,*source,direct,1,0)->rgba(),"Lens adjustment differs from existing filter");
     }
     check(source->rgba()==original,"Lens adjustment mutated source");
+    std::vector<Pixel> detail(48*24);for(int y=0;y<24;++y)for(int x=0;x<48;++x){const uint8_t v=x%2?40:100;detail[size_t(y)*48+x]={v,v,v,255};}
+    auto detailed=Raster::fromRgba(48,24,reinterpret_cast<const uint8_t*>(detail.data()),48*4);
+    auto draft=applyAdjustment(detailed,encode(settings("Lens Effects")),nullptr,{0,0,1,48,24,12});
+    check(draft->pixel(10,10).r!=draft->pixel(11,10).r,"reduced lens preview lost source detail");
     auto malformed=settings("Lens Effects"),group=malformed["filterLayerSettings"].toObject(),lens=group["lens"].toObject();
     lens["starPoints"]=4.5;group["lens"]=lens;malformed["filterLayerSettings"]=group;rejects([&]{apply(source,malformed);});
     lens["starPoints"]=6;lens["prismCopies"]=2.5;group["lens"]=lens;malformed["filterLayerSettings"]=group;rejects([&]{apply(source,malformed);});

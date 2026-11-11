@@ -104,6 +104,32 @@ std::shared_ptr<const DeepImage> resizeDeepNearest(const DeepImage& source,int w
         out->setPixel(x,y,source.pixel(std::min(source.width-1,int((x+.5)*source.width/width)),std::min(source.height-1,int((y+.5)*source.height/height))));}
     return out;
 }
+// Interpolate only the effect delta, retaining the original image detail and coverage.
+template<class Read> std::array<double,3> lensDelta(int x,int y,int width,int height,int rw,int rh,Read read){
+    const double fx=std::clamp((x+.5)*rw/width-.5,0.,double(rw-1)),fy=std::clamp((y+.5)*rh/height-.5,0.,double(rh-1));
+    const int x0=int(fx),y0=int(fy),x1=std::min(x0+1,rw-1),y1=std::min(y0+1,rh-1);const double tx=fx-x0,ty=fy-y0;
+    const auto a=read(x0,y0),b=read(x1,y0),c=read(x0,y1),d=read(x1,y1);std::array<double,3> result{};
+    for(int k=0;k<3;++k)result[k]=(a[k]*(1-tx)+b[k]*tx)*(1-ty)+(c[k]*(1-tx)+d[k]*tx)*ty;
+    return result;
+}
+std::shared_ptr<const Raster> lensPreview(const Raster& source,const Raster& reduced,const Raster& filtered,const std::function<bool()>& cancelled){
+    std::vector<Pixel> pixels(size_t(source.width)*source.height);
+    auto delta=[&](int x,int y){auto a=reduced.pixel(x,y),b=filtered.pixel(x,y);return std::array<double,3>{double(b.r)-a.r,double(b.g)-a.g,double(b.b)-a.b};};
+    for(int y=0;y<source.height;++y){if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");for(int x=0;x<source.width;++x){
+        auto p=source.pixel(x,y);auto d=lensDelta(x,y,source.width,source.height,reduced.width,reduced.height,delta);
+        auto channel=[&](int value,int k){return uint8_t(std::clamp(std::lround(value+d[k]),0L,long(p.a)));};
+        pixels[size_t(y)*source.width+x]={channel(p.r,0),channel(p.g,1),channel(p.b,2),p.a};
+    }}
+    return Raster::fromRgba(source.width,source.height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(source.width)*4,cancelled);
+}
+std::shared_ptr<const DeepImage> lensPreview(const DeepImage& source,const DeepImage& reduced,const DeepImage& filtered,const std::function<bool()>& cancelled){
+    auto out=makeDeep(source.width,source.height,source.format);
+    auto delta=[&](int x,int y){auto a=reduced.pixel(x,y),b=filtered.pixel(x,y);return std::array<double,3>{double(b[0]-a[0]),double(b[1]-a[1]),double(b[2]-a[2])};};
+    for(int y=0;y<source.height;++y){if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");for(int x=0;x<source.width;++x){
+        auto p=source.pixel(x,y);auto d=lensDelta(x,y,source.width,source.height,reduced.width,reduced.height,delta);
+        for(int k=0;k<3;++k)p[k]=float(std::clamp(double(p[k])+d[k],0.,double(p[3])));out->setPixel(x,y,p);
+    }}return out;
+}
 uint8_t byte(double n){return uint8_t(std::clamp(std::lround(n),0L,255L));}
 Pixel sampleCube(Pixel pixel,const std::vector<std::array<float,3>>&v){if(!pixel.a)return pixel;std::array<double,3> u{pixel.r*32./pixel.a,pixel.g*32./pixel.a,pixel.b*32./pixel.a};std::array<int,3> lower{};RGB f{};for(int c=0;c<3;++c){u[c]=std::clamp(u[c],0.,32.);lower[c]=std::min(31,int(u[c]));f[c]=u[c]-lower[c];}RGB out{};for(int b=0;b<2;++b)for(int g=0;g<2;++g)for(int r=0;r<2;++r){auto weight=(r?f[0]:1-f[0])*(g?f[1]:1-f[1])*(b?f[2]:1-f[2]);auto&entry=v[size_t((lower[2]+b)*33*33+(lower[1]+g)*33+lower[0]+r)];for(int c=0;c<3;++c)out[c]+=entry[c]*weight;}return {byte(out[0]*pixel.a),byte(out[1]*pixel.a),byte(out[2]*pixel.a),pixel.a};}
 std::array<float,768> tables(const Settings&s){std::array<float,768> out{};for(int c=0;c<3;++c)for(int i=0;i<256;++i){double result;if(s.kind==1)result=s.levels[0].apply(s.levels[c+1].apply(i/255.));else if(s.kind==2)result=s.curves[0].value(s.curves[c+1].value(i))/255.;else{double encoded=i/255.,linear=encoded<=.04045?encoded/12.92:std::pow((encoded+.055)/1.055,2.4);linear=std::pow(std::max(0.,linear*std::pow(2.,s.exposure)+s.offset),1/s.gamma);result=linear<=.0031308?linear*12.92:1.055*std::pow(linear,1/2.4)-.055;}out[c*256+i]=float(std::clamp(result,0.,1.));}return out;}
@@ -156,7 +182,7 @@ std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> sour
           std::optional<GrayRaster> reducedSelection;const GrayRaster* mask=selection;
           if(selection){reducedSelection=resizeGrayNearest(*selection,width,height,cancelled);mask=&*reducedSelection;}
           auto filtered=filters::runPixels(kind,*reduced,filter,1/region.unitsPerPixel,s.seed,mask,limits);
-          return resizeNearest(*filtered,source->width,source->height,cancelled);
+          return lensPreview(*source,*reduced,*filtered,cancelled);
       }
   }
   return filters::runPixels(kind,*source,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);}
@@ -208,7 +234,7 @@ std::shared_ptr<const DeepImage> applyAdjustment(std::shared_ptr<const DeepImage
                 std::optional<GrayRaster> reducedSelection;const GrayRaster* mask=selection;
                 if(selection){reducedSelection=resizeGrayNearest(*selection,width,height,cancelled);mask=&*reducedSelection;}
                 auto filtered=filters::runDeepPixels(kind,*reduced,filter,1/region.unitsPerPixel,s.seed,mask,limits);
-                return resizeDeepNearest(*filtered,source->width,source->height,cancelled);
+                return lensPreview(*source,*reduced,*filtered,cancelled);
             }
         }
         return filters::runDeepPixels(kind,*source,filter,(s.kind>=12?1/region.unitsPerPixel:1),s.seed,selection,limits);}

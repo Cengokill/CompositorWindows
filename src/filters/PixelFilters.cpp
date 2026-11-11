@@ -194,8 +194,10 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
     }else{
         bool flare=s.effect==LensEffect::AnamorphicFlare;int spokes=flare?1:s.starPoints/2;double amount=(flare?s.flareAmount:s.starAmount)/50;
         for(int spoke=0;spoke<spokes;++spoke){double theta=flare?0:(s.starAngle+spoke*180./spokes)*std::numbers::pi/180,reach=side*(flare?s.flareLength:s.starLength)/100;
-            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double sum=0,total=0,stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;
-                for(int k=-32;k<=32;++k){double t=k/32.,weight=std::exp(-4.5*t*t);total+=weight;sum+=sample(high,w,h,x+t*reach*stretch*std::cos(theta),y-t*reach*stretch*std::sin(theta),c,{})*weight;}
+            std::array<double,65> weights{};std::array<std::array<double,65>,3> dx{},dy{};double total=0;
+            for(int k=-32;k<=32;++k){const double t=k/32.,weight=std::exp(-4.5*t*t);weights[k+32]=weight;total+=weight;for(int c=0;c<3;++c){const double stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;dx[c][k+32]=t*reach*stretch*std::cos(theta);dy[c][k+32]=t*reach*stretch*std::sin(theta);}}
+            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double sum=0;
+                for(int k=0;k<65;++k)sum+=sample(high,w,h,x+dx[c][k],y-dy[c][k],c,{})*weights[k];
                 double coating=flare?1-s.flareBlue/100*(c==0?.9:c==1?.62:0):1;result[(std::size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
             }}
         }
