@@ -22,12 +22,12 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.5.8
+## What's new in 1.5.9 (in development)
 
 See the [release notes](docs/release-notes.md) for details.
 
-- **Lens Effects.** Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh to a pixel layer, with live preview and undo.
-- **What's New.** Read embedded release notes after an update, even offline. The first launch initializes the local version history silently.
+- **Editable Lens Effects.** Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh as an adjustment layer, with masks, opacity and undo.
+- **Updated application icon.** Compositor uses the updated artwork.
 
 <img width="1024" alt="RAW Development with a live preview and the Camera Raw button" src="https://github.com/user-attachments/assets/14fd198a-286b-459e-8086-5ebfd2843f8d" />
 

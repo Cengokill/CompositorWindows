@@ -140,6 +140,23 @@ template<class T> std::vector<T> motion(const std::vector<T>& source,int w,int h
     auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);const double a=angle*std::numbers::pi/180,dx=std::cos(a),dy=-std::sin(a);std::vector<T> out(source.size());
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&63)==0)cancel(limits);std::array<double,4> sum{};for(int k=-r;k<=r;++k)for(int c=0;c<4;++c)sum[c]+=sample(source,w,h,x+k*dx,y+k*dy,c,clamp)*weights[k+r];for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum[c]);}}return out;
 }
+struct LensTap {
+    int x{},y{};
+    double fx{},fy{},weight{};
+};
+LensTap lensTap(double x,double y,double weight){
+    const int ix=int(std::floor(x)),iy=int(std::floor(y));
+    return {ix,iy,x-ix,y-iy,weight};
+}
+double lensSample(const float* row,const float* next,int width,int x,int channel,const LensTap& tap){
+    const int left=x+tap.x,right=left+1;
+    const auto get=[&](const float* line,int column){
+        return line&&unsigned(column)<unsigned(width)?double(line[size_t(column)*4+channel]):0.;
+    };
+    const double upper=get(row,left)*(1-tap.fx)+get(row,right)*tap.fx;
+    if(tap.fy==0)return upper;
+    return upper*(1-tap.fy)+(get(next,left)*(1-tap.fx)+get(next,right)*tap.fx)*tap.fy;
+}
 // Behavioral reference: upstream LensEffects.swift v1.5.8, blob
 // 2a519f5ce8fd0e504eae78b065a1e70891fa124c (MIT, notice above).
 // Software implementation of the v1.5.8 optical behavior. Fixed quadrature
@@ -179,25 +196,58 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
         auto near=fastGaussian(light,w,h,size*.6,limits,{true,true,true,true});auto far=fastGaussian(light,w,h,size*4,limits,{true,true,true,true});auto glow=fastGaussian(high,w,h,size*1.5,limits,{true,true,true,true});
         for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=float(light[i]*(1-scatter)+near[i]*scatter*.6+far[i]*scatter*.4+glow[i]*strength*.35);}}
     }else if(s.effect==LensEffect::Bokeh){
-        double radius=side*s.bokehRadius/100,ring=s.bokehRing/100;constexpr int samples=96;
-        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sum[3]{},bright[3]{},total=0;
-            for(int k=0;k<samples;++k){double theta=k*2.399963229728653,rad=std::sqrt((k+.5)/samples);
-                if(s.bokehShape==BokehShape::Hexagon)rad*=std::cos(std::numbers::pi/6)/std::cos(std::remainder(theta,std::numbers::pi/3));
-                double xx=std::cos(theta)*rad,yy=std::sin(theta)*rad;
-                if(s.bokehShape==BokehShape::Oval)xx*=.5;
-                if(s.bokehShape==BokehShape::CatsEye)xx*=1-.65*std::min(1.,std::hypot((x+.5-w/2.)/(w/2.),(y+.5-h/2.)/(h/2.)));
-                double weight=1+ring*4*std::pow(rad,8);total+=weight;
-                for(int c=0;c<3;++c){sum[c]+=sample(light,w,h,x+xx*radius,y+yy*radius,c,{true,true,true,true})*weight;bright[c]+=sample(high,w,h,x+xx*radius,y+yy*radius,c,{true,true,true,true})*weight;}
+        const double radius=side*s.bokehRadius/100,ring=s.bokehRing/100;
+        struct BokehTap {double x,y,weight;};
+        std::array<BokehTap,96> taps{};
+        double total=0;
+        for(size_t k=0;k<taps.size();++k){
+            const double theta=k*2.399963229728653;
+            double rad=std::sqrt((k+.5)/taps.size());
+            if(s.bokehShape==BokehShape::Hexagon)rad*=std::cos(std::numbers::pi/6)/std::cos(std::remainder(theta,std::numbers::pi/3));
+            taps[k]={std::cos(theta)*rad*(s.bokehShape==BokehShape::Oval?.5:1),std::sin(theta)*rad,1+ring*4*std::pow(rad,8)};
+            total+=taps[k].weight;
+        }
+        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sum[3]{},bright[3]{};
+            const double stretch=s.bokehShape==BokehShape::CatsEye?1-.65*std::min(1.,std::hypot((x+.5-w/2.)/(w/2.),(y+.5-h/2.)/(h/2.))):1.;
+            for(const auto& tap:taps){
+                const auto sample=lensTap(x+tap.x*stretch*radius,y+tap.y*radius,tap.weight);
+                const auto index=[&](int col,int row){return (size_t(std::clamp(row,0,h-1))*w+std::clamp(col,0,w-1))*4;};
+                const auto a=index(sample.x,sample.y),b=index(sample.x+1,sample.y),c=index(sample.x,sample.y+1),d=index(sample.x+1,sample.y+1);
+                const auto add=[&](const std::vector<float>& pixels,int channel){
+                    const double top=pixels[a+channel]*(1-sample.fx)+pixels[b+channel]*sample.fx;
+                    const double bottom=pixels[c+channel]*(1-sample.fx)+pixels[d+channel]*sample.fx;
+                    return (top*(1-sample.fy)+bottom*sample.fy)*tap.weight;
+                };
+                for(int channel=0;channel<3;++channel){sum[channel]+=add(light,channel);bright[channel]+=add(high,channel);}
             }
             auto i=(std::size_t(y)*w+x)*4;for(int c=0;c<3;++c){double b=bright[c]/total*(12+s.bokehBrightness*.7);result[i+c]=float(sum[c]/total+.8*(1-std::exp(-b/.8)));}
         }}
     }else{
         bool flare=s.effect==LensEffect::AnamorphicFlare;int spokes=flare?1:s.starPoints/2;double amount=(flare?s.flareAmount:s.starAmount)/50;
         for(int spoke=0;spoke<spokes;++spoke){double theta=flare?0:(s.starAngle+spoke*180./spokes)*std::numbers::pi/180,reach=side*(flare?s.flareLength:s.starLength)/100;
-            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double sum=0,total=0,stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;
-                for(int k=-32;k<=32;++k){double t=k/32.,weight=std::exp(-4.5*t*t);total+=weight;sum+=sample(high,w,h,x+t*reach*stretch*std::cos(theta),y-t*reach*stretch*std::sin(theta),c,{})*weight;}
-                double coating=flare?1-s.flareBlue/100*(c==0?.9:c==1?.62:0):1;result[(std::size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
-            }}
+            std::array<std::array<LensTap,65>,3> taps{};
+            double total=0;
+            for(int k=-32;k<=32;++k){
+                const double t=k/32.,weight=std::exp(-4.5*t*t);total+=weight;
+                for(int c=0;c<3;++c){
+                    const double stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;
+                    taps[c][k+32]=lensTap(t*reach*stretch*std::cos(theta),-t*reach*stretch*std::sin(theta),weight);
+                }
+            }
+            for(int y=0;y<h;++y){
+                cancel(limits);
+                const auto row=[&](int yy){return unsigned(yy)<unsigned(h)?high.data()+size_t(yy)*w*4:nullptr;};
+                for(int c=0;c<3;++c){
+                    std::array<const float*,65> first{},second{};
+                    for(size_t k=0;k<taps[c].size();++k){first[k]=row(y+taps[c][k].y);second[k]=row(y+taps[c][k].y+1);}
+                    const double coating=flare?1-s.flareBlue/100*(c==0?.9:c==1?.62:0):1;
+                    for(int x=0;x<w;++x){
+                        double sum=0;
+                        for(size_t k=0;k<taps[c].size();++k)sum+=lensSample(first[k],second[k],w,x,c,taps[c][k])*taps[c][k].weight;
+                        result[(size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
+                    }
+                }
+            }
         }
     }
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(a>0?std::clamp(gamma(result[i+c]/a),0.,1.)*a:0);result[i+3]=float(a);}}
@@ -712,6 +762,14 @@ std::array<std::shared_ptr<const Raster>,4> splitChannels(const Raster& source,c
     }
     return planes;
 }
+// Reconstruct the reduced Lens Effects preview over the original pixels.
+template<class Read> std::array<double,3> previewLensDelta(int x,int y,int w,int h,int rw,int rh,Read read){
+    const double fx=std::clamp((x+.5)*rw/w-.5,0.,double(rw-1)),fy=std::clamp((y+.5)*rh/h-.5,0.,double(rh-1));
+    const int x0=int(fx),y0=int(fy),x1=std::min(x0+1,rw-1),y1=std::min(y0+1,rh-1);const double tx=fx-x0,ty=fy-y0;
+    const auto a=read(x0,y0),b=read(x1,y0),c=read(x0,y1),d=read(x1,y1);std::array<double,3> v{};
+    for(int k=0;k<3;++k)v[k]=(a[k]*(1-tx)+b[k]*tx)*(1-ty)+(c[k]*(1-tx)+d[k]*tx)*ty;
+    return v;
+}
 Result apply(const Request& request){
     kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);
     // RGB Split's largest radial preview may be retained after switching back to Linear.
@@ -750,6 +808,8 @@ Result apply(const Request& request){
         }
     }
     std::shared_ptr<const DeepImage> deepOutput;
+    std::shared_ptr<const DeepImage> reducedDeep;
+    const bool lensDraft=request.kind==Kind::LensEffects&&request.preview&&factor<1;
     const bool eightBitOnly=request.kind==Kind::LensCorrection||request.kind==Kind::ContentAwareFill;
     if(!request.preview&&request.deepSource&&request.deepSource->valid()&&!request.deepSource->isHdr()&&eightBitOnly)
         throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
@@ -759,10 +819,25 @@ Result apply(const Request& request){
         auto prepared=makeDeep(working->width,working->height,request.deepSource->format);
         for(int y=0;y<prepared->height;++y){cancel(request.limits);for(int x=0;x<prepared->width;++x){const int sx=bounds.x+int((int64_t(2*x+1)*bounds.width)/(2*prepared->width)),sy=bounds.y+int((int64_t(2*y+1)*bounds.height)/(2*prepared->height));prepared->setPixel(x,y,request.deepSource->pixel(sx,sy));}}
         auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
-        deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,request.cameraRaw,view,clamp);
+        reducedDeep=prepared;deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,lensDraft?nullptr:(selected?&*selected:nullptr),request.limits,request.cameraRaw,view,clamp);
     }
     if(deepOutput&&bounds==PixelRect{0,0,original.width,original.height}&&deepOutput->width==request.deepSource->width&&deepOutput->height==request.deepSource->height&&deepOutput->samples==request.deepSource->samples){result.deep=request.deepSource;return result;}
-    auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,clamp);
+    auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,lensDraft?nullptr:(selected?&*selected:nullptr),request.limits,clamp);
+    if(lensDraft){
+        count(original.width,original.height,request.limits,deepOutput?40:16);
+        auto coverage=[&](int x,int y){return request.selection?request.selection->coverage->pixel(x-request.selection->originX,y-request.selection->originY)/255.:1.;};
+        if(deepOutput){
+            auto full=makeDeep(original.width,original.height,request.deepSource->format);
+            auto delta=[&](int x,int y){auto a=reducedDeep->pixel(x,y),b=deepOutput->pixel(x,y);return std::array<double,3>{double(b[0]-a[0]),double(b[1]-a[1]),double(b[2]-a[2])};};
+            for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=request.deepSource->pixel(x,y);auto d=previewLensDelta(x,y,original.width,original.height,working->width,working->height,delta);const double alpha=coverage(x,y);for(int k=0;k<3;++k)p[k]=float(std::clamp(double(p[k])+d[k]*alpha,0.,double(p[3])));full->setPixel(x,y,p);}}
+            deepOutput=full;output=rasterFromDeep(*full);
+        }else{
+            std::vector<Pixel> pixels(size_t(original.width)*original.height);
+            auto delta=[&](int x,int y){auto a=working->pixel(x,y),b=output->pixel(x,y);return std::array<double,3>{double(b.r)-a.r,double(b.g)-a.g,double(b.b)-a.b};};
+            for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=original.pixel(x,y);auto d=previewLensDelta(x,y,original.width,original.height,working->width,working->height,delta);const double alpha=coverage(x,y);auto channel=[&](int value,int k){return uint8_t(std::clamp(std::lround(value+d[k]*alpha),0L,long(p.a)));};pixels[size_t(y)*original.width+x]={channel(p.r,0),channel(p.g,1),channel(p.b,2),p.a};}}
+            output=Raster::fromRgba(original.width,original.height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(original.width)*4,request.limits.cancelled);
+        }
+    }
     if(grows&&!request.preview){int loX=output->width,loY=output->height,hiX=0,hiY=0;for(int y=0;y<output->height;++y){cancel(request.limits);for(int x=0;x<output->width;++x)if(deepOutput?deepOutput->pixel(x,y)[3]>0:output->pixel(x,y).a!=0){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
         if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}if(deepOutput){auto crop=makeDeep(w,h,deepOutput->format);for(int y=0;y<h;++y)for(int x=0;x<w;++x)crop->setPixel(x,y,deepOutput->pixel(x+loX,y+loY));deepOutput=crop;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
     }

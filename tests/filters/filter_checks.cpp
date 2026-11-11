@@ -40,6 +40,12 @@ void testSettings(){
     s.radius=3;s.distance=16;require(blurMargin(Kind::GaussianBlur,s)==11&&blurMargin(Kind::MotionBlur,s)==10,"source blur margins");
 }
 void testLensEffects(){
+    auto detail=image(128,64,[](int x,int){const uint8_t v=x%2?40:100;return Pixel{v,v,v,255};});
+    auto previewJob=request(Kind::LensEffects,detail);previewJob.preview=true;previewJob.previewMaxEdge=32;
+    auto preview=apply(previewJob);require(preview.raster->width==128&&preview.raster->height==64,"lens preview must retain source resolution");
+    require(preview.raster->pixel(10,10).r!=preview.raster->pixel(11,10).r,"lens preview lost fine image detail");
+    auto coverage=mask(128,64,[](int x,int){return uint8_t(x<64?255:0);});previewJob.selection=SourceSelection{coverage};
+    auto maskedPreview=apply(previewJob);for(int x=64;x<128;++x)require(maskedPreview.raster->pixel(x,20)==detail->pixel(x,20),"lens preview changed unselected pixels");
     auto source=image(48,32,[](int x,int y){auto v=std::uint8_t(x>=20&&x<25&&y>=12&&y<17?255:10);return Pixel{v,v,v,255};});
     auto lowAlpha=image(64,64,[](int x,int y){return x>=24&&x<40&&y>=24&&y<40?Pixel{4,4,4,4}:Pixel{0,0,0,255};});
     auto opaque=image(64,64,[](int x,int y){return x>=24&&x<40&&y>=24&&y<40?Pixel{255,255,255,255}:Pixel{0,0,0,255};});

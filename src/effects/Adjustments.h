@@ -6,13 +6,14 @@
 #include <string_view>
 
 namespace compositor::effects {
-struct AdjustmentRegion { double originX{},originY{},unitsPerPixel{1},documentWidth{},documentHeight{}; };
+struct AdjustmentRegion { double originX{},originY{},unitsPerPixel{1},documentWidth{},documentHeight{}; int previewMaxEdge{}; };
 // Uses the exact raw names from LayerAdjustment: Hue/Saturation, Levels, Curves,
 // Exposure, Gradient Map, Grain. Unknown kinds throw; no silent passthrough.
 std::string defaultAdjustmentJson(std::string_view kind);
 void validateAdjustmentJson(std::string_view json);
 int adjustmentPadding(std::string_view json);
 int adjustmentStackPadding(const Document&);
+bool hasLensAdjustment(const Document&);
 // Selection is optional grayscale coverage already mapped to the source pixel grid.
 // All-zero coverage edits nothing. Each immutable tile is copied only if its pixels change.
 // Levels unpremultiplies once, matching the repaired shared C path. A second conversion would quarter a half-alpha gray.

@@ -98,7 +98,7 @@ std::shared_ptr<const Raster> adjustmentPreviewSource(const std::shared_ptr<cons
     check();
     return Raster::fromRgba(width,height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(width)*4);
 }
-PreviewResult makePreview(Document doc,std::string active,const std::string&json,bool live,bool existing,const std::string&newId,bool showPreview,bool full,const std::function<bool()>& cancelled){
+PreviewResult makePreview(Document doc,std::string active,const std::string&json,bool live,bool existing,const std::string&newId,bool showPreview,bool full,bool thumbnail,const std::function<bool()>& cancelled){
     auto check=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};
     PreviewResult result;result.full=full;const Document before=doc;
     try{
@@ -124,7 +124,7 @@ PreviewResult makePreview(Document doc,std::string active,const std::string&json
             }
         }
         check();validateDocument(doc);
-        result.image=fittedDocumentPreview(showPreview?doc:before,{600,460});
+        if(thumbnail)result.image=fittedDocumentPreview(showPreview?doc:before,{600,460});
         check();result.value=AdjustmentDialogResult{std::move(doc),std::move(active)};
     }catch(const std::exception&e){result.error=e.what();}
     return result;
@@ -193,6 +193,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     void writeVignette(Object value){auto layer=filterLayer();layer["vignette"]=value;writeFilterLayer(layer);}
     Object tonalSettings(){auto layer=filterLayer();if(layer["tonal"].isNull()||layer["tonal"].isUndefined()){layer["tonal"]=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Tonal Contrast"))).object()["filterLayerSettings"].toObject()["tonal"];writeFilterLayer(layer);}return layer["tonal"].toObject();}
     void writeTonal(Object value){auto layer=filterLayer();layer["tonal"]=value;writeFilterLayer(layer);}
+    Object lensSettings(){return filterLayer()["lens"].toObject();}
+    void writeLens(Object value){auto layer=filterLayer();layer["lens"]=value;writeFilterLayer(layer);}
     void syncGuideOverlay(){
         auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data());if(!canvas)return;
         if(kind!="Progressive Blur"&&kind!="RGB Split"){canvas->setCameraRawGuides({});return;}
@@ -230,13 +232,13 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     previewEnabled.setObjectName("adjustmentPreviewEnabled");previewEnabled.setChecked(true);rightLayout.addWidget(&previewEnabled);
     rightLayout.addWidget(&buttons);layout.addWidget(&right,1);
     apply=buttons.button(QDialogButtonBox::Apply);apply->setEnabled(false);apply->setDefault(true);buttons.button(QDialogButtonBox::Cancel)->setAutoDefault(false);
-    debounce.setSingleShot(true);debounce.setInterval(100);
-    changed=[this]{++revision;if(watcher.isRunning())previewCancelled->store(true);apply->setEnabled(false);if(!previewEnabled.isChecked()&&host_.preview)host_.preview({});status.setText("Updating preview…");debounce.start();};
+    debounce.setSingleShot(true);debounce.setInterval(kind=="Lens Effects"?32:100);
+    changed=[this]{++revision;if(watcher.isRunning())previewCancelled->store(true);apply->setEnabled(false);if(!previewEnabled.isChecked()&&host_.preview)host_.preview({});status.setText("Updating preview…");if(kind!="Lens Effects"||!debounce.isActive())debounce.start();};
     QObject::connect(&previewEnabled,&QCheckBox::toggled,&dialog,changed);
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        const bool filterLike=kind=="Tonal Contrast"||kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
+        const bool filterLike=kind=="Lens Effects"||kind=="Tonal Contrast"||kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
         if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"||filterLike){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=filterLike?((label=="Radius"||label=="Distance"||label=="Amount")&&lo>0):(label=="Gamma"||label=="Size");const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
@@ -254,6 +256,31 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto property=[&](const QString&group,const QString&key,const QString&label,double fallback,double lo,double hi,int decimals){auto* spin=number(label,settings[group].toObject().value(key).toDouble(fallback),lo,hi,decimals,fallback,[&,group,key](double v){auto o=settings[group].toObject();o[key]=v;settings[group]=o;});reloadControls.push_back([this,spin,group,key,fallback]{spin->setValue(settings[group].toObject().value(key).toDouble(fallback));});return spin;};
     if(kind=="Exposure"){
         property("exposureSettings","exposure","Exposure",0,-20,20,2);property("exposureSettings","offset","Offset",0,-.5,.5,4);property("exposureSettings","gamma","Gamma",1,.01,9.99,2);
+    }else if(kind=="Lens Effects"){
+        const QStringList modes{"Anamorphic Flare","Starburst","Mist","Prism","Bokeh"};
+        auto* mode=new QComboBox;mode->setObjectName("lensEffectMode");mode->addItems(modes);
+        mode->setCurrentText(lensSettings()["effect"].toString());form.addRow("Effect",mode);
+        QObject::connect(mode,&QComboBox::currentTextChanged,&dialog,[this](const QString& value){auto v=lensSettings();v["effect"]=value;writeLens(v);changed();});
+        std::array<std::pair<int,int>,5> rows{};
+        auto add=[&](int group,const char* key,const char* label,double lo,double hi,int decimals){
+            if(rows[group].first==0)rows[group].first=form.rowCount();
+            const QString field=key;const auto value=lensSettings()[field].toDouble();
+            auto* spin=number(label,value,lo,hi,decimals,value,[this,field](double next){auto v=lensSettings();v[field]=next;writeLens(v);});
+            reloadControls.push_back([this,spin,field]{spin->setValue(lensSettings()[field].toDouble());});
+            rows[group].second=form.rowCount();
+        };
+        add(0,"threshold","Threshold",50,100,1);add(0,"flareAmount","Strength",0,100,1);add(0,"flareLength","Length",1,100,1);add(0,"flareBlue","Blue",0,100,1);
+        add(1,"threshold","Threshold",50,100,1);add(1,"starAmount","Star strength",0,100,1);add(1,"starLength","Star length",2,40,1);add(1,"starAngle","Star angle",-180,180,1);
+        auto* points=new QComboBox;points->setObjectName("lensStarPoints");points->addItems({"4","6","8","12","14"});points->setCurrentText(QString::number(lensSettings()["starPoints"].toInt()));form.addRow("Points",points);rows[1].second=form.rowCount();
+        QObject::connect(points,&QComboBox::currentTextChanged,&dialog,[this](const QString& value){auto v=lensSettings();v["starPoints"]=value.toInt();writeLens(v);changed();});
+        add(2,"mistStrength","Mist strength",0,100,1);add(2,"mistSize","Size",0,100,1);
+        add(3,"prismAmount","Prism strength",0,100,1);add(3,"prismCopies","Copies",1,8,0);add(3,"prismOffset","Offset",0,50,1);add(3,"prismAngle","Prism angle",-180,180,1);add(3,"prismBlur","Blur",0,100,1);
+        flag("Both ways",lensSettings()["prismBothWays"].toBool(),[this](bool value){auto v=lensSettings();v["prismBothWays"]=value;writeLens(v);});rows[3].second=form.rowCount();
+        add(4,"bokehRadius","Radius",.5,6,1);add(4,"bokehBrightness","Brightness",0,100,1);add(4,"bokehRing","Ring",0,100,1);
+        auto* shape=new QComboBox;shape->setObjectName("lensBokehShape");shape->addItems({"Round","Hexagon","Oval","Cat's Eye"});shape->setCurrentText(lensSettings()["bokehShape"].toString());form.addRow("Shape",shape);rows[4].second=form.rowCount();
+        QObject::connect(shape,&QComboBox::currentTextChanged,&dialog,[this](const QString& value){auto v=lensSettings();v["bokehShape"]=value;writeLens(v);changed();});
+        auto show=[this,rows](int current){for(int group=0;group<5;++group)for(int row=rows[group].first;row<rows[group].second;++row)form.setRowVisible(row,group==current);};
+        show(mode->currentIndex());QObject::connect(mode,&QComboBox::currentIndexChanged,&dialog,show);
     }else if(kind=="Tonal Contrast"){
         const auto values=tonalSettings();
         for(const auto& item:std::array<std::pair<const char*,const char*>,5>{{{"amount","Amount"},{"radius","Radius"},{"shadows","Shadows"},{"midtones","Midtones"},{"highlights","Highlights"}}}){
@@ -396,7 +423,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         }
         syncGuideOverlay();
     }
-    start=[this]{if(closing)return;if(watcher.isRunning()){pending=true;previewCancelled->store(true);return;}pending=false;previewCancelled=std::make_shared<std::atomic_bool>(false);runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked(),full=committing_;status.setText(full?"Applying adjustment…":"Updating preview…");watcher.setFuture(QtConcurrent::run([original=original,active=active,json,live=live,existing=existing,insertedId=insertedId,showPreview,full,previewCancelled=previewCancelled]{return makePreview(original,active,json,live,existing,insertedId,showPreview,full,[previewCancelled]{return previewCancelled->load();});}));};
+    start=[this]{if(closing)return;if(watcher.isRunning()){pending=true;previewCancelled->store(true);return;}pending=false;previewCancelled=std::make_shared<std::atomic_bool>(false);runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked(),full=committing_,thumbnail=kind!="Lens Effects"||modal;status.setText(full?"Applying adjustment…":"Updating preview…");watcher.setFuture(QtConcurrent::run([original=original,active=active,json,live=live,existing=existing,insertedId=insertedId,showPreview,full,thumbnail,previewCancelled=previewCancelled]{return makePreview(original,active,json,live,existing,insertedId,showPreview,full,thumbnail,[previewCancelled]{return previewCancelled->load();});}));};
     QObject::connect(&debounce,&QTimer::timeout,&dialog,start);
     QObject::connect(&watcher,&QFutureWatcher<PreviewResult>::finished,&dialog,[&]{if(closing){retire();return;}auto result=watcher.result();if(pending||runningRevision!=revision){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);if(result.full){if(host_.error)host_.error(result.error);committing_=false;dialog.reject();}return;}completed=std::move(result.value);if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}if(result.full){dialog.accept();return;}if(host_.preview)host_.preview(previewEnabled.isChecked()?std::make_shared<const Document>(completed->document):nullptr);preview.setPixmap(QPixmap::fromImage(result.image));status.setText(previewEnabled.isChecked()?"":"Original image");apply->setEnabled(true);});
     QObject::connect(apply,&QPushButton::clicked,&dialog,[&]{

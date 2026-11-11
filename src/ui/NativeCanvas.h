@@ -105,7 +105,8 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
     QTimer* navigatorTimer_{};
     QTimer* viewportTimer_{};
-    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{};
+    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{},compositeDirty_{true};
+    double lastCompositeX_{},lastCompositeY_{},lastCompositeW_{},lastCompositeH_{},lastCompositeUnits_{1};
     std::shared_ptr<const Raster> navigatorRaster_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
     double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
@@ -244,6 +245,7 @@ public:
     std::optional<PreviewPlate> previewPlate() const;
     // While held, paint keeps the current frame instead of composing on the UI thread.
     void setCompositeHeld(bool held);
+    void invalidateComposite(){compositeDirty_=true;}
     bool compositeHeld() const { return compositeHeld_; }
     struct ViewportBounds {
         double x{},y{},width{},height{},units{1}; bool valid{};

@@ -78,6 +78,24 @@ int main(int argc,char**argv){QCoreApplication application(argc,argv);try{check(
     auto split=applyAdjustment(std::shared_ptr<const DeepImage>(deep),encode(lens),nullptr,{0,0,1,3,1});
     check(split&&split->format==DeepImage::Format::Unorm16&&split->samples!=deep->samples,"RGB Split ignored 16-bit pixels");
  }
+ else if(test=="lens_contract"){
+    auto source=Raster::filled(48,24,{0,0,0,255});
+    std::vector<Pixel> lights(6*6,{255,255,255,255});source=source->replacing(5,9,6,6,lights.data(),6);
+    auto original=source->rgba();
+    for(const auto& [name,effect]:std::array<std::pair<const char*,filters::LensEffect>,5>{{{"Anamorphic Flare",filters::LensEffect::AnamorphicFlare},{"Starburst",filters::LensEffect::Starburst},{"Mist",filters::LensEffect::Mist},{"Prism",filters::LensEffect::Prism},{"Bokeh",filters::LensEffect::Bokeh}}}){
+        auto o=settings("Lens Effects"),group=o["filterLayerSettings"].toObject(),lens=group["lens"].toObject();lens["effect"]=name;group["lens"]=lens;o["filterLayerSettings"]=group;
+        filters::Settings direct;direct.lens.effect=effect;
+        check(apply(source,o)->rgba()==filters::runPixels(filters::Kind::LensEffects,*source,direct,1,0)->rgba(),"Lens adjustment differs from existing filter");
+    }
+    check(source->rgba()==original,"Lens adjustment mutated source");
+    std::vector<Pixel> detail(48*24);for(int y=0;y<24;++y)for(int x=0;x<48;++x){const uint8_t v=x%2?40:100;detail[size_t(y)*48+x]={v,v,v,255};}
+    auto detailed=Raster::fromRgba(48,24,reinterpret_cast<const uint8_t*>(detail.data()),48*4);
+    auto draft=applyAdjustment(detailed,encode(settings("Lens Effects")),nullptr,{0,0,1,48,24,12});
+    check(draft->pixel(10,10).r!=draft->pixel(11,10).r,"reduced lens preview lost source detail");
+    auto malformed=settings("Lens Effects"),group=malformed["filterLayerSettings"].toObject(),lens=group["lens"].toObject();
+    lens["starPoints"]=4.5;group["lens"]=lens;malformed["filterLayerSettings"]=group;rejects([&]{apply(source,malformed);});
+    lens["starPoints"]=6;lens["prismCopies"]=2.5;group["lens"]=lens;malformed["filterLayerSettings"]=group;rejects([&]{apply(source,malformed);});
+ }
  else if(test=="tonal_contract"){
     auto o=settings("Tonal Contrast");auto g=o["filterLayerSettings"].toObject();auto t=g["tonal"].toObject();
     std::vector<uint8_t> bytes(90*9*4);for(int y=0;y<9;++y)for(int x=0;x<90;++x){auto i=size_t(y*90+x)*4;auto v=uint8_t((x/30)*85+35+(x%2)*20);bytes[i]=bytes[i+1]=bytes[i+2]=v;bytes[i+3]=255;}

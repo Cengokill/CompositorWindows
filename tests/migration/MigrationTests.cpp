@@ -43,6 +43,26 @@ static int versionOf(const std::filesystem::path& path) {
 static Document base() { Document d; d.id = newId(); d.width = 8; d.height = 8; d.resolution = 72; return d; }
 static Layer pixelLayer() { Layer l; l.id = newId(); l.name = "Paint"; l.transform = {0, 0, 4, 4}; l.raster = Raster::filled(4, 4, {255, 0, 0, 255}); return l; }
 
+static void lens_contract(){
+    QTemporaryDir dir;check(dir.isValid(),"lens temporary directory");ProjectStore store(makeWicProjectCodec());
+    Document d=base();d.width=40;d.height=20;auto photo=pixelLayer();photo.transform={0,0,40,20};
+    std::vector<uint8_t> pixels(40*20*4,0);for(size_t i=3;i<pixels.size();i+=4)pixels[i]=255;
+    for(int y=7;y<12;++y)for(int x=3;x<8;++x)for(int c=0;c<3;++c)pixels[(size_t(y)*40+x)*4+c]=255;
+    photo.raster=Raster::fromRgba(40,20,pixels.data(),40*4);d.layers={photo};
+    Layer lens;lens.id=newId();lens.name="Lens Effects";lens.transform=photo.transform;lens.opacity=.6;lens.adjustmentJson=effects::defaultAdjustmentJson("Lens Effects");
+    lens.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{1,1,{180}}),true,false,Transform{0,0,40,20}};d.layers.push_back(lens);
+    auto expected=SoftwareRenderer().render(d,0,0,40,20)->rgba();check(expected!=pixels,"lens changes composite");
+    auto package=std::filesystem::path(dir.filePath("lens.comp").toStdWString());store.save(package,d,lens.id);
+    auto loaded=store.load(package);check(loaded.readVersion==22&&loaded.document.layers[1].adjustmentJson==lens.adjustmentJson,"lens v22 round trip");
+    check(SoftwareRenderer().render(loaded.document,0,0,40,20)->rgba()==expected,"lens reopened composite");
+    const auto png=std::filesystem::path(dir.filePath("lens.png").toStdWString());
+    exportDocumentAtomic(loaded.document,png);
+    check(imaging::WicCodec::decode(png).image.pixels==expected,"lens reopened PNG export");
+    QFile file(QString::fromStdWString((package/L"manifest.json").wstring()));check(file.open(QIODevice::ReadOnly),"lens manifest read");auto manifest=QJsonDocument::fromJson(file.readAll()).object();file.close();
+    auto reject=[&](QJsonObject value){check(file.open(QIODevice::WriteOnly|QIODevice::Truncate),"lens manifest write");file.write(QJsonDocument(value).toJson());file.close();bool failed=false;try{store.load(package);}catch(const std::exception&){failed=true;}check(failed,"invalid lens project accepted");};
+    auto old=manifest;old["version"]=21;reject(old);
+    for(const char* field:{"effect","threshold","starPoints","prismCopies","bokehShape"}){auto bad=manifest;auto layers=bad["layers"].toArray();auto layer=layers[1].toObject();auto adjustment=layer["adjustment"].toObject();auto group=adjustment["filterLayerSettings"].toObject();auto settings=group["lens"].toObject();settings[field]=field==std::string("effect")?QJsonValue("Invalid"):QJsonValue(1000);group["lens"]=settings;adjustment["filterLayerSettings"]=group;layer["adjustment"]=adjustment;layers[1]=layer;bad["layers"]=layers;reject(bad);}
+}
 static void tonal_contract(){
     QTemporaryDir dir;check(dir.isValid(),"tonal temporary directory");ProjectStore store(makeWicProjectCodec());
     Document d=base();d.width=40;d.height=20;auto photo=pixelLayer();photo.transform={0,0,40,20};std::vector<uint8_t> pixels(40*20*4);for(int y=0;y<20;++y)for(int x=0;x<40;++x){auto i=size_t(y*40+x)*4;pixels[i]=pixels[i+1]=pixels[i+2]=uint8_t(30+(x*7+y*3)%180);pixels[i+3]=255;}photo.raster=Raster::fromRgba(40,20,pixels.data(),40*4);d.layers={photo};
@@ -780,6 +800,6 @@ int main(int argc, char** argv) {
         const auto dir = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("psd-test");
         return psd_folder(dir);
     }
-    try { if(argc>1&&std::string(argv[1])=="--tonal"){tonal_contract();return 0;} if(argc>1&&std::string(argv[1])=="--vignette"){vignette_contract();std::cout<<"PASS migration.vignette\n";return 0;} if(argc>1&&std::string(argv[1])=="--line-export"){line_export_contract();return 0;} if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
+    try { if(argc>1&&std::string(argv[1])=="--lens"){lens_contract();return 0;} if(argc>1&&std::string(argv[1])=="--tonal"){tonal_contract();return 0;} if(argc>1&&std::string(argv[1])=="--vignette"){vignette_contract();std::cout<<"PASS migration.vignette\n";return 0;} if(argc>1&&std::string(argv[1])=="--line-export"){line_export_contract();return 0;} if(argc==3&&std::string(argv[1])=="cmyk"){cmykContract(argv[2]);std::cout<<"PASS cmyk."<<argv[2]<<"\n";return 0;} if(argc>1&&std::string(argv[1])=="--hdr"){hdrNumericContracts();hdrStorageContracts();return 0;} format_contract(); behavior_contract(); psd_contract(); deep_contract(); instagram_layers(); raw_development_contract(); std::cout << "PASS migration.contract\n"; return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL migration.contract: " << error.what() << '\n'; return 1; }
 }

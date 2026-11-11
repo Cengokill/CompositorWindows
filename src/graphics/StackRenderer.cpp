@@ -126,6 +126,7 @@ template<class P> class Render {
     }
     void adjust(int index,std::vector<P>& pixels,bool folderClip)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;
+        if(l.opacity==0||(folderClip&&std::any_of(info.ancestors.begin(),info.ancestors.end(),[&](int parent){return layers[size_t(parent)].layer.opacity==0;})))return;
         std::vector<P> changed(pixelCount);
         if constexpr(std::is_same_v<P,Pixel>){
             if(!callback)throw std::runtime_error("Adjustment callback required for layer "+l.id);

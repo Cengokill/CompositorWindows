@@ -228,11 +228,19 @@ public:
 };
 class SoftwareRenderer final:public IRasterBackend {
     std::shared_ptr<const LayerRenderPreview> preview_;
+    int lensPreviewMaxEdge_{};
+    mutable std::optional<Document> lensDocument_;
+    mutable std::shared_ptr<const Raster> lensFrame_;
+    mutable double lensX_{},lensY_{},lensUnits_{};
+    mutable std::optional<Document> lensDeepDocument_;
+    mutable std::shared_ptr<const DeepImage> lensDeepFrame_;
+    mutable int lensDeepX_{},lensDeepY_{};
 public:
-    explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={}):preview_(std::move(preview)){}
+    explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={},int lensPreviewMaxEdge=0):preview_(std::move(preview)),lensPreviewMaxEdge_(lensPreviewMaxEdge){}
+    static bool lensViewportFits(const Document&,int pixelWidth,int pixelHeight,double unitsPerPixel);
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
     std::shared_ptr<const DeepImage> renderDeep(const Document&,int x,int y,int width,int height,const std::function<bool()>& cancelled={}) const override;
-    std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel) const;
+    std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled={}) const;
     std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel) const;
     // Cursor previews have at most1024 samples per axis; ceil-to-screen sizing
     // can require a positive step slightly below the viewport minimum1/32.
@@ -255,7 +263,9 @@ class CompositeCache {
     uint64_t viewportTick_{};
     std::shared_ptr<const LayerRenderPreview> viewportPreview_;
     size_t lastViewportComposedTiles_{};
+    int lensPreviewMaxEdge_{};
 public:
+    void setLensPreviewMaxEdge(int edge){if(edge<0)edge=0;if(lensPreviewMaxEdge_==edge)return;lensPreviewMaxEdge_=edge;reset();}
     std::shared_ptr<const Raster> render(const Document&);
     CompositeViewport renderViewport(const Document&,double x,double y,double width,double height,double unitsPerPixel=1,size_t maxVisibleTiles=64,size_t maxRetainedTiles=256,std::shared_ptr<const LayerRenderPreview> preview={},const std::function<bool()>& cancelled={});
     size_t viewportRetainedTiles()const{return viewportTiles_.size();}

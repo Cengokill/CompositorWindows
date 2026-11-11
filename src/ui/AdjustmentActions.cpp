@@ -14,6 +14,54 @@
 #include <cmath>
 
 namespace compositor {
+namespace {
+constexpr int lensPreviewEdge=256;
+
+// Retain the last rendered canvas while a new adjustment or viewport is being
+// calculated. Expose events from moving the tool window reuse that canvas.
+std::function<void()> installLensViewportPreview(
+    EditorProject& project, const ui::EditPanelHost& host)
+{
+    auto* canvas=project.canvas;
+    struct RequestedView {
+        NativeCanvas::ViewportBounds bounds;
+        std::optional<Document> document;
+    };
+    auto requested=std::make_shared<RequestedView>();
+    auto* job=new ui::ViewportCompositeJob([canvas,&project,requested,view=host.view,valid=host.valid,error=host.error](ui::ViewportCompositeJob::Result result){
+        if(!valid())return;
+        const auto preview=view();
+        const auto* document=preview?preview.get():(project.document?&*project.document:nullptr);
+        if(canvas->viewportBounds()!=requested->bounds||!document||result.document!=*document)return;
+        if(!result.error.isEmpty()){error(result.error);return;}
+        canvas->presentComposite(std::move(result.view.raster),result.view.documentX,result.view.documentY,result.view.unitsPerPixel,false);
+    },canvas);
+    canvas->deferViewportComposite=[canvas,owner=&project,requested,view=host.view,valid=host.valid,job]{
+        if(!valid())return false;
+        const auto bounds=canvas->viewportBounds();
+        if(!bounds.valid)return true;
+        const auto preview=view();
+        const auto* document=preview?preview.get():(owner->document?&*owner->document:nullptr);
+        if(!document||(requested->bounds==bounds&&requested->document==*document))return true;
+        requested->bounds=bounds;
+        requested->document=*document;
+        ui::ViewportCompositeJob::Request request;
+        request.owner=owner;
+        request.document=*document;
+        request.x=bounds.x;request.y=bounds.y;
+        request.width=bounds.width;request.height=bounds.height;request.units=bounds.units;
+        request.lensPreviewMaxEdge=lensPreviewEdge;
+        job->invalidate();
+        job->submit(std::move(request));
+        return true;
+    };
+    return [canvas,job]{
+        canvas->deferViewportComposite={};
+        job->invalidate();
+        job->deleteLater();
+    };
+}
+}
 void MainWindow::setupAdjustmentActions(){
     auto*menu=menuBar()->addMenu("&Adjustments");
     auto*live=menu->addMenu("New Adjustment Layer");
@@ -24,6 +72,7 @@ void MainWindow::setupAdjustmentActions(){
     }
     action(live,"Vignette…",{},[this]{adjust("Vignette",true);});
     action(live,"Tonal Contrast…",{},[this]{adjust("Tonal Contrast",true);});
+    action(live,"Lens Effects…",{},[this]{adjust("Lens Effects",true);});
     action(menu,"Edit Adjustment Layer…",{},[this]{if(active()&&!active()->adjustmentJson.empty())adjust({},true,true);});
     auto*filters=menuBar()->addMenu("&Filters");
     lastFilterAction_=action(filters,"Last Filter",{},[this]{repeatLastFilter();});
@@ -63,6 +112,7 @@ void MainWindow::adjust(const QString&kind,bool live,bool existing){
         const auto index=at==p->document->layers.end()?p->document->layers.size():size_t(at-p->document->layers.begin()+1);
         auto selected=std::vector<std::string>{added.id};auto collapsed=p->collapsedGroups;collapsed.erase(added.parentId);
         const auto name="New "+kind.toStdString()+" Adjustment";
+        if(kind=="Lens Effects"){p->composite.setLensPreviewMaxEdge(lensPreviewEdge);p->navigatorCache.setLensPreviewMaxEdge(lensPreviewEdge);}
         edit(name.c_str(),[&](Document& document){document.layers.insert(document.layers.begin()+index,added);p->active=added.id;});
         p->selected=std::move(selected);p->collapsedGroups=std::move(collapsed);p->maskSelected=false;existing=true;
     }
@@ -71,8 +121,21 @@ void MainWindow::adjust(const QString&kind,bool live,bool existing){
     if(!live){options.initialAdjustmentJson=p->toolState.filterSettings.beginAdjustment(kind,foreground_,background_);options.onApply=[p](const std::string& json){p->toolState.filterSettings.rememberAdjustment(json);};}
     const auto title=live?QJsonDocument::fromJson(QByteArray::fromStdString(active()->adjustmentJson)).object()["kind"].toString():kind;
     auto host=makeEditPanelHost(*p,before,live?"Edit "+title.toStdString()+" Adjustment":title.toStdString());
+    std::function<void()> stopLensPreview;
+    if(live&&title=="Lens Effects"){
+        p->composite.setLensPreviewMaxEdge(lensPreviewEdge);
+        p->navigatorCache.setLensPreviewMaxEdge(lensPreviewEdge);
+        stopLensPreview=installLensViewportPreview(*p,host);
+        auto closed=std::move(host.closed);
+        host.closed=[owner=p,closed=std::move(closed),stopLensPreview]{
+            stopLensPreview();
+            owner->composite.setLensPreviewMaxEdge(0);
+            owner->navigatorCache.setLensPreviewMaxEdge(0);
+            if(closed)closed();
+        };
+    }
     try{editPanel_=openAdjustmentPanel(this,before,id,kind,live,existing,options,std::move(host));}
-    catch(...){if(live)if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}throw;}
+    catch(...){if(stopLensPreview)stopLensPreview();if(live){p->composite.setLensPreviewMaxEdge(0);p->navigatorCache.setLensPreviewMaxEdge(0);if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}}throw;}
     refresh(false,false);
 }
 void MainWindow::removeBackground(){

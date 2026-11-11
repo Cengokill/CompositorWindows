@@ -1,6 +1,6 @@
 # Current checkpoint
 
-Windows release **1.5.8** is based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+Windows version **1.5.9** is in development, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
 
 The current interface has a vector tool rail, custom dark controls, Inter typography, compact adjustment panels, the native Windows folder dialog for opening projects, Mac-informed layer rows, a searchable command palette (Ctrl+Shift+P), a canvas navigator when the document extends past the view, and canvas rulers with draggable guides. A new session starts with the rulers hidden; View → Rulers shows them. Transform fields show position, size, and angle without trailing zeros. Native Windows title bars are the default; View → Appearance → Mac-style title bar enables the saved optional appearance. This preference only changes window chrome.
 
@@ -10,7 +10,7 @@ The published [1.5.8 release](https://github.com/Cengokill/CompositorWindows/rel
 
 Maintenance intent: stay aligned with Robbie's core features, editing behavior, design, and project format. The Windows preview now implements the observable behavior from upstream 1.0.4 through 1.4.5 that applies on this port: the later blend modes, folder opacity, guides, finishing adjustments and filters, CPU layer effects, DirectWrite text, line shapes, and PSD, SVG, and RAW import. The dependency pin remains `a19db901` until a project written by the Mac 1.4.5 tree is read here. Mac exchange is unverified. The Metal compositor is not ported; rendering stays on the existing CPU and Direct3D paths.
 
-Lens Effects (#83) now has a destructive pixel filter with five modes, per-project applied settings, live reduced preview and the existing selection/history pipeline. The software renderer follows the v1.5.8 settings contract; its bounded sampling is not verified Core Image parity. Editable Lens Effects layers remain outside this change (#97).
+Lens Effects (#83) has a destructive pixel filter with five modes, per-project applied settings, live reduced preview and the existing selection/history pipeline. Editable Lens Effects adjustment layers (#97) use the same filter kernel with masks, opacity, history, full-image rendering and Windows project format v22. The live panel uses a reduced preview; committed canvas and export use full resolution within the working memory budget. The bounded software sampling is not verified Core Image parity.
 
 Vignette adjustment layers (#95) retain six editable settings, use document-relative falloff for regional rendering, and preserve source pixels and coverage. They use the existing live adjustment history and mask pipeline and require Windows project format v20. The destructive Vignette filter keeps its earlier behavior; Mac exchange remains unverified.
 
