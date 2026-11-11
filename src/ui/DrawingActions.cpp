@@ -297,10 +297,10 @@ void MainWindow::refreshCropControls(){
     }
     if(restored)refreshShapeControls();
     if(auto* ratio=findChild<QComboBox*>("cropRatioChoice")){
-        const int marker=ratio->findData("crop-custom-choice",Qt::UserRole);const auto custom=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString{};
+        QSignalBlocker block(ratio);const int marker=ratio->findData("crop-custom-choice",Qt::UserRole);const auto custom=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString{};
         if(marker>=0&&ratio->itemText(marker)!=custom)ratio->removeItem(marker);
         if(!custom.isEmpty()&&ratio->findData("crop-custom-choice",Qt::UserRole)<0){const int action=ratio->findData("crop-custom-action",Qt::UserRole);const int insertAt=action>0&&ratio->itemText(action-1).isEmpty()?action-1:action;ratio->insertItem(insertAt,custom);ratio->setItemData(insertAt,"crop-custom-choice",Qt::UserRole);}
-        QSignalBlocker block(ratio);ratio->setCurrentText(cropRatioChoice_);ratio->setVisible(visible);ratio->setEnabled(enabled);
+        ratio->setCurrentText(cropRatioChoice_);ratio->setVisible(visible);ratio->setEnabled(enabled);
     }
     if(auto* label=findChild<QLabel*>("cropDimensions")){label->setVisible(visible&&cropDraft_.has_value());label->setText(cropDraft_?cropDimensionsText(*cropDraft_):QString{});}
     for(auto* item:findChildren<QAction*>()){const auto id=item->property("commandId").toString();if(id=="crop.apply"||id=="crop.cancel")item->setVisible(visible);}
