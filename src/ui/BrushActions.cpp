@@ -180,6 +180,7 @@ bool MainWindow::updateBrush(Point point,bool finish,double pressure){
         lastBrushPoint_=point;
         // A press that does not change pixels must not close another open edit.
         if(!snapshot->changed()){publishBrush(std::move(snapshot),true);stroke_.reset();refresh();return true;}
+        const bool resumeOpacity=opacityOwner_&&opacityOwner_==pointerOwner_&&opacity_->isSliderDown();
         finishOpacityEdit();
         finishShapeStyleEdit();
         auto* project=pointerOwner_?pointerOwner_:current();
@@ -190,6 +191,11 @@ bool MainWindow::updateBrush(Point point,bool finish,double pressure){
         stroke_.reset();
         project->history.end(project->document,project->active);
         brushHistoryOpen_=false;
+        if(resumeOpacity){
+            opacityPressUndoCount_=project->history.undoCount();
+            project->history.begin("Layer Opacity",project->document,project->active);
+            opacityOwner_=project;
+        }
         refresh();
     }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;

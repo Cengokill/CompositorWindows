@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QKeyEvent>
 #include <QSettings>
 #include <QSlider>
@@ -160,10 +162,38 @@ int main(int argc,char** argv){QApplication app(argc,argv);QTemporaryDir prefere
         dab(*project.canvas,{16.5,16.5});
         require(project.history.undoCount()==2&&project.history.undoName()=="Brush","Brush nested inside opacity was not its own step");
         require(project.document->layers[0].raster->pixel(16,16)==Pixel{0,0,0,255},"Opacity transaction blocked the dab");
+        opacity->setValue(50);
+        opacity->setValue(60);
+        opacity->setSliderDown(false);
+        require(project.history.undoCount()==3&&project.history.undoName()=="Layer Opacity","Remaining opacity drag was not grouped");
+        historyCommand(window,"edit.undo");
+        closeEnough(project.document->layers[0].opacity,.4,"Undo did not restore opacity after the stroke");
         historyCommand(window,"edit.undo");
         require(project.document->layers[0].raster->pixel(16,16)==Pixel{0,0,255,255}&&std::abs(project.document->layers[0].opacity-.4)<1e-6,"Undo did not remove only the stroke");
         historyCommand(window,"edit.undo");
         closeEnough(project.document->layers[0].opacity,1,"Opacity undo did not restore the layer");
+    });
+    test("mask_stroke_preserves_image_and_undo_restores_mask",[]{
+        Document input=example();
+        input.layers[0].mask=Mask{std::make_shared<GrayRaster>(GrayRaster{64,48,std::vector<uint8_t>(64*48,255)})};
+        MainWindow window(true);
+        auto& project=window.addProject(input);
+        key(window,Qt::Key_B);
+        brushTip(window)[0]->setValue(8);
+        QComboBox* target=nullptr;
+        for(auto* box:window.findChildren<QComboBox*>())if(box->accessibleName()=="Editing target")target=box;
+        require(target,"Mask target missing");
+        target->setCurrentIndex(1);
+        control<QCheckBox>(window,"paintMaskWhite")->setChecked(false);
+        require(project.maskSelected,"Mask target not selected");
+        const auto before=*project.document;
+        dab(*project.canvas,{16.5,16.5});
+        const auto& layer=project.document->layers[0];
+        require(layer.raster==before.layers[0].raster,"Mask stroke changed the image raster");
+        require(layer.mask->raster->pixels[16*64+16]<255,"Mask dab did not change the mask");
+        require(project.history.undoCount()==1&&project.history.undoName()=="Brush","Mask stroke did not record a Brush step");
+        historyCommand(window,"edit.undo");
+        require(*project.document==before&&!project.brushPreview,"Undo did not restore the mask and clear the preview");
     });
     test("brush_escape_preserves_open_opacity_edit",[]{
         MainWindow window(true);
