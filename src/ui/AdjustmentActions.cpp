@@ -24,6 +24,7 @@ void MainWindow::setupAdjustmentActions(){
     }
     action(live,"Vignette…",{},[this]{adjust("Vignette",true);});
     action(live,"Tonal Contrast…",{},[this]{adjust("Tonal Contrast",true);});
+    action(live,"Lens Effects…",{},[this]{adjust("Lens Effects",true);});
     action(menu,"Edit Adjustment Layer…",{},[this]{if(active()&&!active()->adjustmentJson.empty())adjust({},true,true);});
     auto*filters=menuBar()->addMenu("&Filters");
     lastFilterAction_=action(filters,"Last Filter",{},[this]{repeatLastFilter();});
@@ -63,6 +64,7 @@ void MainWindow::adjust(const QString&kind,bool live,bool existing){
         const auto index=at==p->document->layers.end()?p->document->layers.size():size_t(at-p->document->layers.begin()+1);
         auto selected=std::vector<std::string>{added.id};auto collapsed=p->collapsedGroups;collapsed.erase(added.parentId);
         const auto name="New "+kind.toStdString()+" Adjustment";
+        if(kind=="Lens Effects"){p->composite.setLensPreviewMaxEdge(256);p->navigatorCache.setLensPreviewMaxEdge(256);}
         edit(name.c_str(),[&](Document& document){document.layers.insert(document.layers.begin()+index,added);p->active=added.id;});
         p->selected=std::move(selected);p->collapsedGroups=std::move(collapsed);p->maskSelected=false;existing=true;
     }
@@ -71,8 +73,18 @@ void MainWindow::adjust(const QString&kind,bool live,bool existing){
     if(!live){options.initialAdjustmentJson=p->toolState.filterSettings.beginAdjustment(kind,foreground_,background_);options.onApply=[p](const std::string& json){p->toolState.filterSettings.rememberAdjustment(json);};}
     const auto title=live?QJsonDocument::fromJson(QByteArray::fromStdString(active()->adjustmentJson)).object()["kind"].toString():kind;
     auto host=makeEditPanelHost(*p,before,live?"Edit "+title.toStdString()+" Adjustment":title.toStdString());
+    if(live&&title=="Lens Effects"){
+        p->composite.setLensPreviewMaxEdge(256);
+        p->navigatorCache.setLensPreviewMaxEdge(256);
+        auto closed=std::move(host.closed);
+        host.closed=[this,owner=p,closed=std::move(closed)]{
+            owner->composite.setLensPreviewMaxEdge(0);
+            owner->navigatorCache.setLensPreviewMaxEdge(0);
+            if(closed)closed();
+        };
+    }
     try{editPanel_=openAdjustmentPanel(this,before,id,kind,live,existing,options,std::move(host));}
-    catch(...){if(live)if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}throw;}
+    catch(...){if(live){p->composite.setLensPreviewMaxEdge(0);p->navigatorCache.setLensPreviewMaxEdge(0);if(auto snapshot=p->history.cancel()){p->document=std::move(snapshot->document);p->active=std::move(snapshot->activeLayer);}}throw;}
     refresh(false,false);
 }
 void MainWindow::removeBackground(){

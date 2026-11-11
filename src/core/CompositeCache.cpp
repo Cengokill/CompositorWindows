@@ -11,6 +11,7 @@
 
 namespace compositor {
 namespace {
+bool lensAdjustment(const Document& doc){return std::any_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return layer.visible&&layer.adjustmentJson.find("Lens Effects")!=std::string::npos;});}
 using Tile=std::shared_ptr<const Raster::Tile>;
 Tile zeroTile(){static const Tile zero=std::make_shared<Raster::Tile>();return zero;}
 struct Bounds {double left{},top{},right{},bottom{};};
@@ -201,11 +202,12 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
     validateDocument(doc);if(auto direct=directRaster(doc)){previous_=doc;output_=direct;return output_;}
     const Layer* flipped=flippedDirect(doc);
     int columns=(doc.width+255)/256,rows=(doc.height+255)/256;auto dirty=invalidTiles(previous_,doc,1,columns,rows);
+    if(lensAdjustment(doc)&&(!previous_||*previous_!=doc))std::fill(dirty.begin(),dirty.end(),uint8_t(1));
     if(output_&&std::none_of(dirty.begin(),dirty.end(),[](uint8_t value){return value!=0;})){previous_=doc;return output_;}
     validateCulledAdjustments(doc);auto painted=paintedBounds(doc);if(painted.empty()){previous_=doc;output_=tiled(doc.width,doc.height,zeroTile());return output_;}
     auto result=std::make_shared<Raster>();result->width=doc.width;result->height=doc.height;
     if(output_&&output_->width==doc.width&&output_->height==doc.height)result->tiles=output_->tiles;else result->tiles.resize(size_t(columns)*rows);
-    SoftwareRenderer renderer;const int margin=spatialMargin(doc);
+    SoftwareRenderer renderer({},lensPreviewMaxEdge_);const int margin=spatialMargin(doc);
     for(size_t index=0;index<dirty.size();++index)if(dirty[index]){int x=int(index%columns)*256,y=int(index/columns)*256,w=std::min(256,doc.width-x),h=std::min(256,doc.height-y);
         if(!touches(painted,x-margin,y-margin,w+margin*2.,h+margin*2.)){result->tiles[index]=zeroTile();continue;}
         if(flipped)result->tiles[index]=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,x,y,doc.width,doc.height);
@@ -241,6 +243,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     // Compare canonical documents independently from transient preview metadata.
     // Only retained output entries will be checked against these damage bounds.
     auto compared=compareLayers(viewportPrevious_?&*viewportPrevious_:nullptr,input,units);
+    if(lensAdjustment(doc)&&(!viewportPrevious_||*viewportPrevious_!=input))all=true;
     if(compared.all)all=true;else damage.insert(damage.end(),compared.regions.begin(),compared.regions.end());
     const auto identity=preview?preview->identity:std::shared_ptr<const void>{};
     if(!all&&identity!=(viewportPreview_?viewportPreview_->identity:std::shared_ptr<const void>{})){
@@ -262,7 +265,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     }
     if(all||!damage.empty())validateCulledAdjustments(doc,preview);
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
-    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview);const int margin=spatialMargin(doc,units);
+    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview,lensPreviewMaxEdge_);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
     for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){
         if(cancelled&&cancelled()){reset();throw std::runtime_error("Viewport composition cancelled");}

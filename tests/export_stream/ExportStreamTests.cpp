@@ -209,6 +209,22 @@ void large_pdf(){
  REQUIRE(memory.PeakWorkingSetSize<256*1024*1024&&memory.PeakPagefileUsage<256*1024*1024&&Raster::materializationCount()==0);
 }
 
+void lens_partition(){
+    QTemporaryDir temp;auto d=blank(513,53);Layer photo;photo.id=newId();photo.name="Photo";photo.transform={0,0,513,53};
+    std::vector<uint8_t> pixels(513*53*4,0);for(size_t i=3;i<pixels.size();i+=4)pixels[i]=255;
+    for(int y=16;y<28;++y)for(int x=5;x<17;++x)for(int c=0;c<3;++c)pixels[(size_t(y)*513+x)*4+c]=255;
+    photo.raster=Raster::fromRgba(513,53,pixels.data(),513*4);d.layers.push_back(photo);
+    Layer lens;lens.id=newId();lens.name="Lens Effects";lens.transform=photo.transform;lens.opacity=.7;
+    lens.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{1,1,{170}}),true,false,Transform{0,0,513,53}};
+    for(const char* mode:{"Anamorphic Flare","Prism"}){
+        auto json=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Lens Effects"))).object();
+        auto group=json["filterLayerSettings"].toObject(),settings=group["lens"].toObject();settings["effect"]=mode;group["lens"]=settings;json["filterLayerSettings"]=group;
+        lens.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers.resize(1);d.layers.push_back(lens);
+        if(std::string_view(mode)=="Prism"){Layer blur;blur.id=newId();blur.name="Gaussian Blur";blur.transform=photo.transform;blur.adjustmentJson=effects::defaultAdjustmentJson("Gaussian Blur");d.layers.push_back(blur);}
+        auto expected=SoftwareRenderer().render(d,0,0,d.width,d.height)->rgba();
+        for(uint32_t rows:{1U,7U,53U}){StreamExportLimits limits;limits.stripeRows=rows;auto target=path(temp,("lens-"+std::string(mode)+"-"+std::to_string(rows)+".png").c_str());exportDocumentAtomic(d,target,{},limits);REQUIRE(WicCodec::decode(target).image.pixels==expected);}
+    }
+}
 void tonal_partition(){
     QTemporaryDir temp;auto d=blank(513,53);Layer photo;photo.id=newId();photo.name="Photo";photo.transform={0,0,513,53};
     std::vector<uint8_t> pixels(513*53*4);for(int y=0;y<53;++y)for(int x=0;x<513;++x){auto i=size_t(y*513+x)*4;pixels[i]=pixels[i+1]=pixels[i+2]=uint8_t(40+(x*3+y*5)%160);pixels[i+3]=255;}photo.raster=Raster::fromRgba(513,53,pixels.data(),513*4);d.layers.push_back(photo);
@@ -227,4 +243,4 @@ void vignette_partition(){
     }
 }
 
-int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"tonal_partition",tonal_partition},{"vignette_partition",vignette_partition},{"channel_pack",channel_pack},{"extent_guard",extent_guard},{"row_png",row_png},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_scale_stripes",pdf_scale_stripes},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
+int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"lens_partition",lens_partition},{"tonal_partition",tonal_partition},{"vignette_partition",vignette_partition},{"channel_pack",channel_pack},{"extent_guard",extent_guard},{"row_png",row_png},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_scale_stripes",pdf_scale_stripes},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
