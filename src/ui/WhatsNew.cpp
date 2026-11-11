@@ -73,8 +73,7 @@ ReleaseNotes installedReleaseNotes(){
 }
 bool releaseNotesDue(QSettings& settings,const update::Version& installed){
     const auto seen=storedVersion(settings);
-    if(!seen){storeVersion(settings,installed);return false;}
-    return installed>*seen;
+    return !seen||installed>*seen;
 }
 void acknowledgeReleaseNotes(QSettings& settings,const update::Version& installed){
     const auto seen=storedVersion(settings);
