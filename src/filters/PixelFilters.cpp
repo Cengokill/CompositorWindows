@@ -714,6 +714,14 @@ std::array<std::shared_ptr<const Raster>,4> splitChannels(const Raster& source,c
     }
     return planes;
 }
+// Reconstruct the reduced Lens Effects preview over the original pixels.
+template<class Read> std::array<double,3> previewLensDelta(int x,int y,int w,int h,int rw,int rh,Read read){
+    const double fx=std::clamp((x+.5)*rw/w-.5,0.,double(rw-1)),fy=std::clamp((y+.5)*rh/h-.5,0.,double(rh-1));
+    const int x0=int(fx),y0=int(fy),x1=std::min(x0+1,rw-1),y1=std::min(y0+1,rh-1);const double tx=fx-x0,ty=fy-y0;
+    const auto a=read(x0,y0),b=read(x1,y0),c=read(x0,y1),d=read(x1,y1);std::array<double,3> v{};
+    for(int k=0;k<3;++k)v[k]=(a[k]*(1-tx)+b[k]*tx)*(1-ty)+(c[k]*(1-tx)+d[k]*tx)*ty;
+    return v;
+}
 Result apply(const Request& request){
     kindCheck(request.kind);cancel(request.limits);if(!request.source||!request.transform.valid())throw std::runtime_error("Filter needs a valid image layer");const auto& original=*request.source;gateSize(original.width,original.height);
     // RGB Split's largest radial preview may be retained after switching back to Linear.
@@ -752,6 +760,8 @@ Result apply(const Request& request){
         }
     }
     std::shared_ptr<const DeepImage> deepOutput;
+    std::shared_ptr<const DeepImage> reducedDeep;
+    const bool lensDraft=request.kind==Kind::LensEffects&&request.preview&&factor<1;
     const bool eightBitOnly=request.kind==Kind::LensCorrection||request.kind==Kind::ContentAwareFill;
     if(!request.preview&&request.deepSource&&request.deepSource->valid()&&!request.deepSource->isHdr()&&eightBitOnly)
         throw std::runtime_error("Convert this 16-bit layer to 8-bit before this spatial filter");
@@ -761,10 +771,25 @@ Result apply(const Request& request){
         auto prepared=makeDeep(working->width,working->height,request.deepSource->format);
         for(int y=0;y<prepared->height;++y){cancel(request.limits);for(int x=0;x<prepared->width;++x){const int sx=bounds.x+int((int64_t(2*x+1)*bounds.width)/(2*prepared->width)),sy=bounds.y+int((int64_t(2*y+1)*bounds.height)/(2*prepared->height));prepared->setPixel(x,y,request.deepSource->pixel(sx,sy));}}
         auto view=request.cameraRawView;view.scale=factor;view.seed=request.seed;
-        deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,request.cameraRaw,view,clamp);
+        reducedDeep=prepared;deepOutput=runDeepPixels(request.kind,*prepared,settings,factor,request.seed,lensDraft?nullptr:(selected?&*selected:nullptr),request.limits,request.cameraRaw,view,clamp);
     }
     if(deepOutput&&bounds==PixelRect{0,0,original.width,original.height}&&deepOutput->width==request.deepSource->width&&deepOutput->height==request.deepSource->height&&deepOutput->samples==request.deepSource->samples){result.deep=request.deepSource;return result;}
-    auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,selected?&*selected:nullptr,request.limits,clamp);
+    auto output=deepOutput?rasterFromDeep(*deepOutput):runPixels(request.kind,*working,settings,factor,request.seed,lensDraft?nullptr:(selected?&*selected:nullptr),request.limits,clamp);
+    if(lensDraft){
+        count(original.width,original.height,request.limits,deepOutput?40:16);
+        auto coverage=[&](int x,int y){return request.selection?request.selection->coverage->pixel(x-request.selection->originX,y-request.selection->originY)/255.:1.;};
+        if(deepOutput){
+            auto full=makeDeep(original.width,original.height,request.deepSource->format);
+            auto delta=[&](int x,int y){auto a=reducedDeep->pixel(x,y),b=deepOutput->pixel(x,y);return std::array<double,3>{double(b[0]-a[0]),double(b[1]-a[1]),double(b[2]-a[2])};};
+            for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=request.deepSource->pixel(x,y);auto d=previewLensDelta(x,y,original.width,original.height,working->width,working->height,delta);const double alpha=coverage(x,y);for(int k=0;k<3;++k)p[k]=float(std::clamp(double(p[k])+d[k]*alpha,0.,double(p[3])));full->setPixel(x,y,p);}}
+            deepOutput=full;output=rasterFromDeep(*full);
+        }else{
+            std::vector<Pixel> pixels(size_t(original.width)*original.height);
+            auto delta=[&](int x,int y){auto a=working->pixel(x,y),b=output->pixel(x,y);return std::array<double,3>{double(b.r)-a.r,double(b.g)-a.g,double(b.b)-a.b};};
+            for(int y=0;y<original.height;++y){cancel(request.limits);for(int x=0;x<original.width;++x){auto p=original.pixel(x,y);auto d=previewLensDelta(x,y,original.width,original.height,working->width,working->height,delta);const double alpha=coverage(x,y);auto channel=[&](int value,int k){return uint8_t(std::clamp(std::lround(value+d[k]*alpha),0L,long(p.a)));};pixels[size_t(y)*original.width+x]={channel(p.r,0),channel(p.g,1),channel(p.b,2),p.a};}}
+            output=Raster::fromRgba(original.width,original.height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(original.width)*4,request.limits.cancelled);
+        }
+    }
     if(grows&&!request.preview){int loX=output->width,loY=output->height,hiX=0,hiY=0;for(int y=0;y<output->height;++y){cancel(request.limits);for(int x=0;x<output->width;++x)if(deepOutput?deepOutput->pixel(x,y)[3]>0:output->pixel(x,y).a!=0){loX=std::min(loX,x);loY=std::min(loY,y);hiX=std::max(hiX,x+1);hiY=std::max(hiY,y+1);}}
         if(hiX>loX&&hiY>loY&&(loX||loY||hiX!=output->width||hiY!=output->height)){const int w=hiX-loX,h=hiY-loY;std::vector<std::uint8_t> cropped(std::size_t(w)*h*4);for(int y=0;y<h;++y)for(int x=0;x<w;++x){auto p=output->pixel(x+loX,y+loY);auto i=(std::size_t(y)*w+x)*4;cropped[i]=p.r;cropped[i+1]=p.g;cropped[i+2]=p.b;cropped[i+3]=p.a;}if(deepOutput){auto crop=makeDeep(w,h,deepOutput->format);for(int y=0;y<h;++y)for(int x=0;x<w;++x)crop->setPixel(x,y,deepOutput->pixel(x+loX,y+loY));deepOutput=crop;}bounds={bounds.x+loX,bounds.y+loY,w,h};placed=placedGrid(request.transform,original.width,original.height,bounds);output=Raster::fromRgba(w,h,cropped.data(),std::size_t(w)*4);}
     }
