@@ -670,6 +670,7 @@ foreach(case source_predicates layer_eligibility pending_preparation stale_activ
 endforeach()
 add_executable(command_integrated_tests tests/command_ui/IntegratedCommandTests.cpp)
 target_link_libraries(command_integrated_tests PRIVATE compositor_ui)
+target_include_directories(command_integrated_tests PRIVATE ${CMAKE_BINARY_DIR}/generated)
 foreach(case about_version registered_actions pending_gradient_undo blocked_layers import_busy blank_hidden_transform text_focus transform_draft command_palette)
   add_test(NAME command_integrated.${case} COMMAND command_integrated_tests ${case})
   set_tests_properties(command_integrated.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)

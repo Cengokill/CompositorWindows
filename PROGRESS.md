@@ -1,6 +1,6 @@
 # Current checkpoint
 
-Windows release **1.5.8** is based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+Windows version **1.5.9** is in development, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
 
 The current interface has a vector tool rail, custom dark controls, Inter typography, compact adjustment panels, the native Windows folder dialog for opening projects, Mac-informed layer rows, a searchable command palette (Ctrl+Shift+P), a canvas navigator when the document extends past the view, and canvas rulers with draggable guides. A new session starts with the rulers hidden; View → Rulers shows them. Transform fields show position, size, and angle without trailing zeros. Native Windows title bars are the default; View → Appearance → Mac-style title bar enables the saved optional appearance. This preference only changes window chrome.
 

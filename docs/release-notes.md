@@ -1,8 +1,12 @@
 # Compositor Windows 1.5.9
 
+## New features
+
+Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh as an editable Lens Effects adjustment layer. Adjust its settings, mask and opacity without changing the source pixels. Projects containing the layer use Windows project format v22.
+
 ## Improvements
 
-The application icon uses the updated Compositor artwork.
+The application icon uses the updated Compositor artwork. Lens Effects previews retain fine image detail while editing.
 
 # Compositor Windows 1.5.8
 
