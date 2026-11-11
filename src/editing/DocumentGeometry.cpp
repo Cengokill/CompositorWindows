@@ -132,7 +132,21 @@ Rect createCrop(Point start,Point end,std::optional<double> ratio,bool symmetric
 Rect CropDrag::updated(Point point,std::optional<double> ratio,bool symmetric)const {
     finitePoint(point);finitePoint(start);if(mode==Mode::Create)return createCrop(start,point,ratio,symmetric);if(mode==Mode::Move)return snappedCrop({original.x+point.x-start.x,original.y+point.y-start.y,original.width,original.height});if(handle<0||handle>=8||!validCrop(original))throw std::runtime_error("Invalid crop resize handle");
     auto unit=handles[handle];Point anchorUnit=symmetric?Point{.5,.5}:Point{1-unit.x,1-unit.y};Point anchor{original.x+anchorUnit.x*original.width,original.y+anchorUnit.y*original.height};double span=symmetric?2:1,lx=(original.x+unit.x*original.width+point.x-start.x-anchor.x)*span,ly=(original.y+unit.y*original.height+point.y-start.y-anchor.y)*span,sx=unit.x*2-1,sy=unit.y*2-1;
-    double width=sx==0?original.width:std::max(1.,lx*sx),height=sy==0?original.height:std::max(1.,ly*sy);if(ratio){double factor=sx==0?height/original.height:sy==0?width/original.width:std::max(1/std::min(original.width,original.height),(lx*sx*original.width+ly*sy*original.height)/(original.width*original.width+original.height*original.height));width=original.width*factor;height=original.height*factor;}
+    double width=sx==0?original.width:std::max(1.,lx*sx),height=sy==0?original.height:std::max(1.,ly*sy);
+    if(ratio){
+        if(!std::isfinite(*ratio)||*ratio<=0)throw std::runtime_error("Invalid crop aspect ratio");
+        const double ratioWidth=std::max(1.,*ratio),ratioHeight=ratioWidth / *ratio;
+        double scale;
+        if(sx==0)scale=height/ratioHeight;
+        else if(sy==0)scale=width/ratioWidth;
+        else scale=(lx*sx*ratioWidth+ly*sy*ratioHeight)/(ratioWidth*ratioWidth+ratioHeight*ratioHeight);
+        scale=std::max(1.,scale);
+        width=std::round(ratioWidth*scale);
+        height=std::round(ratioHeight*scale);
+        // Round the dimensions before positioning so a crop crossing zero keeps its size.
+        Rect next{std::round(anchor.x-anchorUnit.x*width),std::round(anchor.y-anchorUnit.y*height),width,height};
+        return validCrop(next)?next:original;
+    }
     Rect next{anchor.x-anchorUnit.x*width,anchor.y-anchorUnit.y*height,width,height};return snappedCrop(validCrop(next)?next:original);
 }
 Rect CropSnap::apply(Rect rect,const CropDrag& drag,Point point,std::optional<double> ratio,bool symmetric)const {
