@@ -2,11 +2,15 @@
 
 ## New features
 
-Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh as an editable Lens Effects adjustment layer. Adjust its settings, mask and opacity without changing the source pixels. Projects containing the layer use Windows project format v22.
+Add editable Vignette, Tonal Contrast and Lens Effects adjustment layers. Their settings, masks, opacity and history stay in the layer stack without changing the source pixels. Projects use Windows format v20 for Vignette, v21 for Tonal Contrast and v22 for Lens Effects.
 
 ## Improvements
 
 The application icon uses the updated Compositor artwork. Lens Effects previews retain fine image detail while editing.
+
+## Fixes
+
+Changed Brush and Erase strokes now create their own undo step, including when an opacity or shape-style edit is open. Escape during a stroke leaves that other edit in place; mask painting follows the same history behavior.
 
 # Compositor Windows 1.5.8
 

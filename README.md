@@ -22,11 +22,13 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.5.9 (in development)
+## What's new in 1.5.9
 
 See the [release notes](docs/release-notes.md) for details.
 
 - **Editable Lens Effects.** Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh as an adjustment layer, with masks, opacity and undo.
+- **Editable Vignette and Tonal Contrast.** Keep both adjustments editable in the layer stack, with their settings, masks, opacity and history.
+- **Brush history.** Changed brush and eraser strokes are separate undo steps, including when an opacity or shape-style edit is open.
 - **Updated application icon.** Compositor uses the updated artwork.
 
 <img width="1024" alt="RAW Development with a live preview and the Camera Raw button" src="https://github.com/user-attachments/assets/14fd198a-286b-459e-8086-5ebfd2843f8d" />
