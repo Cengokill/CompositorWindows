@@ -5,6 +5,8 @@
 #include <QToolBar>
 #include <QCheckBox>
 #include <QMenuBar>
+#include <QMenu>
+#include <QToolButton>
 #include <QLabel>
 #include <QInputDialog>
 #include <QStatusBar>
@@ -148,6 +150,21 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
         else{if(canvas())canvas()->setCompositeHeld(false);refresh();}
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
 }
+bool MainWindow::canArrangeLayers(bool distribute){
+    auto* project=current();if(!project||!project->document||transformDrag_||selectionGesture_.active()||!shapeDraftId_.empty())return false;
+    auto state=commandState();if(state.modalDialog)return false;
+    if(transformSession_){if(transformOwner_!=project||transformSession_->corners||transformSession_->pixels||transformSession_->maskOnly)return false;state.transformEdit=false;}
+    if(!ui::canEditLayers(state))return false;
+    const auto count=editing_transform::arrangeItemCount(*project->document,layerSelection());return distribute?count>=3:count>=1;
+}
+void MainWindow::arrangeLayers(editing_transform::Arrange command){
+    const bool distribute=command>=editing_transform::Arrange::CentersX;if(!canArrangeLayers(distribute))return;
+    if(transformSession_&&!applyTransformSession())return;
+    if(!canArrangeLayers(distribute))return;
+    finishOpacityEdit();auto* project=current();
+    try{applyLayerEdit(editing_transform::arrange(*project->document,layerSelection(),command));}
+    catch(const std::exception& error){statusBar()->showMessage(error.what());}
+}
 void MainWindow::setupTransformActions(){
     auto*bar=addToolBar("Transform Options");bar->setObjectName("transformOptions");
     auto*autoSelect=new QCheckBox("Auto-select layer");autoSelect->setObjectName("transformAutoSelect");autoSelect->setChecked(true);bar->addWidget(autoSelect);connect(autoSelect,&QCheckBox::toggled,this,[this](bool value){autoSelectLayers_=value;});
@@ -157,6 +174,11 @@ void MainWindow::setupTransformActions(){
     auto*scale=new ui::PropertyNumber;scale->releaseFocus=[this]{if(canvas())canvas()->setFocus();};scale->setObjectName("transformScale");scale->setAccessibleName("Transform scale percent");scale->setRange(.01,100000);scale->setDecimals(2);scale->setSuffix(" %");scale->setValue(100);bar->addWidget(scale);connect(scale,&QDoubleSpinBox::valueChanged,this,[this](double value){changeTransformDraft([&](Transform& draft){draft=editing_transform::scaledPercent(draft,value,transformScalePixelSize());});});
     auto*sampling=new QComboBox;sampling->setObjectName("transformSampling");sampling->addItems({"Nearest","Smooth","High quality"});sampling->setCurrentIndex(2);sampling->setAccessibleName("Transform sampling");bar->addWidget(sampling);connect(sampling,&QComboBox::currentIndexChanged,this,[this](int i){if(i>=0&&i<=2)changeTransformDraft([&](Transform& draft){draft.sampling=Transform::Sampling(i);});});
     for(bool horizontal:{true,false}){auto*flip=bar->addAction(horizontal?"Flip H":"Flip V");flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",horizontal?"Flip H":"Flip V",[this,horizontal]{changeTransformDraft([&](Transform& draft){draft=editing_transform::flippedLocal(draft,horizontal);});});}
+    QMenu* layerMenu=nullptr;for(auto* entry:menuBar()->actions())if(entry->text()=="&Layer")layerMenu=entry->menu();
+    auto* alignMenu=layerMenu->addMenu("Align");auto* distributeMenu=layerMenu->addMenu("Distribute");
+    auto* popup=new QMenu(bar);auto* button=new QToolButton(bar);button->setText("Align");button->setAccessibleName("Align and distribute layers");button->setPopupMode(QToolButton::InstantPopup);button->setMenu(popup);button->setObjectName("arrangeLayersButton");bar->addWidget(button);
+    const char* labels[]{"Left Edges","Horizontal Centers","Right Edges","Top Edges","Vertical Centers","Bottom Edges","Horizontal Centers","Vertical Centers","Horizontal Spacing","Vertical Spacing"};
+    for(int i=0;i<10;++i){const bool distribution=i>=6;auto* action=(distribution?distributeMenu:alignMenu)->addAction(labels[i]);action->setObjectName(QString("arrangeLayer%1").arg(i));popup->addAction(action);connect(action,&QAction::triggered,this,[this,i]{arrangeLayers(static_cast<editing_transform::Arrange>(i));});}
     auto*menu=menuBar()->addMenu("&Transform");
     auto*free=menu->addAction("Free Transform");free->setObjectName("freeTransform");free->setShortcut(QKeySequence("Ctrl+T"));bindCommand(free,"Transform","Free Transform",[this]{startTransformSession(true);});
     auto*distort=menu->addAction("Distort");distort->setObjectName("distortTransform");bindCommand(distort,"Transform","Distort",[this]{startTransformSession(true,true);});

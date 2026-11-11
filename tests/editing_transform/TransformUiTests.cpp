@@ -61,6 +61,17 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         action(window,"freeTransform");drag(project,{32,24},{37,27});require(project.history.undoCount()==0&&!project.history.canUndo(),"Persistent transform committed on mouse-up");drag(project,{37,27},{40,31});require(originalLayer(project).transform.x==8&&originalLayer(project).transform.y==7,"Second gesture drifted from its draft");action(window,"applyTransform");require(project.history.undoCount()==1&&originalLayer(project).raster==source,"Transform did not close one immutable history entry");
         const auto before=project.document;action(window,"freeTransform");drag(project,{40,31},{45,36});action(window,"cancelTransform");require(project.document==before&&project.history.undoCount()==1,"Cancel failed to restore exact pending snapshot");
     });
+    test("ui_arrange_commits_pending_transform",[]{
+        MainWindow window(true);auto d=example();d.layers[0].transform={10,10,20,20};auto& project=window.addProject(d);setup(window,project);
+        action(window,"freeTransform");drag(project,{20,20},{25,20});require(control<QAction>(window,"arrangeLayer0")->isEnabled(),"align disabled in pending transform");
+        action(window,"arrangeLayer0");require(originalLayer(project).transform.x==0&&project.history.undoCount()==2,"pending transform and align history");
+        auto alignUndo=project.history.undo();require(alignUndo&&alignUndo->document->layers[0].transform.x==15,"undo alignment did not retain transform");
+        auto moveUndo=project.history.undo();require(moveUndo&&moveUndo->document->layers[0].transform.x==10,"undo transform did not restore original");
+    });
+    test("ui_arrange_blocks_floating_selection",[]{
+        MainWindow window(true);auto d=example();d.selection=Selection{selection()};auto& project=window.addProject(d);setup(window,project);action(window,"freeTransform");
+        const auto before=project.document;require(!control<QAction>(window,"arrangeLayer0")->isEnabled(),"align enabled during floating selection");action(window,"arrangeLayer0");require(project.document==before&&project.history.undoCount()==0,"disabled align changed floating preview");action(window,"cancelTransform");
+    });
     test("ui_floating_selection_live_stack_apply_without_ghost",[]{
         MainWindow window(true);auto document=example();document.selection=Selection{selection()};auto& project=window.addProject(document);setup(window,project);const auto sourceId=project.active;const auto before=project.document;
         action(window,"freeTransform");require(project.document->layers.size()==2&&project.active!=sourceId,"Selection was not lifted onto a floating layer");require(originalLayer(project).raster->pixel(15,15).a==0,"Selected source pixels were not cleared");
