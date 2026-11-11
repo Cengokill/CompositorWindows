@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 #include "ui/LayerPanel.h"
+#include "persistence/ProjectStore.h"
+#include <QTemporaryDir>
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
@@ -8,6 +10,8 @@
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
+#include <QToolButton>
+#include <QGridLayout>
 #include <iostream>
 
 using namespace compositor;
@@ -35,5 +39,19 @@ int main(int argc,char**argv){QApplication app(argc,argv);int passed=0,failed=0;
     test("qt_collapsed_groups_per_project_no_history",[]{MainWindow w(true);auto d=example();d.layers[0].parentId="folder";auto&p=w.addProject(d);show(w);select(w,p,{"a"});item(w,"folder")->setExpanded(false);require(p.collapsedGroups.contains("folder")&&p.active=="folder"&&p.selected==std::vector<std::string>{"folder"},"Collapse did not select containing group");require(p.history.undoCount()==0,"View collapse entered history");auto&p2=w.addProject(example());require(p2.collapsedGroups.empty(),"Collapsed groups leaked to another project");w.findChild<QTabWidget*>()->setCurrentIndex(0);require(!item(w,"folder")->isExpanded()&&p.collapsedGroups.contains("folder"),"Project switch lost collapsed group state");});
     test("qt_mask_link_enable_delete_and_cancel_dependency_dialog",[]{MainWindow w(true);auto d=example();d.layers[0].mask=Mask{gray(1,1,255)};d.layers[1].maskSourceId="a";auto&p=w.addProject(d);show(w);select(w,p,{"a"});named(w,"maskEditMask")->trigger();named(w,"maskToggleLink")->trigger();require(!layer(p,"a").mask->linked&&p.maskSelected,"Unlink changed mask target");named(w,"maskToggleEnabled")->trigger();require(!layer(p,"a").mask->enabled,"Disable did not apply");const auto before=p.document;const auto count=p.history.undoCount();QTimer::singleShot(0,[]{for(auto* widget:QApplication::topLevelWidgets())if(auto* box=qobject_cast<QMessageBox*>(widget))box->reject();});textAction(w,"Delete Layer")->trigger();require(p.document==before&&p.history.undoCount()==count&&p.maskSelected,"Cancelled dependency deletion changed mask or history");w.findChild<QPushButton*>("layerDeleteButton")->click();require(!layer(p,"a").mask&&p.document->layers.size()==4&&!p.maskSelected,"Delete footer did not remove only targeted mask");});
     test("qt_drop_above_self_copy_and_move_noop",[]{MainWindow w(true);auto&p=w.addProject(example());show(w);select(w,p,{"a"});std::unique_ptr<QMimeData> mime(controller(w)->dragMime());const auto before=p.document;require(!drop(w,mime.get(),point(w,"a"))&&p.document==before&&p.history.undoCount()==0,"Moving above self must be an unchanged operation");require(drop(w,mime.get(),point(w,"a"),Qt::AltModifier),"Alt-copy above its own source must remain legal");require(p.document->layers.size()==5&&p.history.undoCount()==1&&p.active!="a","Self-copy did not select one new layer");});
+    test("qt_arrange_menu_history_and_selection",[]{MainWindow w(true);auto d=example();d.layers[0].transform={2,3,8,8};d.layers[1].transform={12,10,8,8};auto& p=w.addProject(d);show(w);
+        auto* button=w.findChild<QToolButton*>("arrangeLayersButton");require(button&&button->text()=="Align"&&button->menu(),"align popover missing");const int positions[]{0,1,2,5,6,7,3,8,4,9};for(int i=0;i<10;++i){auto* control=w.findChild<QToolButton*>(QString("arrangeControl%1").arg(i));require(control&&!control->icon().isNull()&&control->toolButtonStyle()==Qt::ToolButtonIconOnly&&!control->toolTip().isEmpty()&&!control->accessibleName().isEmpty(),"arrange control accessibility or icon missing");auto* grid=qobject_cast<QGridLayout*>(control->parentWidget()->layout());require(grid&&grid->itemAtPosition(positions[i]/5,positions[i]%5)->widget()==control,"arrange control position");}
+        QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::NoModifier,point(w,"a"));require(named(w,"arrangeLayer1")->isEnabled()&&!named(w,"arrangeLayer6")->isEnabled(),"single layer arrange state");QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::ControlModifier,point(w,"b"));QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::ControlModifier,point(w,"c"));require(named(w,"arrangeLayer6")->isEnabled(),"three layer distribution unavailable");
+        QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::NoModifier,point(w,"a"));QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::ControlModifier,point(w,"b"));
+        auto* align=named(w,"arrangeLayer0");require(align->isEnabled(),"align unavailable");require(!named(w,"arrangeLayer6")->isEnabled(),"distribute enabled for two");align->trigger();
+        require(layer(p,"a").transform.x==2&&layer(p,"b").transform.x==2,"align result");require(p.history.undoCount()==1&&p.selected.size()==2,"align history or selection");
+        textAction(w,"Undo Align Left Edges")->trigger();require(layer(p,"b").transform.x==12,"undo alignment");textAction(w,"Redo Align Left Edges")->trigger();require(layer(p,"b").transform.x==2,"redo alignment");
+        align->trigger();require(p.history.undoCount()==1,"no-op added history");});
+    test("qt_arrange_save_reopen",[]{MainWindow w(true);auto d=example();for(auto& item:d.layers)item.id=newId();d.layers[0].transform={2,3,8,8};d.layers[1].transform={12,10,8,8};auto a=d.layers[0].id,b=d.layers[1].id;auto& p=w.addProject(d);show(w);
+        QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::NoModifier,point(w,a));QTest::mouseClick(tree(w)->viewport(),Qt::LeftButton,Qt::ControlModifier,point(w,b));named(w,"arrangeLayer0")->trigger();
+        QTemporaryDir dir;require(dir.isValid(),"temporary project directory");ProjectStore store(makeWicProjectCodec());auto path=std::filesystem::path(dir.path().toStdWString())/L"arranged.comp";store.save(path,*p.document,p.active);auto loaded=store.load(path);
+        require(loaded.document.layers[0].transform.x==2&&loaded.document.layers[1].transform.x==2,"reopened alignment lost");});
+    test("qt_arrange_folder_mask_undo",[]{MainWindow w(true);auto d=example();d.layers[0].parentId="folder";d.layers[0].transform={10,0,8,8};d.layers[3].transform={10,0,8,8};d.layers[3].mask=Mask{gray(2,2,128)};auto& p=w.addProject(d);show(w);select(w,p,{"folder"});named(w,"arrangeLayer0")->trigger();
+        require(layer(p,"a").transform.x==0&&layer(p,"folder").transform.x==0,"folder mask did not follow");textAction(w,"Undo Align Left Edges")->trigger();require(layer(p,"a").transform.x==10&&layer(p,"folder").transform.x==10,"undo did not restore folder mask");textAction(w,"Redo Align Left Edges")->trigger();require(layer(p,"a").transform.x==0&&layer(p,"folder").transform.x==0,"redo did not restore folder mask");});
     std::cout<<"{\"suite\":\"layer_mask_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"visual_acceptance\":false,\"mac_differential\":false}\n";return failed?1:0;
 }

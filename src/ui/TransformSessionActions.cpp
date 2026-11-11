@@ -3,6 +3,7 @@
 #include "graphics/MaskSampling.h"
 #include "editing/Shapes.h"
 #include <QAction>
+#include <QToolButton>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <algorithm>
@@ -206,8 +207,8 @@ void MainWindow::applyMovePreview(ui::MovePreviewJob::Result result){
     preview.plateX=result.plateX;preview.plateY=result.plateY;preview.anchorX=result.anchorX;preview.anchorY=result.anchorY;
     project->canvas->setMovePreview(std::move(preview));
 }
-void MainWindow::applyTransformSession() {
-    if(!transformSession_||!transformOwner_)return;
+bool MainWindow::applyTransformSession() {
+    if(!transformSession_||!transformOwner_)return false;
     previewDraft_=transformSession_->draft;
     if(!transformSession_->ids.empty())previewLayerId_=transformSession_->ids.front();
     auto* owner=transformOwner_;
@@ -224,7 +225,8 @@ void MainWindow::applyTransformSession() {
         transformSession_.reset();transformOwner_=nullptr;transformDrag_.reset();transformBefore_.reset();transformIds_.clear();
         if(owner->canvas&&owner->canvas->viewportBounds().valid){if(!retain)owner->canvas->setCompositeHeld(true);scheduleViewportComposite(*owner);refresh(false);}
         else{if(owner->canvas){owner->canvas->setCompositeHeld(false);owner->canvas->clearMovePreview();}refresh();}
-    } catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
+    } catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());return false;}
+    return true;
 }
 
 void MainWindow::cancelTransformSession() {
@@ -243,6 +245,9 @@ void MainWindow::cancelTransformSession() {
 }
 
 void MainWindow::updateTransformActions() {
+    const bool align=canArrangeLayers(false),distribute=canArrangeLayers(true);
+    for(int i=0;i<10;++i)if(auto* action=findChild<QAction*>(QString("arrangeLayer%1").arg(i)))action->setEnabled(i<6?align:distribute);
+    if(auto* button=findChild<QToolButton*>("arrangeLayersButton"))button->setEnabled(align);
     for(const auto* name:{"applyTransform","cancelTransform"})if(auto* item=findChild<QAction*>(name))item->setEnabled(bool(transformSession_));
     const auto draft=selectedTransform();auto* project=current();auto* layer=active();
     const bool editable=ui::commandEnabled(ui::CommandGate::TransformDraft,commandState())&&project&&project->document&&!project->importing&&!project->projectBusy&&draft&&layer&&

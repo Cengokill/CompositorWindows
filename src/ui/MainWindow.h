@@ -14,6 +14,7 @@
 #include "editing/DocumentGeometry.h"
 #include "retouch/RetouchSession.h"
 #include "editing_transform/TransformSessionState.h"
+#include "editing_transform/LayerArrange.h"
 #include <QToolBar>
 #include <QCheckBox>
 #include "PaletteDialog.h"
@@ -438,7 +439,7 @@ private:
     // Snaps a gesture point and shows guide feedback. Ctrl suppresses snapping, matching transform moves.
     Point snapGesturePoint(Point point,Qt::KeyboardModifiers modifiers,std::span<const std::string> excluded={});
     bool startTransformSession(bool persistent,bool distort=false);
-    void applyTransformSession();
+    bool applyTransformSession();
     void cancelTransformSession();
     void publishTransformSession(bool finish);
     void invalidateViewportComposite();
@@ -447,6 +448,8 @@ private:
     void applyViewportComposite(ui::ViewportCompositeJob::Result result);
     void applyMovePreview(ui::MovePreviewJob::Result result);
     void updateTransformActions();
+    bool canArrangeLayers(bool distribute);
+    void arrangeLayers(editing_transform::Arrange);
     std::optional<Transform> selectedTransform();
     bool beginTransform(Point,Qt::KeyboardModifiers);
     void updateTransform(Point,Qt::KeyboardModifiers,bool finish);
