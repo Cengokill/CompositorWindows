@@ -5,10 +5,12 @@
 #include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QInputDialog>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTimer>
+#include <exception>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -45,8 +47,16 @@ struct Fixture {
   if(failure)std::rethrow_exception(failure);require(visited,"actual owned panel opened");require(finished,"actual panel finished before assertions");
  }
 };
+void chooseCustomCropRatio(Fixture& f,const QString& value){
+ auto* ratio=field<QComboBox>(f.window,"cropRatioChoice");std::exception_ptr failure;
+ QTimer::singleShot(0,&f.window,[&]{auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());try{
+  require(dialog,"custom crop ratio dialog opened");auto* input=field<QLineEdit>(*dialog,"customCropRatioInput");input->setText(value);
+  auto* box=dialog->findChild<QDialogButtonBox*>();require(box,"custom crop ratio buttons available");auto* apply=box->button(QDialogButtonBox::Ok);require(apply&&apply->isEnabled(),"valid custom crop ratio can apply");apply->click();
+ }catch(...){failure=std::current_exception();if(dialog)dialog->reject();}});
+ ratio->setCurrentText("Custom…");if(failure)std::rethrow_exception(failure);
+}
 void lasso_return(){Fixture f;f.trigger("tool.polygon");f.trigger("tool.move");f.trigger("tool.lasso");auto* rail=f.window.findChild<QToolBar*>("tools");bool polygon=false;for(auto* a:rail->findChildren<QAction*>())if(a->property("editorTool").toInt()==int(ProjectTool::Polygon)&&a->isChecked())polygon=true;std::cout<<"returned_polygon="<<polygon<<'\n';require(polygon,"EditorSession.lassoKind survives leaving Lasso; pressing L selects remembered Polygonal");}
-void crop_ratio(){Fixture f;const auto before=f.a->document;f.trigger("tool.crop");auto* ratio=field<QComboBox>(f.window,"cropRatioChoice");require(ratio->count()==5&&ratio->currentText()=="Free","Crop source five ratios, new entry Free");ratio->setCurrentText("4:3");f.trigger("tool.crop");require(ratio->currentText()=="4:3","same Crop with draft retains ratio");f.trigger("tool.move");f.select(f.b);require(ratio->currentText()=="Free","other project crop default");f.select(f.a);require(ratio->currentText()=="4:3","tab restore retains remembered field before Crop entry");f.trigger("tool.crop");require(ratio->currentText()=="Free","fresh Crop draft resets Free");require(f.a->document==before&&f.a->history.undoCount()==0,"ratio choices do not mutate document or history");}
+void crop_ratio(){Fixture f;const auto before=f.a->document;f.trigger("tool.crop");auto* ratio=field<QComboBox>(f.window,"cropRatioChoice");require(ratio->count()==13&&ratio->currentText()=="Free"&&ratio->itemText(1)=="Canvas","Crop presets and grouped choices");ratio->setCurrentText("4:3");f.trigger("tool.crop");require(ratio->currentText()=="4:3","same Crop with draft retains ratio");f.trigger("tool.move");f.select(f.b);require(ratio->currentText()=="Free","other project crop default");f.select(f.a);require(ratio->currentText()=="4:3","tab restore retains remembered field before Crop entry");f.trigger("tool.crop");require(ratio->currentText()=="Free","fresh Crop draft resets Free");chooseCustomCropRatio(f," 4 : 5 ");require(ratio->currentText()=="4:5"&&ratio->count()==14,"custom crop ratio displayed after validation");f.trigger("tool.move");f.select(f.b);require(ratio->currentText()=="Free","other project crop choice remains independent");f.select(f.a);require(ratio->currentText()=="4:5"&&ratio->count()==14,"custom crop ratio restores with its project");f.trigger("tool.crop");require(ratio->currentText()=="Free"&&ratio->count()==13,"new crop draft restores Free and removes inactive custom choice");require(f.a->document==before&&f.a->history.undoCount()==0,"ratio choices do not mutate document or history");}
 void amounts_independent(){Fixture f;f.trigger("selection.all");auto amount=[&](const char* id,double expected,std::optional<double> next){bool visited=false;QTimer::singleShot(0,&f.window,[&]{auto* dialog=f.window.findChild<QInputDialog*>();if(!dialog)return;visited=true;std::cout<<id<<" initial="<<dialog->doubleValue()<<'\n';const bool matches=dialog->doubleValue()==expected;dialog->setProperty("expectedInitial",matches);if(next&&matches){dialog->setDoubleValue(*next);dialog->accept();}else dialog->reject();});f.trigger(id);require(visited,"amount dialog visited");};
  amount("selection.expand",1,4);double actual=-1;f.modal("selection.expand",[&](QDialog& d){actual=static_cast<QInputDialog&>(d).doubleValue();});std::cout<<"remembered_expand="<<actual<<'\n';require(actual==4,"accepted Expand amount is remembered");f.modal("selection.contract",[&](QDialog& d){require(static_cast<QInputDialog&>(d).doubleValue()==1,"Contract independent default1");});
 }

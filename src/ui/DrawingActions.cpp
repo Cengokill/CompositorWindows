@@ -1,16 +1,50 @@
 #include "MainWindow.h"
 #include "PropertyControls.h"
+#include <QComboBox>
+#include <QDialog>
 #include <QMenuBar>
 #include <QToolBar>
 #include <QFormLayout>
 #include <QDialogButtonBox>
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QLineEdit>
 #include <QSignalBlocker>
 #include <QLabel>
 #include <QPushButton>
+#include <algorithm>
 #include <cmath>
 #include <numbers>
+
+namespace {
+constexpr double maxCropSide=30000.;
+std::optional<double> parseCropRatio(const QString& value,QString* normalized=nullptr){
+    const auto parts=value.split(QLatin1Char(':'),Qt::KeepEmptyParts);if(parts.size()!=2)return {};
+    auto widthText=parts[0].trimmed().replace(QLatin1Char(','),QLatin1Char('.'));
+    auto heightText=parts[1].trimmed().replace(QLatin1Char(','),QLatin1Char('.'));
+    bool widthOk=false,heightOk=false;const double width=widthText.toDouble(&widthOk),height=heightText.toDouble(&heightOk);
+    if(!widthOk||!heightOk||!std::isfinite(width)||!std::isfinite(height)||width<=0||height<=0)return {};
+    const double ratio=width/height;if(!std::isfinite(ratio)||ratio<1./maxCropSide||ratio>maxCropSide)return {};
+    if(normalized)*normalized=widthText+QLatin1Char(':')+heightText;
+    return ratio;
+}
+bool customCropRatioChoice(const QString& value){
+    static const QStringList presets{"Free","Canvas","1:1","4:3","3:4","16:9","9:16","2.39:1"};
+    return !presets.contains(value)&&parseCropRatio(value).has_value();
+}
+std::optional<QString> customCropRatioDialog(QWidget* parent,const QString& initial){
+    QDialog dialog(parent);dialog.setWindowTitle("Custom ratio");QFormLayout form(&dialog);
+    QLineEdit input(initial);input.setObjectName("customCropRatioInput");input.setAccessibleName("Width:height");input.setPlaceholderText("4:5");form.addRow("Width:height",&input);
+    QLabel example("Width:height, such as 4:5 or 3:2");example.setWordWrap(true);form.addRow(&example);
+    QLabel invalid("Enter a positive ratio within the document size limits.");invalid.setObjectName("customCropRatioValidation");invalid.setWordWrap(true);form.addRow(&invalid);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);buttons.button(QDialogButtonBox::Ok)->setText("Apply");form.addRow(&buttons);
+    auto update=[&]{QString normalized;const bool valid=parseCropRatio(input.text(),&normalized).has_value();buttons.button(QDialogButtonBox::Ok)->setEnabled(valid);invalid.setVisible(!valid);};
+    QObject::connect(&input,&QLineEdit::textChanged,&dialog,update);
+    QObject::connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);QObject::connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    update();input.selectAll();if(dialog.exec()!=QDialog::Accepted)return {};
+    QString normalized;if(!parseCropRatio(input.text(),&normalized))return {};return normalized;
+}
+}
 
 namespace compositor {
 void MainWindow::documentSizeDialog(bool imageSize){
@@ -75,8 +109,18 @@ void MainWindow::setupDrawingActions(){
             *active()=editing::restyleShape(*active(),style);
         });
     });
-    auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");cropRatioControl->addItems({"Free","Original","1:1","4:3","3:4","16:9","9:16"});bar->addWidget(cropRatioControl);
-    connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){if(refreshing_)return;cropRatioChoice_=value;changeCropRatio();});
+    auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");
+    cropRatioControl->addItems({"Free","Canvas"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItem("1:1");cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"4:3","16:9","2.39:1"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"3:4","9:16"});cropRatioControl->insertSeparator(cropRatioControl->count());
+    const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);bar->addWidget(cropRatioControl);
+    connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){
+        if(refreshing_)return;
+        if(value=="Custom…"){
+            const auto initial=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString("4:5");
+            if(auto custom=customCropRatioDialog(this,initial)){cropRatioChoice_=*custom;changeCropRatio();}else refreshCropControls();
+            return;
+        }
+        cropRatioChoice_=value;changeCropRatio();
+    });
     auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);bar->addAction(cropCancel);bar->addAction(cropApply);
     auto*background=bar->addAction("Background Color");bindCommand(background,"Tools","Background",[this]{openPalette(true);});commands_->releaseShortcut(background);
 }
@@ -210,18 +254,24 @@ void MainWindow::finishShapeStyleEdit(){
     refresh(false,false);// Undo is disabled while the transaction is open; refresh recomputes its state.
 }
 std::optional<double> MainWindow::cropRatio() {
-    if(cropRatioChoice_=="Original"){auto* p=current();if(p&&p->document)return double(p->document->width)/p->document->height;}
-    else if(cropRatioChoice_=="1:1")return 1.;else if(cropRatioChoice_=="4:3")return 4./3.;else if(cropRatioChoice_=="3:4")return 3./4.;else if(cropRatioChoice_=="16:9")return 16./9.;else if(cropRatioChoice_=="9:16")return 9./16.;return {};
+    if(cropRatioChoice_=="Canvas"){auto* p=current();if(p&&p->document)return double(p->document->width)/p->document->height;}
+    else if(cropRatioChoice_=="1:1")return 1.;else if(cropRatioChoice_=="4:3")return 4./3.;else if(cropRatioChoice_=="3:4")return 3./4.;else if(cropRatioChoice_=="16:9")return 16./9.;else if(cropRatioChoice_=="9:16")return 9./16.;else if(cropRatioChoice_=="2.39:1")return 2.39;
+    return parseCropRatio(cropRatioChoice_);
 }
 void MainWindow::changeCropRatio(){
     auto* p=current();if(tool_!=Tool::Crop||!p||!p->document)return;auto ratio=cropRatio();if(!ratio)return;
-    const auto rect=cropDraft_.value_or(editing::Rect{0,0,double(p->document->width),double(p->document->height)});const double height=rect.width / *ratio;
-    auto next=editing::snappedCrop({rect.x,rect.y+rect.height/2-height/2,rect.width,height});if(editing::validCrop(next))cropDraft_=next;refresh(false,false);
+    const auto rect=cropDraft_.value_or(editing::Rect{0,0,double(p->document->width),double(p->document->height)});const double height=std::clamp(rect.width / *ratio,1.,maxCropSide),width=height * *ratio;
+    auto next=editing::snappedCrop({rect.x,rect.y+rect.height/2-height/2,width,height});if(editing::validCrop(next))cropDraft_=next;refresh(false,false);
 }
 void MainWindow::cancelCrop(){cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refresh(false,false);}
 void MainWindow::refreshCropControls(){
     auto* project=current();const bool visible=tool_==Tool::Crop;const bool enabled=project&&project->document&&!project->projectBusy&&!project->importing;
-    if(auto* ratio=findChild<QComboBox*>("cropRatioChoice")){QSignalBlocker block(ratio);ratio->setCurrentText(cropRatioChoice_);ratio->setVisible(visible);ratio->setEnabled(enabled);}
+    if(auto* ratio=findChild<QComboBox*>("cropRatioChoice")){
+        const int marker=ratio->findData("crop-custom-choice",Qt::UserRole);const auto custom=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString{};
+        if(marker>=0&&ratio->itemText(marker)!=custom)ratio->removeItem(marker);
+        if(!custom.isEmpty()&&ratio->findData("crop-custom-choice",Qt::UserRole)<0){const int action=ratio->findData("crop-custom-action",Qt::UserRole);const int insertAt=action>0&&ratio->itemText(action-1).isEmpty()?action-1:action;ratio->insertItem(insertAt,custom);ratio->setItemData(insertAt,"crop-custom-choice",Qt::UserRole);}
+        QSignalBlocker block(ratio);ratio->setCurrentText(cropRatioChoice_);ratio->setVisible(visible);ratio->setEnabled(enabled);
+    }
     if(auto* label=findChild<QLabel*>("cropDimensions")){label->setVisible(visible&&cropDraft_.has_value());label->setText(cropDraft_?QString("%1 × %2 px").arg(int(cropDraft_->width)).arg(int(cropDraft_->height)):QString{});}
     for(auto* item:findChildren<QAction*>()){const auto id=item->property("commandId").toString();if(id=="crop.apply"||id=="crop.cancel")item->setVisible(visible);}
     if(canvas()){std::optional<editing::Rect> rect;if(visible&&project&&project->document)rect=cropDraft_.value_or(editing::Rect{0,0,double(project->document->width),double(project->document->height)});canvas()->setCropOverlay(rect);}

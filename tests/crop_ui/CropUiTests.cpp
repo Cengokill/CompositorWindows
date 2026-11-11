@@ -2,17 +2,32 @@
 // EditorCanvas.beginCropDrag/dragCrop at pinned a19db901.
 #include "ui/MainWindow.h"
 #include <QApplication>
+#include <QDialogButtonBox>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTimer>
+#include <exception>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <stdexcept>
 using namespace compositor;
 #define REQUIRE(...) do{if(!(__VA_ARGS__))throw std::runtime_error(std::string("line ")+std::to_string(__LINE__)+": " #__VA_ARGS__);}while(false)
-Document fixture(){Document d;d.id="crop-witness";d.width=100;d.height=80;Layer l;l.id="base";l.name="Base";l.transform={0,0,100,80};l.raster=Raster::filled(100,80,{70,120,190,255});d.layers={l};return d;}
+Document fixture(int width=100,int height=80){Document d;d.id="crop-witness";d.width=width;d.height=height;Layer l;l.id="base";l.name="Base";l.transform={0,0,double(width),double(height)};l.raster=Raster::filled(width,height,{70,120,190,255});d.layers={l};return d;}
 QAction* command(MainWindow&w,const QString&id){for(auto*a:w.findChildren<QAction*>())if(a->property("commandId").toString()==id)return a;return nullptr;}
 void cropTool(MainWindow&w,EditorProject&p){auto*a=command(w,"tool.crop");REQUIRE(a&&a->isEnabled());a->trigger();p.canvas->zoomAt(p.canvas->devicePixelRatioF(),p.canvas->rect().center());}
 void drag(EditorProject&p,Point start,Point end,Qt::KeyboardModifiers flags={}){p.canvas->pointerDown({start.x,start.y},flags);p.canvas->pointerMove({end.x,end.y},flags);p.canvas->pointerUp({end.x,end.y},flags);}
 void apply(MainWindow&w){auto*a=command(w,"crop.apply");REQUIRE(a&&a->isEnabled());a->trigger();}
+void customDialog(MainWindow&w,const std::function<void(QDialog&)>& interact){
+    auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio);
+    std::exception_ptr failure;
+    QTimer::singleShot(0,&w,[&]{auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());try{REQUIRE(dialog);interact(*dialog);}catch(...){failure=std::current_exception();if(dialog)dialog->reject();}});
+    ratio->setCurrentText("Custom…");if(failure)std::rethrow_exception(failure);
+}
+QLineEdit* customInput(QDialog& dialog){auto* input=dialog.findChild<QLineEdit*>("customCropRatioInput");REQUIRE(input);return input;}
+QPushButton* customButton(QDialog& dialog,QDialogButtonBox::StandardButton button){auto* box=dialog.findChild<QDialogButtonBox*>();REQUIRE(box);auto* result=box->button(button);REQUIRE(result);return result;}
 void crop_fresh_entry_fullframe_free(){
     MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);
     auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");auto* dimensions=w.findChild<QLabel*>("cropDimensions");
@@ -33,4 +48,49 @@ void crop_eight_dip_snap_distance(){MainWindow w(true);auto&p=w.addProject(fixtu
 void crop_invalid_drag_keeps_last_valid(){MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);p.canvas->pointerDown({20,20},Qt::ControlModifier);p.canvas->pointerMove({50,40},Qt::ControlModifier);p.canvas->pointerMove({40000,40},Qt::ControlModifier);p.canvas->pointerUp({40000,40},Qt::ControlModifier);apply(w);REQUIRE(p.document->width==30&&p.document->height==20);}
 void crop_entire_edge_hit(){MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);drag(p,{25,0},{25,12},Qt::ControlModifier);apply(w);REQUIRE(p.document->width==100&&p.document->height==68);REQUIRE(p.document->layers.front().transform==Transform{0,-12,100,80});}
 void crop_apply_once(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);REQUIRE(p.document==d&&p.history.undoCount()==0);apply(w);REQUIRE(p.document->width==40&&p.document->height==30);REQUIRE(p.document->layers.front().raster==d.layers.front().raster);REQUIRE(p.history.undoCount()==1&&p.history.undoName()=="Crop");REQUIRE(!command(w,"crop.apply")->isEnabled());auto snapshot=p.history.undo();REQUIRE(snapshot&&snapshot->document==d);}
-int main(int argc,char**argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> tests{{"crop_fresh_entry_fullframe_free",crop_fresh_entry_fullframe_free},{"crop_cancel_retains_document",crop_cancel_retains_document},{"crop_pending_dimensions",crop_pending_dimensions},{"crop_square_corner_hit",crop_square_corner_hit},{"crop_control_disables_snap",crop_control_disables_snap},{"crop_eight_dip_snap_distance",crop_eight_dip_snap_distance},{"crop_invalid_drag_keeps_last_valid",crop_invalid_drag_keeps_last_valid},{"crop_entire_edge_hit",crop_entire_edge_hit},{"crop_apply_once",crop_apply_once}};if(argc>1&&!tests.contains(argv[1]))return 2;int passed=0,failed=0;for(const auto&[name,test]:tests){if(argc>1&&name!=argv[1])continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+void crop_ratio_menu_and_presets(){
+    MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="Free");
+    REQUIRE(ratio->count()==13&&ratio->itemText(0)=="Free"&&ratio->itemText(1)=="Canvas"&&ratio->itemText(3)=="1:1");
+    REQUIRE(ratio->itemText(5)=="4:3"&&ratio->itemText(6)=="16:9"&&ratio->itemText(7)=="2.39:1"&&ratio->itemText(9)=="3:4"&&ratio->itemText(10)=="9:16"&&ratio->itemText(12)=="Custom…");
+    REQUIRE(ratio->itemText(2).isEmpty()&&ratio->itemText(4).isEmpty()&&ratio->itemText(8).isEmpty()&&ratio->itemText(11).isEmpty());
+    ratio->setCurrentText("2.39:1");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,19,100,42});
+    ratio->setCurrentText("Canvas");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
+    ratio->setCurrentText("Free");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
+}
+void crop_custom_ratio_validates_and_cancels(){
+    MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{10,10},{60,40},Qt::ControlModifier);const auto original=p.canvas->cropOverlay();
+    customDialog(w,[&](QDialog& dialog){auto* input=customInput(dialog);auto* apply=customButton(dialog,QDialogButtonBox::Ok);
+        for(const auto* invalid:{"","5",":5","5:","5:4:1","Free","0:5","-5:4","5:-4","nan:1","inf:1","1e309:1","30001:1","1:30001"}){input->setText(invalid);QApplication::processEvents();REQUIRE(!apply->isEnabled()&&p.canvas->cropOverlay()==original&&p.document==d);}
+        for(const auto* valid:{"4:5","2,5:1","1:30000","30000:1"}){input->setText(valid);QApplication::processEvents();REQUIRE(apply->isEnabled());}
+        input->setText("2,5:1");QApplication::processEvents();apply->click();
+    });
+    auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="2.5:1");REQUIRE(p.canvas->cropOverlay()==editing::Rect{10,15,50,20});
+    REQUIRE(p.document==d&&p.history.undoCount()==0);command(w,"crop.cancel")->trigger();REQUIRE(p.document==d&&p.history.undoCount()==0&&p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
+    cropTool(w,p);drag(p,{10,10},{60,40},Qt::ControlModifier);const auto cancelDraft=p.canvas->cropOverlay();
+    customDialog(w,[&](QDialog& dialog){customInput(dialog)->setText("4:5");customButton(dialog,QDialogButtonBox::Cancel)->click();});
+    REQUIRE(ratio->currentText()=="Free"&&p.canvas->cropOverlay()==cancelDraft&&p.document==d&&p.history.undoCount()==0);
+}
+void crop_custom_ratio_apply_undo_redo(){
+    MainWindow w(true);auto d=fixture(40,20);auto&p=w.addProject(d);cropTool(w,p);
+    customDialog(w,[&](QDialog& dialog){auto* input=customInput(dialog);input->setText("4:5");customButton(dialog,QDialogButtonBox::Ok)->click();});
+    auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="4:5");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,-15,40,50});REQUIRE(p.document==d&&p.history.undoCount()==0);
+    REQUIRE(ratio->count()==14&&ratio->itemText(11)=="4:5");apply(w);REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
+    REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,40,50});auto* undo=command(w,"edit.undo");auto* redo=command(w,"edit.redo");REQUIRE(undo&&redo);
+    undo->trigger();REQUIRE(p.document==d&&redo->isEnabled()&&p.canvas->cropOverlay()==editing::Rect{0,0,40,20});
+    redo->trigger();REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&undo->isEnabled()&&p.canvas->cropOverlay()==editing::Rect{0,0,40,50});
+}
+void crop_custom_ratio_fits_limits(){
+    MainWindow w(true);auto d=fixture(40,20);auto&p=w.addProject(d);cropTool(w,p);
+    customDialog(w,[&](QDialog& dialog){customInput(dialog)->setText("1:30000");customButton(dialog,QDialogButtonBox::Ok)->click();});
+    REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,-14990,1,30000});
+    customDialog(w,[&](QDialog& dialog){customInput(dialog)->setText("30000:1");customButton(dialog,QDialogButtonBox::Ok)->click();});
+    REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,10,30000,1});REQUIRE(p.document==d&&p.history.undoCount()==0);
+}
+void crop_enter_and_return_apply(){
+    for(const auto key:{Qt::Key_Enter,Qt::Key_Return}){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);
+        QKeyEvent event(QEvent::KeyPress,key,Qt::NoModifier);QApplication::sendEvent(&w,&event);
+        REQUIRE(p.document->width==40&&p.document->height==30&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
+        REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,40,30});
+    }
+}
+int main(int argc,char**argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> tests{{"crop_fresh_entry_fullframe_free",crop_fresh_entry_fullframe_free},{"crop_cancel_retains_document",crop_cancel_retains_document},{"crop_pending_dimensions",crop_pending_dimensions},{"crop_square_corner_hit",crop_square_corner_hit},{"crop_control_disables_snap",crop_control_disables_snap},{"crop_eight_dip_snap_distance",crop_eight_dip_snap_distance},{"crop_invalid_drag_keeps_last_valid",crop_invalid_drag_keeps_last_valid},{"crop_entire_edge_hit",crop_entire_edge_hit},{"crop_apply_once",crop_apply_once},{"crop_ratio_menu_and_presets",crop_ratio_menu_and_presets},{"crop_custom_ratio_validates_and_cancels",crop_custom_ratio_validates_and_cancels},{"crop_custom_ratio_apply_undo_redo",crop_custom_ratio_apply_undo_redo},{"crop_custom_ratio_fits_limits",crop_custom_ratio_fits_limits},{"crop_enter_and_return_apply",crop_enter_and_return_apply}};if(argc>1&&!tests.contains(argv[1]))return 2;int passed=0,failed=0;for(const auto&[name,test]:tests){if(argc>1&&name!=argv[1])continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
