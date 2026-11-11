@@ -155,8 +155,11 @@ void MainWindow::publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapsh
 CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,double y,double width,double height,double requestedUnits){
     if(!project.document)return {};
     auto render=[&](const Document& document,std::shared_ptr<const LayerRenderPreview> layerPreview={}){
-        if(tool_==Tool::Crop&&current()==&project&&cropDraft_)
-            return ui::renderCropViewport(document,*cropDraft_,x,y,width,height,requestedUnits,std::move(layerPreview));
+        if(tool_==Tool::Crop&&current()==&project&&cropDraft_){
+            auto* cache=&document==&*project.document?&project.cropViewportCache:nullptr;
+            return ui::renderCropViewport(document,*cropDraft_,x,y,width,height,requestedUnits,std::move(layerPreview),cache);
+        }
+        project.cropViewportCache={};
         return project.composite.renderViewport(document,x,y,width,height,requestedUnits,64,256,std::move(layerPreview));
     };
     if(auto preview=editPanelPreview(project))return render(*preview);
@@ -214,7 +217,8 @@ void MainWindow::keyPressEvent(QKeyEvent*e){
         const int digit=e->key()-Qt::Key_0;QElapsedTimer clock;clock.start();const auto now=clock.msecsSinceReference();int percent=digit?digit*10:100;if(opacityDigit_&&now-opacityDigit_->second<600){percent=std::max(1,opacityDigit_->first*10+digit);opacityDigit_.reset();}else opacityDigit_=std::pair{digit,now};double value=percent/100.;
         if(tool_==Tool::CloneStamp)cloneSettings_.opacity=value;else if(tool_==Tool::Blur)blurSettings_.opacity=value;else if(brushTool)brushSettings_.opacity=value;else if(tool_==Tool::Gradient){gradientSettings_.opacity=value;refreshGradient();}else{auto selected=layerSelection().ids;finishOpacityEdit();edit("Layer Opacity",[&](Document&d){for(auto&layer:d.layers)if(!layer.group&&std::find(selected.begin(),selected.end(),layer.id)!=selected.end())layer.opacity=value;});}refresh(false,false);return;
     }
-    if(e->modifiers()==Qt::NoModifier){switch(e->key()){
+    const auto plainModifiers=(e->key()==Qt::Key_Return||e->key()==Qt::Key_Enter)?e->modifiers()&~Qt::KeypadModifier:e->modifiers();
+    if(plainModifiers==Qt::NoModifier){switch(e->key()){
         case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;
         case Qt::Key_Return:case Qt::Key_Enter:if(drawingOriginal_)applyGradient();else if(transformSession_)applyTransformSession();else if(tool_==Tool::Crop)applyCrop();else finishPolygon();return;
         case Qt::Key_Escape:pointerCancel();return;default:break;

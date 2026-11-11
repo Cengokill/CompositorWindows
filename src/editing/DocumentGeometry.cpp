@@ -5,6 +5,7 @@
 #include "graphics/RasterSampling.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <unordered_map>
@@ -131,13 +132,46 @@ Rect createCrop(Point start,Point end,std::optional<double> ratio,bool symmetric
 Rect CropDrag::updated(Point point,std::optional<double> ratio,bool symmetric)const {
     finitePoint(point);finitePoint(start);if(mode==Mode::Create)return createCrop(start,point,ratio,symmetric);if(mode==Mode::Move)return snappedCrop({original.x+point.x-start.x,original.y+point.y-start.y,original.width,original.height});if(handle<0||handle>=8||!validCrop(original))throw std::runtime_error("Invalid crop resize handle");
     auto unit=handles[handle];Point anchorUnit=symmetric?Point{.5,.5}:Point{1-unit.x,1-unit.y};Point anchor{original.x+anchorUnit.x*original.width,original.y+anchorUnit.y*original.height};double span=symmetric?2:1,lx=(original.x+unit.x*original.width+point.x-start.x-anchor.x)*span,ly=(original.y+unit.y*original.height+point.y-start.y-anchor.y)*span,sx=unit.x*2-1,sy=unit.y*2-1;
-    double width=sx==0?original.width:std::max(1.,lx*sx),height=sy==0?original.height:std::max(1.,ly*sy);if(ratio){double factor=sx==0?height/original.height:sy==0?width/original.width:std::max(1/std::min(original.width,original.height),(lx*sx*original.width+ly*sy*original.height)/(original.width*original.width+original.height*original.height));width=original.width*factor;height=original.height*factor;}
+    double width=sx==0?original.width:std::max(1.,lx*sx),height=sy==0?original.height:std::max(1.,ly*sy);
+    if(ratio){
+        if(!std::isfinite(*ratio)||*ratio<=0)throw std::runtime_error("Invalid crop aspect ratio");
+        const double ratioWidth=std::max(1.,*ratio),ratioHeight=ratioWidth / *ratio;
+        double scale;
+        if(sx==0)scale=height/ratioHeight;
+        else if(sy==0)scale=width/ratioWidth;
+        else scale=(lx*sx*ratioWidth+ly*sy*ratioHeight)/(ratioWidth*ratioWidth+ratioHeight*ratioHeight);
+        scale=std::max(1.,scale);
+        width=std::round(ratioWidth*scale);
+        height=std::round(ratioHeight*scale);
+        // Round the dimensions before positioning so a crop crossing zero keeps its size.
+        Rect next{std::round(anchor.x-anchorUnit.x*width),std::round(anchor.y-anchorUnit.y*height),width,height};
+        return validCrop(next)?next:original;
+    }
     Rect next{anchor.x-anchorUnit.x*width,anchor.y-anchorUnit.y*height,width,height};return snappedCrop(validCrop(next)?next:original);
 }
 Rect CropSnap::apply(Rect rect,const CropDrag& drag,Point point,std::optional<double> ratio,bool symmetric)const {
     if(!std::isfinite(tolerance)||tolerance<=0)return rect;auto nearest=[&](double value,const std::vector<double>& targets,double step){return nearestSnapLine(value,targets,step,tolerance);};
     if(drag.mode==CropDrag::Mode::Move){auto shift=[&](double a,double b,const std::vector<double>& targets,double step){std::optional<double> best;for(double edge:{a,b})if(auto found=nearest(edge,targets,step)){double offset=*found-edge;if(!best||std::abs(offset)<std::abs(*best))best=offset;}return best.value_or(0);};return {rect.x+shift(rect.x,rect.x+rect.width,xs,gridX),rect.y+shift(rect.y,rect.y+rect.height,ys,gridY),rect.width,rect.height};}
-    if(ratio)return rect;bool horizontal=true,vertical=true;if(drag.mode==CropDrag::Mode::Resize){if(drag.handle<0||drag.handle>=8)throw std::runtime_error("Invalid crop snap handle");horizontal=handles[drag.handle].x!=.5;vertical=handles[drag.handle].y!=.5;}
+    if(ratio){
+        const auto bounds=documentBounds;if(!std::isfinite(*ratio)||*ratio<=0||bounds.width<=0||bounds.height<=0)return rect;
+        Point anchor,anchorUnit;
+        if(drag.mode==CropDrag::Mode::Create){anchor=drag.start;anchorUnit=symmetric?Point{.5,.5}:Point{drag.start.x<=point.x?0.:1.,drag.start.y<=point.y?0.:1.};}
+        else{if(drag.handle<0||drag.handle>=8)throw std::runtime_error("Invalid crop snap handle");const auto unit=handles[drag.handle];anchorUnit=symmetric?Point{.5,.5}:Point{1-unit.x,1-unit.y};anchor={drag.original.x+anchorUnit.x*drag.original.width,drag.original.y+anchorUnit.y*drag.original.height};}
+        const double left=bounds.x,right=bounds.x+bounds.width,top=bounds.y,bottom=bounds.y+bounds.height;
+        auto nearEdge=[&](double value,double first,double last)->std::optional<double>{const double a=std::abs(value-first),b=std::abs(value-last);if(a<=tolerance&&a<=b)return first;if(b<=tolerance)return last;return {};};
+        auto anchoredRect=[&](double width,double height){return Rect{anchor.x-anchorUnit.x*width,anchor.y-anchorUnit.y*height,width,height};};
+        auto score=[&](Rect candidate){double value=0;auto add=[&](double source,double output,double first,double last){if(auto target=nearEdge(source,first,last))value+=std::abs(output-*target);};add(rect.x,candidate.x,left,right);add(rect.x+rect.width,candidate.x+candidate.width,left,right);add(rect.y,candidate.y,top,bottom);add(rect.y+rect.height,candidate.y+candidate.height,top,bottom);return value;};
+        const double originalScore=score(rect);double bestScore=originalScore,bestChange=std::numeric_limits<double>::infinity();std::optional<Rect> best;
+        auto consider=[&](Rect candidate){if(!std::isfinite(candidate.x)||!std::isfinite(candidate.y)||!std::isfinite(candidate.width)||!std::isfinite(candidate.height)||candidate.width<=0||candidate.height<=0)return;candidate=snappedCrop(candidate);if(!validCrop(candidate))return;const double candidateScore=score(candidate),change=std::abs(candidate.x-rect.x)+std::abs(candidate.y-rect.y)+std::abs(candidate.width-rect.width)+std::abs(candidate.height-rect.height);if(candidateScore+1e-9<bestScore||(best&&std::abs(candidateScore-bestScore)<=1e-9&&change<bestChange)){best=candidate;bestScore=candidateScore;bestChange=change;}};
+        const auto nearLeft=nearEdge(rect.x,left,right),nearRight=nearEdge(rect.x+rect.width,left,right),nearTop=nearEdge(rect.y,top,bottom),nearBottom=nearEdge(rect.y+rect.height,top,bottom);
+        if(nearTop&&*nearTop==top&&nearBottom&&*nearBottom==bottom){const double height=bounds.height;consider(anchoredRect(height**ratio,height));}
+        if(nearLeft&&*nearLeft==left&&nearRight&&*nearRight==right){const double width=bounds.width;consider(anchoredRect(width,width/ *ratio));}
+        auto snapX=[&](bool leftSide,double target){const double fraction=leftSide?anchorUnit.x:1-anchorUnit.x;if(fraction<=0)return;const double width=leftSide?(anchor.x-target)/fraction:(target-anchor.x)/fraction;consider(anchoredRect(width,width/ *ratio));};
+        auto snapY=[&](bool topSide,double target){const double fraction=topSide?anchorUnit.y:1-anchorUnit.y;if(fraction<=0)return;const double height=topSide?(anchor.y-target)/fraction:(target-anchor.y)/fraction;consider(anchoredRect(height**ratio,height));};
+        if(nearLeft)snapX(true,*nearLeft);if(nearRight)snapX(false,*nearRight);if(nearTop)snapY(true,*nearTop);if(nearBottom)snapY(false,*nearBottom);
+        return best.value_or(rect);
+    }
+    bool horizontal=true,vertical=true;if(drag.mode==CropDrag::Mode::Resize){if(drag.handle<0||drag.handle>=8)throw std::runtime_error("Invalid crop snap handle");horizontal=handles[drag.handle].x!=.5;vertical=handles[drag.handle].y!=.5;}
     auto result=rect;    if(horizontal){if(std::abs(point.x-result.x)<=std::abs(point.x-result.x-result.width)){if(auto x=nearest(result.x,xs,gridX);x&&*x<result.x+result.width){result.width+=result.x-*x;result.x=*x;}}else if(auto x=nearest(result.x+result.width,xs,gridX);x&&*x>result.x)result.width=*x-result.x;}
     if(vertical){if(std::abs(point.y-result.y)<=std::abs(point.y-result.y-result.height)){if(auto y=nearest(result.y,ys,gridY);y&&*y<result.y+result.height){result.height+=result.y-*y;result.y=*y;}}else if(auto y=nearest(result.y+result.height,ys,gridY);y&&*y>result.y)result.height=*y-result.y;}
     if(symmetric){Point center=drag.mode==CropDrag::Mode::Create?drag.start:Point{drag.original.x+drag.original.width/2,drag.original.y+drag.original.height/2};if(horizontal){double half=point.x>=center.x?result.x+result.width-center.x:center.x-result.x;if(half>=.5){result.x=center.x-half;result.width=2*half;}}if(vertical){double half=point.y>=center.y?result.y+result.height-center.y:center.y-result.y;if(half>=.5){result.y=center.y-half;result.height=2*half;}}}return result;
@@ -147,6 +181,7 @@ CropSnap cropSnapTargets(const Document& doc,const SnapPolicy& policy,const Layo
     auto lines=documentSnapLines({double(doc.width),double(doc.height)},doc.guides,policy,grid);
     auto index=indexLayers(doc);
     for(const auto& layer:doc.layers)if(layer.raster&&visible(layer,index)){auto box=transformBounds(layer.transform);addBoxSnapLines(lines,box.x,box.y,box.width,box.height,policy);}
-    return {std::move(lines.xs),std::move(lines.ys),tolerance,lines.gridX,lines.gridY};
+    const Rect documentBounds=policy.enabled&&policy.documentEdges?Rect{0,0,double(doc.width),double(doc.height)}:Rect{};
+    return {std::move(lines.xs),std::move(lines.ys),tolerance,lines.gridX,lines.gridY,documentBounds};
 }
 }

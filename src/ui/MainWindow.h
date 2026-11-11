@@ -1,5 +1,6 @@
 #pragma once
 #include "NativeCanvas.h"
+#include "CropViewport.h"
 #include "graphics/BrushSession.h"
 #include "graphics/GrowingBrushSession.h"
 #include "graphics/CloneCursorPreview.h"
@@ -65,6 +66,7 @@ struct EditorProject {
     History history;
     CompositeCache composite;
     CompositeCache navigatorCache;
+    ui::CropViewportCache cropViewportCache;
     std::shared_ptr<const graphics::GrowingBrushSnapshot> brushPreview;
     std::shared_ptr<const LayerRenderPreview> textPreview;
     std::shared_ptr<const LayerRenderPreview> retouchPreview;
