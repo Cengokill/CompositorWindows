@@ -88,7 +88,7 @@ void crop_custom_ratio_fits_limits(){
 }
 void crop_enter_and_return_apply(){
     for(const auto key:{Qt::Key_Enter,Qt::Key_Return}){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);
-        QKeyEvent event(QEvent::KeyPress,key,Qt::NoModifier);QApplication::sendEvent(&w,&event);
+        const auto modifiers=key==Qt::Key_Enter?Qt::KeypadModifier:Qt::NoModifier;QKeyEvent event(QEvent::KeyPress,key,modifiers);QApplication::sendEvent(&w,&event);
         REQUIRE(p.document->width==40&&p.document->height==30&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
         REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,40,30});
     }
