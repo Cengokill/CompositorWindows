@@ -232,6 +232,9 @@ class SoftwareRenderer final:public IRasterBackend {
     mutable std::optional<Document> lensDocument_;
     mutable std::shared_ptr<const Raster> lensFrame_;
     mutable double lensX_{},lensY_{},lensUnits_{};
+    mutable std::optional<Document> lensDeepDocument_;
+    mutable std::shared_ptr<const DeepImage> lensDeepFrame_;
+    mutable int lensDeepX_{},lensDeepY_{};
 public:
     explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={},int lensPreviewMaxEdge=0):preview_(std::move(preview)),lensPreviewMaxEdge_(lensPreviewMaxEdge){}
     static bool lensViewportFits(const Document&,int pixelWidth,int pixelHeight,double unitsPerPixel);

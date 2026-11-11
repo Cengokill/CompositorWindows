@@ -40,7 +40,22 @@ std::shared_ptr<const Raster> SoftwareRenderer::renderScaledPatch(const Document
 std::shared_ptr<const DeepImage> SoftwareRenderer::renderDeep(const Document& document,int x,int y,int width,int height,const std::function<bool()>& cancelled)const {
     const int margin=effects::adjustmentStackPadding(document);
     if(width<1||height<1||width>30000-2*margin||height>30000-2*margin||uint64_t(width+2*margin)*(height+2*margin)*80>1200000000)throw std::runtime_error("HDR render exceeds working memory budget");
-    auto result=graphics::StackRenderer({},preview_,[&](const Layer& layer,std::shared_ptr<const DeepImage> current,graphics::RenderRegion region){return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height)},cancelled);}).renderDeep(document,{double(x-margin),double(y-margin),width+2*margin,height+2*margin,1},cancelled);
+    const bool lens=effects::hasLensAdjustment(document);
+    const bool hdr=std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.deep&&layer.deep->isHdr();});
+    auto renderer=graphics::StackRenderer({},preview_,[&](const Layer& layer,std::shared_ptr<const DeepImage> current,graphics::RenderRegion region){
+        if(lens&&!hdr&&layer.adjustmentJson.find("Lens Effects")!=std::string::npos)current=hdrTo16Bit(*current,cancelled);
+        return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height)},cancelled);
+    });
+    if(lens){
+        const int left=std::min(-margin,x),top=std::min(-margin,y),right=std::max(document.width+margin,x+width),bottom=std::max(document.height+margin,y+height);
+        if(!lensFrameFits(right-left,bottom-top))throw std::runtime_error("Lens Effects full-image render exceeds working memory budget");
+        if(!lensDeepFrame_||!lensDeepDocument_||*lensDeepDocument_!=document||lensDeepX_!=left||lensDeepY_!=top||lensDeepFrame_->width!=right-left||lensDeepFrame_->height!=bottom-top){
+            lensDeepFrame_=renderer.renderDeep(document,{double(left),double(top),right-left,bottom-top,1},cancelled);
+            lensDeepDocument_=document;lensDeepX_=left;lensDeepY_=top;
+        }
+        auto cropped=makeDeep(width,height,lensDeepFrame_->format);for(int row=0;row<height;++row){if(cancelled&&cancelled())throw std::runtime_error("HDR render cancelled");for(int col=0;col<width;++col)cropped->setPixel(col,row,lensDeepFrame_->pixel(x-left+col,y-top+row));}return cropped;
+    }
+    auto result=renderer.renderDeep(document,{double(x-margin),double(y-margin),width+2*margin,height+2*margin,1},cancelled);
     if(!margin)return result;
     auto cropped=makeDeep(width,height,result->format);for(int row=0;row<height;++row){if(cancelled&&cancelled())throw std::runtime_error("HDR render cancelled");for(int col=0;col<width;++col)cropped->setPixel(col,row,result->pixel(col+margin,row+margin));}return cropped;
 }
