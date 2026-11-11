@@ -59,7 +59,11 @@ void MainWindow::startAutomaticUpdateChecks(int initialDelayMs,int intervalMs){
         runReleaseCheck(false);
     };
     connect(releaseTimer_,&QTimer::timeout,this,tick);
-    QTimer::singleShot(initialDelayMs,this,[this,tick]{tick();releaseTimer_->start();});
+    QTimer::singleShot(initialDelayMs,this,[this]{
+        QSettings settings;
+        if(update::automaticChecksEnabled(settings))runReleaseCheck(false);
+        releaseTimer_->start();
+    });
 }
 void MainWindow::checkForRelease(std::function<void(const QString&)> report){
     if(report)releaseReports_.push_back(std::move(report));

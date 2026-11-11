@@ -18,7 +18,7 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 - An **x64 MSI**, or a **portable ZIP**. In the ZIP, run `Compositor.exe`.
 - Windows 11 x64. The runtime libraries and the foreground-removal model are already in the package. There is no account, and there is no model download on first launch.
-- Unsigned builds. Windows can show an unknown-publisher warning. Compositor checks GitHub once a day for a newer stable release and links to its page, and you install the update yourself. You can turn the check off in **Help → Check for Updates…**.
+- Unsigned builds. Windows can show an unknown-publisher warning. Compositor checks GitHub for a newer stable release at startup and periodically while open, and links to its page for manual installation. You can turn the check off in **Help → Check for Updates…**.
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 

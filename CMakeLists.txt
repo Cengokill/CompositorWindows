@@ -256,7 +256,7 @@ foreach(case release_parse release_settings release_url release_fetch panel_rele
   add_test(NAME update.release.${case} COMMAND update_panel_tests ${case})
   set_tests_properties(update.release.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()
-foreach(case release_auto_available release_later_skip release_download release_disabled release_quiet_results release_single_flight release_window_closed release_help_panel)
+foreach(case release_each_launch release_auto_available release_later_skip release_download release_disabled release_quiet_results release_single_flight release_manual_before_startup release_window_closed release_help_panel)
   add_test(NAME update_window.${case} COMMAND update_window_tests ${case})
   set_tests_properties(update_window.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 endforeach()
