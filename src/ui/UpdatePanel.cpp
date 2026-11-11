@@ -107,7 +107,7 @@ public:
         retained_ = new QLabel; retained_->setObjectName("updateRetainedVersion"); retained_->setWordWrap(true); layout->addWidget(retained_);
         automatic_ = new QCheckBox("Check for new stable releases automatically"); automatic_->setObjectName("updateAutomatic");
         { QSettings settings; automatic_->setChecked(update::automaticChecksEnabled(settings)); }
-        automatic_->setToolTip("Once a day, Compositor asks GitHub for the latest stable release. Installation stays manual.");
+        automatic_->setToolTip("At startup and periodically while open, Compositor asks GitHub for the latest stable release. Installation stays manual.");
         connect(automatic_, &QCheckBox::toggled, this, [](bool enabled) { QSettings settings; update::setAutomaticChecksEnabled(settings, enabled); });
         layout->addWidget(automatic_);
         releaseStatus_ = new QLabel; releaseStatus_->setObjectName("updateReleaseStatus"); releaseStatus_->setAccessibleName("Release check status"); releaseStatus_->setWordWrap(true); layout->addWidget(releaseStatus_);

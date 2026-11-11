@@ -51,6 +51,30 @@ QTimer* releaseTimer(MainWindow& window){auto* timer=window.findChild<QTimer*>("
 void waitTicks(MainWindow& window,int count){int ticks=0;QObject::connect(releaseTimer(window),&QTimer::timeout,&window,[&]{++ticks;});waitFor([&]{return ticks>=count;},"automatic timer did not tick");}
 void ageLastCheck(){QSettings settings;update::recordReleaseCheck(settings,QDateTime::currentDateTimeUtc().addSecs(-25*3600));}
 QString status(MainWindow& window){return window.property("releaseCheckStatus").toString();}
+void release_each_launch(){
+    FakeRelease fake;*fake.body=releaseJson("v0.1.8");
+    {MainWindow first(true);first.setReleaseFetcherForTesting(fake.fetcher());first.show();first.startAutomaticUpdateChecks(0,20);
+    waitFor([&]{return status(first).contains("up to date");},"first check did not finish");}
+    *fake.body=releaseJson("v0.2.0");
+    {MainWindow second(true);second.setReleaseFetcherForTesting(fake.fetcher());second.show();second.startAutomaticUpdateChecks(0,20);
+    waitFor([&]{return notice(second)!=nullptr;},"new release missed on same-day launch");
+    waitTicks(second,3);require(fake.calls->load()==2,"startup or periodic check made an unexpected request");}
+    fake.fail->store(true);
+    {MainWindow third(true);third.setReleaseFetcherForTesting(fake.fetcher());third.show();third.startAutomaticUpdateChecks(0,20);
+    waitFor([&]{return status(third).startsWith("Could not check");},"failed startup check did not finish");}
+    fake.fail->store(false);
+    {MainWindow fourth(true);fourth.setReleaseFetcherForTesting(fake.fetcher());fourth.show();fourth.startAutomaticUpdateChecks(0,20);
+    waitFor([&]{return notice(fourth)!=nullptr;},"recent failed check suppressed next launch");
+    require(fake.calls->load()==4,"expected one request per launch");}
+    {QSettings settings;update::skipRelease(settings,update::Version{0,2,0});}
+    {MainWindow fifth(true);fifth.setReleaseFetcherForTesting(fake.fetcher());fifth.show();fifth.startAutomaticUpdateChecks(0,20);
+    waitFor([&]{return status(fifth).contains("0.2.0 is available");},"skipped release check did not finish");
+    require(!notice(fifth),"skipped release notified on startup");}
+    *fake.body=releaseJson("v0.3.0");
+    {MainWindow sixth(true);sixth.setReleaseFetcherForTesting(fake.fetcher());sixth.show();sixth.startAutomaticUpdateChecks(0,20);
+    waitFor([&]{return notice(sixth)!=nullptr;},"newer release than skipped version not offered on startup");
+    require(notice(sixth)->property("releaseVersion").toString()=="0.3.0"&&fake.calls->load()==6,"wrong release or request count");}
+}
 void release_auto_available(){
     FakeRelease fake;MainWindow window(true);window.setReleaseFetcherForTesting(fake.fetcher());window.show();
     Document document;document.id=newId();document.width=8;document.height=8;Layer layer;layer.id=newId();layer.name="Unsaved";layer.transform={0,0,8,8};document.layers.push_back(layer);
@@ -107,6 +131,14 @@ void release_single_flight(){
     fake.hold->store(false);waitFor([&]{return reports.size()==2;},"waiting callers not all answered");
     require(fake.calls->load()==1&&reports[0].contains("0.2.0 is available")&&notice(window),"one request answers automatic and manual callers");
 }
+void release_manual_before_startup(){
+    FakeRelease fake;fake.hold->store(true);MainWindow window(true);window.setReleaseFetcherForTesting(fake.fetcher());window.show();
+    QString reported;window.checkForRelease([&](const QString& text){reported=text;});
+    waitFor([&]{return fake.calls->load()==1;},"manual request not started");
+    window.startAutomaticUpdateChecks(0,20);waitTicks(window,2);
+    fake.hold->store(false);waitFor([&]{return !reported.isEmpty();},"manual request did not finish");
+    require(fake.calls->load()==1&&notice(window),"startup did not share the manual request");
+}
 void release_window_closed(){
     FakeRelease fake;fake.hold->store(true);
     {auto window=std::make_unique<MainWindow>(true);window->setReleaseFetcherForTesting(fake.fetcher());window->startAutomaticUpdateChecks(0,20);waitFor([&]{return fake.calls->load()==1;},"request not started");}
@@ -126,7 +158,7 @@ int main(int argc,char** argv){
     if(argc==2){
         QTemporaryDir settingsRoot;QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("ReleaseWindow");QCoreApplication::setApplicationVersion("0.1.8");
         QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsRoot.path());
-        const std::map<std::string,void(*)()> cases{{"release_auto_available",release_auto_available},{"release_later_skip",release_later_skip},{"release_download",release_download},{"release_disabled",release_disabled},{"release_quiet_results",release_quiet_results},{"release_single_flight",release_single_flight},{"release_window_closed",release_window_closed},{"release_help_panel",release_help_panel}};
+        const std::map<std::string,void(*)()> cases{{"release_each_launch",release_each_launch},{"release_auto_available",release_auto_available},{"release_later_skip",release_later_skip},{"release_download",release_download},{"release_disabled",release_disabled},{"release_quiet_results",release_quiet_results},{"release_single_flight",release_single_flight},{"release_manual_before_startup",release_manual_before_startup},{"release_window_closed",release_window_closed},{"release_help_panel",release_help_panel}};
         try{if(!cases.contains(argv[1]))throw std::runtime_error("unknown release case");cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}
         catch(const std::exception& error){std::cerr<<"FAIL "<<argv[1]<<": "<<error.what()<<'\n';return 1;}
     }
