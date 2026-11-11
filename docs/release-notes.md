@@ -17,7 +17,7 @@ Changed Brush and Erase strokes now create their own undo step, including when a
 ## New features
 
 - Add Anamorphic Flare, Starburst, Mist, Prism or Bokeh with **Filters > Lens Effects**. Preview the result, apply it to the pixel layer and undo it in one step.
-- Read **What's New** after an update, with release notes embedded for offline use. The first launch initializes the local version history silently.
+- Read **What's New**, with release notes embedded for offline use.
 
 ## Release details
 

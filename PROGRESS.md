@@ -14,6 +14,6 @@ Lens Effects (#83) has a destructive pixel filter with five modes, per-project a
 
 Vignette adjustment layers (#95) retain six editable settings, use document-relative falloff for regional rendering, and preserve source pixels and coverage. They use the existing live adjustment history and mask pipeline and require Windows project format v20. The destructive Vignette filter keeps its earlier behavior; Mac exchange remains unverified.
 
-What's New displays embedded release notes after an update, once startup imports and dialogs finish. The first launch initializes local version history silently. The 1.5.9 release includes these notes offline. Its editable Vignette, Tonal Contrast and Lens Effects layers use Windows project formats v20, v21 and v22; the upstream pin is unchanged.
+What's New displays embedded release notes on first launch and after an update, once startup imports and dialogs finish. Closing the notes acknowledges the version. The 1.5.9 release includes these notes offline. Its editable Vignette, Tonal Contrast and Lens Effects layers use Windows project formats v20, v21 and v22; the upstream pin is unchanged.
 
 Keep this as the single current checkpoint. Follow AGENTS.md for documentation boundaries. No implementation backlog is implied by historical reports or old tests; start with the user's current request.

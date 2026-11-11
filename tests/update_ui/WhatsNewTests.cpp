@@ -32,7 +32,7 @@ QDialog* whatsNew(MainWindow& window){
     for(auto* dialog:window.findChildren<QDialog*>("whatsNewDialog"))if(dialog->isVisible())return dialog;
     return nullptr;
 }
-void initializeOlder(){QSettings settings;require(!ui::releaseNotesDue(settings,{1,5,5}),"initial reference unexpectedly due");}
+void initializeOlder(){QSettings settings;ui::acknowledgeReleaseNotes(settings,{1,5,5});}
 void extraction(){
     const QString markdown=QStringLiteral("# Compositor Windows 1.5.7\n## Improvements\n- Later\n# Compositor Windows 1.5.6\nIntro\n## New features\n- Offline **notes**\n## Empty section\nIgnore this\n## Fixes\n- Repair\n# Compositor Windows 1.2.0\n## Improvements\n- Older\n");
     const auto notes=ui::releaseNotesForVersion(markdown,"1.5.6");
@@ -43,7 +43,9 @@ void extraction(){
     require(!ui::installedReleaseNotes().empty(),"running version lacks embedded notes");
 }
 void settings(){
-    QSettings initial;require(!ui::releaseNotesDue(initial,{1,5,6}),"fresh history showed notes");
+    QSettings initial;require(ui::releaseNotesDue(initial,{1,5,6}),"fresh history did not show notes");
+    require(!initial.contains("updates/whatsNewVersion"),"due check saved an acknowledgement");
+    ui::acknowledgeReleaseNotes(initial,{1,5,6});
     require(!ui::releaseNotesDue(initial,{1,5,6})&&!ui::releaseNotesDue(initial,{1,4,9}),"same or older version was due");
     require(ui::releaseNotesDue(initial,{1,10,0}),"numeric version ordering failed");
     require(ui::releaseNotesDue(initial,{1,10,0}),"unacknowledged version was lost");
@@ -52,13 +54,18 @@ void settings(){
     ui::acknowledgeReleaseNotes(reopened,{1,5,6});
     require(!ui::releaseNotesDue(reopened,{1,9,9})&&ui::releaseNotesDue(reopened,{1,10,1}),"older acknowledgement changed high-water mark");
     reopened.setValue("updates/whatsNewVersion","invalid");reopened.sync();
-    require(!ui::releaseNotesDue(reopened,{2,0,0})&&!ui::releaseNotesDue(reopened,{2,0,0}),"invalid history did not initialize safely");
+    require(ui::releaseNotesDue(reopened,{2,0,0})&&ui::releaseNotesDue(reopened,{2,0,0}),"invalid history suppressed notes");
+    require(reopened.value("updates/whatsNewVersion").toString()=="invalid","due check replaced invalid history");
 }
 void firstLaunch(){
     MainWindow window(true);window.show();bool finished=false;
-    window.startWhatsNew([&]{finished=true;});waitFor([&]{return finished;},"first launch did not finish");
-    require(!whatsNew(window),"first launch showed dialog");
-    QSettings settings;require(settings.value("updates/whatsNewVersion").toString()=="1.5.6","first launch did not save reference");
+    window.startWhatsNew([&]{finished=true;});waitFor([&]{return whatsNew(window)!=nullptr||finished;},"first launch did not proceed");
+    require(whatsNew(window)&&!finished,"first launch did not show dialog");
+    QSettings settings;require(!settings.contains("updates/whatsNewVersion"),"first launch acknowledged before dismissal");
+    whatsNew(window)->accept();waitFor([&]{return finished;},"first launch did not finish after dismissal");
+    require(settings.value("updates/whatsNewVersion").toString()=="1.5.6","first launch acknowledgement missing");
+    MainWindow next(true);next.show();bool again=false;next.startWhatsNew([&]{again=true;});
+    waitFor([&]{return again;},"next launch did not finish");require(!whatsNew(next),"first launch notes shown twice");
 }
 void closeThrough(const std::string& method){
     initializeOlder();MainWindow window(true);
@@ -90,6 +97,10 @@ void missing(){
     bool finished=false;window.startWhatsNew([&]{finished=true;});waitFor([&]{return finished;},"missing notes stalled startup");
     require(!whatsNew(window),"missing notes showed empty dialog");
     QSettings settings;require(settings.value("updates/whatsNewVersion").toString()=="1.5.5","missing notes acknowledged a version never shown");
+    settings.remove("updates/whatsNewVersion");settings.sync();
+    MainWindow fresh(true);fresh.show();bool freshFinished=false;fresh.startWhatsNew([&]{freshFinished=true;});
+    waitFor([&]{return freshFinished;},"missing notes on first launch stalled startup");
+    require(!whatsNew(fresh)&&!settings.contains("updates/whatsNewVersion"),"missing notes on first launch were acknowledged");
 }
 void defersStartup(){
     initializeOlder();QTemporaryDir input;require(input.isValid(),"input directory missing");
