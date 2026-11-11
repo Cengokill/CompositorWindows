@@ -155,8 +155,11 @@ void MainWindow::publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapsh
 CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,double y,double width,double height,double requestedUnits){
     if(!project.document)return {};
     auto render=[&](const Document& document,std::shared_ptr<const LayerRenderPreview> layerPreview={}){
-        if(tool_==Tool::Crop&&current()==&project&&cropDraft_)
-            return ui::renderCropViewport(document,*cropDraft_,x,y,width,height,requestedUnits,std::move(layerPreview));
+        if(tool_==Tool::Crop&&current()==&project&&cropDraft_){
+            auto* cache=&document==&*project.document?&project.cropViewportCache:nullptr;
+            return ui::renderCropViewport(document,*cropDraft_,x,y,width,height,requestedUnits,std::move(layerPreview),cache);
+        }
+        project.cropViewportCache={};
         return project.composite.renderViewport(document,x,y,width,height,requestedUnits,64,256,std::move(layerPreview));
     };
     if(auto preview=editPanelPreview(project))return render(*preview);

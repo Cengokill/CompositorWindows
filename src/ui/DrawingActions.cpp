@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "CropViewport.h"
 #include "PropertyControls.h"
 #include <QComboBox>
 #include <QDialog>
@@ -18,6 +19,7 @@
 
 namespace {
 constexpr double maxCropSide=30000.;
+QString cropDimensionsText(compositor::editing::Rect crop){return QString("%1 × %2 px").arg(int(crop.width)).arg(int(crop.height));}
 std::optional<double> parseCropRatio(const QString& value,QString* normalized=nullptr){
     const auto parts=value.split(QLatin1Char(':'),Qt::KeepEmptyParts);if(parts.size()!=2)return {};
     auto widthText=parts[0].trimmed().replace(QLatin1Char(','),QLatin1Char('.'));
@@ -134,8 +136,12 @@ bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers modifiers){
         const auto hit=NativeCanvas::cropResizeHandle(drag.original,canvas()->viewMapping().toView(point),canvas()->viewMapping());
         if(hit){drag.mode=editing::CropDrag::Mode::Resize;drag.handle=*hit;}
         else if(cropDraft_&&*cropDraft_!=full&&point.x>=cropDraft_->x&&point.x<cropDraft_->x+cropDraft_->width&&point.y>=cropDraft_->y&&point.y<cropDraft_->y+cropDraft_->height)drag.mode=editing::CropDrag::Mode::Move;
+        const bool hadDraft=cropDraft_.has_value();
         if(drag.mode==editing::CropDrag::Mode::Create)cropDraft_.reset();
-        cropDrag_=drag;if(snapPolicy_.enabled)cropSnap_=editing::cropSnapTargets(*p->document,snapPolicy_,canvas()->layoutGrid(),8/std::max(canvas()->pointsPerPixel(),.0001));refresh(false,false);return true;
+        cropDrag_=drag;
+        if(snapPolicy_.enabled)cropSnap_=editing::cropSnapTargets(*p->document,snapPolicy_,canvas()->layoutGrid(),8/std::max(canvas()->pointsPerPixel(),.0001));
+        if(hadDraft&&!cropDraft_)refresh(false,false);
+        return true;
     }
     if(tool_==Tool::Gradient){beginGradient(point);return true;}
     if(!canEditLayers()||!std::isfinite(point.x)||!std::isfinite(point.y))return true;
@@ -150,13 +156,30 @@ bool MainWindow::updateDrawing(Point point,Qt::KeyboardModifiers modifiers,bool 
     if(tool_!=Tool::Gradient&&tool_!=Tool::Shape&&tool_!=Tool::Crop)return false;auto*p=current();if(!p||!p->document)return true;
     if(tool_==Tool::Crop){
         if(!cropDrag_)return true;
+        const auto previous=cropDraft_;
         if(std::isfinite(point.x)&&std::isfinite(point.y)){
             const auto ratio=cropRatio();const bool symmetric=modifiers.testFlag(Qt::AltModifier);
             auto next=cropDrag_->updated(point,ratio,symmetric);
             if(cropSnap_&&!modifiers.testFlag(Qt::ControlModifier))next=cropSnap_->apply(next,*cropDrag_,point,ratio,symmetric);
             if(editing::validCrop(next))cropDraft_=next;
         }
-        if(finish){cropDrag_.reset();cropSnap_.reset();}refresh(false,false);return true;
+        if(finish){cropDrag_.reset();cropSnap_.reset();}
+        if(previous.has_value()!=cropDraft_.has_value())refresh(false,false);
+        else if(previous!=cropDraft_){
+            const auto& next=*cropDraft_;
+            auto* view=p->canvas;
+            const auto bounds=view->viewportBounds();
+            if(bounds.valid){
+                const auto samples=[&](editing::Rect crop){
+                    return ui::cropViewportSamples(p->document->width,p->document->height,crop,bounds.x,bounds.y,bounds.width,bounds.height,bounds.units);
+                };
+                if(samples(*previous)!=samples(next))view->invalidateComposite();
+            }
+            if(int(previous->width)!=int(next.width)||int(previous->height)!=int(next.height))
+                if(auto* label=findChild<QLabel*>("cropDimensions"))label->setText(cropDimensionsText(next));
+            view->setCropOverlay(next);
+        }
+        return true;
     }
     if(tool_==Tool::Gradient){updateGradient(point,modifiers,finish);return true;}
     if(shapeDraftId_.empty()||!std::isfinite(point.x)||!std::isfinite(point.y))return true;
@@ -279,7 +302,7 @@ void MainWindow::refreshCropControls(){
         if(!custom.isEmpty()&&ratio->findData("crop-custom-choice",Qt::UserRole)<0){const int action=ratio->findData("crop-custom-action",Qt::UserRole);const int insertAt=action>0&&ratio->itemText(action-1).isEmpty()?action-1:action;ratio->insertItem(insertAt,custom);ratio->setItemData(insertAt,"crop-custom-choice",Qt::UserRole);}
         QSignalBlocker block(ratio);ratio->setCurrentText(cropRatioChoice_);ratio->setVisible(visible);ratio->setEnabled(enabled);
     }
-    if(auto* label=findChild<QLabel*>("cropDimensions")){label->setVisible(visible&&cropDraft_.has_value());label->setText(cropDraft_?QString("%1 × %2 px").arg(int(cropDraft_->width)).arg(int(cropDraft_->height)):QString{});}
+    if(auto* label=findChild<QLabel*>("cropDimensions")){label->setVisible(visible&&cropDraft_.has_value());label->setText(cropDraft_?cropDimensionsText(*cropDraft_):QString{});}
     for(auto* item:findChildren<QAction*>()){const auto id=item->property("commandId").toString();if(id=="crop.apply"||id=="crop.cancel")item->setVisible(visible);}
     if(canvas()){std::optional<editing::Rect> rect;if(visible&&project&&project->document)rect=cropDraft_.value_or(editing::Rect{0,0,double(project->document->width),double(project->document->height)});canvas()->setCropOverlay(rect);}
 }

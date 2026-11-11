@@ -31,6 +31,13 @@ int main(int argc,char**argv){QApplication app(argc,argv);if(argc!=2)return 2;co
  for(size_t i=0;i<locations.size();++i){const auto at=locations[i];auto pixel=SoftwareRenderer().renderScaled(d,at.x,at.y,1,1,1)->pixel(0,0);QColor expected(pixel.r,pixel.g,pixel.b,pixel.a),actual=sample(c,live,at);record(names[i],difference(actual,expected)<=1,{{"actual",rgba(actual)},{"expected",rgba(expected)},{"tolerance",1}});}
  record("crop_expanded_canonical_immutable",p.document==d&&p.history.undoCount()==0);
  const auto patch=c.viewportProvider(-20,-10,140,100,1);record("crop_expanded_provider_bounds",patch.raster&&patch.documentX<=-20&&patch.documentY<=-10&&patch.documentX+patch.raster->width*patch.unitsPerPixel>=120&&patch.documentY+patch.raster->height*patch.unitsPerPixel>=90);
+ c.pointerDown({50,40},Qt::ControlModifier);
+ c.pointerMove({40,40},Qt::ControlModifier);
+ const auto moved=c.captureRendered();
+ record("crop_move_reveals_new_exterior",difference(sample(c,moved,{-25,40}),QColor(80,120,160))<=1);
+ c.pointerUp({50,40},Qt::ControlModifier);
+ const auto restored=c.captureRendered();
+ record("crop_move_clips_restored_exterior",difference(sample(c,restored,{-25,40}),sample(c,live,{-25,40}))<=1);
  c.pointerCancel();pump();const auto cancelled=c.captureRendered();save(cancelled,dir/"cancelled.png");record("crop_expanded_cancel",p.document==d&&p.history.undoCount()==0&&difference(sample(c,cancelled,{-10,40}),originalExterior)<=1);
  c.pointerDown({-20,-10},Qt::ControlModifier);c.pointerMove({120,90},Qt::ControlModifier);c.pointerUp({120,90},Qt::ControlModifier);auto* apply=command(w,"crop.apply");require(apply&&apply->isEnabled(),"Apply unavailable");apply->trigger();pump();record("crop_expanded_apply",p.document->width==140&&p.document->height==100&&p.document->layers.front().transform==Transform{-10,-10,160,120}&&p.history.undoCount()==1);save(c.captureRendered(),dir/"applied.png");
  QFile file(QString::fromStdWString((dir/"results.json").wstring()));require(file.open(QIODevice::WriteOnly),"Report failed");file.write(QJsonDocument(QJsonObject{{"schema","NATIVE_EXPANDED_CROP_V1"},{"dpr",c.devicePixelRatioF()},{"checks",checks},{"failed",failed},{"tolerance",1},{"mac_differential",false}}).toJson());
