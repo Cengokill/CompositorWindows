@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTimer>
+#include <QToolBar>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -29,7 +30,7 @@ void customDialog(MainWindow&w,const std::function<void(QDialog&)>& interact){
 QLineEdit* customInput(QDialog& dialog){auto* input=dialog.findChild<QLineEdit*>("customCropRatioInput");REQUIRE(input);return input;}
 QPushButton* customButton(QDialog& dialog,QDialogButtonBox::StandardButton button){auto* box=dialog.findChild<QDialogButtonBox*>();REQUIRE(box);auto* result=box->button(button);REQUIRE(result);return result;}
 void crop_fresh_entry_fullframe_free(){
-    MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);
+    MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);w.resize(3840,800);w.show();QApplication::processEvents();cropTool(w,p);
     auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");auto* dimensions=w.findChild<QLabel*>("cropDimensions");
     REQUIRE(ratio&&ratio->currentText()=="Free");REQUIRE(dimensions&&!dimensions->isHidden()&&dimensions->text()==QString::fromUtf8("100 × 80 px"));
     REQUIRE(command(w,"crop.apply")->isEnabled()&&command(w,"crop.cancel")->isEnabled());REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
@@ -39,6 +40,13 @@ void crop_fresh_entry_fullframe_free(){
     REQUIRE(dimensions->isHidden()&&p.document==d&&p.history.undoCount()==0);
     command(w,"tool.crop")->trigger();REQUIRE(ratio->currentText()=="Free"&&command(w,"crop.apply")->isEnabled()&&!dimensions->isHidden());
     REQUIRE(dimensions->text()==QString::fromUtf8("100 × 80 px")&&p.document==d&&p.history.undoCount()==0);
+    auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool())REQUIRE(!item->isVisible());
+    auto* gradient=w.findChild<QComboBox*>("gradientShape");auto* shape=w.findChild<QComboBox*>("shapeKind");REQUIRE(gradient&&shape&&!gradient->isVisible()&&!shape->isVisible());
+    REQUIRE(ratio->isVisibleTo(bar)&&command(w,"crop.cancel")->isVisible()&&command(w,"crop.apply")->isVisible());
+    const auto selectVisibleTool=[&](const char* id){for(auto* item:w.findChildren<QAction*>())if(item->property("commandId").toString()==id&&item->isVisible()&&item->isEnabled()){item->trigger();return;}throw std::runtime_error("Visible tool action not found");};
+    selectVisibleTool("tool.gradient");QApplication::processEvents();REQUIRE(!gradient->isHidden());
+    selectVisibleTool("tool.shape");QApplication::processEvents();REQUIRE(!shape->isHidden());
+    cropTool(w,p);for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool())REQUIRE(!item->isVisible());
 }
 void crop_cancel_retains_document(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);auto*a=command(w,"crop.cancel");REQUIRE(a&&a->isEnabled());a->trigger();REQUIRE(p.document==d&&p.history.undoCount()==0);REQUIRE(!a->isEnabled()&&!command(w,"crop.apply")->isEnabled());}
 void crop_pending_dimensions(){MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);auto* label=w.findChild<QLabel*>("cropDimensions");REQUIRE(label&&label->text()==QString::fromUtf8("40 × 30 px"));REQUIRE(!label->isHidden());}

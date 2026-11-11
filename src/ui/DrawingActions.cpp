@@ -109,6 +109,7 @@ void MainWindow::setupDrawingActions(){
             *active()=editing::restyleShape(*active(),style);
         });
     });
+    for(auto* item:bar->actions())item->setProperty("hideDuringCrop",true);
     auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");
     cropRatioControl->addItems({"Free","Canvas"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItem("1:1");cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"4:3","16:9","2.39:1"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"3:4","9:16"});cropRatioControl->insertSeparator(cropRatioControl->count());
     const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);bar->addWidget(cropRatioControl);
@@ -122,7 +123,7 @@ void MainWindow::setupDrawingActions(){
         cropRatioChoice_=value;changeCropRatio();
     });
     auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);bar->addAction(cropCancel);bar->addAction(cropApply);
-    auto*background=bar->addAction("Background Color");bindCommand(background,"Tools","Background",[this]{openPalette(true);});commands_->releaseShortcut(background);
+    auto*background=bar->addAction("Background Color");background->setProperty("hideDuringCrop",true);bindCommand(background,"Tools","Background",[this]{openPalette(true);});commands_->releaseShortcut(background);
 }
 bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers modifiers){
     if(tool_!=Tool::Gradient&&tool_!=Tool::Shape&&tool_!=Tool::Crop)return false;auto*p=current();if(!p||!p->document)return true;press_=point;
@@ -266,6 +267,12 @@ void MainWindow::changeCropRatio(){
 void MainWindow::cancelCrop(){cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refresh(false,false);}
 void MainWindow::refreshCropControls(){
     auto* project=current();const bool visible=tool_==Tool::Crop;const bool enabled=project&&project->document&&!project->projectBusy&&!project->importing;
+    bool restored=false;
+    if(auto* bar=findChild<QToolBar*>("drawingOptions"))for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool()){
+        if(visible){item->setProperty("hiddenForCrop",true);item->setVisible(false);}
+        else if(item->property("hiddenForCrop").toBool()){const bool gradientDraft=item->objectName()=="cancelGradient"||item->objectName()=="applyGradient";item->setVisible(!gradientDraft||drawingOriginal_.has_value());item->setProperty("hiddenForCrop",false);restored=true;}
+    }
+    if(restored)refreshShapeControls();
     if(auto* ratio=findChild<QComboBox*>("cropRatioChoice")){
         const int marker=ratio->findData("crop-custom-choice",Qt::UserRole);const auto custom=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString{};
         if(marker>=0&&ratio->itemText(marker)!=custom)ratio->removeItem(marker);
