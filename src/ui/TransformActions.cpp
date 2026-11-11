@@ -7,6 +7,10 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QToolButton>
+#include <QWidgetAction>
+#include <QGridLayout>
+#include <QPainter>
+#include <QApplication>
 #include <QLabel>
 #include <QInputDialog>
 #include <QStatusBar>
@@ -16,6 +20,15 @@
 
 namespace compositor {
 namespace {
+QIcon arrangeIcon(int command){
+    QIcon icon;for(auto mode:{QIcon::Normal,QIcon::Disabled}){QPixmap image(24,24);image.fill(Qt::transparent);QPainter p(&image);p.setRenderHint(QPainter::Antialiasing);auto color=QApplication::palette().color(mode==QIcon::Disabled?QPalette::Disabled:QPalette::Active,QPalette::ButtonText);p.setPen(QPen(color,1.5,Qt::SolidLine,Qt::RoundCap));p.setBrush(color);
+        const bool vertical=command==3||command==4||command==5||command==7||command==9;if(vertical){p.translate(24,0);p.rotate(90);}
+        if(command==0||command==3){p.drawLine(4,3,4,21);p.drawRoundedRect(QRectF(7,5,12,4),1,1);p.drawRoundedRect(QRectF(7,15,8,4),1,1);}
+        else if(command==2||command==5){p.drawLine(20,3,20,21);p.drawRoundedRect(QRectF(5,5,12,4),1,1);p.drawRoundedRect(QRectF(9,15,8,4),1,1);}
+        else if(command==1||command==4){p.drawLine(12,3,12,21);p.drawRoundedRect(QRectF(6,5,12,4),1,1);p.drawRoundedRect(QRectF(8,15,8,4),1,1);}
+        else{p.drawLine(3,3,3,21);p.drawLine(21,3,21,21);if(command==6||command==7){p.drawRoundedRect(QRectF(5,8,3,8),1,1);p.drawRoundedRect(QRectF(10.5,5,3,14),1,1);p.drawRoundedRect(QRectF(16,8,3,8),1,1);}else{p.drawRoundedRect(QRectF(5,6,3,12),1,1);p.drawRoundedRect(QRectF(10,8,4,8),1,1);p.drawRoundedRect(QRectF(16,6,3,12),1,1);}}
+        p.end();icon.addPixmap(image,mode);}return icon;
+}
 struct MovePreviewPlan { bool sprite{}; bool covered{}; bool masked{}; std::vector<const Layer*> above; };
 MovePreviewPlan planMovePreview(const Document& document,const Layer& moving){
     MovePreviewPlan plan;
@@ -155,7 +168,7 @@ bool MainWindow::canArrangeLayers(bool distribute){
     auto state=commandState();if(state.modalDialog)return false;
     if(transformSession_){if(transformOwner_!=project||transformSession_->corners||transformSession_->pixels||transformSession_->maskOnly)return false;state.transformEdit=false;}
     if(!ui::canEditLayers(state))return false;
-    const auto count=editing_transform::arrangeItemCount(*project->document,layerSelection());return distribute?count>=3:count>=1;
+    const auto count=layerSelection().ids.size();return distribute?count>=3:count>=1;
 }
 void MainWindow::arrangeLayers(editing_transform::Arrange command){
     const bool distribute=command>=editing_transform::Arrange::CentersX;if(!canArrangeLayers(distribute))return;
@@ -177,8 +190,10 @@ void MainWindow::setupTransformActions(){
     QMenu* layerMenu=nullptr;for(auto* entry:menuBar()->actions())if(entry->text()=="&Layer")layerMenu=entry->menu();
     auto* alignMenu=layerMenu->addMenu("Align");auto* distributeMenu=layerMenu->addMenu("Distribute");
     auto* popup=new QMenu(bar);auto* button=new QToolButton(bar);button->setText("Align");button->setAccessibleName("Align and distribute layers");button->setPopupMode(QToolButton::InstantPopup);button->setMenu(popup);button->setObjectName("arrangeLayersButton");bar->addWidget(button);
+    auto* panel=new QWidget(popup);auto* grid=new QGridLayout(panel);grid->setContentsMargins(6,6,6,6);grid->setSpacing(2);auto* panelAction=new QWidgetAction(popup);panelAction->setDefaultWidget(panel);popup->addAction(panelAction);
     const char* labels[]{"Left Edges","Horizontal Centers","Right Edges","Top Edges","Vertical Centers","Bottom Edges","Horizontal Centers","Vertical Centers","Horizontal Spacing","Vertical Spacing"};
-    for(int i=0;i<10;++i){const bool distribution=i>=6;auto* action=(distribution?distributeMenu:alignMenu)->addAction(labels[i]);action->setObjectName(QString("arrangeLayer%1").arg(i));popup->addAction(action);connect(action,&QAction::triggered,this,[this,i]{arrangeLayers(static_cast<editing_transform::Arrange>(i));});}
+    const int positions[]{0,1,2,5,6,7,3,8,4,9};
+    for(int i=0;i<10;++i){const bool distribution=i>=6;auto* action=(distribution?distributeMenu:alignMenu)->addAction(labels[i]);action->setObjectName(QString("arrangeLayer%1").arg(i));const auto name=QString(distribution?"Distribute ":"Align ")+labels[i];action->setToolTip(name);connect(action,&QAction::triggered,this,[this,i,popup]{popup->close();arrangeLayers(static_cast<editing_transform::Arrange>(i));});auto* control=new QToolButton(panel);control->setObjectName(QString("arrangeControl%1").arg(i));control->setIcon(arrangeIcon(i));control->setToolButtonStyle(Qt::ToolButtonIconOnly);control->setAccessibleName(name);control->setToolTip(name);connect(control,&QToolButton::clicked,action,&QAction::trigger);connect(action,&QAction::changed,control,[action,control]{control->setEnabled(action->isEnabled());});grid->addWidget(control,positions[i]/5,positions[i]%5);}
     auto*menu=menuBar()->addMenu("&Transform");
     auto*free=menu->addAction("Free Transform");free->setObjectName("freeTransform");free->setShortcut(QKeySequence("Ctrl+T"));bindCommand(free,"Transform","Free Transform",[this]{startTransformSession(true);});
     auto*distort=menu->addAction("Distort");distort->setObjectName("distortTransform");bindCommand(distort,"Transform","Distort",[this]{startTransformSession(true,true);});

@@ -22,6 +22,7 @@ std::vector<Item> items(const Document& d,const layers::SelectionState& selectio
         if(owner.empty())continue;auto box=bounds(p.transform);auto [it,inserted]=owners.emplace(owner,out.size());
         if(inserted)out.push_back({{},box});else out[it->second].box=unite(out[it->second].box,box);
         out[it->second].members.push_back(p.id);
+        if(owner!=p.id)for(auto parent=l->parentId;!parent.empty();){const auto* folder=byId.at(parent);if(folder->mask)out[it->second].members.push_back(parent);if(parent==owner)break;parent=folder->parentId;}
     }return out;
 }
 }
@@ -49,7 +50,7 @@ layers::EditResult arrange(const Document& d,layers::SelectionState selection,Ar
         for(size_t rank=0;rank<order.size();++rank){auto i=order[rank];double delta=spacing?position-start(i):(start(first)+length(first)/2+(start(last)+length(last)/2-start(first)-length(first)/2)*double(rank)/double(order.size()-1))-(start(i)+length(i)/2);if(horizontal)offsets[i].x=delta;else offsets[i].y=delta;position+=length(i)+gap;}
     }
     std::unordered_map<std::string,Point> moves;for(size_t i=0;i<groups.size();++i){Point p{std::round(offsets[i].x),std::round(offsets[i].y)};if(p.x||p.y)for(const auto& id:groups[i].members)moves.emplace(id,p);}
-    for(auto& l:next.layers){auto it=moves.find(l.id);if(it==moves.end())continue;auto old=l.transform;l.transform.x+=it->second.x;l.transform.y+=it->second.y;if(l.mask&&(l.mask->raster->width!=1||l.mask->raster->height!=1)){if(l.mask->linked&&l.mask->placement){l.mask->placement->x+=it->second.x;l.mask->placement->y+=it->second.y;}else if(!l.mask->linked&&!l.mask->placement)l.mask->placement=old;}}
+    for(auto& l:next.layers){auto it=moves.find(l.id);if(it==moves.end())continue;auto old=l.transform;l.transform.x+=it->second.x;l.transform.y+=it->second.y;if(!l.group&&l.mask&&(l.mask->raster->width!=1||l.mask->raster->height!=1)){if(l.mask->linked&&l.mask->placement){l.mask->placement->x+=it->second.x;l.mask->placement->y+=it->second.y;}else if(!l.mask->linked&&!l.mask->placement)l.mask->placement=old;}}
     validateDocument(next);return {std::move(next),std::move(selection),!moves.empty(),name};
 }
 }
