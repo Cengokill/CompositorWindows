@@ -248,8 +248,21 @@ void rgb_split_canvas_cancel_layers(){
 
 void lens_adjustment_lifecycle(){
     Fixture f;const auto source=f.project.document->layers[0].raster;
-    panel(f.window,"adjust.new.lens_effects","Lens Effects",[&](QDialog& p){ready(p);require(f.project.history.undoCount()==1,"lens layer creation history");control<QComboBox>(p,"lensEffectMode")->setCurrentIndex(3);ready(p);p.reject();});
-    require(f.project.document->layers.size()==2&&!f.project.effectPreview&&f.project.history.undoCount()==1,"lens Cancel retains default layer");
+    panel(f.window,"adjust.new.lens_effects","Lens Effects",[&](QDialog& p){
+        ready(p);require(f.project.history.undoCount()==1,"lens layer creation history");
+        auto* canvas=f.project.canvas;
+        auto* worker=dynamic_cast<ui::ViewportCompositeJob*>(canvas->findChild<QObject*>("viewportCompositeJob"));
+        require(worker&&canvas->viewportBounds().valid&&canvas->deferViewportComposite(),"lens canvas uses a background viewport render");
+        const auto initial=worker->epoch();
+        p.move(p.pos()+QPoint(40,30));
+        require(canvas->deferViewportComposite()&&worker->epoch()==initial,"moving the lens window must reuse the viewport");
+        control<QComboBox>(p,"lensEffectMode")->setCurrentIndex(3);
+        field(p,"Copies")->setValue(2);field(p,"Copies")->setValue(4);
+        ready(p);
+        require(canvas->deferViewportComposite()&&worker->epoch()>initial,"new lens settings must request a fresh viewport");
+        p.reject();
+    });
+    require(f.project.document->layers.size()==2&&!f.project.effectPreview&&!f.project.canvas->deferViewportComposite&&f.project.history.undoCount()==1,"lens Cancel retains default layer and detaches the viewport worker");
     const auto created=f.project.document;
     panel(f.window,"adjust.edit","Lens Effects",[&](QDialog& p){require(control<QComboBox>(p,"lensEffectMode")->currentIndex()==0,"lens Cancel restored mode");control<QComboBox>(p,"lensEffectMode")->setCurrentIndex(3);field(p,"Copies")->setValue(3);ready(p);require(bool(f.project.effectPreview),"lens preview");apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"lens Apply");});
     const auto applied=f.project.document;require(f.project.history.undoCount()==2&&f.project.document->layers[0].raster==source&&!f.project.effectPreview,"lens source/history/overlay");

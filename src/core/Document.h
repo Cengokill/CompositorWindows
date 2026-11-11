@@ -236,7 +236,7 @@ public:
     explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={},int lensPreviewMaxEdge=0):preview_(std::move(preview)),lensPreviewMaxEdge_(lensPreviewMaxEdge){}
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
     std::shared_ptr<const DeepImage> renderDeep(const Document&,int x,int y,int width,int height,const std::function<bool()>& cancelled={}) const override;
-    std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel) const;
+    std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled={}) const;
     std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel) const;
     // Cursor previews have at most1024 samples per axis; ceil-to-screen sizing
     // can require a positive step slightly below the viewport minimum1/32.

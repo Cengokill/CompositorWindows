@@ -233,6 +233,17 @@ void lens_global_cache(){
     equal(*cache.render(d),*full);
     auto distant=cache.renderViewport(d,256,0,256,32);
     for(int y=0;y<32;++y)for(int x=0;x<256;++x)REQUIRE(distant.raster->pixel(x,y)==full->pixel(x+256,y));
+    SoftwareRenderer draft({},256);
+    constexpr double units=.9,phase=-.23;
+    auto first=draft.renderScaled(d,phase,0,256,32,units);
+    // A cancellation probe would abort a second lens calculation. Both tiles
+    // belong to one image even when their floating-point phases round apart.
+    auto second=draft.renderScaled(d,phase+256*units,0,256,32,units,[]{return true;});
+    auto combined=SoftwareRenderer({},256).renderScaled(d,phase,0,512,32,units);
+    for(int y=0;y<32;++y)for(int x=0;x<256;++x){
+        REQUIRE(first->pixel(x,y)==combined->pixel(x,y));
+        REQUIRE(second->pixel(x,y)==combined->pixel(x+256,y));
+    }
     std::vector<Pixel> dark(12*12,{0,0,0,255});
     d.layers[0].raster=d.layers[0].raster->replacing(4,10,12,12,dark.data(),12);
     auto changed=SoftwareRenderer().render(d,0,0,512,32);

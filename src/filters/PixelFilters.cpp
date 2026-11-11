@@ -140,6 +140,23 @@ template<class T> std::vector<T> motion(const std::vector<T>& source,int w,int h
     auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);const double a=angle*std::numbers::pi/180,dx=std::cos(a),dy=-std::sin(a);std::vector<T> out(source.size());
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&63)==0)cancel(limits);std::array<double,4> sum{};for(int k=-r;k<=r;++k)for(int c=0;c<4;++c)sum[c]+=sample(source,w,h,x+k*dx,y+k*dy,c,clamp)*weights[k+r];for(int c=0;c<4;++c)out[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum[c]);}}return out;
 }
+struct LensTap {
+    int x{},y{};
+    double fx{},fy{},weight{};
+};
+LensTap lensTap(double x,double y,double weight){
+    const int ix=int(std::floor(x)),iy=int(std::floor(y));
+    return {ix,iy,x-ix,y-iy,weight};
+}
+double lensSample(const float* row,const float* next,int width,int x,int channel,const LensTap& tap){
+    const int left=x+tap.x,right=left+1;
+    const auto get=[&](const float* line,int column){
+        return line&&unsigned(column)<unsigned(width)?double(line[size_t(column)*4+channel]):0.;
+    };
+    const double upper=get(row,left)*(1-tap.fx)+get(row,right)*tap.fx;
+    if(tap.fy==0)return upper;
+    return upper*(1-tap.fy)+(get(next,left)*(1-tap.fx)+get(next,right)*tap.fx)*tap.fy;
+}
 // Behavioral reference: upstream LensEffects.swift v1.5.8, blob
 // 2a519f5ce8fd0e504eae78b065a1e70891fa124c (MIT, notice above).
 // Software implementation of the v1.5.8 optical behavior. Fixed quadrature
@@ -179,27 +196,58 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
         auto near=fastGaussian(light,w,h,size*.6,limits,{true,true,true,true});auto far=fastGaussian(light,w,h,size*4,limits,{true,true,true,true});auto glow=fastGaussian(high,w,h,size*1.5,limits,{true,true,true,true});
         for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=float(light[i]*(1-scatter)+near[i]*scatter*.6+far[i]*scatter*.4+glow[i]*strength*.35);}}
     }else if(s.effect==LensEffect::Bokeh){
-        double radius=side*s.bokehRadius/100,ring=s.bokehRing/100;constexpr int samples=96;
-        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sum[3]{},bright[3]{},total=0;
-            for(int k=0;k<samples;++k){double theta=k*2.399963229728653,rad=std::sqrt((k+.5)/samples);
-                if(s.bokehShape==BokehShape::Hexagon)rad*=std::cos(std::numbers::pi/6)/std::cos(std::remainder(theta,std::numbers::pi/3));
-                double xx=std::cos(theta)*rad,yy=std::sin(theta)*rad;
-                if(s.bokehShape==BokehShape::Oval)xx*=.5;
-                if(s.bokehShape==BokehShape::CatsEye)xx*=1-.65*std::min(1.,std::hypot((x+.5-w/2.)/(w/2.),(y+.5-h/2.)/(h/2.)));
-                double weight=1+ring*4*std::pow(rad,8);total+=weight;
-                for(int c=0;c<3;++c){sum[c]+=sample(light,w,h,x+xx*radius,y+yy*radius,c,{true,true,true,true})*weight;bright[c]+=sample(high,w,h,x+xx*radius,y+yy*radius,c,{true,true,true,true})*weight;}
+        const double radius=side*s.bokehRadius/100,ring=s.bokehRing/100;
+        struct BokehTap {double x,y,weight;};
+        std::array<BokehTap,96> taps{};
+        double total=0;
+        for(size_t k=0;k<taps.size();++k){
+            const double theta=k*2.399963229728653;
+            double rad=std::sqrt((k+.5)/taps.size());
+            if(s.bokehShape==BokehShape::Hexagon)rad*=std::cos(std::numbers::pi/6)/std::cos(std::remainder(theta,std::numbers::pi/3));
+            taps[k]={std::cos(theta)*rad*(s.bokehShape==BokehShape::Oval?.5:1),std::sin(theta)*rad,1+ring*4*std::pow(rad,8)};
+            total+=taps[k].weight;
+        }
+        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sum[3]{},bright[3]{};
+            const double stretch=s.bokehShape==BokehShape::CatsEye?1-.65*std::min(1.,std::hypot((x+.5-w/2.)/(w/2.),(y+.5-h/2.)/(h/2.))):1.;
+            for(const auto& tap:taps){
+                const auto sample=lensTap(x+tap.x*stretch*radius,y+tap.y*radius,tap.weight);
+                const auto index=[&](int col,int row){return (size_t(std::clamp(row,0,h-1))*w+std::clamp(col,0,w-1))*4;};
+                const auto a=index(sample.x,sample.y),b=index(sample.x+1,sample.y),c=index(sample.x,sample.y+1),d=index(sample.x+1,sample.y+1);
+                const auto add=[&](const std::vector<float>& pixels,int channel){
+                    const double top=pixels[a+channel]*(1-sample.fx)+pixels[b+channel]*sample.fx;
+                    const double bottom=pixels[c+channel]*(1-sample.fx)+pixels[d+channel]*sample.fx;
+                    return (top*(1-sample.fy)+bottom*sample.fy)*tap.weight;
+                };
+                for(int channel=0;channel<3;++channel){sum[channel]+=add(light,channel);bright[channel]+=add(high,channel);}
             }
             auto i=(std::size_t(y)*w+x)*4;for(int c=0;c<3;++c){double b=bright[c]/total*(12+s.bokehBrightness*.7);result[i+c]=float(sum[c]/total+.8*(1-std::exp(-b/.8)));}
         }}
     }else{
         bool flare=s.effect==LensEffect::AnamorphicFlare;int spokes=flare?1:s.starPoints/2;double amount=(flare?s.flareAmount:s.starAmount)/50;
         for(int spoke=0;spoke<spokes;++spoke){double theta=flare?0:(s.starAngle+spoke*180./spokes)*std::numbers::pi/180,reach=side*(flare?s.flareLength:s.starLength)/100;
-            std::array<double,65> weights{};std::array<std::array<double,65>,3> dx{},dy{};double total=0;
-            for(int k=-32;k<=32;++k){const double t=k/32.,weight=std::exp(-4.5*t*t);weights[k+32]=weight;total+=weight;for(int c=0;c<3;++c){const double stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;dx[c][k+32]=t*reach*stretch*std::cos(theta);dy[c][k+32]=t*reach*stretch*std::sin(theta);}}
-            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double sum=0;
-                for(int k=0;k<65;++k)sum+=sample(high,w,h,x+dx[c][k],y-dy[c][k],c,{})*weights[k];
-                double coating=flare?1-s.flareBlue/100*(c==0?.9:c==1?.62:0):1;result[(std::size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
-            }}
+            std::array<std::array<LensTap,65>,3> taps{};
+            double total=0;
+            for(int k=-32;k<=32;++k){
+                const double t=k/32.,weight=std::exp(-4.5*t*t);total+=weight;
+                for(int c=0;c<3;++c){
+                    const double stretch=flare?1-(2-c)*.35*s.flareBlue/100:1-c*.1;
+                    taps[c][k+32]=lensTap(t*reach*stretch*std::cos(theta),-t*reach*stretch*std::sin(theta),weight);
+                }
+            }
+            for(int y=0;y<h;++y){
+                cancel(limits);
+                const auto row=[&](int yy){return unsigned(yy)<unsigned(h)?high.data()+size_t(yy)*w*4:nullptr;};
+                for(int c=0;c<3;++c){
+                    std::array<const float*,65> first{},second{};
+                    for(size_t k=0;k<taps[c].size();++k){first[k]=row(y+taps[c][k].y);second[k]=row(y+taps[c][k].y+1);}
+                    const double coating=flare?1-s.flareBlue/100*(c==0?.9:c==1?.62:0):1;
+                    for(int x=0;x<w;++x){
+                        double sum=0;
+                        for(size_t k=0;k<taps[c].size();++k)sum+=lensSample(first[k],second[k],w,x,c,taps[c][k])*taps[c][k].weight;
+                        result[(size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
+                    }
+                }
+            }
         }
     }
     for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(a>0?std::clamp(gamma(result[i+c]/a),0.,1.)*a:0);result[i+3]=float(a);}}

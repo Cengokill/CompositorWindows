@@ -21,6 +21,7 @@ public:
         double zoom{1},panX{},panY{};
         int canvasWidth{},canvasHeight{};
         uint64_t gesture{};
+        int lensPreviewMaxEdge{};
     };
     struct Result {
         EditorProject* owner{};

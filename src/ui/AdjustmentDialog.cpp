@@ -98,7 +98,7 @@ std::shared_ptr<const Raster> adjustmentPreviewSource(const std::shared_ptr<cons
     check();
     return Raster::fromRgba(width,height,reinterpret_cast<const uint8_t*>(pixels.data()),size_t(width)*4);
 }
-PreviewResult makePreview(Document doc,std::string active,const std::string&json,bool live,bool existing,const std::string&newId,bool showPreview,bool full,const std::function<bool()>& cancelled){
+PreviewResult makePreview(Document doc,std::string active,const std::string&json,bool live,bool existing,const std::string&newId,bool showPreview,bool full,bool thumbnail,const std::function<bool()>& cancelled){
     auto check=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};
     PreviewResult result;result.full=full;const Document before=doc;
     try{
@@ -124,8 +124,7 @@ PreviewResult makePreview(Document doc,std::string active,const std::string&json
             }
         }
         check();validateDocument(doc);
-        const auto previewKind=QJsonDocument::fromJson(QByteArray::fromStdString(json)).object()["kind"].toString();
-        if(!(full&&live&&previewKind=="Lens Effects"))result.image=fittedDocumentPreview(showPreview?doc:before,previewKind=="Lens Effects"&&!full?QSize{320,240}:QSize{600,460});
+        if(thumbnail)result.image=fittedDocumentPreview(showPreview?doc:before,{600,460});
         check();result.value=AdjustmentDialogResult{std::move(doc),std::move(active)};
     }catch(const std::exception&e){result.error=e.what();}
     return result;
@@ -233,8 +232,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     previewEnabled.setObjectName("adjustmentPreviewEnabled");previewEnabled.setChecked(true);rightLayout.addWidget(&previewEnabled);
     rightLayout.addWidget(&buttons);layout.addWidget(&right,1);
     apply=buttons.button(QDialogButtonBox::Apply);apply->setEnabled(false);apply->setDefault(true);buttons.button(QDialogButtonBox::Cancel)->setAutoDefault(false);
-    debounce.setSingleShot(true);debounce.setInterval(kind=="Lens Effects"?250:100);
-    changed=[this]{++revision;if(watcher.isRunning())previewCancelled->store(true);apply->setEnabled(false);if(!previewEnabled.isChecked()&&host_.preview)host_.preview({});status.setText("Updating preview…");debounce.start();};
+    debounce.setSingleShot(true);debounce.setInterval(kind=="Lens Effects"?32:100);
+    changed=[this]{++revision;if(watcher.isRunning())previewCancelled->store(true);apply->setEnabled(false);if(!previewEnabled.isChecked()&&host_.preview)host_.preview({});status.setText("Updating preview…");if(kind!="Lens Effects"||!debounce.isActive())debounce.start();};
     QObject::connect(&previewEnabled,&QCheckBox::toggled,&dialog,changed);
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
@@ -424,7 +423,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         }
         syncGuideOverlay();
     }
-    start=[this]{if(closing)return;if(watcher.isRunning()){pending=true;previewCancelled->store(true);return;}pending=false;previewCancelled=std::make_shared<std::atomic_bool>(false);runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked(),full=committing_;status.setText(full?"Applying adjustment…":"Updating preview…");watcher.setFuture(QtConcurrent::run([original=original,active=active,json,live=live,existing=existing,insertedId=insertedId,showPreview,full,previewCancelled=previewCancelled]{return makePreview(original,active,json,live,existing,insertedId,showPreview,full,[previewCancelled]{return previewCancelled->load();});}));};
+    start=[this]{if(closing)return;if(watcher.isRunning()){pending=true;previewCancelled->store(true);return;}pending=false;previewCancelled=std::make_shared<std::atomic_bool>(false);runningRevision=revision;const auto json=encoded(settings);const bool showPreview=previewEnabled.isChecked(),full=committing_,thumbnail=kind!="Lens Effects"||modal;status.setText(full?"Applying adjustment…":"Updating preview…");watcher.setFuture(QtConcurrent::run([original=original,active=active,json,live=live,existing=existing,insertedId=insertedId,showPreview,full,thumbnail,previewCancelled=previewCancelled]{return makePreview(original,active,json,live,existing,insertedId,showPreview,full,thumbnail,[previewCancelled]{return previewCancelled->load();});}));};
     QObject::connect(&debounce,&QTimer::timeout,&dialog,start);
     QObject::connect(&watcher,&QFutureWatcher<PreviewResult>::finished,&dialog,[&]{if(closing){retire();return;}auto result=watcher.result();if(pending||runningRevision!=revision){start();return;}if(!result.error.isEmpty()){status.setText(result.error);apply->setEnabled(false);if(result.full){if(host_.error)host_.error(result.error);committing_=false;dialog.reject();}return;}completed=std::move(result.value);if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}if(result.full){dialog.accept();return;}if(host_.preview)host_.preview(previewEnabled.isChecked()?std::make_shared<const Document>(completed->document):nullptr);preview.setPixmap(QPixmap::fromImage(result.image));status.setText(previewEnabled.isChecked()?"":"Original image");apply->setEnabled(true);});
     QObject::connect(apply,&QPushButton::clicked,&dialog,[&]{

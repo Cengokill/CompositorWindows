@@ -275,7 +275,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             else if(direct){const size_t index=size_t(ty)*((direct->width+255)/256)+tx;tile=index<direct->tiles.size()&&direct->tiles[index]?direct->tiles[index]:zeroTile();}
             else if(mirror)tile=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,tx*256,ty*256,doc.width,doc.height);
             else if(!touches(painted,dx-margin*units,dy-margin*units,(w+margin*2.)*units,(h+margin*2.)*units))tile=zeroTile();
-            else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();++lastViewportComposedTiles_;}
+            else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();++lastViewportComposedTiles_;}
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
         }else{

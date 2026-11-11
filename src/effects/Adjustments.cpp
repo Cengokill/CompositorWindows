@@ -104,19 +104,45 @@ std::shared_ptr<const DeepImage> resizeDeepNearest(const DeepImage& source,int w
         out->setPixel(x,y,source.pixel(std::min(source.width-1,int((x+.5)*source.width/width)),std::min(source.height-1,int((y+.5)*source.height/height))));}
     return out;
 }
-// Interpolate only the effect delta, retaining the original image detail and coverage.
-template<class Read> std::array<double,3> lensDelta(int x,int y,int width,int height,int rw,int rh,Read read){
-    const double fx=std::clamp((x+.5)*rw/width-.5,0.,double(rw-1)),fy=std::clamp((y+.5)*rh/height-.5,0.,double(rh-1));
-    const int x0=int(fx),y0=int(fy),x1=std::min(x0+1,rw-1),y1=std::min(y0+1,rh-1);const double tx=fx-x0,ty=fy-y0;
-    const auto a=read(x0,y0),b=read(x1,y0),c=read(x0,y1),d=read(x1,y1);std::array<double,3> result{};
-    for(int k=0;k<3;++k)result[k]=(a[k]*(1-tx)+b[k]*tx)*(1-ty)+(c[k]*(1-tx)+d[k]*tx)*ty;
-    return result;
-}
+// Interpolate only the effect delta, retaining the source detail and coverage.
+// Each reduced pixel is read once, even at high canvas zoom.
+class LensPreviewDelta {
+    struct Sample {int first,second;double fraction;};
+    static std::vector<Sample> axis(int size,int reduced){
+        std::vector<Sample> result(size);
+        for(int i=0;i<size;++i){
+            const double coordinate=std::clamp((i+.5)*reduced/size-.5,0.,double(reduced-1));
+            const int first=int(coordinate);
+            result[i]={first,std::min(first+1,reduced-1),coordinate-first};
+        }
+        return result;
+    }
+    int width_;
+    std::vector<Sample> columns_,rows_;
+    std::vector<RGB> pixels_;
+public:
+    template<class Read>
+    LensPreviewDelta(int width,int height,int reducedWidth,int reducedHeight,Read read)
+        :width_(reducedWidth),columns_(axis(width,reducedWidth)),rows_(axis(height,reducedHeight)),
+         pixels_(size_t(reducedWidth)*reducedHeight){
+        for(int y=0;y<reducedHeight;++y)for(int x=0;x<reducedWidth;++x)pixels_[size_t(y)*width_+x]=read(x,y);
+    }
+    RGB pixel(int x,int y)const{
+        const auto [x0,x1,tx]=columns_[x];
+        const auto [y0,y1,ty]=rows_[y];
+        const auto* top=pixels_.data()+size_t(y0)*width_;
+        const auto* bottom=pixels_.data()+size_t(y1)*width_;
+        RGB result{};
+        for(int k=0;k<3;++k)result[k]=(top[x0][k]*(1-tx)+top[x1][k]*tx)*(1-ty)+(bottom[x0][k]*(1-tx)+bottom[x1][k]*tx)*ty;
+        return result;
+    }
+};
 std::shared_ptr<const Raster> lensPreview(const Raster& source,const Raster& reduced,const Raster& filtered,const std::function<bool()>& cancelled){
     std::vector<Pixel> pixels(size_t(source.width)*source.height);
     auto delta=[&](int x,int y){auto a=reduced.pixel(x,y),b=filtered.pixel(x,y);return std::array<double,3>{double(b.r)-a.r,double(b.g)-a.g,double(b.b)-a.b};};
+    const LensPreviewDelta grid(source.width,source.height,reduced.width,reduced.height,delta);
     for(int y=0;y<source.height;++y){if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");for(int x=0;x<source.width;++x){
-        auto p=source.pixel(x,y);auto d=lensDelta(x,y,source.width,source.height,reduced.width,reduced.height,delta);
+        auto p=source.pixel(x,y);auto d=grid.pixel(x,y);
         auto channel=[&](int value,int k){return uint8_t(std::clamp(std::lround(value+d[k]),0L,long(p.a)));};
         pixels[size_t(y)*source.width+x]={channel(p.r,0),channel(p.g,1),channel(p.b,2),p.a};
     }}
@@ -125,8 +151,9 @@ std::shared_ptr<const Raster> lensPreview(const Raster& source,const Raster& red
 std::shared_ptr<const DeepImage> lensPreview(const DeepImage& source,const DeepImage& reduced,const DeepImage& filtered,const std::function<bool()>& cancelled){
     auto out=makeDeep(source.width,source.height,source.format);
     auto delta=[&](int x,int y){auto a=reduced.pixel(x,y),b=filtered.pixel(x,y);return std::array<double,3>{double(b[0]-a[0]),double(b[1]-a[1]),double(b[2]-a[2])};};
+    const LensPreviewDelta grid(source.width,source.height,reduced.width,reduced.height,delta);
     for(int y=0;y<source.height;++y){if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");for(int x=0;x<source.width;++x){
-        auto p=source.pixel(x,y);auto d=lensDelta(x,y,source.width,source.height,reduced.width,reduced.height,delta);
+        auto p=source.pixel(x,y);auto d=grid.pixel(x,y);
         for(int k=0;k<3;++k)p[k]=float(std::clamp(double(p[k])+d[k],0.,double(p[3])));out->setPixel(x,y,p);
     }}return out;
 }
