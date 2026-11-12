@@ -1,4 +1,5 @@
 #include "filters/PixelFilters.h"
+#include "filters/RimLight.h"
 #include "graphics/PixelAlgorithms.h"
 #include <algorithm>
 #include <array>
@@ -29,6 +30,27 @@ std::shared_ptr<const Raster> image(int w,int h,const std::function<Pixel(int,in
 std::shared_ptr<const GrayRaster> mask(int w,int h,const std::function<std::uint8_t(int,int)>& get){auto p=std::make_shared<GrayRaster>();p->width=w;p->height=h;p->pixels.resize(std::size_t(w)*h);for(int y=0;y<h;++y)for(int x=0;x<w;++x)p->pixels[std::size_t(y)*w+x]=get(x,y);return p;}
 Request request(Kind k,std::shared_ptr<const Raster> source){Request q;q.kind=k;q.source=std::move(source);q.transform={10,20,double(q.source->width),double(q.source->height)};return q;}
 graphics::Rgba8View view(std::vector<std::uint8_t>& p,int w,int h){return {p,std::uint32_t(w),std::uint32_t(h),std::size_t(w)*4};}
+void testRimLightKernel(){
+    auto src=image(96,96,[](int,int){return Pixel{80,80,80,255};});
+    auto subject=mask(96,96,[](int x,int y){return std::uint8_t(x>=24&&x<72&&y>=20&&y<76?255:0);});
+    RimLightSettings s;s.glow=0;s.lights[0].angle=0;s.lights[0].color={1,0,0};s.lights[0].strength=100;s.lights[0].width=100;
+    auto right=renderRimLight(*src,*subject,s,4000000000ULL);require(right->pixel(70,48).r>right->pixel(25,48).r,"rim light direction");require(right->pixel(70,48).g==80,"rim light color");require(right->pixel(4,4)==src->pixel(4,4),"rim leaves distant background alone");
+    s.glow=100;auto glow=renderRimLight(*src,*subject,s,4000000000ULL);require(glow->pixel(73,48).r>right->pixel(73,48).r,"rim glow reaches background");s.glow=0;
+    s.count=2;s.lights[1].angle=180;s.lights[1].strength=100;s.lights[1].width=100;s.lights[1].color={0,0,1};auto two=renderRimLight(*src,*subject,s,4000000000ULL);require(two->pixel(25,48).b>two->pixel(25,48).r&&two->pixel(70,48).r>two->pixel(70,48).b,"independent colored lights");s.count=1;
+    auto fineMask=mask(96,96,[](int x,int y){return std::uint8_t(x==72&&y>=24&&y<72?150:x>=24&&x<72&&y>=20&&y<76?255:0);});
+    auto hair=image(96,96,[](int x,int y){return x==72&&y>=24&&y<72?Pixel{160,160,160,255}:Pixel{80,80,80,255};});auto litHair=renderRimLight(*hair,*fineMask,s,4000000000ULL);require(litHair->pixel(72,48).r>hair->pixel(72,48).r,"fine strand catches light");
+    auto busy=image(96,96,[](int x,int y){const auto v=std::uint8_t(x>=72?((x+y)%2?135:25):80);return Pixel{v,v,v,255};});auto litBusy=renderRimLight(*busy,*subject,s,4000000000ULL);int backgroundChange=0;for(int y=25;y<70;++y)for(int x=74;x<80;++x)backgroundChange+=int(litBusy->pixel(x,y).r)-busy->pixel(x,y).r;require(backgroundChange==0,"busy background is not mistaken for strands");
+    auto busyHair=image(96,96,[](int x,int y){const auto v=std::uint8_t(x==72&&y>=24&&y<72?200:x>=72?((x+y)%2?135:25):80);return Pixel{v,v,v,255};});auto litBusyHair=renderRimLight(*busyHair,*fineMask,s,4000000000ULL);require(litBusyHair->pixel(72,48).r>busyHair->pixel(72,48).r,"covered strand catches light against busy background");
+    auto transparent=image(96,96,[](int x,int){return x<48?Pixel{30,40,50,100}:Pixel{};});auto alpha=renderRimLight(*transparent,*subject,s,4000000000ULL);for(int y=0;y<96;++y)for(int x=0;x<96;++x){auto p=alpha->pixel(x,y);require(p.a==transparent->pixel(x,y).a&&p.r<=p.a&&p.g<=p.a&&p.b<=p.a,"rim preserves premultiplied transparency");}
+    s.lights[0].angle=180;auto left=renderRimLight(*src,*subject,s,4000000000ULL);require(left->pixel(25,48).r>left->pixel(70,48).r,"opposite light direction");
+    s.lights[0].strength=0;require(renderRimLight(*src,*subject,s,4000000000ULL)->rgba()==src->rgba(),"rim identity");
+    s.lights[0].strength=100;fails([&]{renderRimLight(*src,*subject,s,1);},"rim memory budget");fails([&]{renderRimLight(*src,*subject,s,4000000000ULL,[]{return true;});},"rim cancellation");
+    auto bad=*subject;bad.pixels.pop_back();fails([&]{renderRimLight(*src,bad,s,4000000000ULL);},"rim malformed mask");
+    auto job=request(Kind::RimLight,src);job.settings.rimLight=s;job.subjectMask=subject;job.selection=SourceSelection{mask(96,96,[](int x,int){return std::uint8_t(x<48?255:0);})};
+    auto applied=apply(job);job.preview=true;auto draft=apply(job);require(applied.raster->rgba()==draft.raster->rgba(),"rim preview matches apply");
+    for(int y=0;y<96;++y)for(int x=48;x<96;++x)require(applied.raster->pixel(x,y)==src->pixel(x,y),"rim respects selection");
+    job.subjectMask.reset();fails([&]{apply(job);},"rim requires subject mask");
+}
 void testSettings(){
     LensEffectSettings lens;lens.threshold=std::numeric_limits<double>::quiet_NaN();lens.starPoints=7;lens.prismCopies=12;lens.bokehRadius=-1;
     auto normalizedLens=lens.normalized();require(normalizedLens.threshold==90&&normalizedLens.starPoints==6&&normalizedLens.prismCopies==8&&normalizedLens.bokehRadius==.5,"lens effect settings normalization");
@@ -331,6 +353,12 @@ std::uint64_t peakProcessBytes() {
     return std::uint64_t(usage.ru_maxrss) * 1024;
 #endif
 }
+int benchmarkRim(){
+    auto source=image(1024,768,[](int x,int y){auto v=std::uint8_t(50+(x+y)%90);return Pixel{v,v,v,255};});
+    auto subject=mask(1024,768,[](int x,int y){return std::uint8_t(x>200&&x<824&&y>120&&y<650?255:0);});
+    RimLightSettings settings;settings.count=3;auto start=std::chrono::steady_clock::now();auto result=renderRimLight(*source,*subject,settings,4000000000ULL);require(bool(result),"rim benchmark output");
+    std::cout<<"rim 1024x768 three lights ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()<<" peak_process_mib="<<double(peakProcessBytes())/(1024*1024)<<'\n';return 0;
+}
 int benchmarkSharpen(){
     auto source=image(1024,768,[](int x,int y){auto v=uint8_t(40+(x*3+y*5)%160);return Pixel{v,v,v,255};});
     auto q=request(Kind::Sharpen,source);q.settings.sharpenRadius=20;
@@ -389,5 +417,5 @@ int benchmarkCameraRaw() {
     return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-sharpen")return benchmarkSharpen();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testSharpen();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-rim")return benchmarkRim();if(argc==2&&std::string(argv[1])=="--benchmark-sharpen")return benchmarkSharpen();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testRimLightKernel();testSettings();testSharpen();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

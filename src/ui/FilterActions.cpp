@@ -8,6 +8,8 @@
 #include "PropertyControls.h"
 #include "graphics/MaskSampling.h"
 #include "graphics/Downsample.h"
+#include "imaging/onnx_subject_provider.h"
+#include "imaging/subject_matte.h"
 #include <map>
 #include "filters/PixelFilters.h"
 #include "editing/Selection.h"
@@ -30,14 +32,33 @@
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QMessageBox>
+#include <QApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QColorDialog>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <filesystem>
 #include <utility>
 
 namespace compositor {
 namespace {
+std::filesystem::path subjectModelPath(){
+    auto model=QDir(QApplication::applicationDirPath()).filePath("models/birefnet-lite.onnx");
+    if(!QFileInfo::exists(model))model=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/dependencies/imaging/model/birefnet-lite.onnx";
+    return std::filesystem::path(model.toStdWString());
+}
+std::shared_ptr<const GrayRaster> rimSubject(const Raster& source,const std::filesystem::path& model,const std::function<bool()>& cancelled){
+    imaging::ImportOptions options;options.cancelled=cancelled;
+    if(std::uint64_t(source.width)*source.height>options.maxWorkingBytes/72)throw std::runtime_error("Rim Light subject mask exceeds transient memory budget");
+    imaging::RgbaImage image{std::uint32_t(source.width),std::uint32_t(source.height),size_t(source.width)*4,source.rgba()};
+    imaging::OnnxSubjectProvider provider(model);auto mask=provider.infer(image,options);
+    imaging::MatteSettings settings;settings.advanced=true;settings.refineEdges=std::clamp(std::max(source.width,source.height)*.008,2.,40.);settings.contrast=0;
+    auto refined=imaging::refineSubjectMask(mask,image,settings,false,nullptr,options);imaging::checkCancelled(options);
+    auto result=std::make_shared<GrayRaster>();result->width=source.width;result->height=source.height;result->pixels=std::move(refined.pixels);return result;
+}
 std::optional<filters::SourceSelection> filterSelection(const Document&doc,const Layer&layer,filters::Kind kind,const std::function<bool()>& cancelled={}){
     if(!doc.selection||!layer.raster)return {};
     filters::PixelRect rect{0,0,layer.raster->width,layer.raster->height};
@@ -117,7 +138,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
 }
-QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects","Sharpen"};}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects","Sharpen","Rim Light"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
@@ -185,6 +206,8 @@ class FilterPanel final:public ui::EditPanelSession {
     QFutureWatcher<std::optional<std::pair<double,double>>> balance_;
     std::shared_ptr<std::atomic_bool> balanceCancelled_;
     std::shared_ptr<std::optional<filters::SourceSelection>> rawSelection_;
+    std::shared_ptr<std::shared_ptr<const GrayRaster>> rimMask_=std::make_shared<std::shared_ptr<const GrayRaster>>();
+    std::filesystem::path rimModel_;
     ui::CameraRawPanel::Tool dragKind_{ui::CameraRawPanel::Tool::None};
     FilterDialog dialog_;
     QVBoxLayout layout_;
@@ -350,7 +373,7 @@ class FilterPanel final:public ui::EditPanelSession {
         if((job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit||job.kind==filters::Kind::LensEffects)&&job.preview)job.previewMaxEdge=512;
         if(!existingGrade)status_.setText(committing_?"Applying filter…":"Updating preview…");
         const int navigatorEdge=existingGrade?std::exchange(pendingNavigatorEdge_,0):0;
-        worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_,selection=rawSelection_,
+        worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_,selection=rawSelection_,rimMask=rimMask_,rimModel=rimModel_,
                                              viewport=runningViewport_,cache=rawViewportCache_,existingGrade,navigatorEdge]() mutable {
             FilterOutput out;out.full=!job.preview;
             try{
@@ -379,6 +402,7 @@ class FilterPanel final:public ui::EditPanelSession {
                     if(!*selection)*selection=filterSelection(before,original,job.kind,job.limits.cancelled);
                     job.selection=*selection;
                 }
+                if(job.kind==filters::Kind::RimLight){if(!*rimMask)*rimMask=rimSubject(*job.source,rimModel,job.limits.cancelled);job.subjectMask=*rimMask;}
                 auto prepared=filteredLayer(original,job);
                 auto document=std::move(before);
                 if(job.kind==filters::Kind::CameraRaw&&job.preview){
@@ -416,11 +440,18 @@ class FilterPanel final:public ui::EditPanelSession {
             }
             host_.commit({{},original_.id,false,{},std::move(layers)});
         }else if(answer==QDialog::Accepted&&committed_&&host_.commit){
+            if(request_.kind==filters::Kind::RimLight){
+                auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
+                if(!current)throw std::runtime_error("The Rim Light document is no longer available");
+                auto target=std::find_if(current->layers.begin(),current->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
+                if(target==current->layers.end()||target->raster!=original_.raster||target->deep!=original_.deep||target->transform!=original_.transform)throw std::runtime_error("The Rim Light source layer changed before Apply finished");
+            }
             auto found=std::find_if(committed_->layers.begin(),committed_->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
             if(found==committed_->layers.end())throw std::runtime_error("Completed filter target is missing");
             auto job=request_;job.preview=false;job.limits.cancelled={};
             auto merge=filterMerge(*found,original_,job);
             host_.commit({std::move(*committed_),original_.id,false,std::move(merge)});
+            if(request_.kind==filters::Kind::RimLight&&remember_)remember_(request_.settings.normalized());
             if(raw_&&rememberRaw_)rememberRaw_(request_.cameraRaw);
             if(rememberLast_)rememberLast_(request_.kind);
         }}
@@ -438,6 +469,7 @@ public:
     FilterPanel(QWidget* parent,Document before,Layer original,filters::Request request,QString title,ui::EditPanelHost host,std::function<void(const filters::Settings&)> remember,std::function<void(const filters::CameraRawSettings&)> rememberRaw,std::function<void(filters::Kind)> rememberLast,std::function<std::optional<editing::Rect>()> currentCrop)
         :EditPanelSession(parent,Kind::Filter,false,std::move(host)),before_(std::move(before)),original_(std::move(original)),request_(std::move(request)),remember_(std::move(remember)),rememberRaw_(std::move(rememberRaw)),rememberLast_(std::move(rememberLast)),currentCrop_(std::move(currentCrop)),dialog_(parent),layout_(&dialog_){
         const bool cameraRaw=request_.kind==filters::Kind::CameraRaw;
+        if(request_.kind==filters::Kind::RimLight)rimModel_=subjectModelPath();
         if(cameraRaw)buttons_.setStandardButtons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);
         dialog_.mayReject=[this]{return !committing_;};dialog_.setObjectName("filterPanel");dialog_.setWindowTitle(title);dialog_.setWindowFlags(Qt::Tool|Qt::WindowTitleHint|Qt::WindowCloseButtonHint);dialog_.setWindowModality(Qt::NonModal);
         layout_.addLayout(&fields_);thumbnail_.setObjectName("filterPreview");layout_.addWidget(&thumbnail_);thumbnail_.hide();
@@ -461,6 +493,19 @@ public:
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[this,field=&value](double next){*field=next;change();});
         };
         switch(request_.kind){
+        case filters::Kind::RimLight:{
+            auto& rim=request_.settings.rimLight;auto* count=new QComboBox;count->setObjectName("rimLightCount");count->addItems({"1","2","3"});count->setCurrentIndex(std::clamp(rim.count,1,3)-1);fields_.addRow("Lights",count);
+            auto* active=new QComboBox;active->setObjectName("rimActiveLight");for(int i=0;i<std::clamp(rim.count,1,3);++i)active->addItem(QString("Light %1").arg(i+1));fields_.addRow("Edit",active);
+            std::array<std::pair<int,int>,3> rows;
+            for(int i=0;i<3;++i){auto& light=rim.lights[i];const auto& defaults=factory.rimLight.lights[i];rows[i].first=fields_.rowCount();const auto prefix=QString("Light %1 ").arg(i+1);
+                number(prefix+"angle",light.angle,-180,180,0,defaults.angle);number(prefix+"strength",light.strength,0,100,0,defaults.strength);number(prefix+"width",light.width,0,100,0,defaults.width);number(prefix+"choke",light.choke,0,100,0,defaults.choke);
+                auto* color=new QPushButton;color->setProperty("rimLightColor",true);auto update=[this,color,i]{const auto& c=request_.settings.rimLight.lights[i].color;color->setText(QColor::fromRgbF(c[0],c[1],c[2]).name());};update();color->setAccessibleName(prefix+"color");fields_.addRow(prefix+"color",color);
+                connect(color,&QPushButton::clicked,&dialog_,[this,i,update]{auto& c=request_.settings.rimLight.lights[i].color;auto picked=QColorDialog::getColor(QColor::fromRgbF(c[0],c[1],c[2]),&dialog_,QString("Light %1 color").arg(i+1));if(picked.isValid()){c={picked.redF(),picked.greenF(),picked.blueF()};update();change();}});rows[i].second=fields_.rowCount();
+            }
+            auto show=[this,rows](int selected){for(int i=0;i<3;++i)for(int row=rows[i].first;row<rows[i].second;++row)fields_.setRowVisible(row,i==selected);};show(0);
+            connect(active,&QComboBox::currentIndexChanged,&dialog_,[show](int index){show(index);});
+            connect(count,&QComboBox::currentIndexChanged,&dialog_,[this,show,active](int index){request_.settings.rimLight.count=index+1;QSignalBlocker block(active);active->clear();for(int i=0;i<=index;++i)active->addItem(QString("Light %1").arg(i+1));active->setCurrentIndex(index);show(index);dialog_.adjustSize();change();});number("Glow",rim.glow,0,100,0,factory.rimLight.glow);break;
+        }
         case filters::Kind::Sharpen:number("Amount",request_.settings.sharpenAmount,0,300,0,factory.sharpenAmount);number("Radius",request_.settings.sharpenRadius,.1,20,1,factory.sharpenRadius);break;
         case filters::Kind::GaussianBlur:number("Radius",request_.settings.radius,.1,250,1,factory.radius);break;
         case filters::Kind::MotionBlur:number("Angle",request_.settings.angle,-90,90,1,factory.angle);number("Distance",request_.settings.distance,1,2000,1,factory.distance);break;
@@ -634,14 +679,16 @@ public:
                 }
                 request_.cameraRaw=std::move(rendered);request_.cameraRawView={};
             }else if(request_.kind==filters::Kind::LensCorrection&&request_.settings.distortion==0){dialog_.reject();return;}
+            else if(request_.kind==filters::Kind::RimLight&&request_.settings.rimLight.isIdentity()){dialog_.reject();return;}
             else if(request_.kind==filters::Kind::LensEffects&&request_.settings.lens.isIdentity()){dialog_.reject();return;}
             else if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitDistance==0&&request_.settings.rgbSplitBlur==0){dialog_.reject();return;}
             if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
-            if(!raw_&&remember_)remember_(request_.settings.normalized());committing_=true;apply_->setEnabled(false);buttons_.button(QDialogButtonBox::Cancel)->setEnabled(false);
+            if(!raw_&&request_.kind!=filters::Kind::RimLight&&remember_)remember_(request_.settings.normalized());committing_=true;apply_->setEnabled(false);buttons_.button(QDialogButtonBox::Cancel)->setEnabled(false);
             for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QComboBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
+            for(auto* control:dialog_.findChildren<QPushButton*>())if(control->property("rimLightColor").toBool())control->setEnabled(false);
             preview_.setEnabled(false);debounce_.stop();
             if(!raw_)publishPreview();
             if(running_){++version_;cancelled_->store(true);}
@@ -731,7 +778,7 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     if(repeating&&!canRunFilterKind(*p,kind))return;
     if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
     if(layer->deep&&layer->deep->isHdr()&&!filters::supportsHdr(kind))throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
-    const bool convert=layer->deep&&layer->deep->valid()&&!layer->deep->isHdr()&&(kind==filters::Kind::LensCorrection||kind==filters::Kind::ContentAwareFill);
+    const bool convert=layer->deep&&layer->deep->valid()&&!layer->deep->isHdr()&&(kind==filters::Kind::LensCorrection||kind==filters::Kind::ContentAwareFill||kind==filters::Kind::RimLight);
     if(convert){
         QMessageBox confirmation(QMessageBox::Question,"Convert to 8-Bit","This filter uses an 8-bit kernel. Convert this 16-bit layer to 8-bit first? This conversion can be undone.",QMessageBox::Ok|QMessageBox::Cancel,this);
         confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
@@ -769,9 +816,11 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
         };
         p->projectBusy=true;refresh(false,false);
         try{
-            new ui::LastFilterJob([job,original,selectionSource](std::function<bool()> cancelled){
+            const auto rimModel=kind==filters::Kind::RimLight?subjectModelPath():std::filesystem::path{};
+            new ui::LastFilterJob([job,original,selectionSource,rimModel](std::function<bool()> cancelled){
                 auto active=job;active.limits.cancelled=std::move(cancelled);
                 if(selectionSource)active.selection=filterSelection(*selectionSource,original,active.kind,active.limits.cancelled);
+                if(active.kind==filters::Kind::RimLight)active.subjectMask=rimSubject(*active.source,rimModel,active.limits.cancelled);
                 return filteredLayer(original,active).layer;
             },std::move(host),this,p);
         }catch(...){p->projectBusy=false;refresh(false,false);throw;}
