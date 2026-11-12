@@ -117,7 +117,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
 }
-QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects"};}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects","Sharpen"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
@@ -450,6 +450,7 @@ public:
         const filters::Settings factory{};
         auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
             auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"||label=="Threshold"||label=="Midpoint"?decimals:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
+            if(request_.kind==filters::Kind::Sharpen)spin->setSuffix(label=="Amount"?" %":" px");
             auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=(label=="Radius"||label=="Distance"||label=="Amount")&&low>0;
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
@@ -460,6 +461,7 @@ public:
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[this,field=&value](double next){*field=next;change();});
         };
         switch(request_.kind){
+        case filters::Kind::Sharpen:number("Amount",request_.settings.sharpenAmount,0,300,0,factory.sharpenAmount);number("Radius",request_.settings.sharpenRadius,.1,20,1,factory.sharpenRadius);break;
         case filters::Kind::GaussianBlur:number("Radius",request_.settings.radius,.1,250,1,factory.radius);break;
         case filters::Kind::MotionBlur:number("Angle",request_.settings.angle,-90,90,1,factory.angle);number("Distance",request_.settings.distance,1,2000,1,factory.distance);break;
         case filters::Kind::AddNoise:{number("Amount",request_.settings.amount,.1,400,1,factory.amount);auto* gaussian=new QCheckBox("Gaussian");auto* mono=new QCheckBox("Monochromatic");gaussian->setChecked(request_.settings.gaussian);mono->setChecked(request_.settings.monochromatic);fields_.addRow(gaussian);fields_.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.gaussian=value;change();});connect(mono,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.monochromatic=value;change();});break;}

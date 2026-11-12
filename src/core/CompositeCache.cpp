@@ -175,12 +175,14 @@ int spatialMargin(const Document& doc,double units=1){
     for(auto it=doc.layers.rbegin();it!=doc.layers.rend();++it){const auto& layer=*it;const auto& json=layer.adjustmentJson;if(!layer.visible||json.empty())continue;
         const bool gaussian=json.find("\"Gaussian Blur\"")!=std::string::npos,motion=json.find("\"Motion Blur\"")!=std::string::npos;
         const bool progressive=json.find("\"Progressive Blur\"")!=std::string::npos,glow=json.find("\"Bloom / Glow\"")!=std::string::npos,rgb=json.find("\"RGB Split\"")!=std::string::npos;
-        if(!gaussian&&!motion&&!progressive&&!glow&&!rgb)continue;
+        const bool sharpen=json.find("\"Sharpen\"")!=std::string::npos;
+        if(!gaussian&&!motion&&!progressive&&!glow&&!rgb&&!sharpen)continue;
         const auto settings=json.find("\"filterSettings\"");const auto layerSettings=json.find("\"filterLayerSettings\"");
         if(gaussian){const double radius=settings==std::string::npos?8:jsonField(json,settings,"radius",8);if(radius>0)margin+=std::ceil(radius*3+2);}
         if(motion){const double distance=settings==std::string::npos?16:jsonField(json,settings,"distance",16);if(distance>0)margin+=std::ceil(distance/2+2);}
         if(progressive){const double from=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"progressiveFrom",0),to=layerSettings==std::string::npos?20:jsonField(json,layerSettings,"progressiveTo",20);margin+=std::ceil(std::max(from,to)*3+2);}
         if(glow){const double radius=layerSettings==std::string::npos?24:jsonField(json,layerSettings,"bloomRadius",24);margin+=std::ceil(radius*3+2);}
+        if(sharpen){const auto section=json.find("\"sharpen\"",layerSettings);const double amount=section==std::string::npos?100:jsonField(json,section,"amount",100),radius=section==std::string::npos?1:jsonField(json,section,"radius",1);if(amount>0)margin+=std::ceil(radius*3+2);}
         if(rgb){
             const double distance=layerSettings==std::string::npos?10:jsonField(json,layerSettings,"rgbSplitDistance",10),blur=layerSettings==std::string::npos?0:jsonField(json,layerSettings,"rgbSplitBlur",0);
             const auto flag=layerSettings==std::string::npos?std::string::npos:json.find("\"rgbSplitRadial\"",layerSettings);

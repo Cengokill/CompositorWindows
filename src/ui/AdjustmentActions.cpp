@@ -73,6 +73,7 @@ void MainWindow::setupAdjustmentActions(){
     action(live,"Vignette…",{},[this]{adjust("Vignette",true);});
     action(live,"Tonal Contrast…",{},[this]{adjust("Tonal Contrast",true);});
     action(live,"Lens Effects…",{},[this]{adjust("Lens Effects",true);});
+    action(live,"Sharpen…",{},[this]{adjust("Sharpen",true);});
     action(menu,"Edit Adjustment Layer…",{},[this]{if(active()&&!active()->adjustmentJson.empty())adjust({},true,true);});
     auto*filters=menuBar()->addMenu("&Filters");
     lastFilterAction_=action(filters,"Last Filter",{},[this]{repeatLastFilter();});
@@ -82,7 +83,7 @@ void MainWindow::setupAdjustmentActions(){
         else lastFilterAction_->setText("Last Filter: "+filterKindDisplayName(*project->toolState.lastFilterKind));
     });
     filters->addSeparator();
-    const struct {const char* name;int kind;} filterItems[]{{"Gaussian Blur",0},{"Progressive Blur",11},{"Motion Blur",1},{"Add Noise",2},{"Lens Correction",3},{"Camera Raw Filter",10},{"Content-Aware Fill",4},{"Vignette",5},{"Bloom",6},{"Tonal Contrast",7},{"Dither",8},{"Scanlines",9},{"RGB Split",12},{"Lens Effects",13}};
+    const struct {const char* name;int kind;} filterItems[]{{"Gaussian Blur",0},{"Progressive Blur",11},{"Motion Blur",1},{"Add Noise",2},{"Lens Correction",3},{"Camera Raw Filter",10},{"Content-Aware Fill",4},{"Vignette",5},{"Bloom",6},{"Tonal Contrast",7},{"Dither",8},{"Scanlines",9},{"RGB Split",12},{"Lens Effects",13},{"Sharpen",14}};
     for(const auto& item:filterItems)action(filters,QString(item.name)+"…",{},[this,kind=item.kind]{runFilter(kind);});
     action(filters,"Remove Background…",{},[this]{removeBackground();});
 }
