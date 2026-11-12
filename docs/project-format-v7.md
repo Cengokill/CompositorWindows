@@ -58,7 +58,7 @@ The save routine validates the full snapshot, encodes all assets, then asks Foun
 
 ## Windows reader through version 23
 
-The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–22 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
+The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–23 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
 | Version | Additional content |
 |---|---|
@@ -99,7 +99,7 @@ Bloom / Glow uses amount and radius. The destructive **Filters > Bloom** command
 
 ## Windows CMYK profile extension (version 15)
 
-A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–20. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
+A document with a CMYK proof/output profile writes version 15. Documents without one continue to write the lowest version needed by their existing features. The reader accepts versions 1–23. `colorSpace` remains `sRGB`; layer and mask assets retain their existing formats and meaning.
 
 The optional top-level `cmykProfile` object contains `file` (exactly `cmyk.icc`), `name` (nonempty, at most 1024 characters), and `sha256` (64 lowercase hexadecimal digits). The ICC bytes live in that regular file at the package root, are limited to 16 MiB, and must match the digest. The profile must describe a CMYK output device with XYZ or Lab PCS and support both RGB conversion directions. Invalid, missing, oversized, mismatched or reparse-point assets fail loading before image decoding. A manifest below version 15 carrying this field is rejected. A version 15 manifest may omit it.
 
