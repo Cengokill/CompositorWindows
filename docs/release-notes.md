@@ -1,3 +1,20 @@
+# Compositor Windows 1.5.12
+
+## New features
+
+- Add up to three colored directional lights and a shared glow around a detected subject with **Filters > Rim Light**.
+- Sharpen images with a pixel filter or an editable adjustment layer. Adjustment layers use Windows project format v23.
+- Align and distribute selected layers from the Layer menu or Move toolbar.
+- Set custom crop ratios and snap crop bounds to document edges.
+
+## Improvements
+
+Automatic update checks run at startup as well as periodically when enabled. Crop previews are more responsive.
+
+## Fixes
+
+What's New appears on first launch. Clicking a layer name selects it without changing visibility.
+
 # Compositor Windows 1.5.9
 
 ## New features
