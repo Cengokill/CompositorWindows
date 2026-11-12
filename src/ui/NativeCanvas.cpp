@@ -603,7 +603,7 @@ void NativeCanvas::noteViewportInteraction(){
     if(!live)return;
     viewportDeferred_=true;
     if(navigatorTimer_&&navigatorTimer_->isActive())navigatorTimer_->start();
-    if(!viewportTimer_){viewportTimer_=new QTimer(this);viewportTimer_->setObjectName("viewportInteractionTimer");viewportTimer_->setSingleShot(true);connect(viewportTimer_,&QTimer::timeout,this,[this]{viewportDeferred_=false;update();});}
+    if(!viewportTimer_){viewportTimer_=new QTimer(this);viewportTimer_->setObjectName("viewportInteractionTimer");viewportTimer_->setSingleShot(true);connect(viewportTimer_,&QTimer::timeout,this,[this]{viewportDeferred_=false;if(zoomSettlePending_){zoomSettlePending_=false;if(zoomSettled)zoomSettled();}update();});}
     // Wheel notches coalesce. A held pan or minimap drag refreshes on a fixed
     // cadence so newly revealed document area does not wait for the release.
     if(viewportGesture_){viewportTimer_->setInterval(20);viewportTimer_->start();return;}
@@ -750,8 +750,8 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     const bool notch=!precise||std::abs(angleSteps.x())>=1||std::abs(angleSteps.y())>=1;
     const QPointF delta=notch?angleSteps:QPointF(e->pixelDelta());
     viewportGesture_=true;
-    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(steps*(notch?std::log(1.25):.015)),e->position());}
-    else panBy((precise?QPointF(e->pixelDelta()):angleSteps)*(precise?1:12));
+    if(modifiers.testFlag(Qt::AltModifier)){zoomSettlePending_=bool(raster_);const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(steps*(notch?std::log(1.25):.015)),e->position());}
+    else{zoomSettlePending_=false;panBy((precise?QPointF(e->pixelDelta()):angleSteps)*(precise?1:12));}
     viewportGesture_=false;
     if(pointerHover)pointerHover(e->position(),e->modifiers());
 }

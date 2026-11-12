@@ -219,7 +219,7 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
 CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview,const std::function<bool()>& cancelled){
     lastViewportComposedTiles_=0;
     Document doc=input;
-    if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");}
+    if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");*found=preview->layer;}
     validateDocument(doc);
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(width)||!std::isfinite(height)||!std::isfinite(x+width)||!std::isfinite(y+height)||width<0||height<0||
        !std::isfinite(requestedUnits)||requestedUnits<1./32||requestedUnits>30000||maxVisibleTiles<1||maxVisibleTiles>16384||maxRetainedTiles<maxVisibleTiles||maxRetainedTiles>16384)
@@ -277,7 +277,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     }
     if(all||!damage.empty())validateCulledAdjustments(doc,preview);
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
-    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview,lensPreviewMaxEdge_);const int margin=spatialMargin(doc,units);
+    auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview,lensPreviewMaxEdge_,true);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
     for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){
         if(cancelled&&cancelled()){reset();throw std::runtime_error("Viewport composition cancelled");}

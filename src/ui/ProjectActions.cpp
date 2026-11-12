@@ -184,6 +184,18 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->textKey=[this](QKeyEvent* event){return handleTextKey(event);};
     project.canvas->textInput=[this](QInputMethodEvent* event){handleTextInput(event);};
     auto*owner=&project;project.canvas->viewportProvider=[this,owner](double x,double y,double w,double h,double units){return brushViewport(*owner,x,y,w,h,units);};
+    project.canvas->zoomSettled=[this,owner]{
+        auto* view=owner->canvas;
+        if(!view||!owner->document||owner->importing||owner->projectBusy||transformDrag_||transformSession_||retouch_||stroke_||drawingOriginal_||textSession_)return;
+        if(editPanelPreview(*owner)||owner->effectPreview||owner->blendPreview||owner->textPreview||owner->gradientPreview||owner->retouchPreview||owner->brushPreview||
+           (tool_==Tool::Crop&&cropDraft_)||view->hasMovePreview())return;
+        if(!viewportComposite_||!view->viewportBounds().valid)return;
+        ++previewGesture_;previewSealed_=false;previewLayerId_.clear();
+        if(movePreviewJob_)movePreviewJob_->invalidate();
+        invalidateViewportComposite();
+        view->setNavigatorDeferred(true);view->setCompositeHeld(true);viewportNavigationOwner_=owner;
+        scheduleViewportComposite(*owner);
+    };
     project.canvas->navigatorProvider=[this,owner](int edge){return navigatorComposite(*owner,edge);};
     project.canvas->guideDragUpdated=[this](bool horizontal,double position){statusBar()->showMessage(QString("%1 guide %2").arg(horizontal?QStringLiteral("Horizontal"):QStringLiteral("Vertical")).arg(position,0,'f',1));};
     project.canvas->guideDragCanceled=[this]{statusBar()->clearMessage();};

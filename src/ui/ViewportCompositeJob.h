@@ -17,6 +17,7 @@ public:
     struct Request {
         EditorProject* owner{};
         Document document;
+        CompositeCache cache;
         double x{},y{},width{},height{},units{1};
         double zoom{1},panX{},panY{};
         int canvasWidth{},canvasHeight{};

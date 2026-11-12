@@ -22,7 +22,8 @@ ViewportCompositeJob::Result renderSnapshot(const ViewportCompositeJob::Request&
     if(proceed){while(!proceed->load()){if(abandoned()){result.stale=true;return result;}std::this_thread::sleep_for(std::chrono::milliseconds(2));}}
     if(abandoned()){result.stale=true;return result;}
     try{
-        result.cache.setLensPreviewMaxEdge(request.lensPreviewMaxEdge);
+        result.cache=request.cache;
+        if(request.lensPreviewMaxEdge>0)result.cache.setLensPreviewMaxEdge(request.lensPreviewMaxEdge);
         result.view=result.cache.renderViewport(request.document,request.x,request.y,request.width,request.height,request.units,64,256,{},abandoned);
     }
     catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}

@@ -11,10 +11,10 @@ constexpr uint64_t lensFramePixelBudget=5000000;
 bool lensFrameFits(int width,int height){
     return width<=30000&&height<=30000&&uint64_t(width)*height<=lensFramePixelBudget;
 }
-graphics::StackRenderer stack(const Document& document,const std::shared_ptr<const LayerRenderPreview>& preview,int lensPreviewMaxEdge,const std::function<bool()>& cancelled={}){
+graphics::StackRenderer stack(const Document& document,const std::shared_ptr<const LayerRenderPreview>& preview,int lensPreviewMaxEdge,const std::function<bool()>& cancelled={},bool documentValidated=false){
     return graphics::StackRenderer([&document,lensPreviewMaxEdge,cancelled](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){
         return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge},cancelled);
-    },preview,[&document,cancelled,lensPreviewMaxEdge](const Layer& layer,std::shared_ptr<const DeepImage> current,graphics::RenderRegion region){return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge},cancelled);});
+    },preview,[&document,cancelled,lensPreviewMaxEdge](const Layer& layer,std::shared_ptr<const DeepImage> current,graphics::RenderRegion region){return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge},cancelled);},documentValidated);
 }
 std::shared_ptr<const Raster> cropRaster(const Raster& source,int ox,int oy,int width,int height){
     if(ox%256==0&&oy%256==0&&width==256&&height==256){
@@ -92,13 +92,13 @@ std::shared_ptr<const Raster> SoftwareRenderer::renderScaled(const Document& doc
         const int fullHeight=std::max(oy+height,int(std::ceil((document.height-top)/unitsPerPixel))+margin);
         if(ox<0||oy<0||!lensFrameFits(fullWidth,fullHeight))throw std::runtime_error("Lens Effects full-image preview exceeds working memory budget");
         if(!lensFrame_||!lensDocument_||*lensDocument_!=document||std::abs(lensX_-left)>tolerance||std::abs(lensY_-top)>tolerance||lensUnits_!=unitsPerPixel||lensFrame_->width!=fullWidth||lensFrame_->height!=fullHeight){
-            lensFrame_=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,left,top,fullWidth,fullHeight,unitsPerPixel);
+            lensFrame_=stack(document,preview_,lensPreviewMaxEdge_,cancelled,documentValidated_).renderScaled(document,left,top,fullWidth,fullHeight,unitsPerPixel,cancelled);
             lensDocument_=document;lensX_=left;lensY_=top;lensUnits_=unitsPerPixel;
         }
         return cropRaster(*lensFrame_,ox,oy,width,height);
     }
     const int margin=int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel));
-    auto rendered=stack(document,preview_,lensPreviewMaxEdge_).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel);
+    auto rendered=stack(document,preview_,lensPreviewMaxEdge_,cancelled,documentValidated_).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel,cancelled);
     return margin?cropRaster(*rendered,margin,margin,width,height):rendered;
 }
 std::shared_ptr<const Raster> SoftwareRenderer::renderCursorRegion(const Document& document,double x,double y,int width,int height,double unitsPerPixel)const {

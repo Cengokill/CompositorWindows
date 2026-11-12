@@ -229,6 +229,7 @@ public:
 class SoftwareRenderer final:public IRasterBackend {
     std::shared_ptr<const LayerRenderPreview> preview_;
     int lensPreviewMaxEdge_{};
+    bool documentValidated_{};
     mutable std::optional<Document> lensDocument_;
     mutable std::shared_ptr<const Raster> lensFrame_;
     mutable double lensX_{},lensY_{},lensUnits_{};
@@ -236,7 +237,8 @@ class SoftwareRenderer final:public IRasterBackend {
     mutable std::shared_ptr<const DeepImage> lensDeepFrame_;
     mutable int lensDeepX_{},lensDeepY_{};
 public:
-    explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={},int lensPreviewMaxEdge=0):preview_(std::move(preview)),lensPreviewMaxEdge_(lensPreviewMaxEdge){}
+    // Set true only when the document with its preview-layer override was already validated.
+    explicit SoftwareRenderer(std::shared_ptr<const LayerRenderPreview> preview={},int lensPreviewMaxEdge=0,bool documentValidated=false):preview_(std::move(preview)),lensPreviewMaxEdge_(lensPreviewMaxEdge),documentValidated_(documentValidated){}
     static bool lensViewportFits(const Document&,int pixelWidth,int pixelHeight,double unitsPerPixel);
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
     std::shared_ptr<const DeepImage> renderDeep(const Document&,int x,int y,int width,int height,const std::function<bool()>& cancelled={}) const override;

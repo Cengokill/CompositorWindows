@@ -146,14 +146,12 @@ template<class P> class Render {
             auto p=position(i);pixels[i]=interpolate(original,value,mask(index,p,true)*(folderClip?folders(index,p):1));}
     }
 public:
-    Render(const Document& input,RenderRegion r,const AdjustmentCallback& cb,std::shared_ptr<const LayerRenderPreview> overridePreview,int ox=0,int oy=0,const DeepAdjustmentCallback& deepCb={},std::function<bool()> cancel={}):document(input),region(r),callback(cb),deepCallback(deepCb),cancelled(std::move(cancel)),preview(std::move(overridePreview)),pixelCount(size_t(r.width)*r.height),offsetX(ox),offsetY(oy){
+    Render(const Document& input,RenderRegion r,const AdjustmentCallback& cb,std::shared_ptr<const LayerRenderPreview> overridePreview,int ox=0,int oy=0,const DeepAdjustmentCallback& deepCb={},std::function<bool()> cancel={},bool documentValidated=false):document(input),region(r),callback(cb),deepCallback(deepCb),cancelled(std::move(cancel)),preview(std::move(overridePreview)),pixelCount(size_t(r.width)*r.height),offsetX(ox),offsetY(oy){
         if constexpr(std::is_same_v<P,WidePixel>)if(uint64_t(pixelCount)*80>1200000000)throw std::runtime_error("HDR render exceeds working memory budget");
         if(preview){auto found=std::find_if(document.layers.begin(),document.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==document.layers.end()||!preview->identity)throw std::invalid_argument("Invalid layer render preview");*found=preview->layer;}
         const auto& d=document;
-        validateDocument(document);layers.reserve(d.layers.size());
-        for(size_t i=0;i<d.layers.size();++i){ids[d.layers[i].id]=int(i);layers.emplace_back(d.layers[i]);
-            const auto& image=d.layers[i].raster;if(image){size_t expected=size_t((image->width+255)/256)*size_t((image->height+255)/256);
-                if(image->tiles.size()!=expected)throw std::runtime_error("Invalid raster tile array");for(auto&t:image->tiles)if(!t)throw std::runtime_error("Missing raster tile");}}
+        if(!documentValidated)validateDocument(document);layers.reserve(d.layers.size());
+        for(size_t i=0;i<d.layers.size();++i){ids[d.layers[i].id]=int(i);layers.emplace_back(d.layers[i]);}
         for(auto& info:layers){const auto& layer=info.layer;const bool overridden=preview&&preview->layer.id==layer.id;
             const auto reduce=[&](std::shared_ptr<const SamplingSource> source,const Transform& transform){std::shared_ptr<const ReducedSource> result;if(source&&transform.sampling!=Transform::Sampling::Nearest){const int level=DownsampleCache::levelFor(transform.width/(region.unitsPerPixel*source->width));if(level)result=ReducedSourceCache::shared().resolve(std::move(source),level);}return result;};
             if(layer.raster&&!(overridden&&preview->image&&!preview->imageSource))info.reducedImage=reduce(overridden&&preview->imageSource?preview->imageSource:samplingSource(layer.raster),layer.transform);
@@ -188,26 +186,26 @@ public:
 std::shared_ptr<const DeepImage> StackRenderer::renderDeep(const Document& d,RenderRegion r,const std::function<bool()>& cancelled)const{
     if(r.width<1||r.height<1||r.width>30000||r.height>30000||uint64_t(r.width)*r.height>100000000||!std::isfinite(r.x)||!std::isfinite(r.y)||std::abs(r.x)>10000000||std::abs(r.y)>10000000||!std::isfinite(r.unitsPerPixel)||r.unitsPerPixel<1./32||r.unitsPerPixel>32768)throw std::invalid_argument("Invalid HDR render region");
     if(uint64_t(r.width)*r.height*80>1200000000)throw std::runtime_error("HDR render exceeds working memory budget");
-    return Render<WidePixel>(d,r,adjustment_,preview_,0,0,deepAdjustment_,cancelled).run();
+    return Render<WidePixel>(d,r,adjustment_,preview_,0,0,deepAdjustment_,cancelled,documentValidated_).run();
 }
 std::shared_ptr<const Raster> StackRenderer::render(const Document& d,int x,int y,int width,int height)const{
     if(width<1||height<1||width>30000||height>30000||uint64_t(width)*height>100000000 ||
        std::abs(int64_t(x))>10000000||std::abs(int64_t(y))>10000000)throw std::invalid_argument("Invalid render region");
-    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{double(x),double(y),width,height,1},adjustment_,preview_,0,0,deepAdjustment_).run());
-    return Render<Pixel>(d,{double(x),double(y),width,height,1},adjustment_,preview_).run();
+    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{double(x),double(y),width,height,1},adjustment_,preview_,0,0,deepAdjustment_,{},documentValidated_).run());
+    return Render<Pixel>(d,{double(x),double(y),width,height,1},adjustment_,preview_,0,0,{}, {},documentValidated_).run();
 }
-std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,double x,double y,int width,int height,double unitsPerPixel)const{
+std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled)const{
     if(width<1||height<1||width>30000||height>30000||uint64_t(width)*height>100000000||
        !std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
        !std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768)
         throw std::invalid_argument("Invalid scaled render region");
-    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,deepAdjustment_).run());
-    return Render<Pixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_).run();
+    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,deepAdjustment_,cancelled,documentValidated_).run());
+    return Render<Pixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,{},cancelled,documentValidated_).run();
 }
 std::shared_ptr<const Raster> StackRenderer::renderScaledPatch(const Document& d,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const{
     if(offsetX<0||offsetY<0||width<1||height<1||offsetX>255||offsetY>255||width>256-offsetX||height>256-offsetY||!std::isfinite(tileX)||!std::isfinite(tileY)||std::abs(tileX)>10000000||std::abs(tileY)>10000000||!std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768||std::any_of(d.layers.begin(),d.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();}))throw std::invalid_argument("Invalid bounded non-adjustment render patch");
-    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{tileX,tileY,width,height,unitsPerPixel},adjustment_,preview_,offsetX,offsetY,deepAdjustment_).run());
-    return Render<Pixel>(d,{tileX,tileY,width,height,unitsPerPixel},adjustment_,preview_,offsetX,offsetY).run();
+    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{tileX,tileY,width,height,unitsPerPixel},adjustment_,preview_,offsetX,offsetY,deepAdjustment_,{},documentValidated_).run());
+    return Render<Pixel>(d,{tileX,tileY,width,height,unitsPerPixel},adjustment_,preview_,offsetX,offsetY,{}, {},documentValidated_).run();
 }
 std::shared_ptr<const Raster> StackRenderer::renderCursorRegion(const Document& d,double x,double y,int width,int height,double unitsPerPixel)const{
     if(width<1||height<1||width>1024||height>1024||
@@ -215,8 +213,8 @@ std::shared_ptr<const Raster> StackRenderer::renderCursorRegion(const Document& 
        !std::isfinite(unitsPerPixel)||unitsPerPixel<=0||unitsPerPixel>32768||
        !std::isfinite(x+width*unitsPerPixel)||!std::isfinite(y+height*unitsPerPixel))
         throw std::invalid_argument("Invalid bounded cursor region");
-    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,deepAdjustment_).run());
-    return Render<Pixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_).run();
+    if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,deepAdjustment_,{},documentValidated_).run());
+    return Render<Pixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,{}, {},documentValidated_).run();
 }
 
 } // namespace compositor::graphics

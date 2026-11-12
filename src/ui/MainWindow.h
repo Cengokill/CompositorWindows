@@ -249,6 +249,7 @@ private:
     std::unique_ptr<editing_transform::TransformSessionState> transformSession_;
     ui::ViewportCompositeJob* viewportComposite_{};
     ui::MovePreviewJob* movePreviewJob_{};
+    EditorProject* viewportNavigationOwner_{};
     uint64_t previewGesture_{1};
     bool previewSealed_{};
     Transform previewDraft_{};

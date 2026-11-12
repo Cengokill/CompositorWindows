@@ -105,7 +105,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Effect> presentationEffect_;
     QTimer* navigatorTimer_{};
     QTimer* viewportTimer_{};
-    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{},compositeDirty_{true};
+    bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},zoomSettlePending_{},compositeHeld_{},viewportPresented_{},compositeDirty_{true};
     double lastCompositeX_{},lastCompositeY_{},lastCompositeW_{},lastCompositeH_{},lastCompositeUnits_{1};
     std::shared_ptr<const Raster> navigatorRaster_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
@@ -222,6 +222,7 @@ public:
     std::function<bool(QKeyEvent*)> textKey;
     std::function<void(QInputMethodEvent*)> textInput;
     std::function<CompositeViewport(double,double,double,double,double)> viewportProvider;
+    std::function<void()> zoomSettled;
     // Reduced full-document composite. maxEdge is the longest side in pixels.
     // The canvas calls it after editing pauses, not on every repaint or brush step.
     std::function<CompositeViewport(int maxEdge)> navigatorProvider;

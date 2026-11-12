@@ -161,7 +161,13 @@ void MainWindow::publishTransformSession(bool finish) {
     project->maskSelected=state.originalMaskSelected&&!state.duplicated;
 }
 
-void MainWindow::invalidateViewportComposite(){if(viewportComposite_)viewportComposite_->invalidate();}
+void MainWindow::invalidateViewportComposite(){
+    if(viewportNavigationOwner_){
+        if(viewportNavigationOwner_->canvas){viewportNavigationOwner_->canvas->setCompositeHeld(false);viewportNavigationOwner_->canvas->setNavigatorDeferred(false);viewportNavigationOwner_->canvas->update();}
+        viewportNavigationOwner_=nullptr;
+    }
+    if(viewportComposite_)viewportComposite_->invalidate();
+}
 void MainWindow::beginPreviewGesture(NativeCanvas* target){
     ++previewGesture_;previewSealed_=false;previewLayerId_.clear();
     if(movePreviewJob_)movePreviewJob_->invalidate();
@@ -172,7 +178,7 @@ void MainWindow::scheduleViewportComposite(EditorProject& project){
     if(!viewportComposite_||!project.document||!project.canvas)return;
     const auto bounds=project.canvas->viewportBounds();if(!bounds.valid)return;
     ui::ViewportCompositeJob::Request request;
-    request.owner=&project;request.document=*project.document;request.x=bounds.x;request.y=bounds.y;request.width=bounds.width;request.height=bounds.height;request.units=bounds.units;
+    request.owner=&project;request.document=*project.document;request.cache=project.composite;request.x=bounds.x;request.y=bounds.y;request.width=bounds.width;request.height=bounds.height;request.units=bounds.units;
     request.zoom=project.canvas->zoom;request.panX=project.canvas->pan.x();request.panY=project.canvas->pan.y();request.canvasWidth=project.canvas->width();request.canvasHeight=project.canvas->height();request.gesture=previewGesture_;
     viewportComposite_->submit(std::move(request));
 }
@@ -181,9 +187,10 @@ void MainWindow::applyViewportComposite(ui::ViewportCompositeJob::Result result)
     const bool live=std::any_of(projects_.begin(),projects_.end(),[&](const std::unique_ptr<EditorProject>& item){return item.get()==result.owner;});
     if(!live||!result.owner->canvas)return;
     auto* canvas=result.owner->canvas;
+    if(viewportNavigationOwner_==result.owner)viewportNavigationOwner_=nullptr;
     const bool sameView=canvas->zoom==result.zoom&&canvas->pan.x()==result.panX&&canvas->pan.y()==result.panY&&canvas->width()==result.canvasWidth&&canvas->height()==result.canvasHeight;
     if(!result.error.isEmpty()||!sameView||!result.owner->document||*result.owner->document!=result.document||!result.view.raster){
-        canvas->setCompositeHeld(false);
+        canvas->setCompositeHeld(false);canvas->setNavigatorDeferred(false);
         if(!sameView||!result.owner->document||*result.owner->document!=result.document)canvas->clearMovePreview();
         if(!result.error.isEmpty())statusBar()->showMessage(result.error);
         canvas->update();
