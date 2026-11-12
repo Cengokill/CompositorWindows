@@ -20,6 +20,7 @@
 #include <QToolButton>
 #include <QImage>
 #include <QPixmap>
+#include <QStyleOptionComboBox>
 #include <QJsonDocument>
 #include <QTest>
 #include <QTemporaryDir>
@@ -81,6 +82,33 @@ void rim_light_panel_geometry(){
         f.unchanged();
     });
     f.unchanged();require(!f.project.effectPreview,"rim Cancel clears overlay");
+}
+void rim_light_control_alignment(){
+    Fixture f;
+    panel(f.window,"filter.rim_light","Rim Light",[&](QDialog& p){
+        auto* count=control<QComboBox>(p,"rimLightCount");auto* active=control<QComboBox>(p,"rimActiveLight");
+        QApplication::processEvents();const auto initial=p.size();
+        auto fits=[&](QComboBox* combo,const QString& text){QStyleOptionComboBox option;option.initFrom(combo);option.currentText=text;const auto edit=combo->style()->subControlRect(QStyle::CC_ComboBox,&option,QStyle::SC_ComboBoxEditField,combo);return edit.width()>=combo->fontMetrics().horizontalAdvance(text);};
+        require(fits(count,"3")&&fits(active,"Light 3"),"compact light menu clips its text");
+        count->setCurrentIndex(2);QApplication::processEvents();
+        for(int light=1;light<=3;++light){
+            active->setCurrentIndex(light-1);QApplication::processEvents();require(p.size()==initial,"compact menus changed panel size");
+            const auto prefix=QString("Light %1 ").arg(light);auto* reference=field(p,prefix+"angle");QSlider* referenceSlider=nullptr;
+            for(auto* slider:p.findChildren<QSlider*>())if(slider->accessibleName()==prefix+"angle slider")referenceSlider=slider;
+            require(referenceSlider,"angle slider exists");reference->setValue(-180);auto* editor=reference->findChild<QLineEdit*>();require(editor&&editor->contentsRect().width()>=editor->fontMetrics().horizontalAdvance("-180"),"angle value is clipped");
+            for(const auto& name:QStringList{prefix+"angle",prefix+"strength",prefix+"width",prefix+"choke","Glow"}){
+                auto* spin=field(p,name);QSlider* slider=nullptr;for(auto* value:p.findChildren<QSlider*>())if(value->accessibleName()==name+" slider")slider=value;
+                require(slider&&spin->isVisible()&&slider->isVisible(),"rim controls visible");
+                require(spin->width()==reference->width()&&spin->mapTo(&p,QPoint()).x()==reference->mapTo(&p,QPoint()).x(),"rim value fields do not align");
+                require(slider->width()==referenceSlider->width()&&slider->mapTo(&p,QPoint()).x()==referenceSlider->mapTo(&p,QPoint()).x(),"rim sliders do not align");
+            }
+        }
+        require(count->width()<=count->fontMetrics().horizontalAdvance("3")+60,"light count menu is too wide");
+        require(active->width()<=active->fontMetrics().horizontalAdvance("Light 3")+60,"active light menu is too wide");
+        require(count->width()<active->width(),"count menu should be narrower than light names");
+        f.unchanged();
+    });
+    f.unchanged();
 }
 void rim_light_lifecycle(){
     QImage input(QStringLiteral(COMPOSITOR_RIM_FIXTURE));require(!input.isNull(),"rim photo fixture");input=input.scaled(160,160,Qt::KeepAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
@@ -465,4 +493,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"rim_light_panel_geometry",rim_light_panel_geometry},{"rim_light_lifecycle",rim_light_lifecycle},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"rim_light_lifecycle",rim_light_lifecycle},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}

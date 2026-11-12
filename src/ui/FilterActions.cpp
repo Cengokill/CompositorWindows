@@ -43,6 +43,7 @@
 #include <cmath>
 #include <filesystem>
 #include <utility>
+#include <vector>
 
 namespace compositor {
 namespace {
@@ -492,20 +493,22 @@ public:
             connect(slider,&QSlider::valueChanged,&dialog_,[spin,first,last,logarithmic,stepDecimals](int v){const double normalized=first+(last-first)*v/10000.;const double factor=std::pow(10.,stepDecimals);spin->setValue(std::round((logarithmic?std::exp(normalized):normalized)*factor)/factor);});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[slider,position](double v){QSignalBlocker block(slider);slider->setValue(position(v));});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[this,field=&value](double next){*field=next;change();});
+            return spin;
         };
         switch(request_.kind){
         case filters::Kind::RimLight:{
-            auto& rim=request_.settings.rimLight;auto* count=new QComboBox;count->setObjectName("rimLightCount");count->addItems({"1","2","3"});count->setCurrentIndex(std::clamp(rim.count,1,3)-1);fields_.addRow("Lights",count);
-            auto* active=new QComboBox;active->setObjectName("rimActiveLight");for(int i=0;i<std::clamp(rim.count,1,3);++i)active->addItem(QString("Light %1").arg(i+1));fields_.addRow("Edit",active);
+            auto& rim=request_.settings.rimLight;auto* count=new QComboBox;count->setObjectName("rimLightCount");count->addItems({"1","2","3"});count->setSizeAdjustPolicy(QComboBox::AdjustToContents);count->ensurePolished();count->setFixedWidth(count->sizeHint().width());count->setCurrentIndex(std::clamp(rim.count,1,3)-1);fields_.addRow("Lights",count);
+            auto* active=new QComboBox;active->setObjectName("rimActiveLight");active->setSizeAdjustPolicy(QComboBox::AdjustToContents);active->addItems({"Light 1","Light 2","Light 3"});active->ensurePolished();active->setFixedWidth(active->sizeHint().width());active->clear();for(int i=0;i<std::clamp(rim.count,1,3);++i)active->addItem(QString("Light %1").arg(i+1));fields_.addRow("Edit",active);
             std::array<std::pair<int,int>,3> rows;
+            std::vector<QDoubleSpinBox*> rimNumbers;
             for(int i=0;i<3;++i){auto& light=rim.lights[i];const auto& defaults=factory.rimLight.lights[i];rows[i].first=fields_.rowCount();const auto prefix=QString("Light %1 ").arg(i+1);
-                number(prefix+"angle",light.angle,-180,180,0,defaults.angle);number(prefix+"strength",light.strength,0,100,0,defaults.strength);number(prefix+"width",light.width,0,100,0,defaults.width);number(prefix+"choke",light.choke,0,100,0,defaults.choke);
+                rimNumbers.push_back(number(prefix+"angle",light.angle,-180,180,0,defaults.angle));rimNumbers.push_back(number(prefix+"strength",light.strength,0,100,0,defaults.strength));rimNumbers.push_back(number(prefix+"width",light.width,0,100,0,defaults.width));rimNumbers.push_back(number(prefix+"choke",light.choke,0,100,0,defaults.choke));
                 auto* color=new QToolButton;color->setObjectName(QString("rimLightColor%1").arg(i+1));color->setFixedSize(36,22);auto update=[this,color,i]{const auto& c=request_.settings.rimLight.lights[i].color;const auto hex=QColor::fromRgbF(c[0],c[1],c[2]).name();color->setAccessibleDescription(hex);color->setStyleSheet(QString("QToolButton { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QToolButton:hover { background: %1; border-color: #bfc9d8; } QToolButton:pressed, QToolButton:focus { background: %1; border-color: #78b0f7; }").arg(hex));};update();color->setAccessibleName(prefix+"color");fields_.addRow(prefix+"color",color);
                 connect(color,&QToolButton::clicked,&dialog_,[this,i,update]{auto& c=request_.settings.rimLight.lights[i].color;auto picked=QColorDialog::getColor(QColor::fromRgbF(c[0],c[1],c[2]),&dialog_,QString("Light %1 color").arg(i+1));if(picked.isValid()){c={picked.redF(),picked.greenF(),picked.blueF()};update();change();}});rows[i].second=fields_.rowCount();
             }
             auto show=[this,rows](int selected){for(int i=0;i<3;++i)if(i!=selected)for(int row=rows[i].first;row<rows[i].second;++row)fields_.setRowVisible(row,false);for(int row=rows[selected].first;row<rows[selected].second;++row)fields_.setRowVisible(row,true);};show(0);
             connect(active,&QComboBox::currentIndexChanged,&dialog_,[show](int index){show(index);});
-            connect(count,&QComboBox::currentIndexChanged,&dialog_,[this,show,active](int index){request_.settings.rimLight.count=index+1;QSignalBlocker block(active);active->clear();for(int i=0;i<=index;++i)active->addItem(QString("Light %1").arg(i+1));active->setCurrentIndex(index);show(index);change();});number("Glow",rim.glow,0,100,0,factory.rimLight.glow);break;
+            connect(count,&QComboBox::currentIndexChanged,&dialog_,[this,show,active](int index){request_.settings.rimLight.count=index+1;QSignalBlocker block(active);active->clear();for(int i=0;i<=index;++i)active->addItem(QString("Light %1").arg(i+1));active->setCurrentIndex(index);show(index);change();});rimNumbers.push_back(number("Glow",rim.glow,0,100,0,factory.rimLight.glow));int width=0;for(auto* spin:rimNumbers){spin->ensurePolished();width=std::max(width,spin->sizeHint().width());}for(auto* spin:rimNumbers)spin->setFixedWidth(width);break;
         }
         case filters::Kind::Sharpen:number("Amount",request_.settings.sharpenAmount,0,300,0,factory.sharpenAmount);number("Radius",request_.settings.sharpenRadius,.1,20,1,factory.sharpenRadius);break;
         case filters::Kind::GaussianBlur:number("Radius",request_.settings.radius,.1,250,1,factory.radius);break;
