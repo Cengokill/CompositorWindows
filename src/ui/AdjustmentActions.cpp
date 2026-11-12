@@ -83,7 +83,7 @@ void MainWindow::setupAdjustmentActions(){
         else lastFilterAction_->setText("Last Filter: "+filterKindDisplayName(*project->toolState.lastFilterKind));
     });
     filters->addSeparator();
-    const struct {const char* name;int kind;} filterItems[]{{"Gaussian Blur",0},{"Progressive Blur",11},{"Motion Blur",1},{"Add Noise",2},{"Lens Correction",3},{"Camera Raw Filter",10},{"Content-Aware Fill",4},{"Vignette",5},{"Bloom",6},{"Tonal Contrast",7},{"Dither",8},{"Scanlines",9},{"RGB Split",12},{"Lens Effects",13},{"Sharpen",14}};
+    const struct {const char* name;int kind;} filterItems[]{{"Gaussian Blur",0},{"Progressive Blur",11},{"Motion Blur",1},{"Add Noise",2},{"Lens Correction",3},{"Camera Raw Filter",10},{"Content-Aware Fill",4},{"Vignette",5},{"Bloom",6},{"Tonal Contrast",7},{"Dither",8},{"Scanlines",9},{"RGB Split",12},{"Lens Effects",13},{"Sharpen",14},{"Rim Light",15}};
     for(const auto& item:filterItems)action(filters,QString(item.name)+"…",{},[this,kind=item.kind]{runFilter(kind);});
     action(filters,"Remove Background…",{},[this]{removeBackground();});
 }

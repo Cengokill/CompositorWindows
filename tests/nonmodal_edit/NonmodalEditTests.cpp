@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QColorDialog>
 #include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -19,6 +20,7 @@
 #include <QToolButton>
 #include <QImage>
 #include <QPixmap>
+#include <QStyleOptionComboBox>
 #include <QJsonDocument>
 #include <QTest>
 #include <QTemporaryDir>
@@ -56,6 +58,71 @@ template<class Fn>void panel(MainWindow& window,const char* command,const QStrin
 }
 Pixel exposurePixel(const Document& doc,double amount){auto json=effects::defaultAdjustmentJson("Exposure");auto object=QJsonDocument::fromJson(QByteArray::fromStdString(json)).object();auto settings=object["exposureSettings"].toObject();settings["exposure"]=amount;settings["offset"]=0;settings["gamma"]=1;object["exposureSettings"]=settings;auto output=doc;output.layers[0].raster=effects::applyAdjustment(output.layers[0].raster,QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString());return SoftwareRenderer().render(output,0,0,64,48)->pixel(30,20);}
 void adjustment_nonmodal(){Fixture f;panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){require(!QApplication::activeModalWidget()&&p.windowModality()==Qt::NonModal,"source adjustment panel is nonmodal");require(f.project.canvas->isEnabled(),"main canvas enabled during edit");f.unchanged();});f.unchanged();}
+void chooseRimColor(QToolButton& swatch,const QColor& color,bool accept){
+    bool opened=false;QTimer poll;poll.setInterval(10);QElapsedTimer elapsed;elapsed.start();
+    QObject::connect(&poll,&QTimer::timeout,&swatch,[&]{
+        if(auto* picker=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;picker->setCurrentColor(color);if(accept)picker->accept();else picker->reject();}
+        else if(elapsed.elapsed()>5000){if(auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget()))modal->reject();poll.stop();}
+    });
+    poll.start();swatch.click();poll.stop();require(opened,"rim color picker opens");
+}
+void rim_light_panel_geometry(){
+    Fixture f;
+    panel(f.window,"filter.rim_light","Rim Light",[&](QDialog& p){
+        auto* count=control<QComboBox>(p,"rimLightCount");auto* active=control<QComboBox>(p,"rimActiveLight");auto* buttons=p.findChild<QDialogButtonBox*>();require(buttons,"rim panel buttons");
+        QApplication::processEvents();const auto initial=p.size();const int initialGap=buttons->mapTo(&p,QPoint(0,0)).y()-preview(p)->mapTo(&p,QPoint(0,preview(p)->height())).y();
+        for(int index:{1,2,1,0,1,0}){
+            count->setCurrentIndex(index);QApplication::processEvents();
+            if(p.size()!=initial)std::fprintf(stderr,"rim count=%d initial=%dx%d actual=%dx%d\n",index+1,initial.width(),initial.height(),p.width(),p.height());
+            require(p.size()==initial,"rim panel size changes when choosing light count");
+            const int gap=buttons->mapTo(&p,QPoint(0,0)).y()-preview(p)->mapTo(&p,QPoint(0,preview(p)->height())).y();require(gap<=initialGap+2,"rim panel adds empty vertical space");
+            for(int selected=0;selected<=index;++selected){active->setCurrentIndex(selected);QApplication::processEvents();if(p.size()!=initial)std::fprintf(stderr,"rim selected=%d initial=%dx%d actual=%dx%d\n",selected+1,initial.width(),initial.height(),p.width(),p.height());require(p.size()==initial,"rim panel size changes when selecting a light");require(control<QToolButton>(p,QString("rimLightColor%1").arg(selected+1).toUtf8().constData())->isVisible(),"selected light controls remain visible");const int selectedGap=buttons->mapTo(&p,QPoint(0,0)).y()-preview(p)->mapTo(&p,QPoint(0,preview(p)->height())).y();require(selectedGap<=initialGap+2,"selecting a light adds empty vertical space");}
+        }
+        p.resize(initial.width()+70,initial.height()+50);QApplication::processEvents();const auto resized=p.size();count->setCurrentIndex(2);QApplication::processEvents();active->setCurrentIndex(0);QApplication::processEvents();require(p.size()==resized,"rim light changes override a manually resized panel");
+        f.unchanged();
+    });
+    f.unchanged();require(!f.project.effectPreview,"rim Cancel clears overlay");
+}
+void rim_light_control_alignment(){
+    Fixture f;
+    panel(f.window,"filter.rim_light","Rim Light",[&](QDialog& p){
+        auto* count=control<QComboBox>(p,"rimLightCount");auto* active=control<QComboBox>(p,"rimActiveLight");
+        QApplication::processEvents();const auto initial=p.size();
+        auto fits=[&](QComboBox* combo,const QString& text){QStyleOptionComboBox option;option.initFrom(combo);option.currentText=text;const auto edit=combo->style()->subControlRect(QStyle::CC_ComboBox,&option,QStyle::SC_ComboBoxEditField,combo);return edit.width()>=combo->fontMetrics().horizontalAdvance(text);};
+        require(fits(count,"3")&&fits(active,"Light 3"),"compact light menu clips its text");
+        count->setCurrentIndex(2);QApplication::processEvents();
+        for(int light=1;light<=3;++light){
+            active->setCurrentIndex(light-1);QApplication::processEvents();require(p.size()==initial,"compact menus changed panel size");
+            const auto prefix=QString("Light %1 ").arg(light);auto* reference=field(p,prefix+"angle");QSlider* referenceSlider=nullptr;
+            for(auto* slider:p.findChildren<QSlider*>())if(slider->accessibleName()==prefix+"angle slider")referenceSlider=slider;
+            require(referenceSlider,"angle slider exists");reference->setValue(-180);auto* editor=reference->findChild<QLineEdit*>();require(editor&&editor->contentsRect().width()>=editor->fontMetrics().horizontalAdvance("-180"),"angle value is clipped");
+            for(const auto& name:QStringList{prefix+"angle",prefix+"strength",prefix+"width",prefix+"choke","Glow"}){
+                auto* spin=field(p,name);QSlider* slider=nullptr;for(auto* value:p.findChildren<QSlider*>())if(value->accessibleName()==name+" slider")slider=value;
+                require(slider&&spin->isVisible()&&slider->isVisible(),"rim controls visible");
+                require(spin->width()==reference->width()&&spin->mapTo(&p,QPoint()).x()==reference->mapTo(&p,QPoint()).x(),"rim value fields do not align");
+                require(slider->width()==referenceSlider->width()&&slider->mapTo(&p,QPoint()).x()==referenceSlider->mapTo(&p,QPoint()).x(),"rim sliders do not align");
+            }
+        }
+        require(count->width()<=count->fontMetrics().horizontalAdvance("3")+60,"light count menu is too wide");
+        require(active->width()<=active->fontMetrics().horizontalAdvance("Light 3")+60,"active light menu is too wide");
+        require(count->width()<active->width(),"count menu should be narrower than light names");
+        f.unchanged();
+    });
+    f.unchanged();
+}
+void rim_light_lifecycle(){
+    QImage input(QStringLiteral(COMPOSITOR_RIM_FIXTURE));require(!input.isNull(),"rim photo fixture");input=input.scaled(160,160,Qt::KeepAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+    Document d;d.id="11111111-1111-4111-8111-111111111111";d.width=input.width();d.height=input.height();Layer layer;layer.id="22222222-2222-4222-8222-222222222222";layer.name="Photo";layer.transform={0,0,double(d.width),double(d.height)};layer.raster=Raster::fromRgba(d.width,d.height,input.constBits(),size_t(input.bytesPerLine()));auto layerMask=std::make_shared<GrayRaster>();layerMask->width=2;layerMask->height=2;layerMask->pixels={0,64,128,255};layer.mask=Mask{layerMask,false,false,Transform{2,3,40,40}};d.layers={layer};Fixture f(d);
+    panel(f.window,"filter.rim_light","Rim Light",[&](QDialog& p){auto* swatch=control<QToolButton>(p,"rimLightColor1");require(swatch->size()==QSize(36,22),"rim swatch size");require(swatch->text().isEmpty(),"rim swatch text");require(swatch->styleSheet().contains(QColor::fromRgbF(1.f,.86f,.7f).name()),"rim swatch color");chooseRimColor(*swatch,QColor("#2164c8"),true);require(swatch->styleSheet().contains("#2164c8"),"rim swatch updates after choosing color");chooseRimColor(*swatch,QColor("#ff0000"),false);require(swatch->styleSheet().contains("#2164c8"),"rim swatch keeps color on picker Cancel");control<QComboBox>(p,"rimLightCount")->setCurrentIndex(2);p.reject();});f.unchanged();require(!f.project.effectPreview&&f.project.toolState.filterSettings.pixels.rimLight.count==1,"rim Cancel restores settings and clears overlay");
+    auto replacement=Raster::filled(d.width,d.height,{30,30,30,255});
+    panel(f.window,"filter.rim_light","Rim Light",[&](QDialog& p){wait([&]{return apply(p)->isEnabled();},"rim stale preview",120000);f.project.document->layers[0].raster=replacement;apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"rim stale Apply",120000);});
+    require(f.project.document->layers[0].raster==replacement&&f.project.history.undoCount()==0&&!f.project.toolState.lastFilterKind,"rim stale result and settings discarded");f.project.document=d;
+    std::vector<std::uint8_t> expected;
+    panel(f.window,"filter.rim_light","Rim Light",[&](QDialog& p){wait([&]{return apply(p)->isEnabled();},"rim preview did not finish",120000);control<QComboBox>(p,"rimLightCount")->setCurrentIndex(1);field(p,"Light 2 strength")->setValue(75);auto* swatch=control<QToolButton>(p,"rimLightColor2");require(swatch->isVisible()&&swatch->size()==QSize(36,22)&&swatch->text().isEmpty(),"second rim swatch");chooseRimColor(*swatch,QColor("#2288cc"),true);require(swatch->styleSheet().contains("#2288cc"),"second rim swatch color");wait([&]{return apply(p)->isEnabled();},"rim second light preview",120000);require(bool(f.project.effectPreview),"rim preview available");expected=f.project.effectPreview->layers[0].raster->rgba();require(expected!=layer.raster->rgba(),"rim changes photo");f.unchanged();apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"rim Apply did not finish",120000);});
+    require(f.project.history.undoCount()==1&&f.project.toolState.lastFilterKind==filters::Kind::RimLight&&!f.project.effectPreview,"rim Apply history and overlay");require(f.project.toolState.filterSettings.pixels.rimLight.count==2&&f.project.toolState.filterSettings.pixels.rimLight.lights[1].strength==75&&QColor::fromRgbF(f.project.toolState.filterSettings.pixels.rimLight.lights[1].color[0],f.project.toolState.filterSettings.pixels.rimLight.lights[1].color[1],f.project.toolState.filterSettings.pixels.rimLight.lights[1].color[2])==QColor("#2288cc"),"rim remembers settings after Apply");const auto applied=f.project.document;require(applied->layers[0].raster->rgba()==expected,"rim preview equals Apply");require(applied->layers[0].mask==layer.mask,"rim keeps placed mask");trigger(f.window,"edit.undo");f.unchanged();trigger(f.window,"edit.redo");require(f.project.document==applied,"rim redo");
+    QTemporaryDir temp;require(temp.isValid(),"rim temporary directory");const auto root=std::filesystem::path(temp.path().toStdWString());ProjectStore store(makeWicProjectCodec());store.save(root/L"rim.comp",*applied,f.project.active);auto reopened=store.load(root/L"rim.comp");require(reopened.document.layers[0].raster->rgba()==expected,"rim save reopen pixels");auto rendered=SoftwareRenderer().render(reopened.document,0,0,d.width,d.height)->rgba();exportDocumentAtomic(reopened.document,root/L"rim.png");require(imaging::WicCodec::decode(root/L"rim.png").image.pixels==rendered,"rim PNG export pixels");
+    trigger(f.window,"filter.last");wait([&]{return !f.project.projectBusy;},"rim Last Filter did not finish",120000);require(f.project.history.undoCount()==2,"rim Last Filter adds one history step");trigger(f.window,"edit.undo");require(f.project.document==applied,"rim Last Filter undo");
+}
 void lens_effects_lifecycle(){
     auto d=fixture();d.id="11111111-1111-4111-8111-111111111111";d.layers[0].id="22222222-2222-4222-8222-222222222222";auto pixels=d.layers[0].raster->rgba();for(int y=8;y<14;++y)for(int x=8;x<14;++x)for(int c=0;c<4;++c)pixels[(y*32+x)*4+c]=255;d.layers[0].raster=Raster::fromRgba(32,24,pixels.data(),128);Fixture f(d);
     panel(f.window,"filter.lens_effects","Lens Effects",[&](QDialog& p){ready(p);control<QComboBox>(p,"lensEffectMode")->setCurrentIndex(3);ready(p);f.unchanged();preview(p)->setChecked(false);preview(p)->setChecked(true);});f.unchanged();require(!f.project.effectPreview,"lens Cancel left overlay");
@@ -426,4 +493,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"rim_light_lifecycle",rim_light_lifecycle},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
