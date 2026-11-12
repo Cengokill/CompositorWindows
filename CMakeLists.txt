@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31.6)
-project(CompositorWindows VERSION 1.5.9 LANGUAGES C CXX)
+project(CompositorWindows VERSION 1.5.12 LANGUAGES C CXX)
 include(scripts/HdrDependencies.cmake)
 configure_file(src/CompositorVersion.h.in ${CMAKE_BINARY_DIR}/generated/CompositorVersion.h @ONLY)
 option(COMPOSITOR_ASAN "Instrument native code with MSVC AddressSanitizer" OFF)
