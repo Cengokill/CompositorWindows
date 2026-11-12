@@ -23,6 +23,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
+#include <QToolButton>
 #include <QTimer>
 #include <QFutureWatcher>
 #include <QtConcurrent>
@@ -499,8 +500,8 @@ public:
             std::array<std::pair<int,int>,3> rows;
             for(int i=0;i<3;++i){auto& light=rim.lights[i];const auto& defaults=factory.rimLight.lights[i];rows[i].first=fields_.rowCount();const auto prefix=QString("Light %1 ").arg(i+1);
                 number(prefix+"angle",light.angle,-180,180,0,defaults.angle);number(prefix+"strength",light.strength,0,100,0,defaults.strength);number(prefix+"width",light.width,0,100,0,defaults.width);number(prefix+"choke",light.choke,0,100,0,defaults.choke);
-                auto* color=new QPushButton;color->setProperty("rimLightColor",true);auto update=[this,color,i]{const auto& c=request_.settings.rimLight.lights[i].color;color->setText(QColor::fromRgbF(c[0],c[1],c[2]).name());};update();color->setAccessibleName(prefix+"color");fields_.addRow(prefix+"color",color);
-                connect(color,&QPushButton::clicked,&dialog_,[this,i,update]{auto& c=request_.settings.rimLight.lights[i].color;auto picked=QColorDialog::getColor(QColor::fromRgbF(c[0],c[1],c[2]),&dialog_,QString("Light %1 color").arg(i+1));if(picked.isValid()){c={picked.redF(),picked.greenF(),picked.blueF()};update();change();}});rows[i].second=fields_.rowCount();
+                auto* color=new QToolButton;color->setObjectName(QString("rimLightColor%1").arg(i+1));color->setFixedSize(36,22);auto update=[this,color,i]{const auto& c=request_.settings.rimLight.lights[i].color;const auto hex=QColor::fromRgbF(c[0],c[1],c[2]).name();color->setAccessibleDescription(hex);color->setStyleSheet(QString("QToolButton { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QToolButton:hover { background: %1; border-color: #bfc9d8; } QToolButton:pressed, QToolButton:focus { background: %1; border-color: #78b0f7; }").arg(hex));};update();color->setAccessibleName(prefix+"color");fields_.addRow(prefix+"color",color);
+                connect(color,&QToolButton::clicked,&dialog_,[this,i,update]{auto& c=request_.settings.rimLight.lights[i].color;auto picked=QColorDialog::getColor(QColor::fromRgbF(c[0],c[1],c[2]),&dialog_,QString("Light %1 color").arg(i+1));if(picked.isValid()){c={picked.redF(),picked.greenF(),picked.blueF()};update();change();}});rows[i].second=fields_.rowCount();
             }
             auto show=[this,rows](int selected){for(int i=0;i<3;++i)for(int row=rows[i].first;row<rows[i].second;++row)fields_.setRowVisible(row,i==selected);};show(0);
             connect(active,&QComboBox::currentIndexChanged,&dialog_,[show](int index){show(index);});
@@ -688,7 +689,7 @@ public:
             for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QComboBox*>())control->setEnabled(false);
             for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
-            for(auto* control:dialog_.findChildren<QPushButton*>())if(control->property("rimLightColor").toBool())control->setEnabled(false);
+            for(auto* control:dialog_.findChildren<QToolButton*>())if(control->objectName().startsWith("rimLightColor"))control->setEnabled(false);
             preview_.setEnabled(false);debounce_.stop();
             if(!raw_)publishPreview();
             if(running_){++version_;cancelled_->store(true);}
