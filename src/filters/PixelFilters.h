@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 namespace compositor::filters {
-enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit,LensEffects };
+enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit,LensEffects,Sharpen };
 enum class LensEffect { AnamorphicFlare,Starburst,Mist,Prism,Bokeh };
 enum class BokehShape { Round,Hexagon,Oval,CatsEye };
 struct LensEffectSettings {
@@ -44,6 +44,7 @@ struct Settings {
     // Bloom / Glow adjustment: Mac amount/radius. Distinct from the Windows Bloom
     // filter's strength/threshold pair, which keeps its previous pixel behavior.
     double bloomAmount{40},bloomRadius{24};
+    double sharpenAmount{100},sharpenRadius{1};
     bool bloomGlow{};
     int ditherLevels{},ditherStyle{};
     double scanline{},scanlineGlow{};

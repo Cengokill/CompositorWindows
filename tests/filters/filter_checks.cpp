@@ -39,6 +39,30 @@ void testSettings(){
     s.radius=300;s.amount=-4;s.distance=3000;n=s.normalized();require(n.radius==250&&n.amount==.1&&n.distance==2000,"source setting limits");
     s.radius=3;s.distance=16;require(blurMargin(Kind::GaussianBlur,s)==11&&blurMargin(Kind::MotionBlur,s)==10,"source blur margins");
 }
+void testSharpen(){
+    auto source=image(40,20,[](int x,int){auto v=uint8_t(x<20?80:160);return Pixel{v,v,v,255};});
+    auto q=request(Kind::Sharpen,source);q.settings.sharpenRadius=2;q.settings.sharpenAmount=100;
+    auto result=apply(q);require(result.changed,"sharpen changes edge");
+    require(result.raster->pixel(19,10).r<80&&result.raster->pixel(20,10).r>160,"sharpen increases edge contrast");
+    require(result.raster->pixel(2,10)==source->pixel(2,10),"sharpen retains flat area");
+    q.settings.sharpenAmount=0;require(!apply(q).changed,"zero sharpen is identity");
+    q.settings.sharpenAmount=100;q.selection=SourceSelection{mask(40,20,[](int x,int){return uint8_t(x<20?255:0);})};
+    result=apply(q);require(result.raster->pixel(20,10)==source->pixel(20,10),"sharpen respects selection");
+    q.limits.cancelled=[] {return true;};fails([&]{apply(q);},"sharpen cancellation ignored");
+    int checks=0;q.limits.cancelled=[&]{return ++checks>20;};fails([&]{apply(q);},"sharpen mid-render cancellation ignored");
+    q.limits.cancelled={};q.limits.maxWorkingBytes=1;fails([&]{apply(q);},"sharpen budget ignored");
+    auto transparent=image(40,20,[](int x,int){return x<20?Pixel{40,20,10,128}:Pixel{};});
+    q=request(Kind::Sharpen,transparent);result=apply(q);
+    for(int x=0;x<40;++x){auto p=result.raster->pixel(x,10);require(p.a==transparent->pixel(x,10).a&&p.r<=p.a&&p.g<=p.a&&p.b<=p.a,"sharpen preserves alpha and premultiplication");}
+    auto deep=makeDeep(40,20,DeepImage::Format::Unorm16);
+    for(int y=0;y<20;++y)for(int x=0;x<40;++x){float v=x<20?.3f:.6f;deep->setPixel(x,y,{v,v,v,1});}
+    q=request(Kind::Sharpen,rasterFromDeep(*deep));q.deepSource=deep;q.settings.sharpenRadius=2;
+    auto deepResult=apply(q);require(deepResult.deep&&deepResult.deep->pixel(19,10)[0]<.3f&&deepResult.deep->pixel(20,10)[0]>.6f,"sharpen preserves and processes 16-bit pixels");
+    auto hdr=makeDeep(40,20,DeepImage::Format::HalfFloat);
+    for(int y=0;y<20;++y)for(int x=0;x<40;++x){float v=x<20?-1.f:2.f;hdr->setPixel(x,y,{v,v,v,1});}
+    q=request(Kind::Sharpen,rasterFromDeep(*hdr));q.deepSource=hdr;q.settings.sharpenRadius=2;
+    deepResult=apply(q);require(deepResult.deep&&deepResult.deep->pixel(19,10)[0]<-1.f&&deepResult.deep->pixel(20,10)[0]>2.f,"sharpen retains HDR range");
+}
 void testLensEffects(){
     auto detail=image(128,64,[](int x,int){const uint8_t v=x%2?40:100;return Pixel{v,v,v,255};});
     auto previewJob=request(Kind::LensEffects,detail);previewJob.preview=true;previewJob.previewMaxEdge=32;
@@ -307,6 +331,12 @@ std::uint64_t peakProcessBytes() {
     return std::uint64_t(usage.ru_maxrss) * 1024;
 #endif
 }
+int benchmarkSharpen(){
+    auto source=image(1024,768,[](int x,int y){auto v=uint8_t(40+(x*3+y*5)%160);return Pixel{v,v,v,255};});
+    auto q=request(Kind::Sharpen,source);q.settings.sharpenRadius=20;
+    auto start=std::chrono::steady_clock::now();auto result=apply(q);require(result.changed,"sharpen benchmark output");
+    std::cout<<"sharpen 1024x768 radius=20 ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()<<" peak_process_mib="<<double(peakProcessBytes())/(1024*1024)<<'\n';return 0;
+}
 int benchmarkLens(){
     auto source=image(1024,768,[](int x,int y){auto v=std::uint8_t((x%97<8&&y%83<8)?255:20);return Pixel{v,v,v,255};});
     for(auto effect:{LensEffect::AnamorphicFlare,LensEffect::Starburst,LensEffect::Mist,LensEffect::Prism,LensEffect::Bokeh}){auto q=request(Kind::LensEffects,source);q.settings.lens.effect=effect;auto start=std::chrono::steady_clock::now();auto result=apply(q);require(result.changed,"lens benchmark output");std::cout<<"lens mode="<<int(effect)<<" 1024x768 ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()<<" peak_process_mib="<<double(peakProcessBytes())/(1024*1024)<<'\n';}return 0;
@@ -359,5 +389,5 @@ int benchmarkCameraRaw() {
     return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-sharpen")return benchmarkSharpen();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testSettings();testSharpen();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 

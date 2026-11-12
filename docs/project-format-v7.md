@@ -56,7 +56,7 @@ Live graph validation (`LiveLayerMask.swift:3–21`) follows every node's `maskS
 
 The save routine validates the full snapshot, encodes all assets, then asks Foundation to replace a staged directory package atomically. Windows cannot claim the same atomic-directory guarantee from two renames. A recoverable staged write with an explicit journal and interruption tests is required; power-loss durability and macOS exchange remain separate verification items.
 
-## Windows reader through version 22
+## Windows reader through version 23
 
 The dependency pin stays at the 1.0.4 contract above. The Windows reader also accepts versions 8–22 and writes the lowest version that can represent the document. A plain document still saves as version 7. Versions 1–7 decode with the same gates as before.
 
@@ -77,6 +77,7 @@ The dependency pin stays at the 1.0.4 contract above. The Windows reader also ac
 | 20 | Editable Vignette adjustment layers and their nested settings, described below. |
 | 21 | Editable Tonal Contrast adjustment layers and their nested settings, described below. |
 | 22 | Editable Lens Effects adjustment layers and their nested settings, described below. |
+| 23 | Editable Sharpen adjustment layers and their nested settings, described below. |
 
 A version 7 file that carries folder opacity other than 1, guides, or a blur/noise adjustment is rejected. Invert, Black & White, and Color Balance adjustments stay valid at version 7.
 
@@ -123,3 +124,7 @@ A `Tonal Contrast` adjustment requires `filterLayerSettings.tonal` with finite n
 ## Windows Lens Effects adjustment layers (version 22)
 
 A `Lens Effects` adjustment requires `filterLayerSettings.lens`. Its `effect` is `Anamorphic Flare`, `Starburst`, `Mist`, `Prism`, or `Bokeh`; `bokehShape` is `Round`, `Hexagon`, `Oval`, or `Cat's Eye`. The object stores `threshold` (50–100), `flareAmount` (0–100), `flareLength` (1–100), `flareBlue` (0–100), `starAmount` (0–100), `starLength` (2–40), `starAngle` (−180–180), `starPoints` (4, 6, 8, 12, or 14), `mistStrength` and `mistSize` (0–100), `prismAmount` (0–100), `prismCopies` (integer 1–8), `prismOffset` (0–50), `prismAngle` (−180–180), `prismBlur` (0–100), Boolean `prismBothWays`, `bokehRadius` (0.5–6), and `bokehBrightness` and `bokehRing` (0–100). All numeric values must be finite. The kind or nested object requires Windows version 22. Older projects remain readable. The destructive filter keeps separate settings.
+
+## Windows Sharpen adjustment layers (version 23)
+
+A `Sharpen` adjustment requires `filterLayerSettings.sharpen` with finite `amount` (0–300 percent) and `radius` (0.1–20 pixels). The kind or nested object requires Windows version 23. Older projects remain readable. This Windows version is independent of the Mac format; reciprocal exchange has not been verified.

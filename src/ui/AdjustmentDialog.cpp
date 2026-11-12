@@ -193,6 +193,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     void writeVignette(Object value){auto layer=filterLayer();layer["vignette"]=value;writeFilterLayer(layer);}
     Object tonalSettings(){auto layer=filterLayer();if(layer["tonal"].isNull()||layer["tonal"].isUndefined()){layer["tonal"]=QJsonDocument::fromJson(QByteArray::fromStdString(effects::defaultAdjustmentJson("Tonal Contrast"))).object()["filterLayerSettings"].toObject()["tonal"];writeFilterLayer(layer);}return layer["tonal"].toObject();}
     void writeTonal(Object value){auto layer=filterLayer();layer["tonal"]=value;writeFilterLayer(layer);}
+    Object sharpenSettings(){return filterLayer()["sharpen"].toObject();}
+    void writeSharpen(Object value){auto layer=filterLayer();layer["sharpen"]=value;writeFilterLayer(layer);}
     Object lensSettings(){return filterLayer()["lens"].toObject();}
     void writeLens(Object value){auto layer=filterLayer();layer["lens"]=value;writeFilterLayer(layer);}
     void syncGuideOverlay(){
@@ -238,7 +240,8 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     auto number=[&](const QString&label,double value,double lo,double hi,int decimals,double fallback,std::function<void(double)>setter){
         const int stepDecimals=kind=="Grain"?(label=="Size"?1:0):kind=="Hue/Saturation"?0:kind=="Levels"&&label!="Gamma"?0:decimals;
         auto*spin=new ui::PropertyNumber;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setRange(lo,hi);spin->setDecimals(decimals);spin->setValue(value);spin->setAccessibleName(label);
-        const bool filterLike=kind=="Lens Effects"||kind=="Tonal Contrast"||kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
+        if(kind=="Sharpen")spin->setSuffix(label=="Amount"?" %":" px");
+        const bool filterLike=kind=="Sharpen"||kind=="Lens Effects"||kind=="Tonal Contrast"||kind=="Vignette"||kind=="Progressive Blur"||kind=="Bloom / Glow"||kind=="RGB Split";
         if(kind=="Exposure"||kind=="Grain"||kind=="Hue/Saturation"||kind=="Black & White"||filterLike){
             auto* row=new QWidget;auto* rowLayout=new QHBoxLayout(row);rowLayout->setContentsMargins(0,0,0,0);auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=filterLike?((label=="Radius"||label=="Distance"||label=="Amount")&&lo>0):(label=="Gamma"||label=="Size");const double first=logarithmic?std::log(lo):lo,last=logarithmic?std::log(hi):hi;
@@ -281,6 +284,12 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         QObject::connect(shape,&QComboBox::currentTextChanged,&dialog,[this](const QString& value){auto v=lensSettings();v["bokehShape"]=value;writeLens(v);changed();});
         auto show=[this,rows](int current){for(int group=0;group<5;++group)for(int row=rows[group].first;row<rows[group].second;++row)form.setRowVisible(row,group==current);};
         show(mode->currentIndex());QObject::connect(mode,&QComboBox::currentIndexChanged,&dialog,show);
+    }else if(kind=="Sharpen"){
+        for(const auto& item:std::array<std::pair<const char*,const char*>,2>{{{"amount","Amount"},{"radius","Radius"}}}){
+            const QString key=item.first,label=item.second;const bool radius=key=="radius";const double fallback=radius?1:100;
+            auto* spin=number(label,sharpenSettings()[key].toDouble(fallback),radius?.1:0,radius?20:300,radius?1:0,fallback,[this,key](double value){auto v=sharpenSettings();v[key]=value;writeSharpen(v);});
+            reloadControls.push_back([this,spin,key,fallback]{spin->setValue(sharpenSettings()[key].toDouble(fallback));});
+        }
     }else if(kind=="Tonal Contrast"){
         const auto values=tonalSettings();
         for(const auto& item:std::array<std::pair<const char*,const char*>,5>{{{"amount","Amount"},{"radius","Radius"},{"shadows","Shadows"},{"midtones","Midtones"},{"highlights","Highlights"}}}){
