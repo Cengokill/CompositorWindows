@@ -1,5 +1,6 @@
 #include "graphics/StackRenderer.h"
 #include "graphics/MaskSampling.h"
+#include "graphics/RasterSampling.h"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -16,6 +17,45 @@ void alphas(const Raster&r,std::array<uint8_t,4> expected){for(int y=0;y<2;++y)f
 std::shared_ptr<const Raster> invert(const Layer&,std::shared_ptr<const Raster> in,RenderRegion){std::vector<Pixel> p(size_t(in->width)*in->height);for(int y=0;y<in->height;++y)for(int x=0;x<in->width;++x){auto a=in->pixel(x,y);p[size_t(y)*in->width+x]={uint8_t(a.a-a.r),uint8_t(a.a-a.g),uint8_t(a.a-a.b),a.a};}return in->replacing(0,0,in->width,in->height,p.data(),in->width);}
 }
 int main(){
+    test("bilinear-rgba-matches-scalar-rounding",[]{
+        std::array<Pixel,4> pixels{{{0,42,8,255},{1,70,117,255},{80,80,113,128},{46,9,91,128}}};
+        for(int x=0;x<257;++x)for(int y=0;y<257;++y){
+            const Point unit{.25+x/512.,.25+y/512.};
+            const double fx=unit.x*2-.5,fy=unit.y*2-.5;
+            const auto scalar=[&](uint8_t Pixel::*channel){
+                const double value=(1-fy)*((1-fx)*(pixels[0].*channel)+fx*(pixels[1].*channel))
+                    +fy*((1-fx)*(pixels[2].*channel)+fx*(pixels[3].*channel));
+                return uint8_t(std::lround(value));
+            };
+            const auto actual=sampleRasterPixels(2,2,[&](int column,int row){return pixels[size_t(row)*2+column];},
+                unit,Transform::Sampling::High);
+            require(actual==Pixel{scalar(&Pixel::r),scalar(&Pixel::g),scalar(&Pixel::b),scalar(&Pixel::a)},
+                "Bilinear SIMD changed a channel");
+        }
+    });
+    test("scaled-normal-stack-preserves-rounded-composition",[]{
+        Document document;
+        document.width=269;
+        document.height=273;
+        for(int index=0;index<5;++index){
+            const auto alpha=uint8_t(index%2?150:255);
+            auto image=layer("photo-"+std::to_string(index),{uint8_t(15+index*17),25,40,alpha},269,273);
+            image.transform={index*.25,index*.5,269,273};
+            if(index==4){
+                const std::vector<Pixel> transparent(37*273);
+                image.raster=image.raster->replacing(0,0,37,273,transparent.data(),37);
+            }
+            document.layers.push_back(std::move(image));
+        }
+        auto preview=std::make_shared<LayerRenderPreview>();
+        preview->layer=document.layers.back();
+        preview->identity=std::make_shared<int>(0);
+        for(double units:{.625,1.,1.91,3.25,5.}){
+            const auto candidate=StackRenderer().renderScaled(document,-.75,-.125,256,256,units);
+            const auto reference=StackRenderer({},preview).renderScaled(document,-.75,-.125,256,256,units);
+            require(candidate->rgba()==reference->rgba(),"Normal stack differed from bottom-to-top reference");
+        }
+    });
     test("G-R-013-placed-mask-exterior-edge-majority",[]{Document d;auto image=layer("image",{255,0,0,255},8,4);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=3;gray->pixels.assign(9,255);gray->pixels[4]=0;image.mask=Mask{gray};image.mask->placement=Transform{2,0,3,3,0,false,false,Transform::Sampling::Nearest};d.layers={image};
         auto white=StackRenderer().render(d,0,0,8,4);require(white->pixel(0,0).a==255&&white->pixel(7,3).a==255&&white->pixel(3,1).a==0,"Reveal mask exterior or center differs");
         gray=std::make_shared<GrayRaster>(*gray);gray->pixels.assign(9,0);gray->pixels[4]=255;d.layers[0].mask->raster=gray;auto black=StackRenderer().render(d,0,0,8,4);require(black->pixel(0,0).a==0&&black->pixel(7,3).a==0&&black->pixel(3,1).a==255,"Hide mask exterior or center differs");

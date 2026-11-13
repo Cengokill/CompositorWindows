@@ -1,15 +1,20 @@
 #include "effects/Adjustments.h"
 #include "graphics/SamplingSource.h"
+#include "imaging/wic_codec.h"
+#include "layers/LayerOperations.h"
+#include "persistence/ProjectStore.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewportCompositeJob.h"
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QShortcut>
 #include <QThread>
 #include <QWheelEvent>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -89,6 +94,53 @@ Document fixture(int edge,int visible,int hidden,bool complex,bool lens){
     return document;
 }
 
+Document duplicatePhoto(const std::filesystem::path& path){
+    const auto image=imaging::WicCodec::decode(path).image;
+    const auto raster=Raster::fromRgba(int(image.width),int(image.height),image.pixels.data(),image.stride);
+    Document document;
+    document.id=newId();
+    document.width=raster->width;
+    document.height=raster->height;
+    Layer layer;
+    layer.id=newId();
+    layer.transform={0,0,double(raster->width),double(raster->height)};
+    layer.raster=raster;
+    document.layers.push_back(layer);
+    for(int index=1;index<5;++index)
+        document=layers::duplicateLayer(document,{},layer.id).document;
+    return document;
+}
+
+int photoWindow(QApplication& app){
+    const auto* photo=_wgetenv(L"ZOOM_PHOTO");
+    require(photo,"Set ZOOM_PHOTO to the local JPEG");
+    MainWindow window;
+    auto& project=window.addProject(duplicatePhoto(photo));
+    auto& canvas=*project.canvas;
+    canvas.setFixedSize(640,640);
+    canvas.navigatorProvider={};
+    canvas.showPixelGrid=false;
+    canvas.setRulersVisible(false);
+    canvas.setTransformOverlay(std::nullopt);
+    canvas.pointerHover={};
+    const auto* initialZoom=_wgetenv(L"ZOOM_START");
+    const double start=initialZoom?std::stod(initialZoom):.25;
+    const auto reset=[&]{
+        canvas.zoomAt(start,canvas.contentRect().center());
+        canvas.pan={};
+        canvas.invalidateComposite();
+        canvas.update();
+    };
+    auto* shortcut=new QShortcut(QKeySequence(Qt::Key_F8),&window);
+    QObject::connect(shortcut,&QShortcut::activated,&window,reset);
+    window.show();
+    reset();
+    require(canvas.devicePixelRatioF()==1,"Desktop probe requires display scaling at 100%");
+    const auto origin=canvas.mapToGlobal(QPoint(0,0));
+    std::cout<<"CANVAS "<<origin.x()<<' '<<origin.y()<<' '<<canvas.width()<<' '<<canvas.height()<<std::endl;
+    return app.exec();
+}
+
 void wheel(NativeCanvas& canvas,QPointF anchor,int direction){
     QWheelEvent event(anchor,canvas.mapToGlobal(anchor),{},{0,direction*120},
         Qt::NoButton,Qt::AltModifier,Qt::NoScrollPhase,false);
@@ -106,14 +158,21 @@ int pixelDifference(const QImage& actual,const QImage& expected){
     return difference;
 }
 
-void checkFrames(bool lens,int interval){
-    const auto document=fixture(352,3,1,true,lens);
+void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
+    const auto document=photo.empty()?fixture(352,3,1,true,lens):duplicatePhoto(photo);
     CompositeCache referenceCache;
+    std::shared_ptr<const LayerRenderPreview> referencePreview;
+    if(!photo.empty()){
+        auto original=std::make_shared<LayerRenderPreview>();
+        original->layer=document.layers.back();
+        original->identity=std::make_shared<int>(0);
+        referencePreview=std::move(original);
+    }
     NativeCanvas reference(true);
     reference.setFixedSize(512,512);
     reference.setDocumentSize(document.width,document.height);
     reference.viewportProvider=[&](double x,double y,double w,double h,double units){
-        return referenceCache.renderViewport(document,x,y,w,h,units);
+        return referenceCache.renderViewport(document,x,y,w,h,units,64,256,referencePreview);
     };
     reference.move(0,0);
     reference.show();
@@ -199,7 +258,7 @@ void checkFrames(bool lens,int interval){
     std::cout<<"frames="<<frames.size()<<" max_channel_difference="<<maximum<<'\n';
     require(maximum==0,"A presented zoom frame differs from the synchronous render");
 
-    if(lens||interval!=30)return;
+    if(lens||interval!=30||!photo.empty())return;
     auto* zoomJob=dynamic_cast<ui::ViewportCompositeJob*>(
         canvas.findChild<QObject*>("wheelZoomCompositeJob",Qt::FindDirectChildrenOnly));
     require(zoomJob,"Canvas zoom worker is missing");
@@ -249,7 +308,10 @@ void benchmark(int edge,int visible,int hidden,bool lens,int notches,int interva
         "Invalid benchmark document size or layer count");
     require(notches>=1&&notches<=20&&interval>=0&&interval<=1000&&(direction==1||direction==-1)&&trials>=1,
         "Invalid benchmark wheel sequence");
-    const auto document=fixture(edge,visible,hidden,false,lens);
+    const auto* photo=_wgetenv(L"ZOOM_PHOTO");
+    const auto document=photo?duplicatePhoto(photo):fixture(edge,visible,hidden,false,lens);
+    require(!photo||(std::max(document.width,document.height)==edge&&visible==5&&hidden==0&&!lens),
+        "Photo mode requires the longest image edge and exactly five visible layers");
     MainWindow window;
     auto& project=window.addProject(document);
     auto& canvas=*project.canvas;
@@ -258,7 +320,7 @@ void benchmark(int edge,int visible,int hidden,bool lens,int notches,int interva
     window.showNormal();
     window.raise();
     const auto anchor=canvas.contentRect().center();
-    const double low=512./edge,high=low*std::pow(1.25,notches);
+    const double low=512./std::max(document.width,document.height),high=low*std::pow(1.25,notches);
     const double start=direction>0?low:std::min(high,32.);
     std::vector<double> first,last,event,spacing,dispatch;
     size_t dropped=0;
@@ -330,6 +392,22 @@ int main(int argc,char** argv){
     } com{apartment};
     QApplication app(argc,argv);
     try{
+        if(arguments.size()==1&&arguments.front()=="photo-window")return photoWindow(app);
+        if(arguments.size()==1&&arguments.front()=="photo-project"){
+            const auto* photo=_wgetenv(L"ZOOM_PHOTO");
+            const auto* destination=_wgetenv(L"ZOOM_PROJECT");
+            require(photo&&destination,"Set ZOOM_PHOTO and ZOOM_PROJECT");
+            const auto document=duplicatePhoto(photo);
+            ProjectStore(makeWicProjectCodec()).save(destination,document,document.layers.back().id);
+            return 0;
+        }
+        if(arguments.size()==1&&arguments.front()=="photo-frames"){
+            const auto* photo=_wgetenv(L"ZOOM_PHOTO");
+            require(photo,"Set ZOOM_PHOTO to the local JPEG");
+            checkFrames(false,30,photo);
+            checkFrames(false,100,photo);
+            return 0;
+        }
         if(arguments.empty()||(arguments.size()==1&&arguments.front()=="frames")){
             checkFrames(false,30);
             checkFrames(false,100);

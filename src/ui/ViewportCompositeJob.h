@@ -25,6 +25,7 @@ public:
         int lensPreviewMaxEdge{};
         std::shared_ptr<const LayerRenderPreview> preview;
         std::optional<editing::Rect> crop;
+        bool retainViewportCache{};
     };
     struct Result {
         EditorProject* owner{};

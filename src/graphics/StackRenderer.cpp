@@ -125,9 +125,22 @@ template<class P> class Render {
         const auto& info=layers[size_t(source)];
         return alpha(own(source,p,dependency(info.source,p)))/(std::is_same_v<P,Pixel>?255.:1.);
     }
+    template<class DrawRows> void runRows(const DrawRows& drawRows)const{
+        if(parallel&&pixelCount>=32768){
+            // Poll on the calling thread. The cancellation callback belongs
+            // to the caller and need not be safe to invoke from row workers.
+            if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
+            constexpr int rowsPerBand=32;
+            runParallelRenderBatch(size_t((region.height+rowsPerBand-1)/rowsPerBand),[&](size_t band){
+                const int first=int(band)*rowsPerBand;
+                drawRows(first,std::min(first+rowsPerBand,region.height),false);
+            });
+            if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
+        }else drawRows(0,region.height,true);
+    }
     void drawOwn(int index,std::vector<P>& pixels,bool externalClip)const{
         const auto& info=layers[size_t(index)];
-        const auto drawRows=[&](int first,int last,bool pollRows){
+        runRows([&](int first,int last,bool pollRows){
         ReducedTileReadScope tiles;
         for(int row=first;row<last;++row){
         if(pollRows&&cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
@@ -147,18 +160,35 @@ template<class P> class Render {
             }
             pixels[i]=composite(pixels[i],content,info.layer.blend);}
         }
-        };
-        if(parallel&&pixelCount>=32768){
-            // Poll on the calling thread. The cancellation callback belongs
-            // to the caller and need not be safe to invoke from row workers.
-            if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
-            constexpr int rowsPerBand=32;
-            runParallelRenderBatch(size_t((region.height+rowsPerBand-1)/rowsPerBand),[&](size_t band){
-                const int first=int(band)*rowsPerBand;
-                drawRows(first,std::min(first+rowsPerBand,region.height),false);
-            });
-            if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
-        }else drawRows(0,region.height,true);
+        });
+    }
+    void drawNormalStack(std::vector<P>& pixels)const{
+        runRows([&](int first,int last,bool pollRows){
+            ReducedTileReadScope tiles;
+            std::vector<P> partial;
+            for(int row=first;row<last;++row){
+                if(pollRows&&cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
+                const size_t begin=size_t(row)*region.width;
+                for(size_t i=begin;i<begin+region.width;++i){
+                    const auto point=position(i);
+                    P pixel{};
+                    for(auto layer=order.rbegin();layer!=order.rend();++layer){
+                        const auto source=own(*layer,point);
+                        if(alpha(source)==255){
+                            pixel=source;
+                            break;
+                        }
+                        if(alpha(source)!=0)partial.push_back(source);
+                    }
+                    // Source-over rounds at each layer. Replay samples above
+                    // the opaque pixel in the original bottom-to-top order.
+                    for(auto sample=partial.rbegin();sample!=partial.rend();++sample)
+                        pixel=composite(pixel,*sample,Blend::Normal);
+                    partial.clear();
+                    pixels[i]=pixel;
+                }
+            }
+        });
     }
     void adjust(int index,std::vector<P>& pixels,bool folderClip)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;
@@ -209,6 +239,17 @@ public:
     }
     auto run()const{
         std::vector<P> result(pixelCount);
+        if constexpr(std::is_same_v<P,Pixel>){
+            if(parallel&&order.size()>1&&std::all_of(order.begin(),order.end(),[&](int index){
+                const auto& info=layers[size_t(index)];
+                const auto& layer=info.layer;
+                return info.parent<0&&info.source<0&&layer.raster&&!layer.deep&&!layer.mask&&
+                    layer.blend==Blend::Normal&&layer.adjustmentJson.empty()&&!layer.effects.active();
+            })){
+                drawNormalStack(result);
+                return rasterFromPixels(result,region.width,region.height);
+            }
+        }
         for(int index:order){if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");if(stacked[size_t(index)])continue;const auto& info=layers[size_t(index)];
             if(!info.layer.adjustmentJson.empty()){if(info.source<0)adjust(index,result,true);continue;}
             const auto& stack=stacks[size_t(index)];if(stack.empty()){drawOwn(index,result,true);continue;}

@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Composa.App.Controls;
 using Composa.Editing;
+using Composa.IO;
 using Composa.Model;
 using Composa.Rendering;
 using SkiaSharp;
@@ -51,13 +52,20 @@ public sealed class ComposaZoomBenchmark(ITestOutputHelper output)
         var (notches, interval, direction, trials) = (values[3], values[4], values[5], values[6]);
         var (cold, matched) = (values[7] != 0, values[8] != 0);
         var source = Math.Min(edge, (int)Math.Sqrt(500_000_000.0 / (visible + hidden)));
-        var document = new Document(edge, edge);
+        using var photo = Environment.GetEnvironmentVariable("ZOOM_PHOTO") is { } path
+            ? ImageFiles.Load(path) ?? throw new InvalidOperationException("Cannot decode the benchmark photo.")
+            : null;
+        if (photo != null)
+        {
+            Assert.Equal((edge, 5, 0), (Math.Max(photo.Width, photo.Height), visible, hidden));
+        }
+        var document = new Document(photo?.Width ?? edge, photo?.Height ?? edge);
         for (var i = 0; i < visible + hidden; i++)
         {
             document.Layers.Add(new Layer
             {
-                Pixels = Noise(source, i), Visible = i < visible,
-                Transform = LayerTransform.Identity(edge, edge)
+                Pixels = photo ?? Noise(source, i), Visible = i < visible,
+                Transform = LayerTransform.Identity(document.Width, document.Height)
             });
         }
         var canvas = new CanvasView { Width = View, Height = View, Session = new EditorSession(document) };

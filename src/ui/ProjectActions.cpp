@@ -202,7 +202,9 @@ void MainWindow::initializeProject(EditorProject&project){
     view->requestWheelComposite=[this,owner,zoomJob,requested](NativeCanvas::ViewportBounds bounds){
         if(!bounds.valid||!owner->document)return false;
         *requested=bounds;
-        zoomJob->submit(viewportSnapshot(*owner,bounds));
+        auto request=viewportSnapshot(*owner,bounds);
+        request.retainViewportCache=!request.preview&&!request.crop&&request.document==*owner->document;
+        zoomJob->submit(std::move(request));
         return true;
     };
     view->cancelWheelComposite=[zoomJob]{zoomJob->invalidate();};

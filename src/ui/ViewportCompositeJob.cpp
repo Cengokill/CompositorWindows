@@ -15,7 +15,7 @@
 
 namespace compositor::ui {
 namespace {
-ViewportCompositeJob::Result renderSnapshot(const ViewportCompositeJob::Request& request,uint64_t epoch,const std::shared_ptr<std::atomic<uint64_t>>& liveEpoch,const std::shared_ptr<std::atomic_bool>& proceed){
+ViewportCompositeJob::Result renderSnapshot(const ViewportCompositeJob::Request& request,uint64_t epoch,const std::shared_ptr<std::atomic<uint64_t>>& liveEpoch,const std::shared_ptr<std::atomic_bool>& proceed,CompositeCache& retained){
     ViewportCompositeJob::Result result;
     result.owner=request.owner;result.document=request.document;result.zoom=request.zoom;result.panX=request.panX;result.panY=request.panY;
     result.canvasWidth=request.canvasWidth;result.canvasHeight=request.canvasHeight;result.epoch=epoch;result.gesture=request.gesture;
@@ -23,15 +23,21 @@ ViewportCompositeJob::Result renderSnapshot(const ViewportCompositeJob::Request&
     if(proceed){while(!proceed->load()){if(abandoned()){result.stale=true;return result;}std::this_thread::sleep_for(std::chrono::milliseconds(2));}}
     if(abandoned()){result.stale=true;return result;}
     try{
-        result.cache.setLensPreviewMaxEdge(request.lensPreviewMaxEdge);
+        auto& cache=request.retainViewportCache?retained:result.cache;
+        // This cache belongs to a single worker. Published patches keep only
+        // immutable tile owners while the next request updates cache metadata.
+        cache.setLensPreviewMaxEdge(request.lensPreviewMaxEdge);
         if(request.crop)
             result.view=renderCropViewport(request.document,*request.crop,request.x,request.y,
                 request.width,request.height,request.units,request.preview);
         else
-            result.view=result.cache.renderViewport(request.document,request.x,request.y,request.width,
-                request.height,request.units,64,256,request.preview,abandoned);
+            result.view=cache.renderViewport(request.document,request.x,request.y,request.width,
+                request.height,request.units,64,request.retainViewportCache?64:256,request.preview,abandoned);
     }
-    catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}
+    catch(const std::exception& error){
+        if(request.retainViewportCache)retained.reset();
+        result.error=QString::fromUtf8(error.what());
+    }
     if(abandoned())result.stale=true;
     return result;
 }
@@ -41,6 +47,7 @@ struct ViewportCompositeJob::Impl {
     Receiver receiver;
     std::shared_ptr<std::atomic<uint64_t>> epoch=std::make_shared<std::atomic<uint64_t>>(1);
     std::shared_ptr<std::atomic_bool> proceed;
+    CompositeCache retained;
     std::optional<Queued> pending;
     bool running{};
     bool stopped{};
@@ -79,8 +86,10 @@ void ViewportCompositeJob::start(Request request){
     if(!impl_||impl_->stopped||!request.owner)return;
     const uint64_t epoch=impl_->epoch->load();
     impl_->running=true;
-    auto live=impl_->epoch;auto proceed=impl_->proceed;
-    impl_->watcher.setFuture(QtConcurrent::run([request=std::move(request),epoch,live,proceed]{return renderSnapshot(request,epoch,live,proceed);}));
+    auto live=impl_->epoch;auto proceed=impl_->proceed;auto* retained=&impl_->retained;
+    impl_->watcher.setFuture(QtConcurrent::run([request=std::move(request),epoch,live,proceed,retained]{
+        return renderSnapshot(request,epoch,live,proceed,*retained);
+    }));
 }
 namespace {
 MovePreviewJob::Result renderPreview(const MovePreviewJob::Request& request,uint64_t epoch,const std::shared_ptr<std::atomic<uint64_t>>& liveEpoch){
