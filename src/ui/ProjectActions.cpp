@@ -134,6 +134,8 @@ private:
 void detach(NativeCanvas*canvas){
     canvas->pointerDown={};canvas->pointerDoubleClick={};canvas->pointerMove={};canvas->pointerUp={};canvas->pointerCancel={};canvas->pointerInterrupted={};
     canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};canvas->navigatorProvider={};
+    if(canvas->cancelWheelComposite)canvas->cancelWheelComposite();
+    canvas->requestWheelComposite={};canvas->cancelWheelComposite={};
     canvas->guideDragUpdated={};canvas->guideDragFinished={};canvas->guideDragCanceled={};
 }
 }
@@ -184,6 +186,25 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->textKey=[this](QKeyEvent* event){return handleTextKey(event);};
     project.canvas->textInput=[this](QInputMethodEvent* event){handleTextInput(event);};
     auto*owner=&project;project.canvas->viewportProvider=[this,owner](double x,double y,double w,double h,double units){return brushViewport(*owner,x,y,w,h,units);};
+    auto* view=project.canvas;
+    // Crop and tool snapshots are captured on the UI thread. The worker owns
+    // the immutable pixels and never needs to dereference the project.
+    auto requested=std::make_shared<NativeCanvas::ViewportBounds>();
+    auto* zoomJob=new ui::ViewportCompositeJob([this,view,requested](ui::ViewportCompositeJob::Result result){
+        if(!view->isVisible()||view->viewportBounds()!=*requested)return;
+        if(!result.error.isEmpty()){
+            statusBar()->showMessage(result.error);
+            return;
+        }
+        view->presentWheelComposite(std::move(result.view));
+    },view);
+    view->requestWheelComposite=[this,owner,zoomJob,requested](NativeCanvas::ViewportBounds bounds){
+        if(!bounds.valid||!owner->document)return false;
+        *requested=bounds;
+        zoomJob->submit(viewportSnapshot(*owner,bounds));
+        return true;
+    };
+    view->cancelWheelComposite=[zoomJob]{zoomJob->invalidate();};
     project.canvas->navigatorProvider=[this,owner](int edge){return navigatorComposite(*owner,edge);};
     project.canvas->guideDragUpdated=[this](bool horizontal,double position){statusBar()->showMessage(QString("%1 guide %2").arg(horizontal?QStringLiteral("Horizontal"):QStringLiteral("Vertical")).arg(position,0,'f',1));};
     project.canvas->guideDragCanceled=[this]{statusBar()->clearMessage();};

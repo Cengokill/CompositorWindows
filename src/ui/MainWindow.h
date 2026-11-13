@@ -379,6 +379,7 @@ private:
     bool updateBrush(Point,bool finish,double pressure=1);
     void publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapshot>,bool finish=false);
     CompositeViewport brushViewport(EditorProject&,double,double,double,double,double);
+    ui::ViewportCompositeJob::Request viewportSnapshot(EditorProject&,NativeCanvas::ViewportBounds);
     CompositeViewport navigatorComposite(EditorProject&,int maxEdge);
     void setupAdjustmentActions();
     ui::EditPanelHost makeEditPanelHost(EditorProject&,const Document&,std::string action);

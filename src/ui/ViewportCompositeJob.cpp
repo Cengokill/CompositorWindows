@@ -1,4 +1,5 @@
 #include "ViewportCompositeJob.h"
+#include "CropViewport.h"
 #include "editing_transform/TransformGeometry.h"
 #include "graphics/Downsample.h"
 #include <QFutureWatcher>
@@ -23,7 +24,12 @@ ViewportCompositeJob::Result renderSnapshot(const ViewportCompositeJob::Request&
     if(abandoned()){result.stale=true;return result;}
     try{
         result.cache.setLensPreviewMaxEdge(request.lensPreviewMaxEdge);
-        result.view=result.cache.renderViewport(request.document,request.x,request.y,request.width,request.height,request.units,64,256,{},abandoned);
+        if(request.crop)
+            result.view=renderCropViewport(request.document,*request.crop,request.x,request.y,
+                request.width,request.height,request.units,request.preview);
+        else
+            result.view=result.cache.renderViewport(request.document,request.x,request.y,request.width,
+                request.height,request.units,64,256,request.preview,abandoned);
     }
     catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}
     if(abandoned())result.stale=true;

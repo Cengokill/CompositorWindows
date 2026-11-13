@@ -17,6 +17,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 using namespace compositor;
 #define REQUIRE(...) do{if(!(__VA_ARGS__))throw std::runtime_error(std::string(__FILE__)+":"+std::to_string(__LINE__)+": " #__VA_ARGS__);}while(false)
 Document document(int width,int height,Pixel color={90,40,20,128}){Document d;d.id=newId();d.width=width;d.height=height;Layer layer;layer.id=newId();layer.raster=Raster::filled(width,height,color);layer.transform={0,0,double(width),double(height),0,false,false,Transform::Sampling::Nearest};layer.opacity=.75;d.layers={layer};return d;}
@@ -288,4 +289,16 @@ void vignette_cache(){
     }
 }
 
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+void viewport_cancellation_reaches_renderer(){
+    auto d=document(512,512,{30,40,50,255});
+    size_t polls=0;
+    bool cancelled=false;
+    try{
+        SoftwareRenderer().renderScaled(d,0,0,256,256,1,[&]{return ++polls>=4;});
+    }catch(const std::runtime_error& error){
+        cancelled=std::string_view(error.what()).find("cancelled")!=std::string_view::npos;
+    }
+    REQUIRE(cancelled&&polls>=4);
+}
+
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}

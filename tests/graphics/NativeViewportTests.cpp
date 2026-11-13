@@ -109,7 +109,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         bool ink=false;for(double y=map.top()+4;y<map.bottom()-4;y+=2)for(double x=map.left()+4;x<map.right()-4;x+=2){const auto color=image.pixelColor(int(std::lround(x*dpr)),int(std::lround(y*dpr)));if(color.red()<80&&color.green()<80&&color.blue()<80)ink=true;}
         require(ink,"Reduced navigator omitted the finished stroke");
     });
-    test("native_minimap_and_wheel_keep_the_current_patch",[]{
+    test("native_minimap_defers_and_alt_wheel_requests_current_patch",[]{
         NativeCanvas canvas(true);canvas.resize(400,300);canvas.setRaster(Raster::filled(800,600,{20,20,20,255}));canvas.show();flush();
         auto patch=Raster::filled(32,24,{20,20,20,255});int calls=0;
         canvas.viewportProvider=[&](double,double,double,double,double){++calls;return CompositeViewport{patch,0,0,1,800,600};};
@@ -123,8 +123,8 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         require(calls>baseline,"Minimap release did not refresh the patch");
         const auto afterDrag=calls;const QPointF anchor{80,60};
         QWheelEvent wheel(anchor,canvas.mapToGlobal(anchor),QPoint(0,10),QPoint(),Qt::NoButton,Qt::AltModifier,Qt::NoScrollPhase,false);
-        QApplication::sendEvent(&canvas,&wheel);canvas.repaint();require(calls==afterDrag,"Alt wheel rendered a new patch before the notch settled");
-        waitFor(50);canvas.repaint();require(calls>afterDrag,"Alt wheel never refreshed the patch");
+        QApplication::sendEvent(&canvas,&wheel);canvas.repaint();
+        require(calls>afterDrag,"Alt wheel did not request a sharp patch on its next paint");
     });
     test("native_minimap_drag_shows_overview_before_the_sharp_patch",[]{
         NativeCanvas canvas(true);canvas.resize(400,300);canvas.setDocumentSize(800,600);canvas.show();flush();
@@ -161,12 +161,12 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
             auto* canvas=project.canvas;
             // An empty override uses the sRGB fallback, independent of the monitor ICC profile.
             canvas->setDisplayProfileOverride(std::filesystem::path{});canvas->fit();flush();
-            ui::ViewportCompositeJob* job=nullptr;
-            for(auto* child:window.findChildren<QObject*>())if(auto* candidate=dynamic_cast<ui::ViewportCompositeJob*>(child))job=candidate;
+            auto* job=dynamic_cast<ui::ViewportCompositeJob*>(window.findChild<QObject*>("viewportCompositeJob",Qt::FindDirectChildrenOnly));
             require(job!=nullptr,"Viewport composite job missing");
             auto gate=std::make_shared<std::atomic_bool>(false);job->setProceedGate(gate);
             int calls=0;auto provider=canvas->viewportProvider;
             canvas->viewportProvider=[&](double x,double y,double w,double h,double units){++calls;return provider(x,y,w,h,units);};
+            canvas->invalidateComposite();
             canvas->repaint();require(calls>0,"Initial viewport was not painted");
             const auto toView=[&](Point p){const auto view=canvas->viewMapping().toView(p);return QPointF(view.x,view.y);};
             const auto press=original.fromUnit({.3,.35});

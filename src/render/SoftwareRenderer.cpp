@@ -92,13 +92,13 @@ std::shared_ptr<const Raster> SoftwareRenderer::renderScaled(const Document& doc
         const int fullHeight=std::max(oy+height,int(std::ceil((document.height-top)/unitsPerPixel))+margin);
         if(ox<0||oy<0||!lensFrameFits(fullWidth,fullHeight))throw std::runtime_error("Lens Effects full-image preview exceeds working memory budget");
         if(!lensFrame_||!lensDocument_||*lensDocument_!=document||std::abs(lensX_-left)>tolerance||std::abs(lensY_-top)>tolerance||lensUnits_!=unitsPerPixel||lensFrame_->width!=fullWidth||lensFrame_->height!=fullHeight){
-            lensFrame_=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,left,top,fullWidth,fullHeight,unitsPerPixel);
+            lensFrame_=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,left,top,fullWidth,fullHeight,unitsPerPixel,cancelled);
             lensDocument_=document;lensX_=left;lensY_=top;lensUnits_=unitsPerPixel;
         }
         return cropRaster(*lensFrame_,ox,oy,width,height);
     }
     const int margin=int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel));
-    auto rendered=stack(document,preview_,lensPreviewMaxEdge_).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel);
+    auto rendered=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel,cancelled);
     return margin?cropRaster(*rendered,margin,margin,width,height):rendered;
 }
 std::shared_ptr<const Raster> SoftwareRenderer::renderCursorRegion(const Document& document,double x,double y,int width,int height,double unitsPerPixel)const {
