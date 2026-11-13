@@ -222,6 +222,10 @@ public:
     std::function<void()> pointerInterrupted;
     // Hover and right-drag coordinates are logical view pixels (DIPs).
     std::function<void(QPointF,Qt::KeyboardModifiers)> pointerHover;
+    // Tool cursor first, then navigator, ruler, guide, crop, and transform targets.
+    void updateHoverCursor(QPointF view,Qt::KeyboardModifiers modifiers);
+    // Uses the pointer when it lies inside this canvas. Returns false otherwise.
+    bool updateHoverCursorAtPointer();
     std::function<void()> pointerLeave;
     std::function<bool(QPointF,Qt::KeyboardModifiers)> rightPointerDown;
     std::function<void(QPointF,Qt::KeyboardModifiers,bool)> rightPointerMove;

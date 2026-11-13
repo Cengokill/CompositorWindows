@@ -1,5 +1,6 @@
 #include "NativeCanvas.h"
 #include "CanvasAccessibility.h"
+#include <QCursor>
 #include <QGuiApplication>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -227,6 +228,9 @@ void NativeCanvas::cancelGuideDrag(){
     if(QWidget::mouseGrabber()==this)releaseMouse();
     unsetCursor();
     if(guideDragCanceled)guideDragCanceled();
+    // The drag already followed the pointer. QCursor can lag a grabbed move.
+    if(rect().contains(last_.toPoint()))updateHoverCursor(last_,QGuiApplication::keyboardModifiers());
+    else updateHoverCursorAtPointer();
     update();
 }
 void NativeCanvas::finishGuideDrag(QPointF view){
@@ -239,9 +243,10 @@ void NativeCanvas::finishGuideDrag(QPointF view){
     const bool creating=drag.index<0;
     const double extent=drag.horizontal?double(documentHeight_):double(documentWidth_);
     const bool outsideDocument=!(drag.position>=0&&drag.position<=extent);
-    if((creating&&!contentRect().contains(view))||outsideDocument){if(guideDragCanceled)guideDragCanceled();update();return;}
-    if(!std::isfinite(drag.position)||std::abs(drag.position)>1000000){if(guideDragCanceled)guideDragCanceled();update();return;}
-    if(guideDragFinished)guideDragFinished(drag.horizontal,drag.position,drag.index);
+    const bool rejected=(creating&&!contentRect().contains(view))||outsideDocument||!std::isfinite(drag.position)||std::abs(drag.position)>1000000;
+    if(rejected){if(guideDragCanceled)guideDragCanceled();}
+    else if(guideDragFinished)guideDragFinished(drag.horizontal,drag.position,drag.index);
+    updateHoverCursor(view,QGuiApplication::keyboardModifiers());
     update();
 }
 void NativeCanvas::drawGuideOverlay(){
@@ -796,25 +801,34 @@ void NativeCanvas::mousePressEvent(QMouseEvent*e){
     if(e->button()==Qt::MiddleButton){panning_=true;grabMouse();e->accept();return;}
     if(e->button()==Qt::LeftButton&&!rightDragging_&&!panning_){if(beginGuideDrag(e->position())){grabMouse();e->accept();return;}dragging_=true;grabMouse();if(pointerDown)pointerDown(documentPoint(e->position()),e->modifiers());}
 }
+void NativeCanvas::updateHoverCursor(QPointF view,Qt::KeyboardModifiers modifiers){
+    if(guideDrag_)return;
+    if(pointerHover)pointerHover(view,modifiers);
+    if(dragging_||navigating_||rightDragging_)return;
+    if(navigatorContains(view))setCursor(Qt::OpenHandCursor);
+    else if(rulerBandAt(view)==RulerBand::Horizontal)setCursor(Qt::SizeVerCursor);
+    else if(rulerBandAt(view)==RulerBand::Vertical)setCursor(Qt::SizeHorCursor);
+    else if(const auto guide=guideIndexAt(view))setCursor(guides[size_t(*guide)].first?Qt::SizeVerCursor:Qt::SizeHorCursor);
+    else if(cropOverlay_){
+        const auto hit=cropResizeHandle(*cropOverlay_,{view.x(),view.y()},viewMapping());
+        if(hit){constexpr Qt::CursorShape cursors[]{Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor,Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor};setCursor(cursors[*hit]);}
+        else unsetCursor();
+    }
+    if(!navigatorContains(view)&&rulerBandAt(view)==RulerBand::None&&!guideIndexAt(view)&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({view.x(),view.y()});auto cursor=mode?geometry.cursor(*mode,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
+}
+bool NativeCanvas::updateHoverCursorAtPointer(){
+    const QPoint local=mapFromGlobal(QCursor::pos());
+    if(!rect().contains(local))return false;
+    updateHoverCursor(local,QGuiApplication::keyboardModifiers());
+    return true;
+}
 void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
     wheelHover_.reset();
     if(guideDrag_){updateGuideDrag(e->position());last_=e->position();return;}
-    if(pointerHover)pointerHover(e->position(),e->modifiers());
+    updateHoverCursor(e->position(),e->modifiers());
     if(navigating_){navigateFrom(e->position());last_=e->position();return;}
     if(rightDragging_){if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),false);last_=e->position();return;}
-    if(!dragging_&&navigatorContains(e->position()))setCursor(Qt::OpenHandCursor);
-    else if(!dragging_&&rulerBandAt(e->position())==RulerBand::Horizontal)setCursor(Qt::SizeVerCursor);
-    else if(!dragging_&&rulerBandAt(e->position())==RulerBand::Vertical)setCursor(Qt::SizeHorCursor);
-    else if(!dragging_){
-        if(const auto guide=guideIndexAt(e->position()))setCursor(guides[size_t(*guide)].first?Qt::SizeVerCursor:Qt::SizeHorCursor);
-        else if(cropOverlay_){
-            const auto hit=cropResizeHandle(*cropOverlay_,{e->position().x(),e->position().y()},viewMapping());
-            if(hit){constexpr Qt::CursorShape cursors[]{Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor,Qt::SizeFDiagCursor,Qt::SizeVerCursor,Qt::SizeBDiagCursor,Qt::SizeHorCursor};setCursor(cursors[*hit]);}
-            else unsetCursor();
-        }
-    }
-    if(!dragging_&&!navigatorContains(e->position())&&rulerBandAt(e->position())==RulerBand::None&&!guideIndexAt(e->position())&&(transformOverlay_||distortionOverlay_)){auto geometry=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());auto mode=geometry.hit({e->position().x(),e->position().y()});auto cursor=mode?geometry.cursor(*mode,{e->modifiers().testFlag(Qt::ShiftModifier),e->modifiers().testFlag(Qt::AltModifier),e->modifiers().testFlag(Qt::ControlModifier),false},distortionOverlay_.has_value()):editing_transform::Cursor::Move;Qt::CursorShape shape=Qt::SizeAllCursor;switch(cursor){case editing_transform::Cursor::Horizontal:shape=Qt::SizeHorCursor;break;case editing_transform::Cursor::Vertical:shape=Qt::SizeVerCursor;break;case editing_transform::Cursor::DiagonalDown:shape=Qt::SizeFDiagCursor;break;case editing_transform::Cursor::DiagonalUp:shape=Qt::SizeBDiagCursor;break;case editing_transform::Cursor::Rotate:case editing_transform::Cursor::Distort:shape=Qt::CrossCursor;break;default:break;}setCursor(shape);}
     if(panning_&&(!navigationAllowed||navigationAllowed()))panBy(e->position()-last_);else if(dragging_&&pointerMove)pointerMove(documentPoint(e->position()),e->modifiers());last_=e->position();
 }
 void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
@@ -828,11 +842,12 @@ void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
 }
 void NativeCanvas::mouseReleaseEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
-    if(navigating_&&e->button()==Qt::LeftButton){navigating_=false;releaseMouse();settleViewport();return;}
-    if(panning_&&e->button()==Qt::MiddleButton){panning_=false;releaseMouse();settleViewport();return;}
-    if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);settleViewport();return;}
-    if(guideDrag_&&e->button()==Qt::LeftButton){finishGuideDrag(e->position());return;}
-    if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());settleViewport();}
+    if(navigating_&&e->button()==Qt::LeftButton){navigating_=false;releaseMouse();settleViewport();}
+    else if(panning_&&e->button()==Qt::MiddleButton){panning_=false;releaseMouse();settleViewport();}
+    else if(rightDragging_&&e->button()==Qt::RightButton){rightDragging_=false;releaseMouse();if(rightPointerMove)rightPointerMove(e->position(),e->modifiers(),true);settleViewport();}
+    else if(guideDrag_&&e->button()==Qt::LeftButton){finishGuideDrag(e->position());return;}
+    else if(dragging_&&e->button()==Qt::LeftButton){dragging_=false;releaseMouse();if(pointerUp)pointerUp(documentPoint(e->position()),e->modifiers());settleViewport();}
+    if(!dragging_&&!guideDrag_&&!navigating_&&!rightDragging_&&!panning_)updateHoverCursor(e->position(),e->modifiers());
 }
 void NativeCanvas::wheelEvent(QWheelEvent*e){
     e->accept();if(documentWidth_<=0||documentHeight_<=0||(navigationAllowed&&!navigationAllowed()))return;
@@ -944,6 +959,7 @@ void NativeCanvas::tabletEvent(QTabletEvent*e){
         releaseMouse();
         // Qt release pressure describes lift-off. Use the last contact sample at the final position.
         if(pointerUp)pointerUp({documentPoint(e->position()),lastPressure},e->modifiers());
+        updateHoverCursor(e->position(),e->modifiers());
     }
 }
 void NativeCanvas::leaveEvent(QEvent*e){wheelHover_.reset();if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}

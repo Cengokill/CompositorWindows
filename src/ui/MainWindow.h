@@ -337,6 +337,7 @@ private:
     bool beginTemporaryHand(Point);
     bool updateTemporaryHand(Point,bool finish);
     void cancelTemporaryHand();
+    void releaseCanvasCursor();
     void setupBrushControls();
     void openPalette(bool background=false);
     void setupPaletteControls(QWidget*);
