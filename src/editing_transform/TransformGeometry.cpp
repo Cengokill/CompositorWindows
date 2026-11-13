@@ -199,7 +199,9 @@ std::optional<PressIntent> resolvePress(const PressContext& c,Point viewPoint,co
     for(auto it=c.visibleLayers.rbegin();it!=c.visibleLayers.rend();++it)if(contains(it->transform,pixel)){under=&*it;break;}
     const auto intent=[&](std::string id,bool picked){return PressIntent{std::move(id),{ModeKind::Move},picked,flags.option};};
     const bool picks=!c.hasEdit;
+    const bool held=under&&(under->id==c.activeId||std::find(c.heldIds.begin(),c.heldIds.end(),under->id)!=c.heldIds.end());
     if(flags.command&&picks&&under)return intent(under->id,true);
+    if(picks&&c.autoSelect&&under&&!held)return intent(under->id,true);
     if(c.groupBox&&!c.activeId.empty()&&(contains(*c.groupBox,pixel)||!(picks&&c.autoSelect)||!under))return intent(c.activeId,false);
     if(c.activeTransform&&contains(*c.activeTransform,pixel))return intent(c.activeId,false);
     if(picks&&(c.autoSelect||flags.command)&&under)return intent(under->id,true);

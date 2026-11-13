@@ -149,7 +149,7 @@ void MainWindow::publishTransformSession(bool finish) {
                         if(layer->mask->placement&&editing_transform::samePlacement(*layer->mask->placement,placement))layer->mask->placement.reset();
                     }
                 }
-                if(!layer->shapeJson.empty()){
+                if(!layer->shapeJson.empty()&&!editing_transform::samePlacement(placement,original.transform)){
                     if(finish)*layer=editing::redrawShape(*layer);
                     else if(auto preview=editing::shapeTransformPreview(original,placement))layer->raster=std::move(preview);
                 }

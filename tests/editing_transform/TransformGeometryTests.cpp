@@ -1,5 +1,6 @@
 #include "editing_transform/TransformGeometry.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -123,7 +124,14 @@ int main(){
         c.autoSelect=true;auto automatic=t::resolvePress(c,{300,50},{},{},{});require(automatic&&automatic->layerId=="second"&&automatic->picked,"Auto select outside active");
         c.autoSelect=false;auto command=t::resolvePress(c,{300,50},{},{},{false,false,true});require(command&&command->layerId=="second"&&command->picked,"Command override pick");
         c.hasEdit=true;auto pending=t::resolvePress(c,{300,50},{},{},{false,false,true});require(pending&&pending->layerId=="first"&&!pending->picked,"Pending transform must not pick");
-        c.hasEdit=false;c.autoSelect=true;layers[1].transform=value(0,0,100,100,0);auto inside=t::resolvePress(c,{50,50},{},{},{});require(inside&&inside->layerId=="first"&&!inside->picked,"Inside active wins auto select");
+        c.hasEdit=false;c.autoSelect=true;layers[1].transform=value(0,0,100,100,0);c.visibleLayers=layers;auto inside=t::resolvePress(c,{50,50},{},{},{});require(inside&&inside->layerId=="second"&&inside->picked,"Auto select picks the top layer inside the active bounds");
+        c.autoSelect=false;auto kept=t::resolvePress(c,{50,50},{},{},{});require(kept&&kept->layerId=="first"&&!kept->picked,"Auto select off keeps the active layer");
+        c.autoSelect=true;const std::array<std::string,1> held{"second"};c.heldIds=held;auto member=t::resolvePress(c,{50,50},{},{},{});require(member&&member->layerId=="first"&&!member->picked,"A held top layer stays with the current selection");
+        c.heldIds={};c.activeId="second";c.activeTransform=layers[1].transform;auto self=t::resolvePress(c,{50,50},{},{},{});require(self&&self->layerId=="second"&&!self->picked,"Clicking the active layer does not re-pick it");
+        c.activeId="folder";c.activeTransform=value(0,0,100,100,0);c.groupBox=c.activeTransform;std::vector<t::Placement> grouped{{"child",value(0,0,100,100,0)},{"outside",value(40,40,30,30,0)}};c.visibleLayers=grouped;const std::array<std::string,2> groupHeld{"folder","child"};c.heldIds=groupHeld;
+        auto child=t::resolvePress(c,{10,10},{},{},{});require(child&&child->layerId=="folder"&&!child->picked,"Clicking a held child moves the group");
+        auto foreign=t::resolvePress(c,{50,50},{},{},{});require(foreign&&foreign->layerId=="outside"&&foreign->picked,"Auto select picks a layer above the group");
+        c.autoSelect=false;c.hasEdit=false;layers[1].transform=value(0,0,100,100,0);c.visibleLayers=layers;c.activeId="first";c.activeTransform=layers[0].transform;c.groupBox.reset();c.heldIds={};
         auto override=t::resolvePress(c,{50,50},{},{},{false,false,true});require(override&&override->layerId=="second"&&override->picked,"Command picks topmost by bounds even transparent pixels");
     });
     test("hidden_controls_persistent_override_and_group_press",[]{

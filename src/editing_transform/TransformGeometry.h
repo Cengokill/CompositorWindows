@@ -80,6 +80,8 @@ struct PressContext {
     std::string activeId;
     std::optional<Transform> activeTransform,groupBox;
     std::span<const Placement> visibleLayers;
+    // Active layer, current selection, and their descendants. Auto-select leaves these in place.
+    std::span<const std::string> heldIds;
     bool canEdit{true},hasEdit{},autoSelect{},controlsVisible{true},persistent{},hasDistortion{};
 };
 struct PressIntent {
