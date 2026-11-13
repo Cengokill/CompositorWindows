@@ -29,7 +29,7 @@ ViewportCompositeJob::Result renderSnapshot(const ViewportCompositeJob::Request&
         cache.setLensPreviewMaxEdge(request.lensPreviewMaxEdge);
         if(request.crop)
             result.view=renderCropViewport(request.document,*request.crop,request.x,request.y,
-                request.width,request.height,request.units,request.preview);
+                request.width,request.height,request.units,request.preview,nullptr,abandoned);
         else
             result.view=cache.renderViewport(request.document,request.x,request.y,request.width,
                 request.height,request.units,64,request.retainViewportCache?64:256,request.preview,abandoned);

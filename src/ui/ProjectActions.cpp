@@ -193,6 +193,7 @@ void MainWindow::initializeProject(EditorProject&project){
     auto* zoomJob=new ui::ViewportCompositeJob([this,view,requested](ui::ViewportCompositeJob::Result result){
         if(!view->isVisible()||view->viewportBounds()!=*requested)return;
         if(!result.error.isEmpty()){
+            view->failWheelComposite();
             statusBar()->showMessage(result.error);
             return;
         }

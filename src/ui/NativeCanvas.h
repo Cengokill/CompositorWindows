@@ -107,6 +107,7 @@ private:
     QTimer* viewportTimer_{};
     bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{},compositeDirty_{true};
     bool wheelZoomPending_{},wheelZoomRequested_{},wheelZoomFrame_{},hasPresented_{};
+    std::optional<graphics::CanvasViewport> presentedViewport_;
     std::optional<std::pair<QPointF,Qt::KeyboardModifiers>> wheelHover_;
     double lastCompositeX_{},lastCompositeY_{},lastCompositeW_{},lastCompositeH_{},lastCompositeUnits_{1};
     std::shared_ptr<const Raster> navigatorRaster_;
@@ -262,6 +263,7 @@ public:
     std::function<bool(ViewportBounds)> requestWheelComposite;
     std::function<void()> cancelWheelComposite;
     void presentWheelComposite(CompositeViewport);
+    void failWheelComposite();
     // A deferred provider can keep the last frame while a worker prepares the view.
     std::function<bool()> deferViewportComposite;
     // Install a finished composite and, when requested, drop the move sprite in the same frame.

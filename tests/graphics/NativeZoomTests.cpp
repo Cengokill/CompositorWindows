@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QShortcut>
+#include <QStatusBar>
 #include <QThread>
 #include <QWheelEvent>
 #include <algorithm>
@@ -264,6 +265,29 @@ void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
     require(zoomJob,"Canvas zoom worker is missing");
     auto gate=std::make_shared<std::atomic_bool>(false);
     zoomJob->setProceedGate(gate);
+    const auto beforeFailureZoom=canvas.zoom;
+    const auto beforeFailurePan=canvas.pan;
+    window.statusBar()->clearMessage();
+    wheel(canvas,anchor,1);
+    canvas.repaint();
+    zoomJob->invalidate();
+    ui::ViewportCompositeJob::Request bad;
+    bad.owner=&project;
+    bad.document=*project.document;
+    bad.document.width=0;
+    zoomJob->submit(std::move(bad));
+    gate->store(true);
+    waitUntil([&]{return !window.statusBar()->currentMessage().isEmpty();},"Worker failure was not reported");
+    require(canvas.zoom==beforeFailureZoom&&canvas.pan==beforeFailurePan,"Worker failure did not restore the presented view");
+    frames.clear();
+    canvas.observePresentation=[&](auto frame){frames.push_back(std::move(frame));};
+    canvas.repaint();
+    require(!frames.empty(),"Canvas did not repaint after worker failure");
+    frames.clear();
+    wheel(canvas,anchor,1);
+    waitUntil(expectFinal,"Canvas did not accept a new zoom after worker failure");
+    canvas.observePresentation={};
+    gate->store(false);
     frames.clear();
     canvas.observePresentation=[&](auto frame){frames.push_back(std::move(frame));};
     wheel(canvas,anchor,-1);
@@ -294,6 +318,38 @@ void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
 
 double milliseconds(Clock::duration duration){
     return std::chrono::duration<double,std::milli>(duration).count();
+}
+
+void checkCropWorkerCancellation(){
+    MainWindow window;
+    auto& project=window.addProject(fixture(128,1,0,false,false));
+    ui::ViewportCompositeJob::Request request;
+    request.owner=&project;request.document=*project.document;
+    request.crop=editing::Rect{0,0,128,128};
+    request.width=32;request.height=128;request.units=1;
+    auto preview=std::make_shared<LayerRenderPreview>();
+    preview->layer=request.document.layers.front();
+    preview->identity=std::make_shared<int>(1);
+    auto samples=std::make_shared<std::atomic_int>(0);
+    preview->image=[samples](Point,Transform::Sampling){++*samples;QThread::msleep(1);return Pixel{30,40,50,255};};
+    request.preview=preview;
+    bool received=false,finished=false;
+    QString workerError;
+    ui::ViewportCompositeJob job([&](auto result){finished=true;workerError=result.error;received=!result.stale&&result.error.isEmpty()&&bool(result.view.raster);},nullptr);
+    job.submit(request);
+    waitUntil([&]{return samples->load()>0||finished;},"Crop worker did not enter sampling");
+    if(finished)throw std::runtime_error((QStringLiteral("Crop worker finished before sampling: ")+workerError).toStdString());
+    job.invalidate();
+    request.preview.reset();
+    const auto replaced=Clock::now();
+    job.submit(request);
+    waitUntil([&]{return received;},"Replacement crop render did not complete");
+    require(milliseconds(Clock::now()-replaced)<2000,"Obsolete crop render delayed its replacement");
+    samples->store(0);request.preview=preview;job.submit(request);
+    waitUntil([&]{return samples->load()>0;},"Crop worker did not restart sampling");
+    const auto closing=Clock::now();
+    job.shutdown();
+    require(milliseconds(Clock::now()-closing)<2000,"Crop worker blocked shutdown");
 }
 
 void summarize(const char* label,std::vector<double> values){
@@ -412,6 +468,7 @@ int main(int argc,char** argv){
             checkFrames(false,30);
             checkFrames(false,100);
             checkFrames(true,10);
+            checkCropWorkerCancellation();
         }
         else if(arguments.size()==9)benchmark(std::stoi(arguments[0]),std::stoi(arguments[1]),std::stoi(arguments[2]),
             std::stoi(arguments[3])!=0,std::stoi(arguments[4]),std::stoi(arguments[5]),std::stoi(arguments[6]),

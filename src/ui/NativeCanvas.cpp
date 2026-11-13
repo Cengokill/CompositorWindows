@@ -127,6 +127,17 @@ void NativeCanvas::presentWheelComposite(CompositeViewport patch){
     wheelZoomPending_=wheelZoomRequested_=false;
     presentComposite(std::move(patch.raster),patch.documentX,patch.documentY,patch.unitsPerPixel,false);
 }
+void NativeCanvas::failWheelComposite(){
+    if(!wheelZoomPending_)return;
+    stopWheelZoom();
+    if(presentedViewport_){
+        zoom=presentedViewport_->zoom;
+        pan={presentedViewport_->pan.x,presentedViewport_->pan.y};
+        followsFit_=presentedViewport_->followsFit;
+        viewportPresented_=true;
+    }
+    update();
+}
 void NativeCanvas::stopWheelZoom(){
     if(wheelZoomPending_&&cancelWheelComposite)cancelWheelComposite();
     wheelZoomPending_=wheelZoomRequested_=wheelZoomFrame_=false;
@@ -558,6 +569,7 @@ auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();updat
     check(hr,"Canvas present");
     if(hr==S_OK){
         hasPresented_=true;
+        presentedViewport_=viewportState();
         if(observePresentation)observePresentation({zoom,pan,!skipComposite||readyWheelFrame,std::move(pixels)});
     }
 }
