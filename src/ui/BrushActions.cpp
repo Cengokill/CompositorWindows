@@ -152,27 +152,34 @@ void MainWindow::publishBrush(std::shared_ptr<const graphics::GrowingBrushSnapsh
     if(layer!=p->document->layers.end()&&snapshot->changed())*layer=snapshot->materializeLayer();
     p->brushPreview.reset();p->brushLayerId.clear();
 }
-CompositeViewport MainWindow::brushViewport(EditorProject&project,double x,double y,double width,double height,double requestedUnits){
-    if(!project.document)return {};
-    auto render=[&](const Document& document,std::shared_ptr<const LayerRenderPreview> layerPreview={}){
-        if(tool_==Tool::Crop&&current()==&project&&cropDraft_){
-            auto* cache=&document==&*project.document?&project.cropViewportCache:nullptr;
-            return ui::renderCropViewport(document,*cropDraft_,x,y,width,height,requestedUnits,std::move(layerPreview),cache);
-        }
-        project.cropViewportCache={};
-        return project.composite.renderViewport(document,x,y,width,height,requestedUnits,64,256,std::move(layerPreview));
-    };
-    if(auto preview=editPanelPreview(project))return render(*preview);
-    if(project.blendPreview&&project.active==project.blendPreview->first){
-        auto preview=*project.document;
-        for(auto& layer:preview.layers)if(layer.id==project.blendPreview->first){layer.blend=project.blendPreview->second;break;}
-        return render(preview);
+ui::ViewportCompositeJob::Request MainWindow::viewportSnapshot(EditorProject& project,NativeCanvas::ViewportBounds bounds){
+    ui::ViewportCompositeJob::Request request;
+    request.owner=&project;
+    request.x=bounds.x;request.y=bounds.y;request.width=bounds.width;
+    request.height=bounds.height;request.units=bounds.units;
+    if(tool_==Tool::Crop&&current()==&project)request.crop=cropDraft_;
+    if(auto preview=editPanelPreview(project))request.document=*preview;
+    else{
+        request.document=*project.document;
+        if(project.blendPreview&&project.active==project.blendPreview->first){
+            for(auto& layer:request.document.layers)
+                if(layer.id==project.blendPreview->first){layer.blend=project.blendPreview->second;break;}
+        }else if(project.textPreview)request.preview=project.textPreview;
+        else if(project.gradientPreview)request.preview=project.gradientPreview->renderPreview();
+        else if(project.retouchPreview)request.preview=project.retouchPreview;
+        else if(project.brushPreview)request.preview=project.brushPreview->renderPreview();
     }
-    if(project.textPreview)return render(*project.document,project.textPreview);
-    if(project.gradientPreview)return render(*project.document,project.gradientPreview->renderPreview());
-    if(project.retouchPreview)return render(*project.document,project.retouchPreview);
-    if(!project.brushPreview)return render(*project.document);
-    return render(*project.document,project.brushPreview->renderPreview());
+    return request;
+}
+CompositeViewport MainWindow::brushViewport(EditorProject& project,double x,double y,double width,double height,double units){
+    if(!project.document)return {};
+    auto request=viewportSnapshot(project,{x,y,width,height,units,true});
+    if(request.crop){
+        auto* cache=request.document==*project.document?&project.cropViewportCache:nullptr;
+        return ui::renderCropViewport(request.document,*request.crop,x,y,width,height,units,std::move(request.preview),cache);
+    }
+    project.cropViewportCache={};
+    return project.composite.renderViewport(request.document,x,y,width,height,units,64,256,std::move(request.preview));
 }
 bool MainWindow::updateBrush(Point point,bool finish,double pressure){
     if(!stroke_)return false;

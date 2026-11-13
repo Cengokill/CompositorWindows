@@ -106,6 +106,9 @@ private:
     QTimer* navigatorTimer_{};
     QTimer* viewportTimer_{};
     bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{},compositeDirty_{true};
+    bool wheelZoomPending_{},wheelZoomRequested_{},wheelZoomFrame_{},hasPresented_{};
+    std::optional<graphics::CanvasViewport> presentedViewport_;
+    std::optional<std::pair<QPointF,Qt::KeyboardModifiers>> wheelHover_;
     double lastCompositeX_{},lastCompositeY_{},lastCompositeW_{},lastCompositeH_{},lastCompositeUnits_{1};
     std::shared_ptr<const Raster> navigatorRaster_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
@@ -120,6 +123,9 @@ private:
     void centerDocument(Point);
     void noteViewportInteraction();
     void settleViewport();
+    void stopWheelZoom();
+    void finishWheelZoomForPointer();
+    void submitWheelZoom();
     bool profileKnown_{},presentationAttempted_{};
     QString presentationDiagnostic_;
     uint64_t presentationBytes_{},profileDiscoveryCount_{};
@@ -149,6 +155,7 @@ private:
     void drawGuideOverlay();
     void drawLayoutGrid();
     void draw(bool present=true);
+    QImage readBackBuffer();
     void drawSelection();
     void updateSelectionAnimation();
     graphics::CanvasViewport viewportState()const;
@@ -245,13 +252,18 @@ public:
     std::optional<PreviewPlate> previewPlate() const;
     // While held, paint keeps the current frame instead of composing on the UI thread.
     void setCompositeHeld(bool held);
-    void invalidateComposite(){compositeDirty_=true;}
+    void invalidateComposite();
     bool compositeHeld() const { return compositeHeld_; }
     struct ViewportBounds {
         double x{},y{},width{},height{},units{1}; bool valid{};
         bool operator==(const ViewportBounds&)const=default;
     };
     ViewportBounds viewportBounds() const;
+    // Request a final-quality zoom composite from a snapshot taken on the UI thread.
+    std::function<bool(ViewportBounds)> requestWheelComposite;
+    std::function<void()> cancelWheelComposite;
+    void presentWheelComposite(CompositeViewport);
+    void failWheelComposite();
     // A deferred provider can keep the last frame while a worker prepares the view.
     std::function<bool()> deferViewportComposite;
     // Install a finished composite and, when requested, drop the move sprite in the same frame.
@@ -288,6 +300,15 @@ public:
     QString adapterName()const;
     void recreateDevice();
     QImage captureRendered();
+    // Native render tests can observe the buffer submitted by the normal paint path.
+    struct PresentedFrame {
+        double zoom{};
+        QPointF pan;
+        bool viewportReady{};
+        QImage pixels;
+    };
+    std::function<void(PresentedFrame)> observePresentation;
+    bool readPresentationPixels{};
     // Override is local to this canvas; null restores Windows monitor discovery.
     void setDisplayProfileOverride(std::optional<std::filesystem::path>);
     void setPresentationBudget(uint64_t bytes);

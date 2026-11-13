@@ -25,6 +25,27 @@ std::shared_ptr<const SamplingSource> samplingSource(std::shared_ptr<const GrayR
 struct SamplingGrid {int x{},y{},width{},height{},step{1};};
 SamplingGrid samplingGrid(const SamplingSource&,int level);
 
+class ReducedSource;
+// A render pass retains a few immutable tiles locally to avoid acquiring the
+// shared cache mutex for every bilinear tap. The scope must not outlive the
+// ReducedSource handles sampled in that pass.
+class ReducedTileReadScope {
+public:
+    ReducedTileReadScope();
+    ~ReducedTileReadScope();
+    ReducedTileReadScope(const ReducedTileReadScope&)=delete;
+    ReducedTileReadScope& operator=(const ReducedTileReadScope&)=delete;
+private:
+    friend class ReducedSource;
+    struct Entry {
+        const ReducedSource* source{};
+        int x{},y{};
+        std::shared_ptr<const Raster::Tile> tile;
+    };
+    std::array<Entry,8> entries_;
+    ReducedTileReadScope* previous_{};
+};
+
 class ReducedSource {
 public:
     const SamplingGrid& grid()const{return grid_;}
@@ -43,11 +64,12 @@ private:
     std::shared_ptr<const SamplingSource> source_;
     SamplingGrid grid_;
     int level_{};
+    Pixel readReducedPixel(int x,int y)const;
 };
 class ReducedSourceCache {
 public:
-    // Reduced pixels only: at most 256 256x256 RGBA tiles (64MiB). Gray tiles
-    // use this same upper bound. Level zero reads original storage directly.
+    // Reduced pixels only: at most tileBudget 256x256 RGBA tiles. Gray tiles
+    // count against the same budget. Level zero reads original storage directly.
     explicit ReducedSourceCache(size_t tileBudget=256,size_t sourceBudget=32);
     ~ReducedSourceCache();
     ReducedSourceCache(const ReducedSourceCache&)=delete;

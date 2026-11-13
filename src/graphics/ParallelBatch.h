@@ -10,6 +10,9 @@ inline constexpr uint32_t parallelBatchMaxWorkers=16;
 // it refers to must remain valid and safe for concurrent access until return.
 // First exception propagates only after all callbacks stop. Results may be
 // partial on failure and must be discarded by the caller. Nested calls made by
-// a pool worker run serially, preventing a recursive wait on the bounded pool.
+// a worker targeting its own pool run serially, preventing a recursive wait.
 void runParallelBatch(size_t count,uint32_t workerLimit,const std::function<void(size_t)>& callback);
+// Viewport shading can wait on the reduction cache, which in turn submits
+// work to the general graphics pool. Keep those waiters off that pool.
+void runParallelRenderBatch(size_t count,const std::function<void(size_t)>& callback);
 }

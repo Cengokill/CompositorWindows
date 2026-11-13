@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Document.h"
+#include "editing/Selection.h"
 #include <QObject>
 #include <QString>
 #include <atomic>
@@ -22,6 +23,9 @@ public:
         int canvasWidth{},canvasHeight{};
         uint64_t gesture{};
         int lensPreviewMaxEdge{};
+        std::shared_ptr<const LayerRenderPreview> preview;
+        std::optional<editing::Rect> crop;
+        bool retainViewportCache{};
     };
     struct Result {
         EditorProject* owner{};

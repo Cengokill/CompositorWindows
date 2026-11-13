@@ -118,7 +118,8 @@ public:
 
 inline CompositeViewport renderCropViewport(const Document& document,editing::Rect crop,
     double x,double y,double width,double height,double requestedUnits,
-    std::shared_ptr<const LayerRenderPreview> preview={},CropViewportCache* cache=nullptr) {
+    std::shared_ptr<const LayerRenderPreview> preview={},CropViewportCache* cache=nullptr,
+    const std::function<bool()>& cancelled={}) {
     validateDocument(document);
     if(!std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
        !std::isfinite(width)||!std::isfinite(height)||width<0||height<0||
@@ -130,7 +131,7 @@ inline CompositeViewport renderCropViewport(const Document& document,editing::Re
         if(cache&&!preview)
             if(auto cached=cache->render(document,*samples,x,y,width,height))return *cached;
         result.documentX=samples->x;result.documentY=samples->y;result.unitsPerPixel=samples->units;
-        result.raster=SoftwareRenderer(std::move(preview)).renderScaled(document,samples->x,samples->y,samples->width,samples->height,samples->units);
+        result.raster=SoftwareRenderer(std::move(preview)).renderScaled(document,samples->x,samples->y,samples->width,samples->height,samples->units,cancelled);
     }
     return result;
 }

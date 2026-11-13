@@ -28,6 +28,16 @@ For a full Release build followed by one CTest run and the separate native viewp
 
 Do not run validation alongside another build or test process using the same build directory. Do not enumerate and build every `.vcxproj`: the `Experimental`, `Nightly`, and memory-check projects launch CTest dashboards and can start tests while other executables are still being linked. The normal build command above does not select those dashboard targets.
 
+For Alt+wheel performance, build `native_zoom_tests` in Release with the same test driver and presentation observation code on the baseline and candidate. Copy each executable to a separate location before rebuilding. On the Windows desktop, run:
+
+```powershell
+./scripts/benchmark-viewport-zoom.ps1 -Baseline C:\Bench\baseline.exe -Candidate C:\Bench\candidate.exe -ComposaCheckout C:\Bench\Composa -Output C:\Bench\results
+```
+
+Use `-Representative` for a shorter run. The driver injects actual wheel events and times successful DXGI submissions. Composa uses the same generated raster data and zoom transitions with Avalonia Headless and Skia, so its timings end at frame capture. Lens Effects is measured only in CompositorWindows. Large layer stacks use full-canvas transforms on smaller source rasters when the combined source pixels would exceed the Windows project budget. Run `native_zoom_tests frames` on the Windows platform to compare submitted images pixel by pixel with the synchronous viewport path.
+
+For a local photo comparison, set `ZOOM_PHOTO` to the JPEG path. Run `native_zoom_tests photo-window` at 100% display scaling. Build `tests/graphics/ComposaZoomDesktop.cs` in the pinned Composa checkout using the entry point described in that file. Both windows open the image once and create five visible layers. Each prints the desktop position of its 640 × 640 canvas. Use those coordinates and the process ID with `scripts/measure-photo-zoom-desktop.ps1`. Run one window at a time on the same monitor. The probe matches the visible center of the canvas against settled reference frames and reports the time of the first matching capture. `ZOOM_START` sets the starting zoom, with 0.25 as the default. Run `native_zoom_tests photo-frames` to check full viewport pixels with the local JPEG.
+
 Most native tests generate their own inputs. Some image-quality and diagnostic tests need external corpora, including `evidence/imaging/astronaut.png` for the subject-dialog test. Historical audit scripts additionally expect the pinned upstream checkout and the old research/evidence workspace. Those inputs and generated reports are not shipped in Git or the application-source ZIP; these optional tools are not a prerequisite for building the editor. Mac comparison tooling is documented in [reference/README.md](../reference/README.md).
 
 

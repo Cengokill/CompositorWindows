@@ -65,7 +65,13 @@ void run(const std::string& name){auto d=fixture();const editing::Rect crop{-20,
   d.width=30000;d.height=30000;d.layers.clear();Raster::resetMaterializationCount();auto patch=ui::renderCropViewport(d,{-15000,-15000,30000,30000},-15000,-15000,45000,45000,1);check(patch.raster&&patch.raster->tiles.size()<=64,"Crop allocated more than64 output tiles");check(patch.documentWidth==30000&&patch.documentHeight==30000,"Large document metadata changed");check(patch.unitsPerPixel>1&&patch.documentX==-15000&&patch.documentY==-15000,"Bounded step/phase incorrect");check(Raster::materializationCount()==0,"Crop flattened a full raster");
  }else if(name=="empty_and_invalid_requests"){
   check(!ui::renderCropViewport(d,crop,1000,1000,5,5,1).raster,"Empty union intersection rendered");check(!ui::renderCropViewport(d,crop,0,0,0,0,1).raster,"Empty request rendered");for(double value:std::array<double,5>{0,-1,1./64,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}){bool rejected=false;try{ui::renderCropViewport(d,crop,0,0,1,1,value);}catch(const std::invalid_argument&){rejected=true;}check(rejected,"Invalid sampling step accepted");}
+ }else if(name=="cancel_render"){
+  int polls=0;bool cancelled=false;
+  try{ui::renderCropViewport(d,crop,-20,-10,140,100,1,{},nullptr,[&]{return ++polls>=3;});}
+  catch(const std::runtime_error&){cancelled=true;}
+  check(cancelled&&polls>=3,"Crop rendering did not propagate cancellation into the stack renderer");
+  same(ui::renderCropViewport(d,crop,-20,-10,140,100,1),d);
  }else throw std::runtime_error("Unknown case");
 }
 }
-int main(int argc,char**argv){const std::array<const char*,8> names{"negative_fractional_phase","union_intersection_phase","cached_expanded_tiles","rotated_mask_clip_stack","global_adjustment_origin","immutable_live_source","large_bounded_surface","empty_and_invalid_requests"};int failed=0;for(auto name:names)if(argc==1||name==std::string(argv[1]))try{run(name);std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}return failed?1:0;}
+int main(int argc,char**argv){const std::array<const char*,9> names{"negative_fractional_phase","union_intersection_phase","cached_expanded_tiles","rotated_mask_clip_stack","global_adjustment_origin","immutable_live_source","large_bounded_surface","empty_and_invalid_requests","cancel_render"};int failed=0;for(auto name:names)if(argc==1||name==std::string(argv[1]))try{run(name);std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}return failed?1:0;}

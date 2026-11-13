@@ -100,6 +100,11 @@ bool NativeCanvas::previewMatches(const std::string& layerId,uint64_t gesture) c
 std::optional<NativeCanvas::PreviewPlate> NativeCanvas::previewPlate() const{if(!movePreview_||!movePreview_->plate)return {};return PreviewPlate{movePreview_->plateX,movePreview_->plateY,movePreview_->plate->width,movePreview_->plate->height};}
 void NativeCanvas::clearMovePreview(){if(!movePreview_)return;movePreview_.reset();update();}
 void NativeCanvas::setCompositeHeld(bool held){compositeHeld_=held;}
+void NativeCanvas::invalidateComposite(){
+    compositeDirty_=true;
+    if(wheelZoomRequested_&&cancelWheelComposite)cancelWheelComposite();
+    wheelZoomRequested_=false;
+}
 NativeCanvas::ViewportBounds NativeCanvas::viewportBounds() const{
     ViewportBounds result;if(documentWidth_<=0||documentHeight_<=0)return result;const double scale=pointsPerPixel();if(!(scale>0)||!std::isfinite(scale))return result;
     const auto frame=contentRect();const QPointF origin=documentPoint(frame.topLeft());const bool crisp=zoom>=2;
@@ -110,7 +115,45 @@ NativeCanvas::ViewportBounds NativeCanvas::viewportBounds() const{
 void NativeCanvas::presentComposite(std::shared_ptr<const Raster> raster,double x,double y,double units,bool clearPreview){
     // The deferred provider keeps this frame during painting. Once it is
     // removed or disabled, the next paint should draw the canonical document.
+    if(wheelZoomPending_&&deferViewportComposite)wheelZoomPending_=wheelZoomRequested_=false;
     raster_=std::move(raster);rasterX_=x;rasterY_=y;rasterUnits_=units>0?units:1;viewportPresented_=!deferViewportComposite;if(clearPreview)movePreview_.reset();upload();update();
+}
+void NativeCanvas::presentWheelComposite(CompositeViewport patch){
+    if(!wheelZoomPending_)return;
+    const auto bounds=viewportBounds();
+    lastCompositeX_=bounds.x;lastCompositeY_=bounds.y;lastCompositeW_=bounds.width;
+    lastCompositeH_=bounds.height;lastCompositeUnits_=bounds.units;
+    compositeDirty_=false;
+    wheelZoomPending_=wheelZoomRequested_=false;
+    presentComposite(std::move(patch.raster),patch.documentX,patch.documentY,patch.unitsPerPixel,false);
+}
+void NativeCanvas::failWheelComposite(){
+    if(!wheelZoomPending_)return;
+    stopWheelZoom();
+    if(presentedViewport_){
+        zoom=presentedViewport_->zoom;
+        pan={presentedViewport_->pan.x,presentedViewport_->pan.y};
+        followsFit_=presentedViewport_->followsFit;
+        viewportPresented_=true;
+    }
+    update();
+}
+void NativeCanvas::stopWheelZoom(){
+    if(wheelZoomPending_&&cancelWheelComposite)cancelWheelComposite();
+    wheelZoomPending_=wheelZoomRequested_=wheelZoomFrame_=false;
+    wheelHover_.reset();
+}
+void NativeCanvas::submitWheelZoom(){
+    if(!wheelZoomPending_||wheelZoomRequested_||deferViewportComposite||!requestWheelComposite)return;
+    wheelZoomRequested_=requestWheelComposite(viewportBounds());
+}
+void NativeCanvas::finishWheelZoomForPointer(){
+    if(!wheelZoomPending_||deferViewportComposite)return;
+    stopWheelZoom();
+    wheelZoomFrame_=true;
+    compositeDirty_=true;
+    viewportPresented_=false;
+    repaint();
 }
 QRectF NativeCanvas::contentRect() const{
     if(!showRulers||documentWidth_<=0||documentHeight_<=0)return QRectF(0,0,width(),height());
@@ -326,7 +369,27 @@ void NativeCanvas::drawRulers(){
         context_->DrawText(label.c_str(),UINT32(label.size()),rulerTextFormat(),box,ink.Get());
     }
 }
-void NativeCanvas::draw(bool present){proofApplied_=false;const double scale=pointsPerPixel();const bool held=viewportDeferred_||movePreview_||compositeHeld_;
+void NativeCanvas::draw(bool present){
+if(wheelZoomPending_){
+    // Leave the previous DXGI frame on screen while the new viewport is
+    // incomplete. Drawing here would use its tiles with the new mapping.
+    if(compositeHeld_||movePreview_)return;
+    if(deferViewportComposite){
+        if(deferViewportComposite())return;
+    }else{
+        submitWheelZoom();
+        if(wheelZoomRequested_)return;
+    }
+    wheelZoomPending_=false;
+    viewportPresented_=false;
+}
+if(wheelHover_){
+    const auto [position,modifiers]=*wheelHover_;
+    wheelHover_.reset();
+    if(pointerHover)pointerHover(position,modifiers);
+}
+proofApplied_=false;const double scale=pointsPerPixel();const bool held=viewportDeferred_||movePreview_||compositeHeld_;
+const bool readyWheelFrame=wheelZoomFrame_&&viewportPresented_&&!held;
 const bool deferred=!held&&deferViewportComposite&&deferViewportComposite();
 const bool skipComposite=held||deferred||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){const bool same=request.x==lastCompositeX_&&request.y==lastCompositeY_&&request.width==lastCompositeW_&&request.height==lastCompositeH_&&request.units==lastCompositeUnits_;if(compositeDirty_||!raster_||!same){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;lastCompositeX_=request.x;lastCompositeY_=request.y;lastCompositeW_=request.width;lastCompositeH_=request.height;lastCompositeUnits_=request.units;compositeDirty_=false;upload();}}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
 if(proofing){if(textOverlay_)drawTextOverlay(true);context_->PopAxisAlignedClip();finishCmykProof(bounds);context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);}
@@ -498,7 +561,18 @@ if((snapGuideX_||snapGuideY_)&&documentWidth_>0&&documentHeight_>0){
 if(textOverlay_)drawTextOverlay(false,proofApplied_);
 drawRulers();
 drawNavigator();
-auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}if(FAILED(hr)&&proofApplied_){proofFailure_=QString("CMYK proof failed (HRESULT 0x%1)").arg(uint32_t(hr),8,16,QChar('0'));setToolTip(proofFailure_);resetCmykResources();draw(present);return;}check(hr,"Canvas draw");hr=finishPresentation();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas presentation");if(!present)return;hr=swap_->Present(1,0);if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}check(hr,"Canvas present");}
+auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}if(FAILED(hr)&&proofApplied_){proofFailure_=QString("CMYK proof failed (HRESULT 0x%1)").arg(uint32_t(hr),8,16,QChar('0'));setToolTip(proofFailure_);resetCmykResources();draw(present);return;}check(hr,"Canvas draw");hr=finishPresentation();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();update();return;}check(hr,"Canvas presentation");if(!present)return;
+    QImage pixels;
+    if(observePresentation&&readPresentationPixels)pixels=readBackBuffer();
+    hr=swap_->Present(1,0);
+    if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}
+    check(hr,"Canvas present");
+    if(hr==S_OK){
+        hasPresented_=true;
+        presentedViewport_=viewportState();
+        if(observePresentation)observePresentation({zoom,pan,!skipComposite||readyWheelFrame,std::move(pixels)});
+    }
+}
 std::optional<int> NativeCanvas::cropResizeHandle(editing::Rect crop,Point point,const editing_transform::ViewMapping& mapping){
     const auto geometry=editing_transform::OverlayGeometry::fromTransform({crop.x,crop.y,crop.width,crop.height},mapping);
     const auto contains=[&](double x,double y,double w,double h){return point.x>=x&&point.y>=y&&point.x<x+w&&point.y<y+h;};
@@ -541,7 +615,23 @@ void NativeCanvas::drawSelection(){
 }
 void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(r);setDocumentSize(raster_?raster_->width:0,raster_?raster_->height:0);rasterX_=rasterY_=0;rasterUnits_=1;try{upload();}catch(const std::exception&e){error_=e.what();releaseDevice();}update();}
 graphics::CanvasViewport NativeCanvas::viewportState()const{const auto frame=contentRect();return {{frame.width(),frame.height()},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
-void NativeCanvas::installViewport(const graphics::CanvasViewport& state){const bool wasVisible=navigatorPlacement().visible;zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;update();if(!wasVisible&&navigatorPlacement().visible&&navigatorDirty_&&!navigatorDeferred_)scheduleNavigator();}
+void NativeCanvas::installViewport(const graphics::CanvasViewport& state){
+    const bool wasVisible=navigatorPlacement().visible;
+    const bool replacingWheelView=wheelZoomPending_;
+    if(replacingWheelView){
+        settleViewport();
+        compositeDirty_=true;
+        viewportPresented_=false;
+    }
+    stopWheelZoom();
+    zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;
+    if(replacingWheelView&&documentWidth_>0&&documentHeight_>0){
+        wheelZoomFrame_=true;
+        wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));
+    }
+    update();
+    if(!wasVisible&&navigatorPlacement().visible&&navigatorDirty_&&!navigatorDeferred_)scheduleNavigator();
+}
 void NativeCanvas::synchronizeViewport(){auto state=viewportState();const auto frame=contentRect();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({frame.width(),frame.height()},devicePixelRatioF(),document);installViewport(state);}
 void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();cameraRawGuides_.clear();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
@@ -563,6 +653,11 @@ void NativeCanvas::recreateDevice(){releaseDevice();error_.clear();update();}
 QImage NativeCanvas::captureRendered(){
     // Read the freshly rendered back buffer before Present advances the flip chain.
     draw(false);
+    auto copy=readBackBuffer();
+    check(swap_->Present(1,0),"Present captured canvas");
+    return copy;
+}
+QImage NativeCanvas::readBackBuffer(){
     if(!device_||!swap_)throw std::runtime_error("No canvas graphics device");
     ComPtr<ID3D11Texture2D> source;
     check(swap_->GetBuffer(0,IID_PPV_ARGS(&source)),"Canvas capture buffer");
@@ -572,7 +667,7 @@ QImage NativeCanvas::captureRendered(){
     immediate_->CopyResource(staging.Get(),source.Get());
     D3D11_MAPPED_SUBRESOURCE mapped{};check(immediate_->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Canvas capture readback");
     QImage image(static_cast<const uchar*>(mapped.pData),int(desc.Width),int(desc.Height),mapped.RowPitch,QImage::Format_ARGB32);
-    auto copy=image.copy();immediate_->Unmap(staging.Get(),0);check(swap_->Present(1,0),"Present captured canvas");return copy;
+    auto copy=image.copy();immediate_->Unmap(staging.Get(),0);return copy;
 }
 NativeCanvas::NavigatorPlacement NativeCanvas::navigatorPlacement()const{
     NavigatorPlacement result;
@@ -611,7 +706,7 @@ void NativeCanvas::noteViewportInteraction(){
 }
 void NativeCanvas::settleViewport(){if(!viewportDeferred_)return;viewportDeferred_=false;if(viewportTimer_)viewportTimer_->stop();update();}
 void NativeCanvas::refreshNavigator(){
-    if(viewportDeferred_){if(navigatorTimer_)navigatorTimer_->start();return;}
+    if(viewportDeferred_||wheelZoomPending_){if(navigatorTimer_)navigatorTimer_->start();return;}
     if(navigatorDeferred_||!navigatorProvider||documentWidth_<=0||documentHeight_<=0)return;
     if(!navigatorPlacement().visible){navigatorDirty_=true;return;}
     navigatorDirty_=false;
@@ -636,7 +731,7 @@ bool NativeCanvas::sharpPatchCoversView()const{
     return rasterX_<=left+.51&&rasterY_<=top+.51&&rasterX_+raster_->width*rasterUnits_>=right-.51&&rasterY_+raster_->height*rasterUnits_>=bottom-.51;
 }
 void NativeCanvas::drawDocumentStandIn(D2D1_RECT_F bounds){
-    if(!context_||sharpPatchCoversView())return;
+    if(!context_||wheelZoomFrame_||sharpPatchCoversView())return;
     ensureNavigatorBitmap();
     if(!navigatorBitmap_||!navigatorRaster_||navigatorUnits_<=0||documentWidth_<=0)return;
     const auto& image=*navigatorRaster_;
@@ -694,6 +789,7 @@ void NativeCanvas::paintEvent(QPaintEvent*){try{draw();error_.clear();}catch(con
 void NativeCanvas::resizeEvent(QResizeEvent*){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();if(swap_){context_->SetTarget(nullptr);target_.Reset();auto hr=swap_->ResizeBuffers(0,std::max(1,int(width()*devicePixelRatioF())),std::max(1,int(height()*devicePixelRatioF())),DXGI_FORMAT_UNKNOWN,0);try{check(hr,"Canvas resize");createTarget();}catch(const std::exception&e){error_=e.what();releaseDevice();}}update();}
 void NativeCanvas::mousePressEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
+    finishWheelZoomForPointer();
     setFocus();last_=e->position();if(pointerHover)pointerHover(e->position(),e->modifiers());
     if(navigatorContains(e->position())&&(e->button()==Qt::LeftButton||e->button()==Qt::RightButton)){if(e->button()==Qt::LeftButton){navigating_=true;grabMouse();navigateFrom(e->position());}e->accept();return;}
     if(e->button()==Qt::RightButton&&rightPointerDown&&rightPointerDown(e->position(),e->modifiers())){rightDragging_=true;grabMouse();e->accept();return;}
@@ -702,6 +798,7 @@ void NativeCanvas::mousePressEvent(QMouseEvent*e){
 }
 void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
     if(tabletActive_){e->accept();return;}
+    wheelHover_.reset();
     if(guideDrag_){updateGuideDrag(e->position());last_=e->position();return;}
     if(pointerHover)pointerHover(e->position(),e->modifiers());
     if(navigating_){navigateFrom(e->position());last_=e->position();return;}
@@ -722,6 +819,7 @@ void NativeCanvas::mouseMoveEvent(QMouseEvent*e){
 }
 void NativeCanvas::mouseDoubleClickEvent(QMouseEvent* e){
     if(tabletActive_||e->button()!=Qt::LeftButton||rightDragging_){e->accept();return;}
+    finishWheelZoomForPointer();
     if(navigatorContains(e->position())){navigating_=true;grabMouse();navigateFrom(e->position());e->accept();return;}
     if(guideDrag_){e->accept();return;}
     if(beginGuideDrag(e->position())){grabMouse();e->accept();return;}
@@ -749,10 +847,26 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     const bool precise=!e->pixelDelta().isNull();const QPointF angleSteps=QPointF(e->angleDelta())/120;
     const bool notch=!precise||std::abs(angleSteps.x())>=1||std::abs(angleSteps.y())>=1;
     const QPointF delta=notch?angleSteps:QPointF(e->pixelDelta());
-    viewportGesture_=true;
-    if(modifiers.testFlag(Qt::AltModifier)){const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();zoomAt(zoom*std::exp(steps*(notch?std::log(1.25):.015)),e->position());}
-    else panBy((precise?QPointF(e->pixelDelta()):angleSteps)*(precise?1:12));
-    viewportGesture_=false;
+    if(modifiers.testFlag(Qt::AltModifier)){
+        if(compositeHeld_||movePreview_)return;
+        const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();
+        const double target=std::clamp(zoom*std::exp(steps*(notch?std::log(1.25):.015)),.001,32.);
+        if(target!=zoom){
+            settleViewport();
+            zoomAt(target,e->position());
+            wheelZoomFrame_=true;
+            wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));
+            viewportPresented_=false;
+            wheelHover_=std::pair{e->position(),modifiers};
+            submitWheelZoom();
+            if(navigatorTimer_->isActive())navigatorTimer_->start();
+        }
+        return;
+    }else{
+        viewportGesture_=true;
+        panBy((precise?QPointF(e->pixelDelta()):angleSteps)*(precise?1:12));
+        viewportGesture_=false;
+    }
     if(pointerHover)pointerHover(e->position(),e->modifiers());
 }
 void NativeCanvas::setTextOverlay(std::optional<TextCaretOverlay> value){textOverlay_=std::move(value);setAttribute(Qt::WA_InputMethodEnabled,textOverlay_.has_value());if(!textOverlay_){textBitmap_.Reset();textRasterSource_.reset();}update();}
@@ -807,6 +921,7 @@ void NativeCanvas::tabletEvent(QTabletEvent*e){
     if(e->type()==QEvent::TabletPress){
         setFocus();
         if(dragging_||rightDragging_||panning_||navigating_)return;
+        finishWheelZoomForPointer();
         if(beginGuideDrag(e->position())){grabMouse();return;}
         if(navigatorContains(e->position())){navigating_=true;grabMouse();navigateFrom(e->position());return;}
         tabletActive_=dragging_=true;
@@ -831,9 +946,15 @@ void NativeCanvas::tabletEvent(QTabletEvent*e){
         if(pointerUp)pointerUp({documentPoint(e->position()),lastPressure},e->modifiers());
     }
 }
-void NativeCanvas::leaveEvent(QEvent*e){if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}
+void NativeCanvas::leaveEvent(QEvent*e){wheelHover_.reset();if(pointerLeave)pointerLeave();if(!dragging_&&!rightDragging_)unsetCursor();QWidget::leaveEvent(e);}
 bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();updateSelectionAnimation();}
-    if(e->type()==QEvent::Hide&&selectionTimer_)selectionTimer_->stop();
+    if(e->type()==QEvent::Hide){
+        if(selectionTimer_)selectionTimer_->stop();
+        if(wheelZoomPending_){
+            invalidateComposite();
+            wheelHover_.reset();
+        }
+    }
     const bool focusLost=e->type()==QEvent::WindowDeactivate||e->type()==QEvent::FocusOut;
     if(guideDrag_&&(focusLost||e->type()==QEvent::UngrabMouse))cancelGuideDrag();
     if(navigating_&&(focusLost||e->type()==QEvent::UngrabMouse)){navigating_=false;if(QWidget::mouseGrabber()==this&&!dragging_&&!rightDragging_)releaseMouse();}

@@ -4,9 +4,11 @@
 #include "ParallelBatch.h"
 #include <algorithm>
 #include <compare>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <tuple>
 #include <emmintrin.h>
 
 namespace compositor::graphics {
@@ -20,7 +22,10 @@ struct SourceKey {
 SourceKey key(const SamplingSource& s){return {reinterpret_cast<uintptr_t>(s.identity.get()),s.width,s.height,s.alignmentX,s.alignmentY,bool(s.gray)};}
 struct TileKey {SourceKey source;int level{},x{},y{};auto operator<=>(const TileKey&)const=default;};
 struct LevelKey {SourceKey source;int level{};auto operator<=>(const LevelKey&)const=default;};
+thread_local ReducedTileReadScope* tileReadScope{};
 }
+ReducedTileReadScope::ReducedTileReadScope():previous_(tileReadScope){tileReadScope=this;}
+ReducedTileReadScope::~ReducedTileReadScope(){tileReadScope=previous_;}
 SamplingGrid samplingGrid(const SamplingSource& source,int level){
     if(level<0||level>16||source.width<1||source.height<1||source.width>30000||source.height>30000||
        std::abs(int64_t(source.alignmentX))>10000000||std::abs(int64_t(source.alignmentY))>10000000)
@@ -45,7 +50,18 @@ struct ReducedSource::Storage {
     std::map<LevelKey,LevelEntry> levels;
     size_t tileBudget,sourceBudget;uint64_t tick{},generated{},reused{};
     Storage(size_t tileLimit,size_t sourceLimit):tileBudget(tileLimit),sourceBudget(sourceLimit){}
-    void trim(){while(tiles.size()>tileBudget){auto oldest=std::min_element(tiles.begin(),tiles.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});tiles.erase(oldest);}}
+    void trim(const TileKey& inserted){
+        while(tiles.size()>tileBudget){
+            // Lower pyramid levels are used to build new views, but cannot
+            // evict every ready-to-sample tile while a zoom crosses a level.
+            auto oldest=std::min_element(tiles.begin(),tiles.end(),[&](const auto& a,const auto& b){
+                if(a.first==inserted)return false;
+                if(b.first==inserted)return true;
+                return std::tie(a.first.level,a.second.use)<std::tie(b.first.level,b.second.use);
+            });
+            tiles.erase(oldest);
+        }
+    }
     std::shared_ptr<const Raster::Tile> reusable(const std::shared_ptr<const SamplingSource>& source,const TileKey& requested){
         if(!source->reuseDomain||!source->dependencies)return {};
         const auto grid=samplingGrid(*source,requested.level);
@@ -118,7 +134,7 @@ struct ReducedSource::Storage {
                 else{tile=generate(source,level,tileKey.x,tileKey.y,work);++generated;}
             }
             found=tiles.emplace(tileKey,TileEntry{source->identity,source->reuseDomain&&source->dependencies?source:nullptr,std::move(tile),++tick}).first;
-            trim();
+            trim(tileKey);
         }else found->second.use=++tick;
         return found->second.tile;
     }
@@ -237,18 +253,42 @@ std::shared_ptr<const ReducedSource> ReducedSourceCache::resolve(std::shared_ptr
 }
 Pixel ReducedSource::pixel(int x,int y)const{std::lock_guard lock(storage_->mutex);return storage_->pixel(source_,level_,x,y);}
 uint8_t ReducedSource::gray(int x,int y)const{return pixel(x,y).r;}
+Pixel ReducedSource::readReducedPixel(int x,int y)const{
+    if(!tileReadScope||level_==0)return pixel(x,y);
+    const int tx=x/256,ty=y/256;
+    const auto index=(std::hash<const ReducedSource*>{}(this)/16+size_t(tx)+size_t(ty)*3)%tileReadScope->entries_.size();
+    auto& entry=tileReadScope->entries_[index];
+    if(entry.source!=this||entry.x!=tx||entry.y!=ty){
+        std::lock_guard lock(storage_->mutex);
+        entry={this,tx,ty,storage_->tile(source_,level_,tx,ty)};
+    }
+    return entry.tile->pixels[size_t(y%256)*256+x%256];
+}
 Pixel ReducedSource::sample(Point unit,Transform::Sampling sampling)const{
     const Point mapped{(unit.x*source_->width-grid_.x)/(double(grid_.width)*grid_.step),(unit.y*source_->height-grid_.y)/(double(grid_.height)*grid_.step)};
-    std::lock_guard lock(storage_->mutex);return sampleRasterPixels(grid_.width,grid_.height,[&](int x,int y){return storage_->pixel(source_,level_,x,y);},mapped,sampling);
+    if(!tileReadScope){
+        std::lock_guard lock(storage_->mutex);
+        return sampleRasterPixels(grid_.width,grid_.height,[&](int x,int y){return storage_->pixel(source_,level_,x,y);},mapped,sampling);
+    }
+    return sampleRasterPixels(grid_.width,grid_.height,[&](int x,int y){return readReducedPixel(x,y);},mapped,sampling);
 }
 double ReducedSource::sampleGray(Point unit,Transform::Sampling sampling,uint8_t exterior)const{
     const Point mapped{(unit.x*source_->width-grid_.x)/(double(grid_.width)*grid_.step),(unit.y*source_->height-grid_.y)/(double(grid_.height)*grid_.step)};
-    std::lock_guard lock(storage_->mutex);return sampleMaskPixels(grid_.width,grid_.height,[&](int x,int y){return storage_->pixel(source_,level_,x,y).r;},mapped,sampling,exterior);
+    if(!tileReadScope){
+        std::lock_guard lock(storage_->mutex);
+        return sampleMaskPixels(grid_.width,grid_.height,[&](int x,int y){return storage_->pixel(source_,level_,x,y).r;},mapped,sampling,exterior);
+    }
+    return sampleMaskPixels(grid_.width,grid_.height,[&](int x,int y){return readReducedPixel(x,y).r;},mapped,sampling,exterior);
 }
 size_t ReducedSourceCache::retainedTiles()const{std::lock_guard lock(storage_->mutex);return storage_->tiles.size();}
 size_t ReducedSourceCache::retainedSources()const{std::lock_guard lock(storage_->mutex);return storage_->levels.size();}
 uint64_t ReducedSourceCache::generatedTiles()const{std::lock_guard lock(storage_->mutex);return storage_->generated;}
 uint64_t ReducedSourceCache::reusedTiles()const{std::lock_guard lock(storage_->mutex);return storage_->reused;}
 void ReducedSourceCache::clear(){std::lock_guard lock(storage_->mutex);storage_->tiles.clear();storage_->levels.clear();storage_->tick=0;storage_->generated=0;storage_->reused=0;}
-ReducedSourceCache& ReducedSourceCache::shared(){static ReducedSourceCache cache;return cache;}
+ReducedSourceCache& ReducedSourceCache::shared(){
+    // Several visible sources can span multiple reduction levels in one
+    // wheel notch. Retain up to 128 MiB of shared reduced tiles.
+    static ReducedSourceCache cache(512,128);
+    return cache;
+}
 }
