@@ -240,7 +240,7 @@ void MainWindow::switchProject(){
     if(activeProject_)captureToolState(*activeProject_);
     if(transformSession_&&transformSession_->persistent)applyTransformSession();
     pointerCancel();activeProject_=next;
-    if(next){restoreToolState(*next);if(next->canvas){if(tool_==Tool::Hand)next->canvas->setCursor(Qt::OpenHandCursor);else if(next->canvas->cursor().shape()==Qt::OpenHandCursor||next->canvas->cursor().shape()==Qt::ClosedHandCursor)next->canvas->unsetCursor();}}
+    if(next){restoreToolState(*next);if(next->canvas){if(tool_==Tool::Hand)next->canvas->setCursor(Qt::OpenHandCursor);else if(next->canvas->cursor().shape()==Qt::OpenHandCursor||next->canvas->cursor().shape()==Qt::ClosedHandCursor)next->canvas->unsetCursor();next->canvas->updateHoverCursorAtPointer();}}
     refresh();
 }
 EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){

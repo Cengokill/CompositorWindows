@@ -2,6 +2,7 @@
 #include "persistence/ProjectStore.h"
 #include "ui/PaletteDialog.h"
 #include <QApplication>
+#include <QCursor>
 #include <QComboBox>
 #include <QDialog>
 #include <QKeyEvent>
@@ -104,6 +105,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         moveMouse(canvas,point);
         require(canvas->cursor().shape()==Qt::OpenHandCursor,"Returning to the canvas did not restore the open hand");
         canvas->setRulersVisible(true);
+        if(auto* rulersAction=window.findChild<QAction*>("viewRulers"))rulersAction->setChecked(true);
         const QPoint ruler(std::max(40,canvas->width()/2),8);
         moveMouse(canvas,ruler);
         require(canvas->cursor().shape()==Qt::SizeVerCursor,"The ruler lost its cursor to the Hand tool");
@@ -115,6 +117,28 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         require(canvas->cursor().shape()==Qt::SizeHorCursor,"The guide lost its cursor to the Hand tool");
         moveMouse(canvas,point+QPoint(40,0));
         require(canvas->cursor().shape()==Qt::OpenHandCursor,"Leaving the guide did not restore the open hand");
+        const QPoint aside=point+QPoint(40,0);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,aside);
+        require(canvas->cursor().shape()==Qt::ClosedHandCursor,"Hand press away from the guide did not close the hand");
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,ruler);
+        require(canvas->cursor().shape()==Qt::SizeVerCursor,"Releasing a Hand pan over a ruler showed the open hand");
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,ruler);
+        QTest::mouseMove(canvas,aside);
+        QTest::keyClick(canvas,Qt::Key_Escape);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Cancelling a guide drag left the arrow");
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,aside);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,ruler);
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,ruler);
+        require(canvas->cursor().shape()==Qt::SizeVerCursor,"Ending a guide drag on the ruler left the arrow");
+        key(window,Qt::Key_V);
+        QCursor::setPos(canvas->mapToGlobal(ruler));
+        moveMouse(canvas,ruler);
+        require(canvas->cursor().shape()==Qt::SizeVerCursor,"The ruler lost its cursor before Hand was selected");
+        key(window,Qt::Key_H);
+        require(canvas->cursor().shape()==Qt::SizeVerCursor,"Selecting Hand on a ruler showed the open hand");
+        QCursor::setPos(canvas->mapToGlobal(aside));
+        moveMouse(canvas,aside);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Leaving the ruler after Hand did not restore the open hand");
         key(window,Qt::Key_M);moveMouse(canvas,point);
         require(canvas->cursor().shape()==Qt::BitmapCursor,"Marquee did not replace the hand cursor");
         key(window,Qt::Key_H);
