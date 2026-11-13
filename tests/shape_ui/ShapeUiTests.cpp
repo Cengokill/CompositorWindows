@@ -1,7 +1,10 @@
 #include "ui/MainWindow.h"
 #include "ui/PaletteDialog.h"
 #include <QApplication>
+#include <QColorDialog>
+#include <QElapsedTimer>
 #include <QKeyEvent>
+#include <QTimer>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -32,9 +35,15 @@ void shape_stroke_draw(){MainWindow w(true);auto&p=w.addProject(fixture());shape
 void shape_style_loads_from_selected_layer(){MainWindow w(true);auto d=fixture();editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,0,0};style.strokeEnabled=true;style.strokeWidth=3;d.layers.push_back(*editing::createShapeLayer({10,10,20,20},style,"Stroked"));auto&p=w.addProject(d);p.active=d.layers.back().id;p.selected={p.active};shapeTool(w);REQUIRE(w.findChild<QCheckBox*>("shapeStroke")->isChecked());REQUIRE(w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->value()==3);}
 void shape_controls_edit_selected_layer(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);const auto id=p.active;const auto fill=editing::decodeShapeStyle(added(p).shapeJson);w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->setValue(3);const auto style=editing::decodeShapeStyle(added(p).shapeJson);REQUIRE(p.active==id&&style.strokeEnabled&&style.strokeWidth==3);REQUIRE(style.red==fill.red&&style.green==fill.green&&style.blue==fill.blue);REQUIRE(p.history.undoName()=="Shape Style");}
 QAction* command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
+QAction* labeledCommand(MainWindow& w,const char* id,const QString& text){for(auto* action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id&&action->text()==text)return action;throw std::runtime_error("missing labeled command");}
 PaletteDialog* palettePicker(MainWindow& w){for(auto* widget:w.findChildren<QWidget*>())if(auto* dialog=dynamic_cast<PaletteDialog*>(widget);dialog&&dialog->isVisible())return dialog;throw std::runtime_error("visible palette picker");}
-void choosePalette(MainWindow& w,const char* id,const char* hex,bool accept){command(w,id)->trigger();QApplication::processEvents();const auto rgb=effects_tools::PaletteColor::fromHex(hex);REQUIRE(rgb);palettePicker(w)->sample(*rgb);if(accept)palettePicker(w)->accept();else palettePicker(w)->reject();QApplication::processEvents();}
-std::string paletteHex(MainWindow& w,const char* id){command(w,id)->trigger();QApplication::processEvents();const auto hex=palettePicker(w)->color().hex();palettePicker(w)->reject();QApplication::processEvents();return hex;}
+void chooseShapeBackground(MainWindow& w,const char* hex,bool accept){
+    const auto rgb=effects_tools::PaletteColor::fromHex(hex);REQUIRE(rgb);const QColor color=QColor::fromRgbF(rgb->red,rgb->green,rgb->blue);
+    bool opened=false;QString title;QTimer poll;poll.setInterval(10);QElapsedTimer elapsed;elapsed.start();
+    QObject::connect(&poll,&QTimer::timeout,&w,[&]{if(auto* picker=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;title=picker->windowTitle();picker->setCurrentColor(color);if(accept)picker->accept();else picker->reject();}else if(elapsed.elapsed()>5000){if(auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget()))modal->reject();poll.stop();}});
+    poll.start();labeledCommand(w,"palette.background","Background Color")->trigger();poll.stop();REQUIRE(opened&&title=="Background color");QApplication::processEvents();
+}
+std::string paletteHex(MainWindow& w,const char* id){const QString text=QString(id)=="palette.background"?"Background":"Foreground";labeledCommand(w,id,text)->trigger();QApplication::processEvents();const auto hex=palettePicker(w)->color().hex();palettePicker(w)->reject();QApplication::processEvents();return hex;}
 const Layer& layerById(const EditorProject& p,const std::string& id){auto it=std::find_if(p.document->layers.begin(),p.document->layers.end(),[&](const Layer& layer){return layer.id==id;});REQUIRE(it!=p.document->layers.end());return *it;}
 void shape_undo_resyncs_bar(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);auto*stroke=w.findChild<QCheckBox*>("shapeStroke");auto*width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");stroke->setChecked(true);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);command(w,"edit.undo")->trigger();REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled&&!stroke->isChecked());width->setValue(4);REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
 void shape_smoothing_draft(){
@@ -128,7 +137,7 @@ void shape_background_fill_selected(){
     REQUIRE(beforeStyle.strokeEnabled&&beforeStyle.strokeWidth==3&&before.raster->width==80&&before.raster->height==60);
     REQUIRE(before.raster->pixel(40,30)==Pixel{0,0,0,255}&&before.raster->pixel(0,0)==Pixel{0,0,0,255});
     const auto base=p.history.undoCount();
-    choosePalette(w,"palette.background","FF0000",true);
+    chooseShapeBackground(w,"FF0000",true);
     const auto painted=added(p);const auto style=editing::decodeShapeStyle(painted.shapeJson);
     REQUIRE(painted.id==id&&painted.transform==before.transform);
     REQUIRE(style.red==1&&style.green==0&&style.blue==0);
@@ -147,7 +156,7 @@ void shape_background_fill_ellipse_and_line(){
     {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->setCurrentIndex(1);draw(p,{10,12},{90,72});
         const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);
         REQUIRE(beforeStyle.kind==editing::ShapeKind::Ellipse&&beforeStyle.cornerRadius==0);
-        choosePalette(w,"palette.background","00FF00",true);
+        chooseShapeBackground(w,"00FF00",true);
         const auto style=editing::decodeShapeStyle(added(p).shapeJson);
         REQUIRE(style.kind==editing::ShapeKind::Ellipse&&style.cornerRadius==0&&style.red==0&&style.green==1&&style.blue==0);
         REQUIRE(added(p).transform==before.transform&&added(p).raster->pixel(40,30)==Pixel{0,255,0,255}&&p.history.undoName()=="Shape Style");}
@@ -155,20 +164,20 @@ void shape_background_fill_ellipse_and_line(){
         const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);int px=-1,py=-1;
         for(int y=0;y<before.raster->height&&px<0;++y)for(int x=0;x<before.raster->width;++x)if(before.raster->pixel(x,y).a==255){px=x;py=y;break;}
         REQUIRE(px>=0&&before.raster->pixel(px,py)==Pixel{0,0,0,255});
-        choosePalette(w,"palette.background","0000FF",true);
+        chooseShapeBackground(w,"0000FF",true);
         const auto style=editing::decodeShapeStyle(added(p).shapeJson);
         REQUIRE(style.kind==editing::ShapeKind::Line&&style.lineWidth==beforeStyle.lineWidth&&style.lineStyle==beforeStyle.lineStyle&&style.lineCap==beforeStyle.lineCap);
         REQUIRE(style.startX==beforeStyle.startX&&style.startY==beforeStyle.startY&&style.endX==beforeStyle.endX&&style.endY==beforeStyle.endY);
         REQUIRE(style.red==0&&style.green==0&&style.blue==1&&added(p).transform==before.transform&&added(p).raster->pixel(px,py)==Pixel{0,0,255,255});}
 }
-void shape_background_fill_cancel(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=*p.document;const auto count=p.history.undoCount();choosePalette(w,"palette.background","FF0000",false);REQUIRE(*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FFFFFF");}
-void shape_background_fill_same_color(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=added(p);const auto count=p.history.undoCount();choosePalette(w,"palette.background","000000",true);REQUIRE(added(p)==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="000000");}
-void shape_background_fill_other_tool(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=added(p);const auto count=p.history.undoCount();command(w,"tool.move")->trigger();choosePalette(w,"palette.background","FF0000",true);REQUIRE(added(p)==before&&p.history.undoCount()==count&&p.history.undoName()=="Rectangle"&&paletteHex(w,"palette.background")=="FF0000");}
-void shape_background_fill_pixel_layer(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);const auto before=*p.document;choosePalette(w,"palette.background","FF0000",true);REQUIRE(*p.document==before&&p.history.undoCount()==0&&paletteHex(w,"palette.background")=="FF0000");}
+void shape_background_fill_cancel(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=*p.document;const auto count=p.history.undoCount();chooseShapeBackground(w,"FF0000",false);REQUIRE(*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FFFFFF");}
+void shape_background_fill_same_color(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=added(p);const auto count=p.history.undoCount();chooseShapeBackground(w,"000000",true);REQUIRE(added(p)==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="000000");}
+void shape_background_fill_other_tool(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=added(p);const auto count=p.history.undoCount();command(w,"tool.move")->trigger();chooseShapeBackground(w,"FF0000",true);REQUIRE(added(p)==before&&p.history.undoCount()==count&&p.history.undoName()=="Rectangle"&&paletteHex(w,"palette.background")=="FF0000");}
+void shape_background_fill_pixel_layer(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);const auto before=*p.document;chooseShapeBackground(w,"FF0000",true);REQUIRE(*p.document==before&&p.history.undoCount()==0&&paletteHex(w,"palette.background")=="FF0000");}
 void shape_background_fill_draft(){
     MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=*p.document;const auto count=p.history.undoCount();
     down(p,{30,30});move(p,{70,60});REQUIRE(p.canvas->shapeDraft());
-    choosePalette(w,"palette.background","FF0000",true);
+    chooseShapeBackground(w,"FF0000",true);
     REQUIRE(*p.document==before&&p.history.undoCount()==count&&p.canvas->shapeDraft());
     p.canvas->pointerCancel();REQUIRE(!p.canvas->shapeDraft()&&*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FF0000");
 }

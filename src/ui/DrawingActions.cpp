@@ -125,7 +125,15 @@ void MainWindow::setupDrawingActions(){
         cropRatioChoice_=value;changeCropRatio();
     });
     auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);bar->addAction(cropCancel);bar->addAction(cropApply);
-    auto*background=bar->addAction("Background Color");background->setProperty("hideDuringCrop",true);bindCommand(background,"Tools","Background",[this]{openPalette(true);});commands_->releaseShortcut(background);
+    auto*background=bar->addAction("Background Color");background->setProperty("hideDuringCrop",true);bindCommand(background,"Tools","Background",[this]{
+        QColor initial=background_;
+        if(tool_==Tool::Shape)if(const auto* layer=active();layer&&!layer->shapeJson.empty()){const auto stored=editing::decodeShapeStyle(layer->shapeJson);initial=QColor::fromRgbF(stored.red,stored.green,stored.blue);}
+        const auto color=QColorDialog::getColor(initial,this,"Background color");
+        if(!color.isValid())return;
+        background_=color;
+        if(tool_==Tool::Shape){finishShapeStyleEdit();applyShapeStyleToSelection(std::nullopt,color);finishShapeStyleEdit();}
+        refreshGradient();refresh(false,false);
+    });commands_->releaseShortcut(background);
 }
 bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers modifiers){
     if(tool_!=Tool::Gradient&&tool_!=Tool::Shape&&tool_!=Tool::Crop)return false;auto*p=current();if(!p||!p->document)return true;press_=point;
