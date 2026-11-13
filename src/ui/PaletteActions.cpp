@@ -2,6 +2,7 @@
 #include "PaletteSwatches.h"
 #include <QGuiApplication>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScreen>
 #include <QStatusBar>
@@ -57,7 +58,19 @@ void MainWindow::openPalette(bool background){
         popup->move(position);popup->show();return;
     }
     if(colorPicker_){if(colorPicker_->property("editPanelColor").toBool())colorPicker_->accept();else colorPicker_->reject();}
-    auto*dialog=new PaletteDialog(asPalette(background?background_:foreground_),background?"Color Picker (Background Color)":"Color Picker (Foreground Color)",this);colorPicker_=dialog;connect(dialog,&QDialog::finished,this,[this,dialog,background](int result){if(result==QDialog::Accepted&&(!current()||!current()->maskSelected)){if(background)background_=color(dialog->color());else foreground_=color(dialog->color());}palettePosition_=dialog->pos();colorPicker_=nullptr;samplingPalette_=false;if(canvas())canvas()->setSampleRing({});dialog->deleteLater();refreshGradient();refresh(false,false);});if(palettePosition_)dialog->move(*palettePosition_);dialog->show();
+    auto*dialog=new PaletteDialog(asPalette(background?background_:foreground_),background?"Color Picker (Background Color)":"Color Picker (Foreground Color)",this);colorPicker_=dialog;connect(dialog,&QDialog::finished,this,[this,dialog,background](int result){
+        if(result==QDialog::Accepted&&(!current()||!current()->maskSelected)){
+            if(background){
+                background_=color(dialog->color());
+                if(tool_==Tool::Shape){
+                    colorPicker_=nullptr;
+                    try{finishShapeStyleEdit();applyShapeStyleToSelection(std::nullopt,background_);finishShapeStyleEdit();}
+                    catch(const std::exception& error){QMessageBox::critical(this,"Compositor",error.what());}
+                }
+            }else foreground_=color(dialog->color());
+        }
+        palettePosition_=dialog->pos();colorPicker_=nullptr;samplingPalette_=false;if(canvas())canvas()->setSampleRing({});dialog->deleteLater();refreshGradient();refresh(false,false);
+    });if(palettePosition_)dialog->move(*palettePosition_);dialog->show();
 }
 void MainWindow::openEditPanelColor(effects_tools::PaletteColor original,const QString& title,std::function<void(effects_tools::PaletteColor)> changed){
     if(colorPicker_||stroke_||retouch_||!editPanel_||editPanel_->committing())return;

@@ -251,12 +251,15 @@ void MainWindow::refreshShapeControls(){
         overlay=NativeCanvas::ShapeDraftOverlay{*shapeDraftRect_,shapeDraftStyle_,{uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue()),255}};
     canvas()->setShapeDraft(std::move(overlay));
 }
-// Controls edit a selected shape layer directly; its own fill colour is kept, unlike Update Shape Style.
-void MainWindow::applyShapeStyleToSelection(std::optional<bool> smoothing){
+// Bar controls edit a selected shape directly and keep its fill, unlike Update Shape Style.
+// fill is only for a confirmed background colour while the Shape tool is active.
+void MainWindow::applyShapeStyleToSelection(std::optional<bool> smoothing,std::optional<QColor> fill){
     if(!shapeDraftId_.empty()||!active()||active()->shapeJson.empty()||!canEditLayers())return;
     const auto stored=editing::decodeShapeStyle(active()->shapeJson);
-    const bool smoothingOnly=smoothing.has_value()&&shapeStyle_.kind==stored.kind;
-    auto style=smoothingOnly?stored:shapeStyle_;style.red=stored.red;style.green=stored.green;style.blue=stored.blue;
+    const bool smoothingOnly=!fill&&smoothing.has_value()&&shapeStyle_.kind==stored.kind;
+    auto style=fill||smoothingOnly?stored:shapeStyle_;
+    if(fill){style.red=fill->redF();style.green=fill->greenF();style.blue=fill->blueF();}
+    else{style.red=stored.red;style.green=stored.green;style.blue=stored.blue;}
     if(style.kind==editing::ShapeKind::Line&&stored.kind==editing::ShapeKind::Line){style.startX=stored.startX;style.startY=stored.startY;style.endX=stored.endX;style.endY=stored.endY;}
     if(style.kind!=editing::ShapeKind::Rectangle)style.smoothing=false;
     else if(stored.kind==editing::ShapeKind::Rectangle)style.smoothing=smoothing.value_or(stored.smoothing);

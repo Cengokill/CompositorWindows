@@ -328,7 +328,7 @@ private:
     void changeCropRatio();
     void cancelShape();
     void refreshShapeControls();
-    void applyShapeStyleToSelection(std::optional<bool> smoothing={});
+    void applyShapeStyleToSelection(std::optional<bool> smoothing={},std::optional<QColor> fill={});
     void finishShapeStyleEdit();
     void cancelCrop();
     void refreshCropControls();
