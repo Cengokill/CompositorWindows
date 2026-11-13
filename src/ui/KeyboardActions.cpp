@@ -83,16 +83,17 @@ bool MainWindow::handleEditingKey(QKeyEvent* event){
     return false;
 }
 
+void MainWindow::releaseCanvasCursor(){if(auto* view=canvas()){if(tool_==Tool::Hand)view->setCursor(Qt::OpenHandCursor);else view->unsetCursor();}}
 bool MainWindow::beginTemporaryHand(Point point){
     if(!spaceHeld_)return false;if(!canvas())return true;
     spaceDragging_=true;spacePress_={point.x,point.y};canvas()->setCursor(Qt::ClosedHandCursor);return true;
 }
 bool MainWindow::updateTemporaryHand(Point point,bool finish){
     if(!spaceDragging_)return false;if(canvas())canvas()->panBy((QPointF(point.x,point.y)-spacePress_)*canvas()->pointsPerPixel());
-    if(finish){spaceDragging_=false;if(canvas()){if(spaceHeld_)canvas()->setCursor(Qt::OpenHandCursor);else canvas()->unsetCursor();}refreshBrushPointer();}return true;
+    if(finish){spaceDragging_=false;if(canvas()){if(spaceHeld_)canvas()->setCursor(Qt::OpenHandCursor);else releaseCanvasCursor();}refreshBrushPointer();}return true;
 }
-void MainWindow::cancelTemporaryHand(){spaceHeld_=spaceDragging_=false;if(canvas())canvas()->unsetCursor();}
-void MainWindow::keyReleaseEvent(QKeyEvent* event){if(event->key()==Qt::Key_Space){if(!event->isAutoRepeat()){spaceHeld_=false;if(!spaceDragging_&&canvas())canvas()->unsetCursor();refreshBrushPointer();}event->accept();return;}QMainWindow::keyReleaseEvent(event);}
+void MainWindow::cancelTemporaryHand(){spaceHeld_=spaceDragging_=false;releaseCanvasCursor();}
+void MainWindow::keyReleaseEvent(QKeyEvent* event){if(event->key()==Qt::Key_Space){if(!event->isAutoRepeat()){spaceHeld_=false;if(!spaceDragging_)releaseCanvasCursor();refreshBrushPointer();}event->accept();return;}QMainWindow::keyReleaseEvent(event);}
 void MainWindow::changeEvent(QEvent* event){if(event->type()==QEvent::ActivationChange&&!isActiveWindow())cancelTemporaryHand();QMainWindow::changeEvent(event);}
 
 void MainWindow::interruptPointer(){

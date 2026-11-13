@@ -178,7 +178,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->pointerMove=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerUpdate(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerUp=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerEnd(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerCancel=[this]{pointerCancel();};project.canvas->pointerInterrupted=[this]{interruptPointer();};
-    project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);};
+    project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);if(tool_==Tool::Hand&&!spaceHeld_&&!spaceDragging_)if(auto* view=canvas())view->setCursor(pointerOwner_==current()?Qt::ClosedHandCursor:Qt::OpenHandCursor);};
     project.canvas->pointerLeave=[this]{clearBrushPointer();if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal){selectionGesture_.moveCursor({});refreshSelectionGesture();}};
     project.canvas->rightPointerDown=[this](QPointF point,Qt::KeyboardModifiers flags){return beginBrushTip(point,flags);};
     project.canvas->rightPointerMove=[this](QPointF point,Qt::KeyboardModifiers flags,bool finish){updateBrushTip(point,flags,finish);};
@@ -240,7 +240,7 @@ void MainWindow::switchProject(){
     if(activeProject_)captureToolState(*activeProject_);
     if(transformSession_&&transformSession_->persistent)applyTransformSession();
     pointerCancel();activeProject_=next;
-    if(next)restoreToolState(*next);
+    if(next){restoreToolState(*next);if(next->canvas){if(tool_==Tool::Hand)next->canvas->setCursor(Qt::OpenHandCursor);else if(next->canvas->cursor().shape()==Qt::OpenHandCursor||next->canvas->cursor().shape()==Qt::ClosedHandCursor)next->canvas->unsetCursor();}}
     refresh();
 }
 EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){

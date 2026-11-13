@@ -6,6 +6,8 @@
 #include <QDialog>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QTabWidget>
 #include <QListWidget>
 #include <QScrollBar>
 #include <QSettings>
@@ -64,8 +66,69 @@ Selection selection(){return *editing::rasterSelection(editing::SelectionOutline
 std::shared_ptr<const GrayRaster> gray(uint8_t value){auto result=std::make_shared<GrayRaster>();result->width=64;result->height=48;result->pixels.assign(64*48,value);return result;}
 Layer& layer(EditorProject& project){return project.document->layers.front();}
 void drag(EditorProject& project,Point start,Point end){project.canvas->pointerDown({start.x,start.y},{});project.canvas->pointerMove({end.x,end.y},{});project.canvas->pointerUp({end.x,end.y},{});}
+void moveMouse(QWidget* canvas,QPoint point){QMouseEvent event(QEvent::MouseMove,point,Qt::NoButton,Qt::NoButton,Qt::NoModifier);QApplication::sendEvent(canvas,&event);}
+QAction* command(MainWindow& window,const char* id){for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("Missing command ")+id);}
 }
 int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);QApplication app(argc,argv);int passed=0,failed=0;auto test=[&](const char* name,const std::function<void()>& run){try{run();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception& error){++failed;std::cout<<"FAIL "<<name<<": "<<error.what()<<'\n';}};
+    test("hand_cursor_and_pan",[]{
+        MainWindow window(true);auto& project=window.addProject(example());window.resize(1100,700);window.show();QApplication::processEvents();
+        auto* canvas=project.canvas;const auto before=*project.document;const auto history=project.history.undoCount();
+        const QPoint point=canvas->rect().center();
+        command(window,"tool.hand")->trigger();
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Hand command did not show the open hand");
+        moveMouse(canvas,point);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Hand hover did not keep the open hand");
+        const auto pan=canvas->pan;
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        require(canvas->cursor().shape()==Qt::ClosedHandCursor,"Hand press did not show the closed hand");
+        moveMouse(canvas,point+QPoint(20,0));
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point+QPoint(20,0));
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Hand release did not restore the open hand");
+        require(canvas->pan!=pan&&*project.document==before&&project.history.undoCount()==history,"Hand pan changed the document or history");
+        key(window,Qt::Key_Space,Qt::NoModifier,false);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        require(canvas->cursor().shape()==Qt::ClosedHandCursor,"Space drag did not close the hand");
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point+QPoint(12,0));
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Space drag release lost the open hand");
+        release(window,Qt::Key_Space);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Space release lost the hand cursor");
+        require(*project.document==before&&project.history.undoCount()==history,"Space pan changed the document or history");
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QTest::keyClick(canvas,Qt::Key_Escape);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Escape left the closed hand");
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QEvent focusOut(QEvent::FocusOut);QApplication::sendEvent(canvas,&focusOut);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Interruption left the closed hand");
+        QEvent leave(QEvent::Leave);QApplication::sendEvent(canvas,&leave);
+        require(canvas->cursor().shape()!=Qt::OpenHandCursor&&canvas->cursor().shape()!=Qt::ClosedHandCursor,"Leaving the canvas kept the hand");
+        moveMouse(canvas,point);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Returning to the canvas did not restore the open hand");
+        canvas->setRulersVisible(true);
+        const QPoint ruler(std::max(40,canvas->width()/2),8);
+        moveMouse(canvas,ruler);
+        require(canvas->cursor().shape()==Qt::SizeVerCursor,"The ruler lost its cursor to the Hand tool");
+        moveMouse(canvas,point);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Leaving the ruler did not restore the open hand");
+        const auto guideDocument=canvas->documentPoint(point);
+        canvas->showGuides=true;canvas->guides.push_back({false,guideDocument.x()});
+        moveMouse(canvas,point);
+        require(canvas->cursor().shape()==Qt::SizeHorCursor,"The guide lost its cursor to the Hand tool");
+        moveMouse(canvas,point+QPoint(40,0));
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Leaving the guide did not restore the open hand");
+        key(window,Qt::Key_M);moveMouse(canvas,point);
+        require(canvas->cursor().shape()==Qt::BitmapCursor,"Marquee did not replace the hand cursor");
+        key(window,Qt::Key_H);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"H did not restore the open hand");
+        key(window,Qt::Key_B);moveMouse(canvas,point);
+        require(canvas->cursor().shape()==Qt::BlankCursor,"Brush did not replace the hand cursor");
+        command(window,"tool.hand")->trigger();
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Returning to Hand did not show the open hand");
+        auto& second=window.addProject(example());
+        require(second.canvas->cursor().shape()!=Qt::OpenHandCursor&&second.canvas->cursor().shape()!=Qt::ClosedHandCursor,"A Move project inherited the hand cursor");
+        auto* tabs=window.findChild<QTabWidget*>();require(tabs!=nullptr,"Project tabs missing");tabs->setCurrentIndex(0);
+        require(canvas->cursor().shape()==Qt::OpenHandCursor,"Returning to the Hand project lost the open hand");
+        require(*project.document==before&&project.history.undoCount()==history,"Hand cursor changes edited the document");
+    });
     test("keyboard_layer_nudge_linked_and_unlinked_mask",[]{MainWindow window(true);auto doc=example();doc.layers.front().mask=Mask{gray(128),true,true,Transform{3,4,64,48}};auto& project=window.addProject(doc);const auto source=layer(project).raster;key(window,Qt::Key_Right);key(window,Qt::Key_Down,Qt::ShiftModifier);require(layer(project).transform.x==1&&layer(project).transform.y==10,"Arrow layer steps differ");require(layer(project).mask->placement->x==4&&layer(project).mask->placement->y==14,"Linked mask was not carried");require(project.history.undoCount()==2&&layer(project).raster==source,"Nudge did not make one immutable transaction per key");layer(project).mask->linked=false;project.maskSelected=true;const auto image=layer(project).transform;key(window,Qt::Key_Left);require(layer(project).transform==image&&layer(project).mask->placement->x==3,"Unlinked selected mask changed image placement");});
     test("keyboard_outline_nudge_retains_offcanvas_geometry",[]{MainWindow window(true);auto doc=example();doc.selection=selection();auto& project=window.addProject(doc);const auto source=layer(project).raster;key(window,Qt::Key_M);for(int i=0;i<3;++i)key(window,Qt::Key_Left,Qt::ShiftModifier);require(project.document->selection->outline->bounds().x==-20,"Offcanvas outline was clipped");for(int i=0;i<3;++i)key(window,Qt::Key_Right,Qt::ShiftModifier);require(project.document->selection->outline->bounds().x==10&&project.document->selection->coverage->pixel(15,15)==255,"Returning outline lost geometry");require(layer(project).raster==source&&project.history.undoCount()==6,"Outline nudge painted or combined history");});
     test("keyboard_ctrl_arrow_moves_pixels_from_any_tool",[]{MainWindow window(true);auto doc=example();doc.selection=selection();auto& project=window.addProject(doc);const auto original=project.document;key(window,Qt::Key_B);key(window,Qt::Key_Right,Qt::ControlModifier|Qt::ShiftModifier);require(layer(project).raster->pixel(15,15).a==0&&layer(project).raster->pixel(25,15)==Pixel{255,0,0,255},"Ctrl arrow failed to lift/move selected pixels");require(project.document->selection->outline->bounds().x==20&&project.document->selection->coverage->pixel(25,15)==255,"Pixel nudge did not move vector selection");require(project.history.undoName()=="Move Pixels"&&project.history.undoCount()==1,"Pixel nudge history");auto undo=project.history.undo();require(undo&&undo->document==original,"Pixel nudge undo lost original");});
