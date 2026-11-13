@@ -82,9 +82,14 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
         std::optional<editing_transform::OverlayGeometry> overlay;
         if(transform)overlay=transformSession_&&transformSession_->corners?editing_transform::OverlayGeometry::fromCorners(*transformSession_->corners,mapping):editing_transform::OverlayGeometry::fromTransform(*transform,mapping);
         auto visible=editing_transform::visiblePlacements(*p->document);
-        editing_transform::PressContext context;context.activeId=p->active;context.activeTransform=transform;context.visibleLayers=visible;context.autoSelect=autoSelectLayers_;context.controlsVisible=transformControls_;
+        const auto selected=layerSelection();
+        std::vector<std::string> held=selected.ids;
+        if(!p->active.empty()&&std::find(held.begin(),held.end(),p->active)==held.end())held.push_back(p->active);
+        const auto roots=held;
+        for(const auto& id:roots)for(const auto& child:layers::descendants(*p->document,id))if(std::find(held.begin(),held.end(),child)==held.end())held.push_back(child);
+        editing_transform::PressContext context;context.activeId=p->active;context.activeTransform=transform;context.visibleLayers=visible;context.heldIds=held;context.autoSelect=autoSelectLayers_;context.controlsVisible=transformControls_;
         context.hasEdit=bool(transformSession_);context.persistent=transformSession_&&transformSession_->persistent;context.hasDistortion=transformSession_&&transformSession_->corners.has_value();
-        if(layerSelection().ids.size()>1||(active()&&active()->group))context.groupBox=transform;
+        if(selected.ids.size()>1||(active()&&active()->group))context.groupBox=transform;
         const auto intent=editing_transform::resolvePress(context,mapping.toView(point),mapping,overlay,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),false});
         if(!intent)return true;
         if(intent->picked){p->active=intent->layerId;p->selected={p->active};p->maskSelected=false;}

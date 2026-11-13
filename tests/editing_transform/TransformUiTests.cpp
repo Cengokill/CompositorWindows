@@ -1,3 +1,4 @@
+#include "editing/Shapes.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewportCompositeJob.h"
 #include <QApplication>
@@ -225,6 +226,26 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         require(expected.x<0,"Offscreen masked pixels were outside the preview plate");
         const auto view=project.canvas->viewportBounds();
         require(std::abs(plate->x-view.x)>0.5||plate->width!=std::max(1,int(std::ceil(view.width/view.units))),"Preview plate reused the viewport crop");
+    });
+    test("ui_click_selects_shape_above_image",[]{
+        MainWindow window(true);auto document=example();
+        auto shape=editing::createShapeLayer({20,16,12,10},{editing::ShapeKind::Rectangle,1,0,0},"Mark");
+        require(shape.has_value(),"Shape layer was not created");
+        const auto shapeId=shape->id;document.layers.push_back(std::move(*shape));
+        auto& project=window.addProject(std::move(document));setup(window,project);showCanvas(window);
+        const auto imageId=project.document->layers.front().id;
+        project.active=imageId;project.selected={imageId};project.maskSelected=true;
+        const auto undo=project.history.undoCount();
+        down(project,{26,21});up(project,{26,21});
+        require(project.active==shapeId&&project.selected==std::vector<std::string>{shapeId}&&!project.maskSelected,"Click did not select the shape above the image");
+        require(project.history.undoCount()==undo,"Selecting the shape added history");
+        down(project,{4,4});up(project,{4,4});
+        require(project.active==imageId&&project.selected==std::vector<std::string>{imageId},"Click outside the shape did not restore the image");
+        require(project.history.undoCount()==undo,"Selecting the image added history");
+        control<QCheckBox>(window,"transformAutoSelect")->setChecked(false);
+        down(project,{26,21});up(project,{26,21});
+        require(project.active==imageId&&project.selected==std::vector<std::string>{imageId},"Auto-select off changed the selection");
+        require(project.history.undoCount()==undo,"A click without movement added history");
     });
     std::cout<<"{\"suite\":\"transform_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";return failed?1:0;
 }
