@@ -1,6 +1,13 @@
 #include "ui/MainWindow.h"
+#include "ui/PaletteDialog.h"
 #include <QApplication>
+#include <QColorDialog>
+#include <QElapsedTimer>
+#include <QPushButton>
 #include <QKeyEvent>
+#include <QTimer>
+#include <QToolBar>
+#include <QWidgetAction>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -31,6 +38,16 @@ void shape_stroke_draw(){MainWindow w(true);auto&p=w.addProject(fixture());shape
 void shape_style_loads_from_selected_layer(){MainWindow w(true);auto d=fixture();editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,0,0};style.strokeEnabled=true;style.strokeWidth=3;d.layers.push_back(*editing::createShapeLayer({10,10,20,20},style,"Stroked"));auto&p=w.addProject(d);p.active=d.layers.back().id;p.selected={p.active};shapeTool(w);REQUIRE(w.findChild<QCheckBox*>("shapeStroke")->isChecked());REQUIRE(w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->value()==3);}
 void shape_controls_edit_selected_layer(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);const auto id=p.active;const auto fill=editing::decodeShapeStyle(added(p).shapeJson);w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->setValue(3);const auto style=editing::decodeShapeStyle(added(p).shapeJson);REQUIRE(p.active==id&&style.strokeEnabled&&style.strokeWidth==3);REQUIRE(style.red==fill.red&&style.green==fill.green&&style.blue==fill.blue);REQUIRE(p.history.undoName()=="Shape Style");}
 QAction* command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
+QAction* labeledCommand(MainWindow& w,const char* id,const QString& text){for(auto* action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id&&action->text()==text)return action;throw std::runtime_error("missing labeled command");}
+PaletteDialog* palettePicker(MainWindow& w){for(auto* widget:w.findChildren<QWidget*>())if(auto* dialog=dynamic_cast<PaletteDialog*>(widget);dialog&&dialog->isVisible())return dialog;throw std::runtime_error("visible palette picker");}
+void chooseShapeBackground(MainWindow& w,const char* hex,bool accept){
+    const auto rgb=effects_tools::PaletteColor::fromHex(hex);REQUIRE(rgb);const QColor color=QColor::fromRgbF(rgb->red,rgb->green,rgb->blue);
+    bool opened=false;QString title;QTimer poll;poll.setInterval(10);QElapsedTimer elapsed;elapsed.start();
+    QObject::connect(&poll,&QTimer::timeout,&w,[&]{if(auto* picker=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;title=picker->windowTitle();picker->setCurrentColor(color);if(accept)picker->accept();else picker->reject();}else if(elapsed.elapsed()>5000){if(auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget()))modal->reject();poll.stop();}});
+    poll.start();labeledCommand(w,"palette.background","Background Color")->trigger();poll.stop();REQUIRE(opened&&title=="Background color");QApplication::processEvents();
+}
+std::string paletteHex(MainWindow& w,const char* id){const QString text=QString(id)=="palette.background"?"Background":"Foreground";labeledCommand(w,id,text)->trigger();QApplication::processEvents();const auto hex=palettePicker(w)->color().hex();palettePicker(w)->reject();QApplication::processEvents();return hex;}
+const Layer& layerById(const EditorProject& p,const std::string& id){auto it=std::find_if(p.document->layers.begin(),p.document->layers.end(),[&](const Layer& layer){return layer.id==id;});REQUIRE(it!=p.document->layers.end());return *it;}
 void shape_undo_resyncs_bar(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);auto*stroke=w.findChild<QCheckBox*>("shapeStroke");auto*width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");stroke->setChecked(true);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);command(w,"edit.undo")->trigger();REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled&&!stroke->isChecked());width->setValue(4);REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
 void shape_smoothing_draft(){
     MainWindow w(true);
@@ -115,4 +132,92 @@ void shape_line_controls(){
     style->setCurrentIndex(5);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).lineStyle==editing::ShapeLineStyle::Dotted&&p.history.undoCount()==2);command(w,"edit.undo")->trigger();REQUIRE(added(p)==line&&style->currentIndex()==1);command(w,"edit.redo")->trigger();REQUIRE(style->currentIndex()==5);
     const auto prior=added(p);const auto priorStyle=editing::decodeShapeStyle(prior.shapeJson);auto endpoint=[](const Layer& l,const editing::ShapeStyle& s){return l.transform.fromUnit({s.startX*(l.raster->width-1)/l.raster->width,s.startY*(l.raster->height-1)/l.raster->height});};const auto start=endpoint(prior,priorStyle);width->setValue(30);emit width->editingFinished();const auto changed=added(p);const auto changedStyle=editing::decodeShapeStyle(changed.shapeJson);const auto moved=endpoint(changed,changedStyle);REQUIRE(std::hypot(start.x-moved.x,start.y-moved.y)<.001);command(w,"edit.undo")->trigger();REQUIRE(added(p)==prior);
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+template<class T>
+QAction* barControl(MainWindow& w,T* widget){auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar&&widget);for(auto* action:bar->actions()){if(bar->widgetForAction(action)==widget)return action;if(auto* hosted=qobject_cast<QWidgetAction*>(action);hosted&&hosted->defaultWidget()==widget)return action;}throw std::runtime_error("toolbar control absent");}
+bool barCommandVisible(MainWindow& w,const char* id){auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);for(auto* action:bar->actions())if(action->property("commandId").toString()==id)return action->isVisible();throw std::runtime_error(std::string("toolbar command absent ")+id);}
+void shape_bar_limits_selected_shape(){
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});
+    REQUIRE(!barCommandVisible(w,"tool.gradient"));
+    REQUIRE(barCommandVisible(w,"tool.shape"));
+    REQUIRE(barControl(w,w.findChild<QComboBox*>("gradientShape"))->isVisible()==false);
+    REQUIRE(w.findChild<QComboBox*>("gradientStyle")->isHidden());
+    REQUIRE(w.findChild<QCheckBox*>("gradientReverse")->isHidden());
+    REQUIRE(w.findChild<QDoubleSpinBox*>("gradientOpacity")->isHidden());
+    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
+    REQUIRE(w.findChild<QComboBox*>("shapeLineStyle")->isHidden());
+    REQUIRE(w.findChild<QComboBox*>("shapeLineCap")->isHidden());
+    REQUIRE(w.findChild<QComboBox*>("cropRatioChoice")->isHidden());
+    REQUIRE(!w.findChild<QComboBox*>("shapeKind")->isHidden());
+    REQUIRE(!w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden());
+    REQUIRE(!w.findChild<QCheckBox*>("shapeSmoothing")->isHidden());
+    REQUIRE(!w.findChild<QCheckBox*>("shapeStroke")->isHidden());
+    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->isHidden());
+    REQUIRE(barControl(w,w.findChild<QPushButton*>("shapeStrokeColor"))->isVisible()==false);
+    kind(w)->setCurrentIndex(1);
+    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden()&&w.findChild<QCheckBox*>("shapeSmoothing")->isHidden());
+    REQUIRE(!w.findChild<QCheckBox*>("shapeStroke")->isHidden()&&w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
+    kind(w)->setCurrentIndex(2);
+    REQUIRE(!w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
+    REQUIRE(!w.findChild<QComboBox*>("shapeLineStyle")->isHidden()&&!w.findChild<QComboBox*>("shapeLineCap")->isHidden());
+    REQUIRE(w.findChild<QCheckBox*>("shapeStroke")->isHidden()&&w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden());
+    REQUIRE(!barCommandVisible(w,"tool.gradient"));
+    const auto shapeId=p.active;command(w,"tool.move")->trigger();
+    REQUIRE(barCommandVisible(w,"tool.gradient")&&!w.findChild<QComboBox*>("gradientShape")->isHidden());
+    p.active="top";p.selected={"top"};shapeTool(w);
+    REQUIRE(barCommandVisible(w,"tool.gradient")&&!w.findChild<QComboBox*>("gradientShape")->isHidden());
+    p.active=shapeId;p.selected={shapeId};shapeTool(w);
+    REQUIRE(!barCommandVisible(w,"tool.gradient")&&w.findChild<QComboBox*>("gradientShape")->isHidden());
+}
+void shape_background_fill_selected(){
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});const auto id=p.active;
+    auto* stroke=w.findChild<QCheckBox*>("shapeStroke");auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");REQUIRE(stroke&&width);
+    stroke->setChecked(true);width->setValue(3);emit width->editingFinished();
+    const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);
+    REQUIRE(beforeStyle.strokeEnabled&&beforeStyle.strokeWidth==3&&before.raster->width==80&&before.raster->height==60);
+    REQUIRE(before.raster->pixel(40,30)==Pixel{0,0,0,255}&&before.raster->pixel(0,0)==Pixel{0,0,0,255});
+    const auto base=p.history.undoCount();
+    chooseShapeBackground(w,"FF0000",true);
+    const auto painted=added(p);const auto style=editing::decodeShapeStyle(painted.shapeJson);
+    REQUIRE(painted.id==id&&painted.transform==before.transform);
+    REQUIRE(style.red==1&&style.green==0&&style.blue==0);
+    REQUIRE(style.strokeEnabled&&style.strokeWidth==beforeStyle.strokeWidth&&style.strokeRed==beforeStyle.strokeRed&&style.strokeGreen==beforeStyle.strokeGreen&&style.strokeBlue==beforeStyle.strokeBlue);
+    REQUIRE(style.kind==beforeStyle.kind&&style.cornerRadius==beforeStyle.cornerRadius&&style.smoothing==beforeStyle.smoothing);
+    REQUIRE(painted.raster->pixel(40,30)==Pixel{255,0,0,255}&&painted.raster->pixel(0,0)==Pixel{0,0,0,255});
+    REQUIRE(p.history.undoCount()==base+1&&p.history.undoName()=="Shape Style");
+    REQUIRE(paletteHex(w,"palette.foreground")=="000000"&&paletteHex(w,"palette.background")=="FF0000");
+    command(w,"edit.undo")->trigger();REQUIRE(added(p)==before&&paletteHex(w,"palette.background")=="FF0000");
+    command(w,"edit.redo")->trigger();REQUIRE(added(p)==painted);
+    draw(p,{14,16},{40,40});
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).red==0&&editing::decodeShapeStyle(added(p).shapeJson).green==0&&editing::decodeShapeStyle(added(p).shapeJson).blue==0);
+    REQUIRE(editing::decodeShapeStyle(layerById(p,id).shapeJson).red==1&&editing::decodeShapeStyle(layerById(p,id).shapeJson).green==0&&editing::decodeShapeStyle(layerById(p,id).shapeJson).blue==0);
+}
+void shape_background_fill_ellipse_and_line(){
+    {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->setCurrentIndex(1);draw(p,{10,12},{90,72});
+        const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);
+        REQUIRE(beforeStyle.kind==editing::ShapeKind::Ellipse&&beforeStyle.cornerRadius==0);
+        chooseShapeBackground(w,"00FF00",true);
+        const auto style=editing::decodeShapeStyle(added(p).shapeJson);
+        REQUIRE(style.kind==editing::ShapeKind::Ellipse&&style.cornerRadius==0&&style.red==0&&style.green==1&&style.blue==0);
+        REQUIRE(added(p).transform==before.transform&&added(p).raster->pixel(40,30)==Pixel{0,255,0,255}&&p.history.undoName()=="Shape Style");}
+    {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->setCurrentIndex(2);draw(p,{10,30},{80,30});
+        const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);int px=-1,py=-1;
+        for(int y=0;y<before.raster->height&&px<0;++y)for(int x=0;x<before.raster->width;++x)if(before.raster->pixel(x,y).a==255){px=x;py=y;break;}
+        REQUIRE(px>=0&&before.raster->pixel(px,py)==Pixel{0,0,0,255});
+        chooseShapeBackground(w,"0000FF",true);
+        const auto style=editing::decodeShapeStyle(added(p).shapeJson);
+        REQUIRE(style.kind==editing::ShapeKind::Line&&style.lineWidth==beforeStyle.lineWidth&&style.lineStyle==beforeStyle.lineStyle&&style.lineCap==beforeStyle.lineCap);
+        REQUIRE(style.startX==beforeStyle.startX&&style.startY==beforeStyle.startY&&style.endX==beforeStyle.endX&&style.endY==beforeStyle.endY);
+        REQUIRE(style.red==0&&style.green==0&&style.blue==1&&added(p).transform==before.transform&&added(p).raster->pixel(px,py)==Pixel{0,0,255,255});}
+}
+void shape_background_fill_cancel(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=*p.document;const auto count=p.history.undoCount();chooseShapeBackground(w,"FF0000",false);REQUIRE(*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FFFFFF");}
+void shape_background_fill_same_color(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=added(p);const auto count=p.history.undoCount();chooseShapeBackground(w,"000000",true);REQUIRE(added(p)==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="000000");}
+void shape_background_fill_other_tool(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=added(p);const auto count=p.history.undoCount();command(w,"tool.move")->trigger();chooseShapeBackground(w,"FF0000",true);REQUIRE(added(p)==before&&p.history.undoCount()==count&&p.history.undoName()=="Rectangle"&&paletteHex(w,"palette.background")=="FF0000");}
+void shape_background_fill_pixel_layer(){MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);const auto before=*p.document;chooseShapeBackground(w,"FF0000",true);REQUIRE(*p.document==before&&p.history.undoCount()==0&&paletteHex(w,"palette.background")=="FF0000");}
+void shape_background_fill_draft(){
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p);const auto before=*p.document;const auto count=p.history.undoCount();
+    down(p,{30,30});move(p,{70,60});REQUIRE(p.canvas->shapeDraft());
+    chooseShapeBackground(w,"FF0000",true);
+    REQUIRE(*p.document==before&&p.history.undoCount()==count&&p.canvas->shapeDraft());
+    p.canvas->pointerCancel();REQUIRE(!p.canvas->shapeDraft()&&*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FF0000");
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
