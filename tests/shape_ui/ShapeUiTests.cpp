@@ -3,8 +3,11 @@
 #include <QApplication>
 #include <QColorDialog>
 #include <QElapsedTimer>
+#include <QPushButton>
 #include <QKeyEvent>
 #include <QTimer>
+#include <QToolBar>
+#include <QWidgetAction>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -129,6 +132,42 @@ void shape_line_controls(){
     style->setCurrentIndex(5);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).lineStyle==editing::ShapeLineStyle::Dotted&&p.history.undoCount()==2);command(w,"edit.undo")->trigger();REQUIRE(added(p)==line&&style->currentIndex()==1);command(w,"edit.redo")->trigger();REQUIRE(style->currentIndex()==5);
     const auto prior=added(p);const auto priorStyle=editing::decodeShapeStyle(prior.shapeJson);auto endpoint=[](const Layer& l,const editing::ShapeStyle& s){return l.transform.fromUnit({s.startX*(l.raster->width-1)/l.raster->width,s.startY*(l.raster->height-1)/l.raster->height});};const auto start=endpoint(prior,priorStyle);width->setValue(30);emit width->editingFinished();const auto changed=added(p);const auto changedStyle=editing::decodeShapeStyle(changed.shapeJson);const auto moved=endpoint(changed,changedStyle);REQUIRE(std::hypot(start.x-moved.x,start.y-moved.y)<.001);command(w,"edit.undo")->trigger();REQUIRE(added(p)==prior);
 }
+template<class T>
+QAction* barControl(MainWindow& w,T* widget){auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar&&widget);for(auto* action:bar->actions()){if(bar->widgetForAction(action)==widget)return action;if(auto* hosted=qobject_cast<QWidgetAction*>(action);hosted&&hosted->defaultWidget()==widget)return action;}throw std::runtime_error("toolbar control absent");}
+bool barCommandVisible(MainWindow& w,const char* id){auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);for(auto* action:bar->actions())if(action->property("commandId").toString()==id)return action->isVisible();throw std::runtime_error(std::string("toolbar command absent ")+id);}
+void shape_bar_limits_selected_shape(){
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});
+    REQUIRE(!barCommandVisible(w,"tool.gradient"));
+    REQUIRE(barCommandVisible(w,"tool.shape"));
+    REQUIRE(barControl(w,w.findChild<QComboBox*>("gradientShape"))->isVisible()==false);
+    REQUIRE(w.findChild<QComboBox*>("gradientStyle")->isHidden());
+    REQUIRE(w.findChild<QCheckBox*>("gradientReverse")->isHidden());
+    REQUIRE(w.findChild<QDoubleSpinBox*>("gradientOpacity")->isHidden());
+    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
+    REQUIRE(w.findChild<QComboBox*>("shapeLineStyle")->isHidden());
+    REQUIRE(w.findChild<QComboBox*>("shapeLineCap")->isHidden());
+    REQUIRE(w.findChild<QComboBox*>("cropRatioChoice")->isHidden());
+    REQUIRE(!w.findChild<QComboBox*>("shapeKind")->isHidden());
+    REQUIRE(!w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden());
+    REQUIRE(!w.findChild<QCheckBox*>("shapeSmoothing")->isHidden());
+    REQUIRE(!w.findChild<QCheckBox*>("shapeStroke")->isHidden());
+    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->isHidden());
+    REQUIRE(barControl(w,w.findChild<QPushButton*>("shapeStrokeColor"))->isVisible()==false);
+    kind(w)->setCurrentIndex(1);
+    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden()&&w.findChild<QCheckBox*>("shapeSmoothing")->isHidden());
+    REQUIRE(!w.findChild<QCheckBox*>("shapeStroke")->isHidden()&&w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
+    kind(w)->setCurrentIndex(2);
+    REQUIRE(!w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
+    REQUIRE(!w.findChild<QComboBox*>("shapeLineStyle")->isHidden()&&!w.findChild<QComboBox*>("shapeLineCap")->isHidden());
+    REQUIRE(w.findChild<QCheckBox*>("shapeStroke")->isHidden()&&w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden());
+    REQUIRE(!barCommandVisible(w,"tool.gradient"));
+    const auto shapeId=p.active;command(w,"tool.move")->trigger();
+    REQUIRE(barCommandVisible(w,"tool.gradient")&&!w.findChild<QComboBox*>("gradientShape")->isHidden());
+    p.active="top";p.selected={"top"};shapeTool(w);
+    REQUIRE(barCommandVisible(w,"tool.gradient")&&!w.findChild<QComboBox*>("gradientShape")->isHidden());
+    p.active=shapeId;p.selected={shapeId};shapeTool(w);
+    REQUIRE(!barCommandVisible(w,"tool.gradient")&&w.findChild<QComboBox*>("gradientShape")->isHidden());
+}
 void shape_background_fill_selected(){
     MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});const auto id=p.active;
     auto* stroke=w.findChild<QCheckBox*>("shapeStroke");auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");REQUIRE(stroke&&width);
@@ -181,4 +220,4 @@ void shape_background_fill_draft(){
     REQUIRE(*p.document==before&&p.history.undoCount()==count&&p.canvas->shapeDraft());
     p.canvas->pointerCancel();REQUIRE(!p.canvas->shapeDraft()&&*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FF0000");
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
