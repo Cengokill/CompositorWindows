@@ -198,6 +198,7 @@ void MainWindow::initializeProject(EditorProject&project){
         }
         view->presentWheelComposite(std::move(result.view));
     },view);
+    zoomJob->setObjectName("wheelZoomCompositeJob");
     view->requestWheelComposite=[this,owner,zoomJob,requested](NativeCanvas::ViewportBounds bounds){
         if(!bounds.valid||!owner->document)return false;
         *requested=bounds;

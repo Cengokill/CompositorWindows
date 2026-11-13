@@ -200,9 +200,8 @@ void checkFrames(bool lens,int interval){
     require(maximum==0,"A presented zoom frame differs from the synchronous render");
 
     if(lens||interval!=30)return;
-    ui::ViewportCompositeJob* zoomJob=nullptr;
-    for(auto* child:canvas.children())
-        if(auto* job=dynamic_cast<ui::ViewportCompositeJob*>(child))zoomJob=job;
+    auto* zoomJob=dynamic_cast<ui::ViewportCompositeJob*>(
+        canvas.findChild<QObject*>("wheelZoomCompositeJob",Qt::FindDirectChildrenOnly));
     require(zoomJob,"Canvas zoom worker is missing");
     auto gate=std::make_shared<std::atomic_bool>(false);
     zoomJob->setProceedGate(gate);
