@@ -1,6 +1,8 @@
 # Current checkpoint
 
-Windows version **1.5.12** was published on 2026-11-12 from `d531c0ea28d724c587fa1ae9874893405fc7d2f8`, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+Windows version **1.5.13** was published on 2026-11-14 from `ec6663214228d4e9ccf21a15ebe86511bfa5407d`, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+
+The [1.5.13 release](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.13) improves zoom and layer visibility responsiveness, reveals canvas-selected layers in the panel, and fixes shape fill, canvas selection, Hand cursors and What's New behavior. Its manifest records `sourceDirty: false`; seven portable checks and MSI ICE validation passed. All six published asset hashes match the candidate. MSI installation and upgrade were not tested in this run.
 
 The [1.5.12 release](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.12) includes Rim Light, Sharpen, layer alignment and distribution, custom crop ratios, startup update checks, and fixes for first-launch notes and layer-name clicks. Its package manifest records `sourceDirty: false`; all seven portable checks and MSI ICE validation passed. The six published asset hashes match the local candidate. MSI installation and upgrade were not tested in this run.
 
