@@ -15,6 +15,13 @@
       "sha256": "5ef2c707614b9f70b6bbadd2d4abcb4124efee215e9b16bfbc80113079a604c7",
       "directory": "wixtoolset.ui.wixext-5.0.2",
       "entry": "wixext5/WixToolset.UI.wixext.dll"
+    },
+    {
+      "url": "https://api.nuget.org/v3-flatcontainer/wixtoolset.bal.wixext/5.0.2/wixtoolset.bal.wixext.5.0.2.nupkg",
+      "archive": "wixtoolset.bal.wixext.5.0.2.nupkg",
+      "sha256": "22422b50a925477e33c2b5f78d2965a9a09c6622d17ba5aa5365b20ec662b7c8",
+      "directory": "wixtoolset.bal.wixext-5.0.2",
+      "entry": "wixext5/WixToolset.BootstrapperApplications.wixext.dll"
     }
   ],
   "license": {

@@ -69,4 +69,12 @@ if($LASTEXITCODE){throw "MSI compilation failed; see $output\installer-build.log
 # ICE91 warns about intentionally per-user payloads; all other ICEs remain enabled.
 & dotnet exec --roll-forward Major $compiler msi validate $msi -sice ICE91 -wx *> (Join-Path $output 'installer-validation.log')
 if($LASTEXITCODE){throw "MSI validation failed; see $output\installer-validation.log"}
+$bundle=Join-Path $output "CompositorWindows-$Version-setup.exe"
+if(Test-Path -LiteralPath $bundle){throw "Installer already exists: $bundle"}
+$bal=Join-Path (Join-Path $toolRoot $toolchain.assets[2].directory) $toolchain.assets[2].entry
+& dotnet exec --roll-forward Major $compiler build -arch x64 -ext $bal -wx -pdbtype none `
+    -d "Version=$Version" -d "Icon=$(Join-Path $root 'assets\app.ico')" -d "Logo=$(Join-Path $root 'assets\setup-logo.png')" -d "Msi=$msi" `
+    -intermediatefolder (Join-Path $work 'bundle') -o $bundle (Join-Path $PSScriptRoot 'Bundle.wxs') *> (Join-Path $output 'bundle-build.log')
+if($LASTEXITCODE){throw "Installer bundle compilation failed; see $output\bundle-build.log"}
 Write-Output "MSI=$msi"
+Write-Output "SETUP=$bundle"
