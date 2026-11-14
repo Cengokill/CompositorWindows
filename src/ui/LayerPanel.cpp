@@ -8,6 +8,9 @@
 #include <QComboBox>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QEasingCurve>
+#include <QVariantAnimation>
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -19,13 +22,15 @@
 #include <QLineEdit>
 #include <QStyleOptionViewItem>
 #include <QScrollBar>
+#include <QTimer>
 #include <cmath>
 #include <QSignalBlocker>
 #include <QUuid>
 #include <QWindow>
 #include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
 #ifdef Q_OS_WIN
-#include <QTimer>
 #include <windows.h>
 #endif
 
@@ -53,12 +58,38 @@ void nameLayerControls(QTreeWidgetItem& item,const Layer& layer){
 std::vector<std::string> idsOf(const QMimeData* mime){std::vector<std::string> ids;for(const auto& value:QJsonDocument::fromJson(mime->data(layerMime)).array())ids.push_back(value.toString().toStdString());return ids;}
 QTreeWidgetItem* itemWithId(QTreeWidget* tree,const std::string& id){QTreeWidgetItemIterator it(tree);while(*it){if(idOf(*it)==id)return *it;++it;}return nullptr;}
 struct Destination{std::string id;DropZone zone;};
-Destination destination(QTreeWidget* tree,const Document& d,const QPoint& point){
+struct RowGeom { std::string id; QRect rect; };
+std::vector<RowGeom> visibleRows(QTreeWidget* tree){
+    std::vector<RowGeom> rows;
+    const auto visit=[&](auto&& self,QTreeWidgetItem* item)->void{
+        if(!item||item->isHidden())return;
+        for(auto* parent=item->parent();parent;parent=parent->parent())if(parent->isHidden()||!parent->isExpanded())return;
+        const QRect rect=tree->visualItemRect(item);
+        if(rect.height()<=0)return;
+        rows.push_back({idOf(item),rect});
+        if(!item->isExpanded())return;
+        for(int i=0;i<item->childCount();++i)self(self,item->child(i));
+    };
+    for(int i=0;i<tree->topLevelItemCount();++i)visit(visit,tree->topLevelItem(i));
+    return rows;
+}
+Destination destination(QTreeWidget* tree,const Document& d,const QPoint& point,bool mask=false){
     const auto* item=tree->itemAt(point);if(!item)return {{},DropZone::Bottom};
     const auto id=idOf(item);const auto* layer=findLayer(d,id);const auto rect=tree->visualItemRect(item);
+    const auto rows=visibleRows(tree);
+    // The list can end flush with the viewport, leaving no empty band for Bottom.
+    if(!mask&&!rows.empty()&&rows.back().id==id&&point.y()>=rect.top()+rect.height()*3/4)
+        return {layer?layer->parentId:std::string{},DropZone::Bottom};
     if(layer&&layer->group&&point.y()>=rect.top()+rect.height()/4&&point.y()<rect.bottom()-rect.height()/4)return {id,DropZone::IntoGroup};
     // Every ordinary row is an insertion-above target, matching NativeLayerList.
     return {id,DropZone::Above};
+}
+int dragAnimationDuration(){
+#ifdef Q_OS_WIN
+    BOOL enabled=TRUE;
+    if(SystemParametersInfo(SPI_GETCLIENTAREAANIMATION,0,&enabled,0)&&!enabled)return 0;
+#endif
+    return 140;
 }
 
 }
@@ -105,7 +136,7 @@ layers::EditResult dropLayers(const Document& d,layers::SelectionState selection
     if(ids.empty())return {d,selection,false,"Move Layers"};
     layers::Placement placement;
     if(zone==DropZone::IntoGroup){const auto*l=findLayer(d,target);if(!l||!l->group)throw std::runtime_error("Drop target is not a group");placement.parent=target;}
-    else if(zone==DropZone::Bottom)placement.atBottom=true;
+    else if(zone==DropZone::Bottom){placement.atBottom=true;placement.parent=target;}
     else{const auto*l=findLayer(d,target);if(!l)throw std::runtime_error("Drop target no longer exists");placement.parent=l->parentId;placement.above=target;}
     for(const auto& id:ids){if(!layers::canPlace(d,id,placement.parent))throw std::runtime_error("Layer cannot be dropped here");if(copy&&findLayer(d,id)->group)throw std::runtime_error("Folder duplication is not supported by this source operation");}
     auto order=ids;if(zone==DropZone::IntoGroup)std::reverse(order.begin(),order.end());Document next=d;layers::SelectionState after=selection;
@@ -114,6 +145,18 @@ layers::EditResult dropLayers(const Document& d,layers::SelectionState selection
     const bool changed=next!=d;return {std::move(next),std::move(after),changed,copy?(ids.size()>1?"Duplicate Layers":"Duplicate Layer"):(ids.size()>1?"Move Layers":"Move Layer")};
 }
 
+class LayerDragOverlay final : public QWidget {
+public:
+    std::function<void(QPainter&)> paint;
+    explicit LayerDragOverlay(QWidget* parent):QWidget(parent){
+        setObjectName("layerDragOverlay");
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_TranslucentBackground);
+        hide();
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {QPainter painter(this);if(paint)paint(painter);}
+};
 namespace {
 class LayerRowDelegate final : public QStyledItemDelegate {
 public:
@@ -157,7 +200,30 @@ public:
     }
 };
 }
-LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(tree),tree_(tree),host_(std::move(host)),token_(QUuid::createUuid().toByteArray()),thumbnailCache_(std::make_unique<ThumbnailCache>()){
+struct LayerPanelController::DragFeedback {
+    explicit DragFeedback(LayerPanelController* owner):owner(owner){
+        animation.setEasingCurve(QEasingCurve::OutCubic);
+        scroll.setInterval(50);
+        QObject::connect(&animation,&QVariantAnimation::valueChanged,owner,[this](const QVariant& value){progress=value.toReal();if(overlay)overlay->update();});
+        QObject::connect(&scroll,&QTimer::timeout,owner,[this]{this->owner->autoScrollDrag();});
+    }
+    ~DragFeedback(){delete overlay;}
+    LayerPanelController* owner{};
+    std::optional<DropCue> cue;
+    std::unordered_map<std::string,int> targetShift,startShift;
+    std::unordered_set<std::string> dimmed;
+    std::unordered_map<std::string,QPixmap> pixmaps;
+    std::vector<std::string> ids;
+    std::string maskId;
+    QPointer<QMimeData> incomingMime;
+    Qt::KeyboardModifiers modifiers{};
+    bool session{},outline{},line{};
+    qreal progress=1;
+    QVariantAnimation animation;
+    QTimer scroll;
+    LayerDragOverlay* overlay{};
+};
+LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(tree),tree_(tree),host_(std::move(host)),token_(QUuid::createUuid().toByteArray()),thumbnailCache_(std::make_unique<ThumbnailCache>()),drag_(std::make_unique<DragFeedback>(this)){
     setObjectName("layerPanelController");tree_->setObjectName("layersTree");tree_->setColumnCount(5);tree_->setHeaderLabels({"Layer","Image","Link","Mask"});tree_->setHeaderHidden(true);tree_->setItemDelegate(new LayerRowDelegate(tree_));tree_->setIndentation(12);tree_->setTreePosition(0);tree_->setIconSize({36,36});tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);tree_->setEditTriggers(QAbstractItemView::EditKeyPressed);tree_->setSelectionBehavior(QAbstractItemView::SelectRows);tree_->setDragDropMode(QAbstractItemView::NoDragDrop);tree_->setAcceptDrops(true);tree_->viewport()->setAcceptDrops(true);tree_->viewport()->installEventFilter(this);tree_->setContextMenuPolicy(Qt::CustomContextMenu);
     tree_->header()->setStretchLastSection(false);tree_->header()->setMinimumSectionSize(12);
     tree_->header()->setSectionResizeMode(4,QHeaderView::Fixed);tree_->setColumnWidth(4,24);
@@ -175,8 +241,9 @@ LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(
     qApp->installNativeEventFilter(this);
 #endif
     installLayerAccessibility(tree_);
+    connect(tree_->verticalScrollBar(),&QAbstractSlider::valueChanged,this,[this]{if(drag_&&drag_->overlay&&drag_->overlay->isVisible())drag_->overlay->update();});
 }
-LayerPanelController::~LayerPanelController(){if(qApp)qApp->removeEventFilter(this);host_={};}
+LayerPanelController::~LayerPanelController(){drag_.reset();if(qApp)qApp->removeEventFilter(this);host_={};}
 QRect LayerPanelController::checkRect(const QTreeWidgetItem*item)const{
     if(!item)return {};
     const auto row=tree_->visualRect(tree_->indexFromItem(item,4));
@@ -352,14 +419,308 @@ void LayerPanelController::scrollSelectionToTop(){
     tree_->scrollToItem(item,QAbstractItemView::PositionAtTop);
 }
 void LayerPanelController::updateSelection(){const auto state=host_.state();const bool editable=!host_.canEdit||host_.canEdit();QSignalBlocker block(tree_);for(QTreeWidgetItemIterator it(tree_);*it;++it){auto* item=*it;auto flags=item->flags();flags.setFlag(Qt::ItemIsEditable,editable);flags.setFlag(Qt::ItemIsUserCheckable,editable);flags.setFlag(Qt::ItemIsSelectable,editable);item->setFlags(flags);const auto id=idOf(item);item->setSelected(std::find(state.selection.ids.begin(),state.selection.ids.end(),id)!=state.selection.ids.end());item->setExpanded(filtering()||!state.collapsed.contains(id));if(id==state.selection.primary){const bool autoScroll=tree_->hasAutoScroll();tree_->setAutoScroll(false);tree_->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);tree_->setAutoScroll(autoScroll);}item->setBackground(1,id==state.selection.primary&&!state.maskSelected?QBrush(QColor(85,125,165)):QBrush());item->setBackground(3,id==state.selection.primary&&state.maskSelected?QBrush(QColor(85,125,165)):QBrush());}applyFilter(state);if(auto* parent=tree_->parentWidget())if(auto* combo=parent->findChild<QComboBox*>("layerEditTarget")){QSignalBlocker comboBlock(combo);const auto*l=state.document?findLayer(*state.document,state.selection.primary):nullptr;const bool hasMask=l&&l->mask&&state.selection.ids.size()==1;combo->setVisible(hasMask);combo->setEnabled(hasMask&&(!host_.targetEnabled||host_.targetEnabled()));combo->setCurrentIndex(state.maskSelected?1:0);}}
-void LayerPanelController::rebuild(){finishMiddleScroll();rebuilding_=true;QSignalBlocker block(tree_);tree_->clear();const auto state=host_.state();if(state.document){std::unordered_map<std::string,QTreeWidgetItem*> items;for(const auto& layer:state.document->layers){auto* item=new QTreeWidgetItem({QString::fromStdString(layer.name)});item->setData(0,Qt::UserRole,QString::fromStdString(layer.id));item->setData(0,Qt::UserRole+2,layer.group?QString("Folder"):!layer.adjustmentJson.empty()?QString("Adjustment"):layer.text?QString("Text"):!layer.shapeJson.empty()?QString("Shape"):QString(layer.deep&&layer.deep->isHdr()?"HDR · %1 × %2 px":"%1 × %2 px").arg(layer.raster?layer.raster->width:int(layer.transform.width)).arg(layer.raster?layer.raster->height:int(layer.transform.height)));item->setFlags(item->flags()|Qt::ItemIsUserCheckable|Qt::ItemIsEditable);item->setCheckState(0,layer.visible?Qt::Checked:Qt::Unchecked);item->setIcon(1,thumbnail(layer,false,{double(state.document->width),double(state.document->height)}));item->setToolTip(1,"Select image; Ctrl-click selects alpha, Ctrl+Shift adds, Ctrl+Alt subtracts");if(layer.mask){item->setIcon(3,thumbnail(layer,true,{double(state.document->width),double(state.document->height)}));if(layer.mask->linked)item->setIcon(2,editorIcon(EditorIcon::Link));item->setToolTip(2,layer.mask->linked?"Unlink mask":"Link mask");item->setToolTip(3,"Select mask; Shift-click enables/disables; Ctrl-click selects black areas; Alt-drag copies mask");}if(!layer.maskSourceId.empty())item->setToolTip(0,"Clipped to "+QString::fromStdString(layer.maskSourceId));item->setSizeHint(0,{0,44});items.emplace(layer.id,item);}
+void LayerPanelController::rebuild(){clearDragFeedback();finishMiddleScroll();rebuilding_=true;QSignalBlocker block(tree_);tree_->clear();const auto state=host_.state();if(state.document){std::unordered_map<std::string,QTreeWidgetItem*> items;for(const auto& layer:state.document->layers){auto* item=new QTreeWidgetItem({QString::fromStdString(layer.name)});item->setData(0,Qt::UserRole,QString::fromStdString(layer.id));item->setData(0,Qt::UserRole+2,layer.group?QString("Folder"):!layer.adjustmentJson.empty()?QString("Adjustment"):layer.text?QString("Text"):!layer.shapeJson.empty()?QString("Shape"):QString(layer.deep&&layer.deep->isHdr()?"HDR · %1 × %2 px":"%1 × %2 px").arg(layer.raster?layer.raster->width:int(layer.transform.width)).arg(layer.raster?layer.raster->height:int(layer.transform.height)));item->setFlags(item->flags()|Qt::ItemIsUserCheckable|Qt::ItemIsEditable);item->setCheckState(0,layer.visible?Qt::Checked:Qt::Unchecked);item->setIcon(1,thumbnail(layer,false,{double(state.document->width),double(state.document->height)}));item->setToolTip(1,"Select image; Ctrl-click selects alpha, Ctrl+Shift adds, Ctrl+Alt subtracts");if(layer.mask){item->setIcon(3,thumbnail(layer,true,{double(state.document->width),double(state.document->height)}));if(layer.mask->linked)item->setIcon(2,editorIcon(EditorIcon::Link));item->setToolTip(2,layer.mask->linked?"Unlink mask":"Link mask");item->setToolTip(3,"Select mask; Shift-click enables/disables; Ctrl-click selects black areas; Alt-drag copies mask");}if(!layer.maskSourceId.empty())item->setToolTip(0,"Clipped to "+QString::fromStdString(layer.maskSourceId));item->setSizeHint(0,{0,44});items.emplace(layer.id,item);}
         for(const auto& entry:layers::entries(*state.document,true)){const auto*l=findLayer(*state.document,entry.id);auto* item=items.at(entry.id);nameLayerControls(*item,*l);if(l->parentId.empty())tree_->addTopLevelItem(item);else items.at(l->parentId)->addChild(item);item->setExpanded(!state.collapsed.contains(entry.id));if(!entry.visible)item->setForeground(0,QBrush(QColor(125,125,125)));}}
     std::erase_if(thumbnailCache_->entries,[&](const auto&entry){const auto*l=state.document?findLayer(*state.document,entry.first.first):nullptr;return !l||(entry.first.second&&!l->mask);});
     updateSelection();rebuilding_=false;updateLayerAccessibility(tree_);
 }
-QMimeData* LayerPanelController::dragMime(bool maskCopy)const{const auto state=host_.state();std::vector<std::string> ordered;if(state.document){const std::unordered_set<std::string> selected(state.selection.ids.begin(),state.selection.ids.end());for(const auto& entry:layers::entries(*state.document,true,filtering()?std::unordered_set<std::string>{}:state.collapsed))if(selected.contains(entry.id))ordered.push_back(entry.id);}QMimeData* mime=!maskCopy&&host_.dragOwner?new ProjectLayerMimeData(host_.dragOwner(),ordered):new QMimeData;mime->setData(ownerMime,token_);if(maskCopy)mime->setData(maskMime,QByteArray::fromStdString(pressId_.empty()?state.selection.primary:pressId_));else{QJsonArray ids;for(const auto&id:state.selection.ids)ids.append(QString::fromStdString(id));mime->setData(layerMime,QJsonDocument(ids).toJson(QJsonDocument::Compact));}return mime;}
-bool LayerPanelController::accepts(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers)const{if(filtering()&&!tree_->itemAt(point))return false;if(host_.canEdit&&!host_.canEdit())return false;try{const auto state=host_.state();if(!state.document||mime->data(ownerMime)!=token_)return false;if(mime->hasFormat(projectLayerMime)&&host_.dragOwner){const auto payload=projectLayerPayload(mime);if(!payload||projectLayerIdentity(host_.dragOwner())!=payload->session)return false;}const auto dest=destination(tree_,*state.document,point);if(mime->hasFormat(maskMime)){const auto* source=findLayer(*state.document,mime->data(maskMime).toStdString());const auto* target=findLayer(*state.document,dest.id);return source&&source->mask&&target&&!target->group&&source!=target;}if(!mime->hasFormat(layerMime))return false;const auto ids=idsOf(mime);if(ids.empty())return false;std::string parent;if(dest.zone==DropZone::IntoGroup)parent=dest.id;else if(dest.zone==DropZone::Above)parent=findLayer(*state.document,dest.id)->parentId;for(const auto&id:ids){const auto*l=findLayer(*state.document,id);if(!l||!layers::canPlace(*state.document,id,parent)||(modifiers.testFlag(Qt::AltModifier)&&l->group))return false;}return true;}catch(...){return false;}}
-bool LayerPanelController::performDrop(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers){if(!accepts(mime,point,modifiers))return false;bool changed=false;invoke([&]{const auto state=host_.state();const auto dest=destination(tree_,*state.document,point);auto result=mime->hasFormat(maskMime)?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id):dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier));changed=result.changed;if(changed){host_.commit(std::move(result),mime->hasFormat(maskMime));if(dest.zone==DropZone::IntoGroup)host_.collapse(dest.id,false);}});return changed;}
+QMimeData* LayerPanelController::dragMime(bool maskCopy)const{const auto state=host_.state();std::vector<std::string> ordered;if(state.document){const std::unordered_set<std::string> selected(state.selection.ids.begin(),state.selection.ids.end());for(const auto& entry:layers::entries(*state.document,true,filtering()?std::unordered_set<std::string>{}:state.collapsed))if(selected.contains(entry.id))ordered.push_back(entry.id);}QMimeData* mime=!maskCopy&&host_.dragOwner?new ProjectLayerMimeData(host_.dragOwner(),ordered):new QMimeData;if(auto* project=dynamic_cast<ProjectLayerMimeData*>(mime))project->setTransfer([document=state.document?std::optional<Document>(*state.document):std::nullopt,ordered]{return document?packageLayerTransfer(*document,ordered):QByteArray();});mime->setData(ownerMime,token_);if(maskCopy)mime->setData(maskMime,QByteArray::fromStdString(pressId_.empty()?state.selection.primary:pressId_));else{QJsonArray ids;for(const auto&id:state.selection.ids)ids.append(QString::fromStdString(id));mime->setData(layerMime,QJsonDocument(ids).toJson(QJsonDocument::Compact));}return mime;}
+bool LayerPanelController::accepts(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers)const{if(filtering()&&!tree_->itemAt(point))return false;if(host_.canEdit&&!host_.canEdit())return false;try{const auto state=host_.state();if(!state.document||mime->data(ownerMime)!=token_)return false;if(mime->hasFormat(projectLayerMime)&&host_.dragOwner){const auto payload=projectLayerPayload(mime);if(!payload||projectLayerIdentity(host_.dragOwner())!=payload->session)return false;}const auto dest=destination(tree_,*state.document,point,mime->hasFormat(maskMime));if(mime->hasFormat(maskMime)){const auto* source=findLayer(*state.document,mime->data(maskMime).toStdString());const auto* target=findLayer(*state.document,dest.id);return source&&source->mask&&target&&!target->group&&source!=target;}if(!mime->hasFormat(layerMime))return false;const auto ids=idsOf(mime);if(ids.empty())return false;std::string parent;if(dest.zone==DropZone::IntoGroup)parent=dest.id;else if(dest.zone==DropZone::Above)parent=findLayer(*state.document,dest.id)->parentId;else parent=dest.id;for(const auto&id:ids){const auto*l=findLayer(*state.document,id);if(!l||!layers::canPlace(*state.document,id,parent)||(modifiers.testFlag(Qt::AltModifier)&&l->group))return false;}return true;}catch(...){return false;}}
+bool LayerPanelController::performDrop(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers){if(!accepts(mime,point,modifiers))return false;bool changed=false;invoke([&]{const auto state=host_.state();const auto dest=destination(tree_,*state.document,point,mime->hasFormat(maskMime));auto result=mime->hasFormat(maskMime)?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id):dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier));changed=result.changed;if(changed){host_.commit(std::move(result),mime->hasFormat(maskMime));if(dest.zone==DropZone::IntoGroup)host_.collapse(dest.id,false);}});return changed;}
+std::optional<DropCue> LayerPanelController::dropCue() const {return drag_?drag_->cue:std::nullopt;}
+int LayerPanelController::layerDragShift(const std::string& id) const {
+    if(!drag_)return 0;
+    const auto it=drag_->targetShift.find(id);
+    return it==drag_->targetShift.end()?0:it->second;
+}
+int LayerPanelController::shownShift(const std::string& id) const {
+    const int target=layerDragShift(id);
+    int start=0;
+    if(drag_)if(const auto it=drag_->startShift.find(id);it!=drag_->startShift.end())start=it->second;
+    const qreal progress=drag_?drag_->progress:1;
+    return int(std::lround(start+(target-start)*progress));
+}
+void LayerPanelController::dismissDragCue(){
+    if(!drag_)return;
+    drag_->cue.reset();
+    drag_->targetShift.clear();
+    drag_->startShift.clear();
+    drag_->dimmed.clear();
+    drag_->outline=false;
+    drag_->line=false;
+    drag_->progress=1;
+    drag_->animation.stop();
+    if(drag_->overlay)drag_->overlay->hide();
+}
+void LayerPanelController::clearDragFeedback(){
+    if(!drag_)return;
+    dismissDragCue();
+    drag_->pixmaps.clear();
+    drag_->ids.clear();
+    drag_->maskId.clear();
+    drag_->incomingMime.clear();
+    drag_->session=false;
+    drag_->scroll.stop();
+}
+void LayerPanelController::cacheDragRows(){
+    if(!drag_||!drag_->overlay)return;
+    const auto rows=visibleRows(tree_);
+    const bool missing=std::any_of(rows.begin(),rows.end(),[&](const RowGeom& row){return !drag_->pixmaps.contains(row.id)&&row.rect.intersects(tree_->viewport()->rect());});
+    if(!missing)return;
+    // Hide only while grabbing, so the pixmap is the real row and not this overlay.
+    const bool shown=drag_->overlay->isVisible();
+    if(shown)drag_->overlay->hide();
+    for(const auto& row:rows){
+        if(drag_->pixmaps.contains(row.id)||!row.rect.intersects(tree_->viewport()->rect()))continue;
+        const QPixmap shot=tree_->viewport()->grab(row.rect);
+        if(!shot.isNull())drag_->pixmaps.emplace(row.id,shot);
+    }
+    if(shown)drag_->overlay->show();
+}
+void LayerPanelController::paintDragFeedback(QPainter& painter) const {
+    if(!drag_||!drag_->cue)return;
+    const auto rows=visibleRows(tree_);
+    bool havePixmap=false;
+    for(const auto& row:rows)if(drag_->pixmaps.contains(row.id))havePixmap=true;
+    if(havePixmap){
+        painter.fillRect(tree_->viewport()->rect(),tree_->palette().color(QPalette::Base));
+        for(const auto& row:rows){
+            if(drag_->dimmed.contains(row.id))continue;
+            const auto it=drag_->pixmaps.find(row.id);
+            if(it==drag_->pixmaps.end())continue;
+            painter.drawPixmap(row.rect.topLeft()+QPoint(0,shownShift(row.id)),it->second);
+        }
+        painter.save();
+        painter.setOpacity(0.4);
+        for(const auto& row:rows){
+            if(!drag_->dimmed.contains(row.id))continue;
+            const auto it=drag_->pixmaps.find(row.id);
+            if(it==drag_->pixmaps.end())continue;
+            painter.drawPixmap(row.rect.topLeft(),it->second);
+        }
+        painter.restore();
+    }
+    painter.setRenderHint(QPainter::Antialiasing);
+    if(drag_->outline){
+        const auto* item=itemWithId(tree_,drag_->cue->id);
+        if(!item)return;
+        const QRect rect=tree_->visualItemRect(item).translated(0,shownShift(drag_->cue->id));
+        painter.setPen(QPen(QColor("#72aafa"),2));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(QRectF(rect).adjusted(1,1,-1,-1),4,4);
+        return;
+    }
+    if(!drag_->line)return;
+    int y=0;
+    bool found=false;
+    if(drag_->cue->zone==DropZone::Above){
+        for(const auto& row:rows)if(row.id==drag_->cue->id){y=row.rect.top()+shownShift(row.id);found=true;break;}
+    }else{
+        for(const auto& row:rows)if(!drag_->dimmed.contains(row.id)){y=row.rect.top()+shownShift(row.id)+row.rect.height();found=true;}
+        if(!found&&!rows.empty()){y=rows.front().rect.top();found=true;}
+    }
+    if(!found)return;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor("#72aafa"));
+    painter.drawRect(8,y-1,std::max(0,tree_->viewport()->width()-16),2);
+}
+void LayerPanelController::autoScrollDrag(){
+    if(!drag_||!drag_->session){if(drag_)drag_->scroll.stop();return;}
+    const QPoint point=tree_->viewport()->mapFromGlobal(QCursor::pos());
+    const int height=tree_->viewport()->height();
+    const bool above=point.y()<24,below=point.y()>=height-24;
+    if(!above&&!below){drag_->scroll.stop();return;}
+    auto* bar=tree_->verticalScrollBar();
+    bar->setValue(std::clamp(bar->value()+(above?-16:16),bar->minimum(),bar->maximum()));
+    if(!tree_->viewport()->rect().contains(point))return;
+    if(drag_->incomingMime){updateDragFeedback(drag_->incomingMime,point,drag_->modifiers,true);return;}
+    QMimeData mime;
+    mime.setData(ownerMime,token_);
+    if(!drag_->maskId.empty())mime.setData(maskMime,QByteArray::fromStdString(drag_->maskId));
+    else{
+        QJsonArray ids;
+        for(const auto& id:drag_->ids)ids.append(QString::fromStdString(id));
+        mime.setData(layerMime,QJsonDocument(ids).toJson(QJsonDocument::Compact));
+    }
+    updateDragFeedback(&mime,point,drag_->modifiers);
+}
+bool LayerPanelController::incomingLayerDrag(const QMimeData* mime) const {
+    if(!mime||!mime->hasFormat(projectLayerMime))return false;
+    const auto payload=projectLayerPayload(mime);if(!payload)return false;
+    auto* owner=host_.dragOwner?host_.dragOwner():nullptr;
+    return !owner||projectLayerIdentity(owner)!=payload->session;
+}
+void LayerPanelController::updateDragFeedback(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers,bool incoming){
+    // QDrag::exec blocks ordinary mouse moves. The tree and document stay put;
+    // this overlay only paints the gap the existing drop would open.
+    if(!drag_||!mime||(!incoming&&mime->data(ownerMime)!=token_)){clearDragFeedback();return;}
+    drag_->session=true;
+    drag_->incomingMime=incoming?const_cast<QMimeData*>(mime):nullptr;
+    drag_->modifiers=modifiers;
+    if(mime->hasFormat(maskMime)){drag_->maskId=mime->data(maskMime).toStdString();drag_->ids.clear();}
+    else{drag_->maskId.clear();drag_->ids=mime->hasFormat(layerMime)?idsOf(mime):std::vector<std::string>{};}
+    const bool edge=point.y()<24||point.y()>=tree_->viewport()->height()-24;
+    if(edge){if(!drag_->scroll.isActive())drag_->scroll.start();}
+    else drag_->scroll.stop();
+    bool changed=false;
+    Destination dest{{},DropZone::Bottom};
+    int incomingRows=0;
+    if(incoming){
+        const auto payload=projectLayerPayload(mime);
+        incomingRows=std::clamp(payload?int(payload->ids.size()):1,1,3);
+        if(host_.state&&host_.state().document)dest=destination(tree_,*host_.state().document,point);
+        changed=true;
+    }else if(accepts(mime,point,modifiers)){
+        try{
+            const auto state=host_.state();
+            if(state.document){
+                dest=destination(tree_,*state.document,point,mime->hasFormat(maskMime));
+                changed=mime->hasFormat(maskMime)
+                    ?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id).changed
+                    :dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier)).changed;
+            }
+        }catch(...){changed=false;}
+    }
+    if(!changed){dismissDragCue();return;}
+    const bool mask=!incoming&&mime->hasFormat(maskMime);
+    const bool copy=incoming||modifiers.testFlag(Qt::AltModifier);
+    const auto rows=visibleRows(tree_);
+    std::unordered_set<std::string> carried,roots,block;
+    if(!mask&&host_.state&&host_.state().document){
+        const auto& document=*host_.state().document;
+        for(const auto& id:drag_->ids){const auto kids=layers::descendants(document,id);carried.insert(kids.begin(),kids.end());}
+        for(const auto& id:drag_->ids)if(!carried.contains(id))roots.insert(id);
+        for(const auto& id:roots){
+            block.insert(id);
+            if(!copy){const auto kids=layers::descendants(document,id);block.insert(kids.begin(),kids.end());}
+        }
+    }
+    const bool slide=!mask&&dest.zone!=DropZone::IntoGroup;
+    std::unordered_set<std::string> dimmed;
+    if(!mask&&!copy)for(const auto& row:rows)if(block.contains(row.id))dimmed.insert(row.id);
+    std::vector<RowGeom> stay;
+    for(const auto& row:rows)if(copy||mask||!block.contains(row.id))stay.push_back(row);
+    int insertion=int(stay.size());
+    if(dest.zone==DropZone::Above){
+        int targetTop=0;
+        for(const auto& row:rows)if(row.id==dest.id)targetTop=row.rect.top();
+        auto it=std::find_if(stay.begin(),stay.end(),[&](const RowGeom& row){return row.id==dest.id;});
+        if(it!=stay.end())insertion=int(it-stay.begin());
+        else insertion=int(std::count_if(stay.begin(),stay.end(),[&](const RowGeom& row){return row.rect.top()<targetTop;}));
+    }
+    int blockHeight=0;
+    for(const auto& row:rows)if(block.contains(row.id))blockHeight+=row.rect.height();
+    if(incoming)blockHeight=(rows.empty()?44:rows.front().rect.height())*incomingRows;
+    if(blockHeight<1)blockHeight=rows.empty()?44:rows.front().rect.height();
+    std::unordered_map<std::string,int> nextTarget;
+    if(slide&&!rows.empty()){
+        int cursor=rows.front().rect.top();
+        for(int i=0;i<int(stay.size());++i){
+            if(i==insertion)cursor+=blockHeight;
+            nextTarget[stay[i].id]=cursor-stay[i].rect.top();
+            cursor+=stay[i].rect.height();
+        }
+    }
+    std::unordered_map<std::string,int> nextStart;
+    if(nextTarget!=drag_->targetShift){
+        for(const auto& [id,value]:nextTarget){static_cast<void>(value);nextStart[id]=shownShift(id);}
+        drag_->startShift=std::move(nextStart);
+        drag_->targetShift=std::move(nextTarget);
+        drag_->animation.stop();
+        const int duration=dragAnimationDuration();
+        if(duration<=0)drag_->progress=1;
+        else{drag_->progress=0;drag_->animation.setStartValue(0.0);drag_->animation.setEndValue(1.0);drag_->animation.setDuration(duration);drag_->animation.start();}
+    }
+    drag_->dimmed=std::move(dimmed);
+    drag_->cue=DropCue{dest.id,dest.zone};
+    drag_->outline=mask||dest.zone==DropZone::IntoGroup;
+    drag_->line=!drag_->outline;
+    if(!drag_->overlay){
+        drag_->overlay=new LayerDragOverlay(tree_->viewport());
+        drag_->overlay->paint=[this](QPainter& painter){paintDragFeedback(painter);};
+    }
+    cacheDragRows();
+    drag_->overlay->setGeometry(tree_->viewport()->rect());
+    drag_->overlay->raise();
+    drag_->overlay->show();
+    drag_->overlay->update();
+}
+void LayerPanelController::armDragGhost(QDrag& drag,bool maskCopy) const {
+    const qreal dpr=std::max<qreal>(1,tree_->viewport()->devicePixelRatioF());
+    auto publish=[&](const QPixmap& composite,QSize logical,QPoint hotspot,const QString& badge){
+        if(composite.isNull()||logical.isEmpty())return;
+        qreal fit=1;
+        if(logical.width()>320)fit=std::min(fit,320./logical.width());
+        if(logical.height()>150)fit=std::min(fit,150./logical.height());
+        const QSize scaled(std::max(1,int(std::lround(logical.width()*fit))),std::max(1,int(std::lround(logical.height()*fit))));
+        QPixmap image(std::max(1,int(std::lround(scaled.width()*dpr))),std::max(1,int(std::lround(scaled.height()*dpr))));
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawPixmap(QRect(QPoint(0,0),scaled),composite);
+        if(!badge.isEmpty()){
+            painter.setOpacity(1);
+            auto font=painter.font();font.setPixelSize(11);font.setBold(true);painter.setFont(font);
+            const int badgeWidth=std::max(18,painter.fontMetrics().horizontalAdvance(badge)+8);
+            const QRect badgeRect(scaled.width()-badgeWidth-4,std::max(0,scaled.height()-22),badgeWidth,18);
+            painter.setPen(Qt::NoPen);painter.setBrush(QColor("#72aafa"));painter.drawRoundedRect(badgeRect,4,4);
+            painter.setPen(Qt::white);painter.drawText(badgeRect,Qt::AlignCenter,badge);
+        }
+        hotspot=QPoint(std::clamp(int(std::lround(hotspot.x()*fit)),0,std::max(0,scaled.width()-1)),std::clamp(int(std::lround(hotspot.y()*fit)),0,std::max(0,scaled.height()-1)));
+        drag.setPixmap(image);
+        drag.setHotSpot(hotspot);
+    };
+    if(maskCopy){
+        auto* item=itemWithId(tree_,pressId_);
+        if(!item)return;
+        const QRect row=tree_->visualItemRect(item);
+        const QRect cell(tree_->columnViewportPosition(3),row.top(),tree_->columnWidth(3),row.height());
+        const QPixmap shot=tree_->viewport()->grab(cell);
+        if(shot.isNull())return;
+        QPixmap faded(shot.size());
+        faded.setDevicePixelRatio(shot.devicePixelRatio());
+        faded.fill(Qt::transparent);
+        QPainter painter(&faded);
+        painter.setOpacity(0.72);
+        painter.drawPixmap(0,0,shot);
+        publish(faded,cell.size(),press_-cell.topLeft(),{});
+        return;
+    }
+    const auto state=host_.state();
+    std::vector<std::string> ordered;
+    if(state.document){
+        const std::unordered_set<std::string> selected(state.selection.ids.begin(),state.selection.ids.end());
+        for(const auto& entry:layers::entries(*state.document,true,filtering()?std::unordered_set<std::string>{}:state.collapsed))
+            if(selected.contains(entry.id))ordered.push_back(entry.id);
+    }
+    struct Part { QPixmap pixmap; QRect rect; int y; std::string id; };
+    std::vector<Part> parts;
+    int width=0,total=0;
+    for(const auto& id:ordered){
+        if(parts.size()==3)break;
+        auto* item=itemWithId(tree_,id);
+        if(!item)continue;
+        const QRect rect=tree_->visualItemRect(item);
+        if(!rect.intersects(tree_->viewport()->rect()))continue;
+        const QPixmap shot=tree_->viewport()->grab(rect);
+        if(shot.isNull())continue;
+        parts.push_back({shot,rect,total,id});
+        total+=rect.height();
+        width=std::max(width,rect.width());
+    }
+    if(parts.empty()||width<1||total<1)return;
+    QPixmap composite(std::max(1,int(std::lround(width*dpr))),std::max(1,int(std::lround(total*dpr))));
+    composite.setDevicePixelRatio(dpr);
+    composite.fill(Qt::transparent);
+    QPainter painter(&composite);
+    painter.setOpacity(0.72);
+    for(const auto& part:parts)painter.drawPixmap(QRect(0,part.y,part.rect.width(),part.rect.height()),part.pixmap);
+    QPoint hotspot(width/2,std::min(12,total/2));
+    for(const auto& part:parts)if(part.id==pressId_)hotspot=QPoint(press_.x()-part.rect.left(),press_.y()-part.rect.top()+part.y);
+    const QString badge=int(ordered.size())>int(parts.size())?QString::number(int(ordered.size())):QString{};
+    publish(composite,QSize(width,total),hotspot,badge);
+}
 
 bool LayerPanelController::eventFilter(QObject* watched,QEvent* event){
     auto* viewport=tree_->viewport();
@@ -487,9 +848,29 @@ bool LayerPanelController::eventFilter(QObject* watched,QEvent* event){
             return true;
         }
     }
-    if(event->type()==QEvent::DragEnter||event->type()==QEvent::DragMove){auto* e=static_cast<QDragMoveEvent*>(event);if(accepts(e->mimeData(),e->position().toPoint(),e->modifiers())){e->setDropAction(e->mimeData()->hasFormat(maskMime)||e->modifiers().testFlag(Qt::AltModifier)?Qt::CopyAction:Qt::MoveAction);e->accept();}else e->ignore();return true;}
-    if(event->type()==QEvent::Drop){auto* e=static_cast<QDropEvent*>(event);if(performDrop(e->mimeData(),e->position().toPoint(),e->modifiers())){e->setDropAction(e->mimeData()->hasFormat(maskMime)||e->modifiers().testFlag(Qt::AltModifier)?Qt::CopyAction:Qt::MoveAction);e->accept();}else e->ignore();return true;}
-    if(event->type()==QEvent::DragLeave){event->accept();return true;}
+    if(event->type()==QEvent::Resize&&drag_&&drag_->overlay)drag_->overlay->setGeometry(tree_->viewport()->rect());
+    if(event->type()==QEvent::DragEnter||event->type()==QEvent::DragMove||event->type()==QEvent::Drop){
+        auto* e=static_cast<QDropEvent*>(event);const auto point=e->position().toPoint();const auto* mime=e->mimeData();
+        if(incomingLayerDrag(mime)){
+            const bool dropped=event->type()==QEvent::Drop;
+            Destination dest{{},DropZone::Bottom};
+            if(host_.state&&host_.state().document)dest=destination(tree_,*host_.state().document,point);
+            const bool allowed=host_.incomingLayerDrop&&host_.incomingLayerDrop(mime,dest.id,dest.zone,dropped);
+            if(dropped)clearDragFeedback();
+            else if(allowed)updateDragFeedback(mime,point,e->modifiers(),true);
+            else dismissDragCue();
+            if(auto* move=dynamic_cast<QDragMoveEvent*>(e)){
+                if(allowed)move->setDropAction(Qt::CopyAction);
+                else move->setDropAction(Qt::IgnoreAction);
+                move->accept(QRect(point,QSize(1,1)));
+            }else if(allowed){e->setDropAction(Qt::CopyAction);e->accept();}
+            else e->ignore();
+            return true;
+        }
+    }
+    if(event->type()==QEvent::DragEnter||event->type()==QEvent::DragMove){auto* e=static_cast<QDragMoveEvent*>(event);const auto point=e->position().toPoint();updateDragFeedback(e->mimeData(),point,e->modifiers());if(accepts(e->mimeData(),point,e->modifiers())){e->setDropAction(e->mimeData()->hasFormat(maskMime)||e->modifiers().testFlag(Qt::AltModifier)?Qt::CopyAction:Qt::MoveAction);e->accept();}else e->ignore();return true;}
+    if(event->type()==QEvent::Drop){auto* e=static_cast<QDropEvent*>(event);clearDragFeedback();if(performDrop(e->mimeData(),e->position().toPoint(),e->modifiers())){e->setDropAction(e->mimeData()->hasFormat(maskMime)||e->modifiers().testFlag(Qt::AltModifier)?Qt::CopyAction:Qt::MoveAction);e->accept();}else e->ignore();return true;}
+    if(event->type()==QEvent::DragLeave){clearDragFeedback();event->accept();return true;}
     if(event->type()==QEvent::MouseButtonPress){auto* e=static_cast<QMouseEvent*>(event);if(e->button()!=Qt::LeftButton)return false;auto* item=tree_->itemAt(e->position().toPoint());if(!item)return false;press_=e->position().toPoint();pressId_=idOf(item);pressColumn_=tree_->columnAt(press_.x());pressModifiers_=e->modifiers();pressed_=true;dragging_=false;deferSingle_=false;const auto state=host_.state();const auto*l=state.document?findLayer(*state.document,pressId_):nullptr;if(!l)return false;const auto id=pressId_;const bool mask=pressColumn_==3&&l->mask.has_value();
         if((pressColumn_==1||mask)&&e->modifiers().testFlag(Qt::ControlModifier)){pressed_=false;invoke([&]{host_.loadSelection(id,mask,e->modifiers());});return true;}
         if(pressColumn_==2&&l->mask){pressed_=false;invoke([&]{host_.commit(editMask(*state.document,state.selection,id,MaskCommand::ToggleLink),state.maskSelected);});return true;}
@@ -499,7 +880,7 @@ bool LayerPanelController::eventFilter(QObject* watched,QEvent* event){
         if((pressColumn_==1||mask)&&!e->modifiers().testFlag(Qt::ShiftModifier)){if(host_.selectTarget)invokeActionControl(id,mask?LayerControlKind::Mask:LayerControlKind::Image);else invoke([&]{host_.select({{id},id},mask);});return true;}
         if(state.selection.ids.size()>1&&item->isSelected()&&!(e->modifiers()&(Qt::ControlModifier|Qt::ShiftModifier))){deferSingle_=true;return true;}
     }
-    if(event->type()==QEvent::MouseMove&&pressed_){auto* e=static_cast<QMouseEvent*>(event);if((e->buttons()&Qt::LeftButton)&&(e->position().toPoint()-press_).manhattanLength()>=QApplication::startDragDistance()){pressed_=false;if(filtering()&&hasHiddenSelection())return true;dragging_=true;QDrag drag(tree_);drag.setMimeData(dragMime(pressColumn_==3&&pressModifiers_.testFlag(Qt::AltModifier)));drag.exec(Qt::MoveAction|Qt::CopyAction,pressModifiers_.testFlag(Qt::AltModifier)?Qt::CopyAction:Qt::MoveAction);dragging_=false;return true;}}
+    if(event->type()==QEvent::MouseMove&&pressed_){auto* e=static_cast<QMouseEvent*>(event);if((e->buttons()&Qt::LeftButton)&&(e->position().toPoint()-press_).manhattanLength()>=QApplication::startDragDistance()){pressed_=false;if(filtering()&&hasHiddenSelection())return true;dragging_=true;const bool maskCopy=pressColumn_==3&&pressModifiers_.testFlag(Qt::AltModifier);QDrag drag(tree_);drag.setMimeData(dragMime(maskCopy));armDragGhost(drag,maskCopy);drag.exec(Qt::MoveAction|Qt::CopyAction,pressModifiers_.testFlag(Qt::AltModifier)?Qt::CopyAction:Qt::MoveAction);dragging_=false;clearDragFeedback();return true;}}
     if(event->type()==QEvent::MouseButtonRelease&&pressed_){pressed_=false;const auto id=pressId_;if(deferSingle_||(pressColumn_==3&&pressModifiers_.testFlag(Qt::AltModifier))){invoke([&]{host_.select({{id},id},pressColumn_==3);});return true;}}
     return QObject::eventFilter(watched,event);
 }

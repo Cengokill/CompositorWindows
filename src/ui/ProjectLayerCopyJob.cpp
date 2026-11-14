@@ -2,6 +2,7 @@
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
+#include <algorithm>
 #include <atomic>
 #include <stdexcept>
 
@@ -34,8 +35,8 @@ void ProjectLayerCopyJob::advance(){
     while(state.next<state.ids.size()){
         try{
             state.work=state.host.prepare(state.ids[state.next++]);if(!state.work)continue;
-            auto source=state.work->source,destination=state.work->destination;auto root=state.work->root;const auto point=state.work->point;auto cancelled=state.cancelled;
-            state.watcher.setFuture(QtConcurrent::run([source=std::move(source),destination=std::move(destination),root=std::move(root),point,cancelled]{Impl::Result result;try{layers::Limits limits;limits.cancelled=[cancelled]{return cancelled->load();};result.value=std::make_shared<layers::CopyResult>(layers::copySubtree(source,root,destination,point,limits));}catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}return result;}));
+            auto source=state.work->source,destination=state.work->destination;auto root=state.work->root;auto roots=state.work->listRoots;const auto point=state.work->point;const auto placement=state.work->listPlacement;auto cancelled=state.cancelled;
+            state.watcher.setFuture(QtConcurrent::run([source=std::move(source),destination=std::move(destination),root=std::move(root),roots=std::move(roots),point,placement,cancelled]() mutable {Impl::Result result;try{layers::Limits limits;limits.cancelled=[cancelled]{return cancelled->load();};if(!placement){result.value=std::make_shared<layers::CopyResult>(layers::copySubtree(source,root,destination,point,limits));return result;}if(!placement->atBottom&&placement->above.empty())std::reverse(roots.begin(),roots.end());layers::CopyResult combined;std::vector<std::string> selected;for(const auto& id:roots){const auto it=std::find_if(source.layers.begin(),source.layers.end(),[&](const Layer& layer){return layer.id==id;});if(it==source.layers.end())throw std::runtime_error("Dragged layer no longer exists");auto copied=layers::copySubtree(source,id,destination,it->transform.fromUnit({.5,.5}),limits);const auto newId=copied.ids.at(id);auto placed=layers::place(copied.edit.document,{},newId,*placement);destination=std::move(placed.document);selected.push_back(newId);combined.ids.insert(copied.ids.begin(),copied.ids.end());}if(selected.empty())throw std::runtime_error("No layers to copy");combined.edit={std::move(destination),{selected,selected.back()},true,"Copy Layers from Project"};result.value=std::make_shared<layers::CopyResult>(std::move(combined));}catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}return result;}));
             return;
         }catch(const std::exception& error){if(state.work){state.host.settled(*state.work);state.work.reset();}QPointer<ProjectLayerCopyJob> alive=this;state.host.error(QString::fromUtf8(error.what()));if(!alive)return;}
     }

@@ -169,7 +169,7 @@ void MainWindow::initializeProject(EditorProject&project){
         if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
         button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));
         if(button->defaultAction())connect(button->defaultAction(),&QAction::changed,button,[button]{button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));});
-        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");tabs_->setCornerWidget(corner,Qt::TopRightCorner);
+        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");corner->setAcceptDrops(true);button->setAcceptDrops(true);tabs_->setCornerWidget(corner,Qt::TopRightCorner);
     }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;

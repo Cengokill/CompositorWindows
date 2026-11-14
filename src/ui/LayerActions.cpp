@@ -12,6 +12,8 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QTimer>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -158,6 +160,22 @@ void MainWindow::setupLayerActions(){
     action(menu,"Convert HDR to 16-Bit…",{},[this]{layerCommand(14);});
     ui::LayerPanelController::Host host;
     host.dragOwner=[this]()->QObject*{auto*p=current();return p?p->canvas:nullptr;};
+    host.deliverExternalDrop=[this](const QMimeData* mime,QPoint global,Qt::KeyboardModifiers modifiers,bool drop){
+        const QPoint where=mapFromGlobal(global);
+        if(!drop){QDragMoveEvent event(where,Qt::CopyAction|Qt::MoveAction,mime,Qt::LeftButton,modifiers);acceptWorkspaceDrag(&event,where);return event.isAccepted();}
+        QDropEvent event(where,Qt::CopyAction|Qt::MoveAction,mime,Qt::LeftButton,modifiers);dropEvent(&event);return event.isAccepted();
+    };
+    host.incomingLayerDrop=[this](const QMimeData* mime,const std::string& target,ui::DropZone zone,bool perform){
+        if(!canAcceptIncomingLayer(mime))return false;
+        if(!perform)return true;
+        layers::Placement placement;
+        const auto& layers=current()->document->layers;
+        const auto found=std::find_if(layers.begin(),layers.end(),[&](const Layer& layer){return layer.id==target;});
+        if(zone==ui::DropZone::IntoGroup){if(found==layers.end()||!found->group)return false;placement.parent=target;}
+        else if(zone==ui::DropZone::Above&&found!=layers.end()){placement.parent=found->parentId;placement.above=target;}
+        else{placement.atBottom=true;placement.parent=target;}
+        return receiveLayerDrop(mime,{},{},&placement);
+    };
     host.prepare=[this]{if(refreshing_)return;applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();finishOpacityEdit();pointerCancel();};
     host.state=[this]{auto*p=current();return ui::PanelState{p&&p->document?&*p->document:nullptr,layerSelection(),p&&p->maskSelected,p?p->collapsedGroups:std::unordered_set<std::string>{}};};
     host.select=[this](layers::SelectionState selection,bool mask){auto*p=current();if(refreshing_||!p||!p->document||p->importing||p->projectBusy||selection.ids.empty())return;selection=layers::normalizeSelection(*p->document,std::move(selection));p->active=selection.primary;p->selected=selection.ids;p->maskSelected=mask&&selection.ids.size()==1&&active()&&active()->mask.has_value();refresh(false,false);if(auto*c=ui::LayerPanelController::find(layers_))c->updateSelection();};

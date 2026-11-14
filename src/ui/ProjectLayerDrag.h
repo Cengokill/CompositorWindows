@@ -2,15 +2,18 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include "core/Document.h"
 #include <QMimeData>
 #include <QPointer>
 #include <QUuid>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace compositor::ui {
 inline constexpr auto projectLayerMime="application/x-compositor-project-layers";
+inline constexpr auto layerTransferMime="application/x-compositor-layer-transfer";
 inline constexpr auto projectLayerIdentityProperty="compositorDragSession";
 inline QString projectLayerIdentity(QObject* owner){return owner?owner->property(projectLayerIdentityProperty).toString():QString{};}
 struct ProjectLayerPayload{QString session;std::vector<std::string> ids;QPointer<QObject> owner;bool scoped{};};
@@ -23,7 +26,17 @@ public:
         QJsonArray rows;for(const auto& id:ids)rows.append(QString::fromStdString(id));
         setData(projectLayerMime,QJsonDocument(QJsonObject{{"session",token},{"layers",rows}}).toJson(QJsonDocument::Compact));
     }
+    void setTransfer(std::function<QByteArray()> transfer){transfer_=std::move(transfer);}
+    QStringList formats() const override;
+    bool hasFormat(const QString& mimeType) const override;
+protected:
+    QVariant retrieveData(const QString& mimeType,QMetaType preferredType) const override;
+private:
+    std::function<QByteArray()> transfer_;
 };
+struct LayerTransfer { Document document; std::vector<std::string> roots; };
+QByteArray packageLayerTransfer(const Document&,const std::vector<std::string>& roots);
+std::optional<LayerTransfer> documentFromLayerTransfer(const QByteArray&);
 inline std::optional<ProjectLayerPayload> projectLayerPayload(const QMimeData* mime){
     if(!mime||!mime->hasFormat(projectLayerMime))return {};
     const auto bytes=mime->data(projectLayerMime);if(bytes.size()>2*1024*1024)return {};
