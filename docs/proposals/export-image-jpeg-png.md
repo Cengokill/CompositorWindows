@@ -11,6 +11,7 @@ Provide understandable JPEG quality and encoding choices, plus PNG transparency 
 - JPEG: retain the existing 0–100 quality setting and its saved value. Offer Standard, Optimized and Progressive encoding as mutually exclusive choices, with a short explanation of progressive loading. Use Standard by default for compatibility. Do not label this scale Photoshop's 0–12 scale or claim equivalent output.
 - PNG: offer an interlace checkbox and a transparency choice for ordinary PNG exports. Default to existing alpha-preserving, non-interlaced behavior. Flatten against the selected background when transparency is disabled. Keep Channel Pack's exact channel values independent of these controls.
 - Avoid PNG-8 quantization in this change: it changes colors and alpha and requires its own palette, preview and quality design. Keep dimensions, format, RGB/CMYK selection and existing controls intact.
+- For every export format, display the actual encoded file size in decimal megabytes (1,000,000 bytes), with the requested label `Mb`: for example `1.23 Mb`. Show nonzero sizes below 0.01 Mb as `< 0.01 Mb` so they do not appear empty. The label is a product choice here and denotes megabytes, not megabits.
 - Changing any applicable setting cancels or supersedes the current job and regenerates both the preview and actual encoded size. Only the latest completed file can be saved. Hide settings for unrelated formats and preserve the existing project and history.
 
 ## Encoder selection and feasibility gate
@@ -33,5 +34,6 @@ For PNG, first evaluate WIC interlace support and its buffering and cancellation
 
 - Decode exports with independent tools; inspect JPEG frame markers and scan structure for each selected mode and verify PNG interlace metadata. Check ICC and DPI, RGB and CMYK, alpha and matte pixels, and color consistency with the existing WIC output.
 - Exercise zero and maximum JPEG quality, detailed and flat images, transparent edges, large documents, all modes, format switching, rapid repeated changes, cancellation and errors. Confirm old destinations remain recoverable and no stale preview is saved.
+- Verify the size label for every export format against the actual prepared file, including a file smaller than 0.01 Mb and rounding boundaries; ensure it updates after settings change and always uses `Mb`.
 - Exercise the actual Export Image dialog, including visibility, quality preference migration, latest generation, actual saved bytes and unchanged document/history. Retain Channel Pack's exact channel semantics.
 - Run affected existing imaging, CMYK and export-stream CTest targets and meaningful regressions on Windows; report commands and results. Measure memory and time for the progressive path at representative and maximum supported sizes, and document any explicit restrictions.
