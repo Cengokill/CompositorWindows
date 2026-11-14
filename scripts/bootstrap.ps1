@@ -7,6 +7,13 @@ if (-not $taskVS) { throw 'Install Visual Studio 2022 C++ x64 tools and Windows 
 & (Join-Path $taskVS 'Common7\Tools\Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { $env:PATH = "$taskVS\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:PATH" }
 $taskLock = Get-Content (Join-Path $taskRoot 'dependencies.lock.json') -Raw | ConvertFrom-Json
+$taskJpegArchive=Join-Path $taskRoot 'dependencies/downloads/libjpeg-turbo-3.2.1.tar.gz'
+if(-not (Test-Path -LiteralPath $taskJpegArchive)){
+    if($Offline){throw "Locked libjpeg-turbo archive missing: $taskJpegArchive"}
+    New-Item -ItemType Directory -Force (Split-Path $taskJpegArchive -Parent) | Out-Null
+    Invoke-WebRequest -Uri $taskLock.libjpeg_turbo.url -OutFile $taskJpegArchive
+}
+if((Get-FileHash -LiteralPath $taskJpegArchive -Algorithm SHA256).Hash -ine $taskLock.libjpeg_turbo.sha256){throw 'libjpeg-turbo source checksum mismatch'}
 foreach($taskHdrName in @('imath','openexr','libdeflate')){
     $taskHdrAsset=$taskLock.hdr.$taskHdrName
     $taskHdrArchive=Join-Path $taskRoot "dependencies/downloads/hdr/$taskHdrName.tar.gz"

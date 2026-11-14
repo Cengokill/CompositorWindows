@@ -55,7 +55,7 @@ bool flatDeepExport(const Document& document) {
     }
     return anyDeep;
 }
-std::shared_ptr<const DeepImage> flattenDeep(const Document& document, const imaging::ExportOptions& options) {
+std::shared_ptr<DeepImage> flattenDeep(const Document& document, const imaging::ExportOptions& options) {
     auto image = std::make_shared<DeepImage>();
     image->width = document.width; image->height = document.height;
     image->samples.assign(std::size_t(document.width) * std::size_t(document.height) * 4, 0);
@@ -138,8 +138,13 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
     }
     const bool deepPng = options.format == imaging::ImageFormat::Png && flatDeepExport(document);
     if (deepPng) {
+        if(options.pngInterlaced&&std::uint64_t(document.width)*document.height*8>512ULL*1024*1024)throw std::invalid_argument("16-bit interlaced PNG exceeds the 512 MiB encoder image budget for this canvas.");
         auto flat = flattenDeep(document, options);
-        imaging::WicCodec::encodeProjectDeepPng(path, *flat);
+        if(!options.pngTransparency){
+            const std::uint16_t matte[]{promote8(options.matteR),promote8(options.matteG),promote8(options.matteB)};
+            for(int y=0;y<flat->height;++y){if(options.cancelled&&options.cancelled())throw imaging::ExportCancelled();for(int x=0;x<flat->width;++x){auto* pixel=flat->at(x,y);const auto inverse=65535u-pixel[3];for(int c=0;c<3;++c)pixel[c]=std::uint16_t(std::min(65535u,unsigned(pixel[c])+(unsigned(matte[c])*inverse+32767u)/65535u));pixel[3]=65535;}}
+        }
+        imaging::WicCodec::encodeProjectDeepPng(path, *flat,&options);
         if (progress) progress(std::uint32_t(document.height), std::uint32_t(document.height));
         imaging::StreamingExportResult result;
         result.encodedBytes = std::filesystem::file_size(path);

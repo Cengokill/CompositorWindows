@@ -74,10 +74,13 @@ struct DecodedImage { RgbaImage image; ImageMetadata metadata; std::shared_ptr<c
 struct RawDevelopment { DecodedImage image; RawCapabilities capabilities; RawAsShot asShot; };
 // Pdf is written only by the streaming document export (encodePdfAtomic); WicCodec has no PDF encoder.
 enum class ImageFormat { Png, Jpeg, Tiff, Pdf, Exr };
+enum class JpegMode { Standard, Optimized, Progressive };
 struct ExportOptions {
     ImageFormat format{ImageFormat::Png};
     double dpi{72},jpegQuality{0.85};
     std::uint8_t matteR{255},matteG{255},matteB{255};
+    bool pngTransparency{true},pngInterlaced{false};
+    JpegMode jpegMode{JpegMode::Standard};
     // PDF only: resamples the flattened canvas, keeping dpi, so the printed page scales with it.
     double scale{1.0};
     std::function<bool()> cancelled;
