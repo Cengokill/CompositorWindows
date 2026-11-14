@@ -1,3 +1,22 @@
+# Compositor Windows 1.5.13
+
+## Performance
+
+- Zoom more responsively with Alt+wheel, while the last rendered view stays visible until the new view is ready.
+- Toggle layer visibility more responsively, including in multi-layer documents.
+
+## New features and improvements
+
+- Select a layer on the canvas with Move to reveal its row in Layers and expand its parent folders. An active search can still hide the row.
+- Change a selected shape's fill with Background Color when the Shape tool is active. The options bar shows controls relevant to the selected shape.
+- Reopen these notes from **Help > What's New**.
+
+## Fixes
+
+- Auto-select chooses the visible layer under the pointer even inside the current layer's transform bounds.
+- The Hand tool shows an open hand at rest and a closed hand while dragging.
+- Reading notes in a development build no longer marks the stable package's notes as read.
+
 # Compositor Windows 1.5.12
 
 ## New features
