@@ -1,12 +1,9 @@
 # Compositor Windows 1.5.13
 
-## Performance
+## New features
 
-- Zoom more responsively with Alt+wheel, while the last rendered view stays visible until the new view is ready.
-- Toggle layer visibility more responsively, including in multi-layer documents.
-
-## New features and improvements
-
+- **Faster zoom.** Zoom more responsively with Alt+wheel, while the last rendered view stays visible until the new view is ready.
+- **Faster layer visibility.** Toggle layers more responsively, including in multi-layer documents.
 - Select a layer on the canvas with Move to reveal its row in Layers and expand its parent folders. An active search can still hide the row.
 - Change a selected shape's fill with Background Color when the Shape tool is active. The options bar shows controls relevant to the selected shape.
 - Reopen these notes from **Help > What's New**.
