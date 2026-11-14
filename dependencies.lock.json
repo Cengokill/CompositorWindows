@@ -17,6 +17,12 @@
   },
   "schema": 1,
   "upstream": "a19db9011282399785dc18efcfded904627bdcc2",
+  "libjpeg_turbo": {
+    "version": "3.2.1",
+    "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz",
+    "sha256": "c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f",
+    "license": "BSD-3-Clause AND IJG AND Zlib"
+  },
   "toolchain": {
     "architecture": "x64",
     "windows_sdk": "10.0.26100.0",

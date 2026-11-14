@@ -41,6 +41,8 @@ For a local photo comparison, set `ZOOM_PHOTO` to the JPEG path. Run `native_zoo
 Most native tests generate their own inputs. Some image-quality and diagnostic tests need external corpora, including `evidence/imaging/astronaut.png` for the subject-dialog test. Historical audit scripts additionally expect the pinned upstream checkout and the old research/evidence workspace. Those inputs and generated reports are not shipped in Git or the application-source ZIP; these optional tools are not a prerequisite for building the editor. Mac comparison tooling is documented in [reference/README.md](../reference/README.md).
 
 
+JPEG export uses statically linked libjpeg-turbo 3.2.1. Bootstrap verifies the official source archive against `dependencies.lock.json`; CMake builds it in a separate project. Packaging includes its source archive and licence notices.
+
 ## HDR codec sources
 
 `dependencies.lock.json` pins OpenEXR 3.3.5, Imath 3.1.12 and libdeflate 1.18 by commit and source-archive SHA256. Bootstrap verifies their archives in `dependencies/downloads/hdr`; the first online configure can also acquire them. Keep these archives for offline configuration. `scripts/HdrDependencies.cmake` builds them statically, without their tools, examples or tests. No additional codec DLL is needed. Packaging includes the verified archives and licenses beside the existing dependency sources/notices. The Radiance decoder is the pinned, HDR-only `src/imaging/third_party/stb_image.h`, with its license retained.

@@ -10,6 +10,8 @@ The application and reused Compositor code are distributed under MIT; see
 Compositor-MIT.txt. The offline foreground replacement uses MIT-licensed
 BiRefNet_lite weights, pinned to the revision recorded in its model card.
 ONNX Runtime license and third party notices accompany its binary.
+libjpeg-turbo is statically linked; its licence and IJG notice are included.
+This software is based in part on the work of the Independent JPEG Group.
 
 Qt 6.8.3 is dynamically linked. Qt license texts and the upstream supplied
 SPDX inventory are in Qt and Qt-SBOM. This package uses Qt under LGPL-3.0

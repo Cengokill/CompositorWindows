@@ -4,6 +4,10 @@
 #include <array>
 #include <cmath>
 #include <sstream>
+#include <fstream>
+#include <cstdio>
+#include <iterator>
+#include <jpeglib.h>
 
 namespace compositor::imaging {
 using Microsoft::WRL::ComPtr;
@@ -16,6 +20,49 @@ using detail::Handle;
 using detail::ok;
 using detail::regularFile;
 using detail::TemporaryFile;
+struct JpegError { jpeg_error_mgr manager{}; };
+void jpegFailure(j_common_ptr info) {
+    char message[JMSG_LENGTH_MAX]{};info->err->format_message(info,message);throw std::runtime_error(message);
+}
+struct JpegProgress { jpeg_progress_mgr manager{}; const std::function<bool()>* check{}; };
+void jpegProgress(j_common_ptr info) {
+    const auto* progress=reinterpret_cast<JpegProgress*>(info->progress);
+    cancelled(*progress->check);
+}
+class JpegWriter {
+    jpeg_compress_struct codec_{};JpegError error_{};JpegProgress progress_{};FILE* file_{};bool created_{};
+public:
+    JpegWriter(const std::filesystem::path& path,UINT width,UINT height,const ExportOptions& options,bool cmyk) {
+        codec_.err=jpeg_std_error(&error_.manager);error_.manager.error_exit=jpegFailure;
+        try {
+            created_=true;jpeg_create_compress(&codec_);
+            if(_wfopen_s(&file_,path.c_str(),L"wb")||!file_)throw std::runtime_error("Cannot open temporary JPEG");
+            jpeg_stdio_dest(&codec_,file_);codec_.image_width=width;codec_.image_height=height;codec_.input_components=cmyk?4:3;codec_.in_color_space=cmyk?JCS_CMYK:JCS_EXT_BGR;
+            jpeg_set_defaults(&codec_);jpeg_set_quality(&codec_,int(std::lround(std::clamp(options.jpegQuality,0.,1.)*100)),TRUE);
+            codec_.optimize_coding=options.jpegMode!=JpegMode::Standard;if(options.jpegMode==JpegMode::Progressive)jpeg_simple_progression(&codec_);
+            codec_.density_unit=1;codec_.X_density=codec_.Y_density=UINT16(std::lround(std::clamp(options.dpi,1.,65535.)));
+            progress_.check=&options.cancelled;progress_.manager.progress_monitor=jpegProgress;codec_.progress=&progress_.manager;
+            jpeg_start_compress(&codec_,TRUE);
+            std::vector<std::uint8_t> profile;
+            if(options.cmykProfile)profile=options.cmykProfile->bytes;
+            else{wchar_t system[MAX_PATH]{};if(!GetSystemDirectoryW(system,MAX_PATH))throw std::runtime_error("Cannot locate Windows sRGB profile");std::ifstream in(std::filesystem::path(system)/L"spool/drivers/color/sRGB Color Space Profile.icm",std::ios::binary);if(!in)throw std::runtime_error("Cannot load Windows sRGB profile");profile.assign(std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>());}
+            if(profile.empty()||profile.size()>UINT_MAX)throw std::runtime_error("Invalid JPEG output profile");
+            jpeg_write_icc_profile(&codec_,profile.data(),UINT(profile.size()));
+            if(cmyk){
+                std::array<JOCTET,72> exif{'E','x','i','f',0,0,'I','I',42,0,8,0,0,0,3,0,0x1a,1,5,0,1,0,0,0,50,0,0,0,0x1b,1,5,0,1,0,0,0,58,0,0,0,0x28,1,3,0,1,0,0,0,2,0,0,0,0,0,0,0};
+                const auto dpi=std::uint32_t(std::llround(std::clamp(options.dpi,1.,4294967295.)));
+                for(int n=0;n<4;++n){exif[56+n]=JOCTET(dpi>>(8*n));exif[64+n]=JOCTET(dpi>>(8*n));}exif[60]=1;exif[68]=1;
+                jpeg_write_marker(&codec_,JPEG_APP0+1,exif.data(),UINT(exif.size()));
+            }
+        } catch(...) { if(created_)jpeg_destroy_compress(&codec_);if(file_)std::fclose(file_);throw; }
+    }
+    ~JpegWriter(){if(created_)jpeg_destroy_compress(&codec_);if(file_)std::fclose(file_);}
+    void rows(std::uint8_t* data,UINT count,UINT stride,bool cmyk){
+        if(cmyk)for(std::size_t i=0;i<std::size_t(count)*stride;++i)data[i]=255-data[i];
+        for(UINT row=0;row<count;++row){JSAMPROW p=data+std::size_t(row)*stride;if(jpeg_write_scanlines(&codec_,&p,1)!=1)throw std::runtime_error("Cannot encode JPEG scanline");}
+    }
+    void finish(){jpeg_finish_compress(&codec_);if(std::fflush(file_)!=0)throw std::runtime_error("Cannot flush JPEG output");if(std::fclose(file_)!=0){file_=nullptr;throw std::runtime_error("Cannot close JPEG output");}file_=nullptr;}
+};
 RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& path, UINT requestedWidth, UINT requestedHeight,
                       std::size_t availableBytes, std::size_t& peakBytes, const std::function<bool()>& check,bool cmyk) {
     cancelled(check);
@@ -63,16 +110,6 @@ RgbaImage jpegPreview(IWICImagingFactory* imaging, const std::filesystem::path& 
     cancelled(check);
     return result;
 }
-// WIC writes the JFIF density only for 1- or 3-component JPEG, so a CMYK frame needs the density as Exif (APP1).
-void writeCmykJpegDensity(IWICBitmapFrameEncode* frame, double dpi) {
-    ComPtr<IWICMetadataQueryWriter> metadata; ok(frame->GetMetadataQueryWriter(&metadata), "Get CMYK JPEG metadata writer");
-    const auto inches = ULONG(std::clamp(std::llround(dpi), 1LL, 0xFFFFFFFFLL));
-    PROPVARIANT resolution; PropVariantInit(&resolution); resolution.vt = VT_UI8; resolution.uhVal.LowPart = inches; resolution.uhVal.HighPart = 1;
-    ok(metadata->SetMetadataByName(L"/app1/ifd/{ushort=282}", &resolution), "Write CMYK JPEG X resolution");
-    ok(metadata->SetMetadataByName(L"/app1/ifd/{ushort=283}", &resolution), "Write CMYK JPEG Y resolution");
-    PROPVARIANT unit; PropVariantInit(&unit); unit.vt = VT_UI2; unit.uiVal = 2;
-    ok(metadata->SetMetadataByName(L"/app1/ifd/{ushort=296}", &unit), "Write CMYK JPEG resolution unit");
-}
 void writeProfile(IWICImagingFactory* imaging, IWICBitmapFrameEncode* frame, ImageFormat format,CmykProfilePtr profile) {
     if(profile){ComPtr<IWICColorContext> color;ok(imaging->CreateColorContext(&color),"Create CMYK export context");ok(color->InitializeFromMemory(const_cast<BYTE*>(profile->bytes.data()),UINT(profile->bytes.size())),"Read CMYK output profile");IWICColorContext* contexts[]{color.Get()};ok(frame->SetColorContexts(1,contexts),"Embed CMYK output profile");
     }else if (format == ImageFormat::Png) {
@@ -102,8 +139,14 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         (options.format != ImageFormat::Png && options.format != ImageFormat::Jpeg && options.format != ImageFormat::Tiff) || !limits.stripeRows || limits.stripeRows > 256 ||
         limits.previewWidth > 1000 || limits.previewHeight > 1000 || limits.maxBufferBytes > 1024ULL * 1024 * 1024)
         throw std::invalid_argument("Invalid streaming image export settings");
-    if(straightPng && (options.format != ImageFormat::Png || options.cmykProfile)) throw std::invalid_argument("Straight pixels require RGB PNG");
+    if(straightPng && (options.format != ImageFormat::Png || options.cmykProfile || !options.pngTransparency || options.pngInterlaced)) throw std::invalid_argument("Straight pixels require unmodified RGB PNG options");
     if(options.cmykProfile&&options.format==ImageFormat::Png)throw std::invalid_argument("PNG does not support CMYK output");
+    if(options.jpegMode!=JpegMode::Standard&&options.jpegMode!=JpegMode::Optimized&&options.jpegMode!=JpegMode::Progressive)throw std::invalid_argument("Invalid JPEG mode");
+    const bool turbo=options.format==ImageFormat::Jpeg;
+    const std::uint64_t jpegBlock=options.cmykProfile?8:16;
+    const auto paddedWidth=(std::uint64_t(width)+jpegBlock-1)/jpegBlock*jpegBlock;
+    const auto paddedHeight=(std::uint64_t(height)+jpegBlock-1)/jpegBlock*jpegBlock;
+    if(turbo&&options.jpegMode!=JpegMode::Standard&&paddedWidth*paddedHeight*(options.cmykProfile?8:3)>512ULL*1024*1024)throw std::invalid_argument("JPEG optimized and progressive modes exceed the 512 MiB coefficient budget for this canvas.");
     std::unique_ptr<CmykTransform> color;if(options.cmykProfile)color=std::make_unique<CmykTransform>(options.cmykProfile);
     cancelled(options.cancelled);
     const auto [previewWidth, previewHeight] = fitPreview(width, height, limits.previewWidth, limits.previewHeight);
@@ -126,17 +169,21 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
     result.peakOwnedPixelBytes = rgba.size() + encoded.size() + previewStorage;
     Apartment apartment; auto imaging = factory(); TemporaryFile temporary(destination);
     {
-        ComPtr<IWICStream> stream; ok(imaging->CreateStream(&stream), "Create streaming export file");
-        ok(stream->InitializeFromFilename(temporary.path.c_str(), GENERIC_WRITE), "Open streaming export file");
+        ComPtr<IWICStream> stream;
         ComPtr<IWICBitmapEncoder> encoder;
-        ok(imaging->CreateEncoder(options.format == ImageFormat::Png ? GUID_ContainerFormatPng : options.format==ImageFormat::Tiff?GUID_ContainerFormatTiff:GUID_ContainerFormatJpeg, nullptr, &encoder), "Create streaming image encoder");
-        ok(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "Initialize scanline encoder without image cache");
         ComPtr<IWICBitmapFrameEncode> frame; ComPtr<IPropertyBag2> properties;
+        std::unique_ptr<JpegWriter> jpeg;
+        if(turbo)jpeg=std::make_unique<JpegWriter>(temporary.path,width,height,options,bool(color));
+        else {
+        ok(imaging->CreateStream(&stream), "Create streaming export file");
+        ok(stream->InitializeFromFilename(temporary.path.c_str(), GENERIC_WRITE), "Open streaming export file");
+        ok(imaging->CreateEncoder(options.format == ImageFormat::Png ? GUID_ContainerFormatPng : GUID_ContainerFormatTiff, nullptr, &encoder), "Create streaming image encoder");
+        ok(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "Initialize scanline encoder without image cache");
         ok(encoder->CreateNewFrame(&frame, &properties), "Create streaming export frame");
-        if (options.format == ImageFormat::Jpeg) {
-            PROPBAG2 property{}; property.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
-            VARIANT value; VariantInit(&value); value.vt = VT_R4; value.fltVal = float(std::clamp(options.jpegQuality, 0., 1.));
-            ok(properties->Write(1, &property, &value), "Set JPEG export quality");
+        if (options.format == ImageFormat::Png && options.pngInterlaced) {
+            PROPBAG2 property{}; property.pstrName = const_cast<LPOLESTR>(L"InterlaceOption");
+            VARIANT value; VariantInit(&value); value.vt = VT_BOOL; value.boolVal = VARIANT_TRUE;
+            ok(properties->Write(1, &property, &value), "Set PNG interlacing");
         }
         if (options.format == ImageFormat::Tiff) {
             PROPBAG2 property{}; property.pstrName = const_cast<LPOLESTR>(L"TiffCompressionMethod");
@@ -145,11 +192,11 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
         }
         ok(frame->Initialize(properties.Get()), "Initialize streaming export frame");
         ok(frame->SetSize(width, height), "Set export dimensions"); ok(frame->SetResolution(options.dpi, options.dpi), "Set export resolution");
-        GUID format = color?GUID_WICPixelFormat32bppCMYK:options.format!=ImageFormat::Jpeg?GUID_WICPixelFormat32bppBGRA:GUID_WICPixelFormat24bppBGR;
+        GUID format = color?GUID_WICPixelFormat32bppCMYK:GUID_WICPixelFormat32bppBGRA;
         const auto requested = format; ok(frame->SetPixelFormat(&format), "Choose export pixel format");
         if (format != requested) throw std::runtime_error("Encoder changed the required export pixel format");
         writeProfile(imaging.Get(), frame.Get(), options.format,options.cmykProfile);
-        if (options.format == ImageFormat::Jpeg && color) writeCmykJpegDensity(frame.Get(), options.dpi);
+        }
         const std::array<std::uint8_t, 3> matte{options.matteR, options.matteG, options.matteB};
         for (UINT y = 0; y < height; y += stripeRows) {
             cancelled(options.cancelled); const UINT count = std::min(stripeRows, height - y);
@@ -165,22 +212,25 @@ StreamingExportResult encodeRowsAtomic(const std::filesystem::path& destination,
                     const auto* p = rgba.data() + (std::size_t(row) * width + x) * 4;
                     auto* q = encoded.data() + (std::size_t(row) * width + x) * channels;
                     if (!straightPng && (p[0] > p[3] || p[1] > p[3] || p[2] > p[3])) throw std::runtime_error("Export rows contain invalid premultiplied pixels");
-                    for (UINT c = 0; c < 3; ++c) q[2 - c] = channels == 3 ? std::uint8_t(std::min(255U, unsigned(p[c]) + (unsigned(matte[c]) * (255 - p[3]) + 127) / 255))
+                    const bool opaquePng = options.format == ImageFormat::Png && !options.pngTransparency;
+                    for (UINT c = 0; c < 3; ++c) q[2 - c] = channels == 3 || opaquePng ? std::uint8_t(std::min(255U, unsigned(p[c]) + (unsigned(matte[c]) * (255 - p[3]) + 127) / 255))
                         : straightPng ? p[c] : p[3] ? std::uint8_t(std::min(255U, (unsigned(p[c]) * 255 + p[3] / 2) / p[3])) : 0;
-                    if (channels == 4) q[3] = p[3];
+                    if (channels == 4) q[3] = opaquePng ? 255 : p[3];
                     if (losslessPreview) {
                         auto& sum = sums[std::size_t(std::uint64_t(y + row) * previewHeight / height) * previewWidth + previewX[x]];
-                        for (UINT c = 0; c < 3; ++c) sum[c] += straightPng ? q[2 - c] : (unsigned(q[2 - c]) * p[3] + 127) / 255;
-                        sum[3] += straightPng ? 255 : p[3];
+                        for (UINT c = 0; c < 3; ++c) sum[c] += straightPng || opaquePng ? q[2 - c] : (unsigned(q[2 - c]) * p[3] + 127) / 255;
+                        sum[3] += straightPng || opaquePng ? 255 : p[3];
                     }
                 }
             }
-            ok(frame->WritePixels(count, width * channels, width * count * channels, encoded.data()), "Encode image scanlines");
+            if(jpeg)jpeg->rows(encoded.data(),count,width*channels,bool(color));
+            else ok(frame->WritePixels(count, width * channels, width * count * channels, encoded.data()), "Encode image scanlines");
             if (progress) progress(y + count, height);
         }
-        cancelled(options.cancelled); ok(frame->Commit(), "Commit streaming image frame"); ok(encoder->Commit(), "Commit streaming image container");
+        cancelled(options.cancelled);if(jpeg)jpeg->finish();else{ok(frame->Commit(), "Commit streaming image frame");ok(encoder->Commit(), "Commit streaming image container");}
     }
     cancelled(options.cancelled);
+    if(options.format==ImageFormat::Png&&options.pngInterlaced){std::ifstream file(temporary.path,std::ios::binary);std::array<unsigned char,29> header{};file.read(reinterpret_cast<char*>(header.data()),header.size());if(!file||header[28]!=1)throw std::runtime_error("PNG encoder did not produce an interlaced image");}
     if (losslessPreview) {
         result.preview = {previewWidth, previewHeight, std::size_t(previewWidth) * 4, std::vector<std::uint8_t>(previewPixels * 4)};
         auto boundary = [](UINT i, UINT source, UINT target) { return (std::uint64_t(i) * source + target - 1) / target; };

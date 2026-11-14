@@ -48,6 +48,11 @@ try {
  $wixLicense=Join-Path $packageRoot 'dependencies\packaging\WIX-LICENSE.txt'
  if(Test-Path -LiteralPath $wixLicense){Copy-Item -LiteralPath $wixLicense -Destination (Join-Path $payload 'licenses')}
  $qtLock=Get-Content -LiteralPath (Join-Path $packageRoot 'dependencies.lock.json') -Raw | ConvertFrom-Json
+ $jpegArchive=Join-Path $packageRoot 'dependencies/downloads/libjpeg-turbo-3.2.1.tar.gz'
+ if((Get-FileHash -LiteralPath $jpegArchive -Algorithm SHA256).Hash -ine $qtLock.libjpeg_turbo.sha256){throw 'libjpeg-turbo source checksum mismatch'}
+ Copy-Item -LiteralPath $jpegArchive -Destination (Join-Path $payload 'sources/libjpeg-turbo-source.tar.gz')
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'build/release/_deps/jpeg_turbo-src/LICENSE.md') -Destination (Join-Path $payload 'licenses/libjpeg-turbo-LICENSE.txt')
+ Copy-Item -LiteralPath (Join-Path $packageRoot 'build/release/_deps/jpeg_turbo-src/README.ijg') -Destination (Join-Path $payload 'licenses/libjpeg-turbo-README.ijg.txt')
  foreach($name in @('imath','openexr','libdeflate')){
   $hdrArchive=Join-Path $packageRoot "dependencies/downloads/hdr/$name.tar.gz"
   if((Get-FileHash -LiteralPath $hdrArchive -Algorithm SHA256).Hash -ine $qtLock.hdr.$name.sha256){throw "HDR source checksum mismatch: $name"}
@@ -131,7 +136,7 @@ try {
   Copy-Item -LiteralPath $path -Destination $destination
  }
  New-Item -ItemType Directory -Path (Join-Path $source 'scripts'),(Join-Path $source 'docs') | Out-Null
- foreach($script in @('bootstrap.ps1','bootstrap-imaging.ps1','bootstrap-packaging.ps1','HdrDependencies.cmake','deploy-imaging-runtime.cmake','restore-imaging-runtime.ps1','package.ps1')){
+ foreach($script in @('bootstrap.ps1','bootstrap-imaging.ps1','bootstrap-packaging.ps1','HdrDependencies.cmake','JpegDependencies.cmake','deploy-imaging-runtime.cmake','restore-imaging-runtime.ps1','package.ps1')){
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $source 'scripts')
  }
  Copy-ApplicationSource (Join-Path $PSScriptRoot 'msi') (Join-Path $source 'scripts\msi') @('.ps1','.wxs','.json','.txt')

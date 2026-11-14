@@ -5,6 +5,7 @@
 #include "core/DeepImage.h"
 #include "core/Document.h"
 #include "win32_file_path.h"
+#include "stream_export.h"
 #include <windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -59,18 +60,22 @@ std::shared_ptr<const DeepImage> WicCodec::decodeProjectDeepPng(const std::files
     for(std::uint32_t y=0;y<height;++y){checkCancelled(options);for(std::uint32_t x=0;x<width;++x){auto* pixel=image->at(int(x),int(y));const auto alpha=pixel[3];for(int c=0;c<3;++c)pixel[c]=alpha?std::uint16_t((std::uint32_t(pixel[c])*alpha+32767)/65535):0;}}
     return image;
 }
-void WicCodec::encodeProjectDeepPng(const std::filesystem::path& filename,const DeepImage& image){
+void WicCodec::encodeProjectDeepPng(const std::filesystem::path& filename,const DeepImage& image,const ExportOptions* exportOptions){
     if(image.isHdr())throw std::runtime_error("HDR pixels require EXR storage");
     const auto path=win32FilePath(filename);if(!image.valid())throw std::runtime_error("Invalid 16-bit image");
     Apartment apartment;GUID id{};ok(CoCreateGuid(&id));wchar_t guid[40]{};StringFromGUID2(id,guid,40);auto temp=path;temp+=std::wstring(L".")+guid+L".tmp";
     struct Cleanup{std::filesystem::path p;~Cleanup(){std::error_code ec;std::filesystem::remove(p,ec);}} cleanup{temp};
     {ComPtr<IWICImagingFactory> factory;ok(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory)));ComPtr<IWICStream> stream;ok(factory->CreateStream(&stream));ok(stream->InitializeFromFilename(temp.c_str(),GENERIC_WRITE));
     ComPtr<IWICBitmapEncoder> encoder;ok(factory->CreateEncoder(GUID_ContainerFormatPng,nullptr,&encoder));ok(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache));
-    ComPtr<IWICBitmapFrameEncode> frame;ComPtr<IPropertyBag2> props;ok(encoder->CreateNewFrame(&frame,&props));ok(frame->Initialize(props.Get()));ok(frame->SetSize(UINT(image.width),UINT(image.height)));
+    ComPtr<IWICBitmapFrameEncode> frame;ComPtr<IPropertyBag2> props;ok(encoder->CreateNewFrame(&frame,&props));
+    if(exportOptions&&exportOptions->pngInterlaced){PROPBAG2 property{};property.pstrName=const_cast<LPOLESTR>(L"InterlaceOption");VARIANT value;VariantInit(&value);value.vt=VT_BOOL;value.boolVal=VARIANT_TRUE;ok(props->Write(1,&property,&value));}
+    ok(frame->Initialize(props.Get()));ok(frame->SetSize(UINT(image.width),UINT(image.height)));if(exportOptions)ok(frame->SetResolution(exportOptions->dpi,exportOptions->dpi));
     GUID format=GUID_WICPixelFormat64bppRGBA;ok(frame->SetPixelFormat(&format));if(format!=GUID_WICPixelFormat64bppRGBA)throw std::runtime_error("Encoder cannot preserve 16-bit RGBA");
     std::vector<std::uint16_t> row(std::size_t(image.width)*4);
-    for(int y=0;y<image.height;++y){for(int x=0;x<image.width;++x){const auto* pixel=image.at(x,y);const auto alpha=pixel[3];auto* out=row.data()+std::size_t(x)*4;out[3]=alpha;for(int c=0;c<3;++c)out[c]=alpha?std::uint16_t(std::min(65535u,(std::uint32_t(pixel[c])*65535+alpha/2)/alpha)):0;}ok(frame->WritePixels(1,UINT(image.width)*8,UINT(row.size()*sizeof(std::uint16_t)),reinterpret_cast<BYTE*>(row.data())));}
-    ok(frame->Commit());ok(encoder->Commit());}
+    for(int y=0;y<image.height;++y){if(exportOptions&&exportOptions->cancelled&&exportOptions->cancelled())throw ExportCancelled();for(int x=0;x<image.width;++x){const auto* pixel=image.at(x,y);const auto alpha=pixel[3];auto* out=row.data()+std::size_t(x)*4;out[3]=alpha;for(int c=0;c<3;++c)out[c]=alpha?std::uint16_t(std::min(65535u,(std::uint32_t(pixel[c])*65535+alpha/2)/alpha)):0;}ok(frame->WritePixels(1,UINT(image.width)*8,UINT(row.size()*sizeof(std::uint16_t)),reinterpret_cast<BYTE*>(row.data())));}
+    if(exportOptions&&exportOptions->cancelled&&exportOptions->cancelled())throw ExportCancelled();ok(frame->Commit());ok(encoder->Commit());}
+    if(exportOptions&&exportOptions->cancelled&&exportOptions->cancelled())throw ExportCancelled();
+    if(exportOptions&&exportOptions->pngInterlaced){std::ifstream file(temp,std::ios::binary);std::array<std::uint8_t,29> header{};file.read(reinterpret_cast<char*>(header.data()),header.size());if(!file||header[28]!=1)throw std::runtime_error("PNG encoder did not produce an interlaced image");}
     if(!MoveFileExW(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("Project image replacement failed");
 }
 GrayMask WicCodec::decodeProjectGrayPng(const std::filesystem::path& filename,const ImportOptions& options){

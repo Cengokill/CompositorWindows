@@ -37,6 +37,7 @@
 #include <QTimer>
 #include <QStatusBar>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -807,8 +808,17 @@ void MainWindow::exportImage(){
     QLabel pageSize;pageSize.setObjectName("exportPageSize");layout.addRow("Page",&pageSize);
     QSettings settings;double remembered=settings.value("jpegExportQuality",.85).toDouble();if(!std::isfinite(remembered))remembered=.85;
     ui::TrackSlider quality(Qt::Horizontal);quality.setObjectName("exportQuality");quality.setRange(0,100);quality.setDefaultValue(85);quality.setValue(int(std::round(std::clamp(remembered,0.,1.)*100)));layout.addRow("JPEG quality",&quality);
-    // JPEG and PDF have no transparency in the preview or the file; this color fills the canvas wherever it is transparent.
+    QComboBox jpegMode;jpegMode.setObjectName("exportJpegMode");jpegMode.setAccessibleName("JPEG encoding mode");jpegMode.addItems({"Standard","Optimized","Progressive"});const auto savedMode=settings.value("jpegExportMode","Standard").toString();const int modeIndex=jpegMode.findText(savedMode,Qt::MatchExactly);jpegMode.setCurrentIndex(modeIndex<0?0:modeIndex);layout.addRow("JPEG mode",&jpegMode);
+    QCheckBox transparency("Preserve transparency");transparency.setObjectName("exportPngTransparency");transparency.setChecked(true);layout.addRow("PNG",&transparency);
+    QCheckBox interlaced("Interlaced");interlaced.setObjectName("exportPngInterlaced");layout.addRow(QString(),&interlaced);
+    // The selected background fills transparent pixels in formats or modes that do not preserve alpha.
     QPushButton matte("White");matte.setObjectName("exportMatte");QColor matteColor=Qt::white;layout.addRow("Background",&matte);
+    auto showMatte=[&]{
+        const auto hex=matteColor.name();
+        matte.setAccessibleName("Export background color");matte.setAccessibleDescription(hex);matte.setToolTip(hex);
+        if(kind()==ExportKind::Jpeg){matte.setText({});matte.setFixedSize(36,22);matte.setStyleSheet(QString("QPushButton#exportMatte { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QPushButton#exportMatte:hover { border-color: #bfc9d8; } QPushButton#exportMatte:pressed, QPushButton#exportMatte:focus { border-color: #78b0f7; }").arg(hex));}
+        else{matte.setMinimumSize(0,0);matte.setMaximumSize(QWIDGETSIZE_MAX,QWIDGETSIZE_MAX);matte.setStyleSheet({});matte.setText(hex);}
+    };
     auto showPageSize=[&]{
         const auto size=imaging::scaledExportSize(uint32_t(snapshot.width),uint32_t(snapshot.height),scale.currentData().toDouble());
         auto inches=[&](uint32_t pixels){auto text=QString::number(pixels/snapshot.resolution,'f',2);while(text.endsWith('0'))text.chop(1);if(text.endsWith('.'))text.chop(1);return text;};
@@ -831,12 +841,21 @@ void MainWindow::exportImage(){
     auto cancel=std::make_shared<std::atomic_bool>(false);auto percent=std::make_shared<std::atomic_uint32_t>(0);
     quint64 generation=0,runningGeneration=0;bool running=false,closed=false;QString readyPath;
     std::function<void()> start;
-    auto changed=[&]{stopAnimation();previewFrames.clear();previewFrame=0;animatedPreview.setEnabled(false);++generation;cancel->store(true);readyPath.clear();buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();};
+    auto changed=[&]{
+        stopAnimation();previewFrames.clear();previewFrame=0;animatedPreview.setEnabled(false);
+        ++generation;cancel->store(true);
+        if(!readyPath.isEmpty())QFile::remove(readyPath);
+        readyPath.clear();dialog.setProperty("readyExportPath",QString());
+        previewSource=QPixmap();preview.clear();
+        buttons.button(QDialogButtonBox::Save)->setEnabled(false);bytesLabel.setText("Updating preview…");debounce.start();
+    };
     start=[&]{
         if(running||closed)return;
         if(colorMode.currentIndex()==1&&cmykAllowed()&&!outputProfile){bytesLabel.setText("Choose a CMYK output profile");return;}
         running=true;runningGeneration=generation;cancel=std::make_shared<std::atomic_bool>(false);percent->store(0);
         imaging::ExportOptions options;options.format=(kind()==ExportKind::Png||kind()==ExportKind::ChannelPack)?imaging::ImageFormat::Png:kind()==ExportKind::Jpeg?imaging::ImageFormat::Jpeg:kind()==ExportKind::Tiff?imaging::ImageFormat::Tiff:kind()==ExportKind::Exr?imaging::ImageFormat::Exr:imaging::ImageFormat::Pdf;options.cmykProfile=colorMode.currentIndex()==1&&cmykAllowed()?outputProfile:nullptr;options.jpegQuality=quality.value()/100.;
+        if(kind()==ExportKind::Jpeg)options.jpegMode=static_cast<imaging::JpegMode>(jpegMode.currentIndex());
+        if(kind()==ExportKind::Png){options.pngTransparency=transparency.isChecked();options.pngInterlaced=interlaced.isChecked();}
         if(kind()==ExportKind::Pdf)options.scale=scale.currentData().toDouble();
         options.matteR=uint8_t(matteColor.red());options.matteG=uint8_t(matteColor.green());options.matteB=uint8_t(matteColor.blue());options.cancelled=[flag=cancel]{return flag->load();};
         const bool gif=kind()==ExportKind::Gif;
@@ -892,7 +911,7 @@ void MainWindow::exportImage(){
     };
     connect(&watcher,&QFutureWatcher<Prepared>::finished,&dialog,[&]{
         running=false;if(closed)return;auto prepared=watcher.result();
-        if(runningGeneration!=generation){if(!debounce.isActive())debounce.start(0);return;}
+        if(runningGeneration!=generation){QFile::remove(prepared.path);if(!debounce.isActive())debounce.start(0);return;}
         if(prepared.cancelled)return;
         if(!prepared.error.isEmpty()){bytesLabel.setText(prepared.error);return;}
         const auto&image=prepared.result.preview;
@@ -900,27 +919,30 @@ void MainWindow::exportImage(){
         if(shown.isNull()){bytesLabel.setText("Cannot display export preview");return;}
         previewSource=QPixmap::fromImage(shown.copy());showPreview();readyPath=prepared.path;
         previewFrames=std::move(prepared.frames);previewFrame=0;animatedPreview.setEnabled(kind()==ExportKind::Gif&&previewFrames.size()>1);if(!previewFrames.empty())showFrame();
-        bytesLabel.setText(QString::number(prepared.result.encodedBytes)+" bytes");buttons.button(QDialogButtonBox::Save)->setEnabled(true);
+        const auto size=prepared.result.encodedBytes;
+        bytesLabel.setText(size&&size<10000?QStringLiteral("< 0.01 Mb"):QString::number(double(size)/1000000.,'f',2)+" Mb");buttons.button(QDialogButtonBox::Save)->setEnabled(true);
         dialog.setProperty("readyExportPath",readyPath);dialog.setProperty("readyExportGeneration",generation);
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
-    auto applyKind=[&]{for(auto& box:channels)layout.setRowVisible(&box,kind()==ExportKind::ChannelPack);const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
+    auto applyKind=[&]{for(auto& box:channels)layout.setRowVisible(&box,kind()==ExportKind::ChannelPack);const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Png&&!transparency.isChecked())||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&jpegMode,kind()==ExportKind::Jpeg);layout.setRowVisible(&transparency,kind()==ExportKind::Png);layout.setRowVisible(&interlaced,kind()==ExportKind::Png);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
     for(auto& box:channels)connect(&box,&QComboBox::currentIndexChanged,&dialog,changed);
     connect(&colorMode,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&profileButton,&QPushButton::clicked,&dialog,[&]{const auto path=chooseNativeCmykProfilePath();if(path.isEmpty())return;try{auto profile=imaging::readCmykProfile(nativePath(path));outputProfile=std::move(profile);profileButton.setText(QString::fromStdString(outputProfile->name));changed();}catch(const std::exception& error){QMessageBox::critical(&dialog,"CMYK profile",error.what());}});
-    connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
+    connect(&format,&QComboBox::currentIndexChanged,&dialog,[&]{showMatte();applyKind();changed();});
     connect(&scale,&QComboBox::currentIndexChanged,&dialog,[&]{showPageSize();changed();});
     connect(&quality,&QSlider::valueChanged,&dialog,changed);
+    connect(&jpegMode,&QComboBox::currentIndexChanged,&dialog,changed);
+    connect(&transparency,&QCheckBox::toggled,&dialog,[&]{applyKind();changed();});
+    connect(&interlaced,&QCheckBox::toggled,&dialog,changed);
     connect(&previewZoom,&QSlider::valueChanged,&dialog,showPreview);
-    connect(&matte,&QPushButton::clicked,&dialog,[&]{auto color=QColorDialog::getColor(matteColor,&dialog,"Export background");if(color.isValid()){matteColor=color;matte.setText(color.name());changed();}});
+    connect(&matte,&QPushButton::clicked,&dialog,[&]{auto color=QColorDialog::getColor(matteColor,&dialog,"Export background");if(color.isValid()){matteColor=color;showMatte();changed();}});
     connect(&buttons,&QDialogButtonBox::accepted,&dialog,[&]{if(!readyPath.isEmpty()&&!running)dialog.accept();});
     connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
     applyKind();changed();progress.start();
     const auto response=dialog.exec();closed=true;stopAnimation();debounce.stop();progress.stop();cancel->store(true);watcher.waitForFinished();
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     const auto chosen=kind();
-    if(chosen==ExportKind::Jpeg)settings.setValue("jpegExportQuality",quality.value()/100.);
     const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+((chosen==ExportKind::Png||chosen==ExportKind::ChannelPack)?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Tiff?".tif":chosen==ExportKind::Exr?".exr":chosen==ExportKind::Gif?".gif":".pdf");
     const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
     QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
@@ -929,6 +951,7 @@ void MainWindow::exportImage(){
     connect(&copy,&QFutureWatcher<QString>::finished,&saving,&QDialog::accept);
     copy.setFuture(QtConcurrent::run([readyPath,destination,copyCancelled]{try{imaging::copyEncodedAtomic(nativePath(readyPath),nativePath(destination),[copyCancelled]{return copyCancelled->load();});return QString();}catch(const imaging::ExportCancelled&){return QString();}catch(const std::exception&e){return QString::fromUtf8(e.what());}}));
     saving.exec();copy.waitForFinished();if(!copy.result().isEmpty())throw std::runtime_error(copy.result().toStdString());
+    if(chosen==ExportKind::Jpeg&&!copyCancelled->load()){settings.setValue("jpegExportQuality",quality.value()/100.);settings.setValue("jpegExportMode",jpegMode.currentText());}
     // The file that produced the encoded preview is copied exactly. No project/history mutation.
 }
 }
