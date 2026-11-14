@@ -1,39 +1,68 @@
-# Export Image: JPEG and PNG implementation proposal
+# Plan : options JPEG et PNG dans Export Image
 
-This is a proposal for review; it does not describe shipped behavior.
+Ce document est une proposition d'implémentation. Aucune fonctionnalité décrite ci-dessous n'est encore livrée.
 
-## Goal and current behavior
+## Objectif
 
-Provide understandable JPEG quality and encoding choices, plus PNG transparency and interlacing options, in **File → Export Image**. Today `src/ui/FileActions.cpp` offers JPEG quality from 0 to 100, remembers it, generates a debounced background export, displays its encoded preview and size, and saves that exact prepared file. `src/imaging/stream_export.cpp` uses Windows Imaging Component (WIC) row encoding and decodes the JPEG preview; it handles RGB and profile-converted CMYK, DPI, ICC profiles, cancellation and temporary destination replacement. PNG is encoded with alpha. `src/imaging/wic_codec.cpp` has a separate in-memory path.
+Permettre de régler la compression JPEG et le chargement progressif, de choisir la transparence et l'entrelacement PNG, et de lire la taille du fichier préparé en mégabytes. L'export produit une image aplatie : il ne modifie ni le document, ni son historique, ni le format du projet.
 
-## Proposed controls
+## Comportement attendu
 
-- JPEG: retain the existing 0–100 quality setting and its saved value. Offer Standard, Optimized and Progressive encoding as mutually exclusive choices, with a short explanation of progressive loading. Use Standard by default for compatibility. Do not label this scale Photoshop's 0–12 scale or claim equivalent output.
-- PNG: offer an interlace checkbox and a transparency choice for ordinary PNG exports. Default to existing alpha-preserving, non-interlaced behavior. Flatten against the selected background when transparency is disabled. Keep Channel Pack's exact channel values independent of these controls.
-- Avoid PNG-8 quantization in this change: it changes colors and alpha and requires its own palette, preview and quality design. Keep dimensions, format, RGB/CMYK selection and existing controls intact.
-- For every export format, display the actual encoded file size in decimal megabytes (1,000,000 bytes), with the requested label `Mb`: for example `1.23 Mb`. Show nonzero sizes below 0.01 Mb as `< 0.01 Mb` so they do not appear empty. The label is a product choice here and denotes megabytes, not megabits.
-- Changing any applicable setting cancels or supersedes the current job and regenerates both the preview and actual encoded size. Only the latest completed file can be saved. Hide settings for unrelated formats and preserve the existing project and history.
+### JPEG
 
-## Encoder selection and feasibility gate
+- Conserver le curseur existant de qualité **0 à 100**, son défaut actuel de 85 et la préférence `jpegExportQuality`. Une valeur plus faible privilégie un fichier plus léger ; JPEG reste un format avec perte. Cette échelle n'est pas présentée comme équivalente à celle de Photoshop, graduée de 0 à 12.
+- Ajouter un choix exclusif **Standard**, **Optimized**, **Progressive**. Standard vise la compatibilité ; Optimized utilise des tables Huffman optimisées ; Progressive organise les données en plusieurs passages pour permettre un affichage progressif. Garder Standard par défaut et ne jamais produire silencieusement un autre mode que celui sélectionné.
+- Conserver le choix RGB ou CMYK et le profil CMYK, le fond de transparence choisi, le profil ICC et la résolution. L'aperçu doit provenir du JPEG effectivement encodé avec ces options.
 
-JPEG quality, optimized Huffman tables and progressive scans are separate decisions. Candidate: **libjpeg-turbo**, using its scanline API, standard Huffman encoding for Standard, optimized Huffman coding for Optimized, and progressive coding for Progressive. It supports SIMD and the conventional JPEG format. Benchmark against current WIC on representative photographs, gradients, text and transparent composites: compare output size at visually comparable quality, encode time, peak memory, and decode compatibility. Compare MozJPEG as a size-focused alternative if smaller output justifies its cost; do not claim either is universally optimal without measurements. References: [libjpeg-turbo on MozJPEG](https://www.libjpeg-turbo.org/About/Mozjpeg), [MozJPEG](https://github.com/mozilla/mozjpeg).
+### PNG
 
-Before committing to a backend, verify WIC's available properties and actual output on the supported Windows build. A new dependency is warranted only if WIC cannot reliably provide the required modes or measurements justify it. Check progressive/optimized encoders' full-image coefficient storage and worst-case memory at the 100 MP export ceiling; row input alone does not guarantee bounded memory. Establish an explicit budget and report unsupported cases clearly without damaging an existing destination. Preserve RGB and CMYK, profile embedding, DPI, matte handling and the ability to decode the encoded preview. Compare actual output with independent decoders and inspect JPEG markers; do not silently downgrade a selected mode.
+- Proposer pour le PNG ordinaire une option de transparence, activée par défaut, et une option d'entrelacement, désactivée par défaut. Sans transparence, aplatir sur le fond choisi. L'entrelacement concerne l'affichage pendant le téléchargement ; il ne change pas les pixels décodés.
+- Ne pas appliquer ces options à Channel Pack : ses quatre canaux doivent conserver leurs valeurs exactes. La réduction de palette PNG-8 est hors périmètre, car elle peut modifier couleurs et transparence.
 
-For PNG, first evaluate WIC interlace support and its buffering and cancellation behavior. If it cannot implement the checkbox reliably, evaluate a pinned libpng backend with the same budget and transactional guarantees. PNG compression is lossless; color conversion, transparency removal, and indexed-palette conversion are distinct operations. Sources: [Adobe PNG export](https://helpx.adobe.com/photoshop/desktop/save-and-export/save-files/save-in-png-and-gif-formats.html), [Adobe export settings](https://helpx.adobe.com/photoshop/desktop/save-and-export/export-files-to-different-formats/export-settings-and-export-location-preferences.html).
+### Taille, aperçu et annulation
 
-## Implementation sequence
+- Pour **tous les formats** disponibles, afficher la taille réelle du fichier préparé en mégabytes décimaux : 1 Mb = 1 000 000 octets. Employer exactement le suffixe demandé **Mb**, même si cette notation désigne habituellement des mégabits. Exemple : `1.23 Mb`. Afficher `< 0.01 Mb` pour une taille non nulle inférieure à 10 000 octets ; sinon arrondir à deux décimales.
+- Chaque modification pertinente invalide le résultat précédent, désactive Save, annule ou remplace le travail en cours, puis met à jour aperçu et taille uniquement pour la génération courante. Save copie exactement le fichier présenté.
+- Cancel, fermeture, échec d'encodage ou de copie ne modifient pas le document ni son historique. Les fichiers temporaires sont nettoyés et une destination existante reste récupérable. Un résultat périmé ne peut pas réactiver Save.
 
-1. Measure WIC capabilities and candidate JPEG encoders using a representative corpus and Windows x64 release builds. Record image inputs, quality settings, actual sizes, time and memory, and choose the backend and defaults from results.
-2. Add typed JPEG mode and PNG settings to `ExportOptions`, validate combinations, and route all relevant callers through existing ownership. Decide explicitly whether the separate `WicCodec::encode` path must implement or reject each setting; never silently ignore it.
-3. Implement selected codecs with bounded allocations, cancellation, progress, temporary files and error handling. Pin any new dependency in `dependencies.lock.json` and update build, packaging, notices and source provenance. Preserve ICC, DPI, RGB/CMYK and the existing rendered composite.
-4. Add format-specific controls in `FileActions.cpp`; connect each to the existing generation and debounce lifecycle. Preview and displayed size must correspond to the exact bytes eventually saved. Keep saved JPEG quality compatible with existing preferences.
-5. Update the user guide with the controls and explain lossless PNG versus lossy JPEG, transparency and progressive loading. Capture a real Windows screenshot for the implementation PR.
+## État actuel et points d'entrée
 
-## Acceptance checks
+- `src/ui/FileActions.cpp`, `MainWindow::exportImage()` : dialogue ouvert depuis **File → Export Image** et **Ctrl+Shift+E**, snapshot du document, qualité persistée, génération asynchrone avec temporisation, aperçu, taille en octets, annulation et copie du fichier préparé.
+- `src/imaging/image_types.h` : `ExportOptions` transporte format, qualité, fond, résolution, profil et annulation.
+- `src/imaging/stream_export.cpp` : encodage WIC par bandes, conversion RGB/CMYK, ICC et DPI, fichier temporaire, aperçu JPEG décodé et copie sécurisée.
+- `src/imaging/wic_codec.cpp` : second encodeur en mémoire ; vérifier ses appelants avant de modifier le contrat partagé et refuser explicitement toute option non prise en charge.
+- `tests/export_stream/ExportStreamTests.cpp`, `tests/export_stream/ExportUiTests.cpp` et `tests/cmyk/CmykContracts.cpp` couvrent des chemins existants à prolonger. Le format `.comp` et la pile d'annulation ne nécessitent aucune migration.
 
-- Decode exports with independent tools; inspect JPEG frame markers and scan structure for each selected mode and verify PNG interlace metadata. Check ICC and DPI, RGB and CMYK, alpha and matte pixels, and color consistency with the existing WIC output.
-- Exercise zero and maximum JPEG quality, detailed and flat images, transparent edges, large documents, all modes, format switching, rapid repeated changes, cancellation and errors. Confirm old destinations remain recoverable and no stale preview is saved.
-- Verify the size label for every export format against the actual prepared file, including a file smaller than 0.01 Mb and rounding boundaries; ensure it updates after settings change and always uses `Mb`.
-- Exercise the actual Export Image dialog, including visibility, quality preference migration, latest generation, actual saved bytes and unchanged document/history. Retain Channel Pack's exact channel semantics.
-- Run affected existing imaging, CMYK and export-stream CTest targets and meaningful regressions on Windows; report commands and results. Measure memory and time for the progressive path at representative and maximum supported sizes, and document any explicit restrictions.
+## Choix technique et points à établir
+
+1. Vérifier sur la version de Windows prise en charge les options réellement offertes par WIC pour JPEG standard, Huffman optimisé, progressif et PNG entrelacé. Examiner les fichiers produits, sans supposer que l'écriture d'une propriété est suffisante.
+2. Prendre **libjpeg-turbo** comme candidat pour JPEG si WIC ne fournit pas les trois modes de manière fiable. Il propose l'encodage standard, l'optimisation Huffman et le progressif. Comparer également MozJPEG si le gain de taille justifie son temps d'encodage. Ne pas affirmer qu'un encodeur est le plus optimisé avant mesure.
+3. Comparer sur Windows x64 des photos, dégradés, textes et compositions transparentes : taille à qualité visuelle comparable, temps, mémoire maximale et compatibilité de décodage. Tester RGB et CMYK. Documenter le choix, la version et les résultats. Références : [libjpeg-turbo et MozJPEG](https://www.libjpeg-turbo.org/About/Mozjpeg), [MozJPEG](https://github.com/mozilla/mozjpeg).
+4. Vérifier la mémoire réellement utilisée par l'encodeur, notamment les coefficients d'un JPEG progressif : une API par lignes ne garantit pas une mémoire bornée. Mesurer jusqu'à la limite actuelle de 100 millions de pixels, définir un budget et signaler les cas non pris en charge avant tout remplacement de destination.
+5. Évaluer WIC pour PNG entrelacé ; si insuffisant, examiner libpng avec les mêmes exigences de mémoire, d'annulation et de fichiers temporaires. Toute dépendance retenue doit être épinglée, intégrée au build et aux paquets, et accompagnée de ses licences et sources.
+
+## Étapes d'implémentation
+
+1. **Établir la référence** : relever le comportement WIC actuel, mesurer les candidats et choisir le ou les encodeurs et leurs limites. Vérification : résultats reproductibles et fichiers décodables par un lecteur indépendant.
+2. **Étendre les options** : ajouter des types explicites dans `ExportOptions`, valider chaque combinaison et tracer tous les consommateurs, notamment `WicCodec::encode`. Vérification : aucune option ignorée silencieusement.
+3. **Implémenter l'encodage** : raccorder le backend retenu au chemin par bandes et conserver les conversions, profils, DPI, annulation, limites et remplacement de destination. Vérification : marqueurs JPEG et entrelacement PNG conformes, pixels et métadonnées décodés corrects.
+4. **Adapter le dialogue** : ajouter les contrôles propres au format et l'affichage en Mb dans `FileActions.cpp`, connecter leurs changements au cycle de génération existant et conserver la préférence JPEG. Vérification : aperçu, taille et fichier enregistré correspondent à la dernière génération.
+5. **Documenter et vérifier** : actualiser `docs/user-guide.md`, exécuter les tests ciblés, effectuer les contrôles Windows réels et préparer les captures pour la PR. Vérification : commandes et résultats effectifs consignés sans revendiquer de compatibilité Photoshop ou Mac non mesurée.
+
+## Plan de test automatisé
+
+- Construire avec le preset `windows-x64-release` documenté, puis exécuter les tests concernés : `ctest --preset windows-x64-release -R "^(export\\.ui|export_stream\\.|migration\\.cmyk_)" --output-on-failure`. Ajouter les cas pertinents aux cibles existantes et exécuter tout nouveau cas associé.
+- Avec des fichiers réellement exportés, vérifier les marqueurs JPEG et le nombre de passages, le décodage indépendant, RGB/CMYK, ICC, DPI, fond et limites de qualité. Vérifier les pixels PNG avec et sans alpha et avec ou sans entrelacement ; contrôler séparément Channel Pack.
+- Dans le dialogue de production, vérifier les contrôles visibles selon le format, la restauration de la qualité, les changements rapides, l'annulation et les erreurs, l'absence de mutation du document et de l'historique, et l'identité des octets affichés/préparés/enregistrés.
+- Vérifier la conversion de taille pour chaque format, un fichier sous 0,01 Mb, les seuils d'arrondi et un changement de réglage. Vérifier l'absence de résultat périmé et la conservation d'une destination existante après annulation ou échec.
+- Mesurer temps et mémoire sur petits et grands documents, y compris le JPEG progressif ; reporter le matériel, les entrées, les limites et les résultats réellement observés.
+
+## Vérification manuelle et livraison
+
+Après implémentation et tests, créer une branche de fonctionnalité à partir de `main` à jour en préservant le travail local, committer et pousser les seuls changements concernés, puis mettre à jour cette PR sans la fusionner. Lancer une fois la version finale et la laisser ouverte.
+
+Dans CompositorWindows : ouvrir un document avec zones transparentes et détails fins ; ouvrir **File → Export Image** ; essayer les trois modes JPEG et plusieurs qualités, puis PNG avec les deux options ; vérifier aperçu, taille en Mb et fichier enregistré. Pendant un encodage, changer rapidement de réglage puis annuler ; vérifier que le document reste inchangé. Contrôler le dialogue avec la mise à l'échelle Windows utilisée et faire une capture réelle montrant les réglages et la taille. Consigner séparément toute vérification impossible.
+
+## État de cette proposition
+
+Lecture du code et des tests existants uniquement. Aucun benchmark, build, test automatisé ou contrôle visuel natif n'a été exécuté pour ce plan.
