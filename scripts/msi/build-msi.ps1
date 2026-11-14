@@ -73,7 +73,7 @@ $bundle=Join-Path $output "CompositorWindows-$Version-setup.exe"
 if(Test-Path -LiteralPath $bundle){throw "Installer already exists: $bundle"}
 $bal=Join-Path (Join-Path $toolRoot $toolchain.assets[2].directory) $toolchain.assets[2].entry
 & dotnet exec --roll-forward Major $compiler build -arch x64 -ext $bal -wx -pdbtype none `
-    -d "Version=$Version" -d "Icon=$(Join-Path $root 'assets\app.ico')" -d "Msi=$msi" `
+    -d "Version=$Version" -d "Icon=$(Join-Path $root 'assets\app.ico')" -d "Logo=$(Join-Path $root 'assets\setup-logo.png')" -d "Msi=$msi" `
     -intermediatefolder (Join-Path $work 'bundle') -o $bundle (Join-Path $PSScriptRoot 'Bundle.wxs') *> (Join-Path $output 'bundle-build.log')
 if($LASTEXITCODE){throw "Installer bundle compilation failed; see $output\bundle-build.log"}
 Write-Output "MSI=$msi"

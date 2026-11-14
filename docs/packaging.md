@@ -33,4 +33,6 @@ Run the existing deployment checks after freezing the candidate:
 
 The checks remove developer paths from child-process environments, verify payload/source hashes, run runtime and native editing/save/export checks, install/repair the MSI, and verify project preservation on uninstall. To exercise upgrade and downgrade rejection, pass `-UpgradeInstaller <newer-version-msi>` built from the same payload using `scripts/msi/build-msi.ps1`. The test refuses to replace an existing registered preview. Results are stored under `evidence/packaging/`.
 
+On a disposable Windows installation without an existing Compositor installation or installation folder, pass `-BundleInstall` to exercise setup EXE install, repair and uninstall. Add `-BundleUpgradeInstaller <newer-version-setup.exe>` to also exercise bundle upgrade, downgrade rejection and an upgrade from the direct MSI. The bundle checks use the default per-user installation folder and refuse to run if an installation, folder or related bundle already exists. Check the installer windows and the downgrade message interactively as well; quiet checks cannot establish their appearance or focus.
+
 Deployment results describe the machine where they were measured. See [validation](../VALIDATION.md) for the checks performed and the remaining coverage limits.

@@ -1,5 +1,6 @@
-param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$Install,[string]$UpgradeInstaller)
+param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$Install,[string]$UpgradeInstaller,[switch]$BundleInstall,[string]$BundleUpgradeInstaller)
 $ErrorActionPreference='Stop'
+if($BundleUpgradeInstaller -and -not $BundleInstall){throw 'BundleUpgradeInstaller requires BundleInstall'}
 $root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $package=[IO.Path]::GetFullPath($PackageDirectory)
 $portable=Join-Path $package 'CompositorWindows'
@@ -31,6 +32,8 @@ if(Test-Path -LiteralPath $msi){
  if($LASTEXITCODE){throw 'Cannot extract the installer bundle'}
  $embedded=@(Get-ChildItem -LiteralPath $extracted -Recurse -File -Filter '*.msi')
  Record 'bundle_contains_release_msi' ($embedded.Count -eq 1 -and (Get-FileHash -LiteralPath $embedded[0].FullName).Hash -eq (Get-FileHash -LiteralPath $msi).Hash) @{msiCount=$embedded.Count}
+ $logo=Join-Path $run 'bundle-bootstrapper\logo.png'
+ Record 'bundle_setup_logo' ((Test-Path -LiteralPath $logo -PathType Leaf) -and (Get-FileHash -LiteralPath $logo).Hash -eq (Get-FileHash -LiteralPath (Join-Path $root 'assets\setup-logo.png')).Hash) @{}
  Add-Type -AssemblyName System.Drawing
  $actual=[Drawing.Icon]::ExtractAssociatedIcon($bundle)
  $expected=[Drawing.Icon]::new([string](Join-Path $root 'assets\app.ico'),$actual.Width,$actual.Height)
@@ -105,6 +108,71 @@ if($manifest.schema -eq 2){
    Record 'msi_uninstall_preserves_project' ($removed.exitCode -eq 0 -and $unchanged.Count -eq 0 -and -not(Test-Path -LiteralPath (Join-Path $installRoot 'Compositor.exe')) -and -not(Test-Path -LiteralPath $verb)) @{process=$removed;projectFiles=$projectHashes.Count;changed=$unchanged}
   }finally{
    if($installedMsi){$cleanup=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/x',$installedMsi,'/qn','/norestart','/l*v',(Join-Path $run 'msi-failed-run-cleanup.log')) 'msi-failed-run-cleanup';if($cleanup.exitCode -ne 0){Write-Warning "Test installation remains at $installRoot; cleanup returned $($cleanup.exitCode)"}}
+  }
+ }
+ if($BundleInstall){
+  if(-not(Test-Path -LiteralPath $msi -PathType Leaf) -or -not(Test-Path -LiteralPath $bundle -PathType Leaf)){throw 'Bundle installation requires an MSI and its setup EXE'}
+  $verb='HKCU:\Software\Classes\Directory\shell\CompositorWindowsPreview'
+  $registration='HKCU:\Software\CompositorWindows\CommunityPreview'
+  $installRoot=Join-Path $env:LOCALAPPDATA 'Programs\CompositorWindows'
+  $upgradeCode='{CF84B6B3-6B88-4BCA-8704-914E1A59693F}'
+  $uninstallRoots=@('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+  function RelatedBundles {foreach($key in $uninstallRoots){if(Test-Path -LiteralPath $key){Get-ChildItem -LiteralPath $key | ForEach-Object { $item=Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue; if($item.BundleUpgradeCode -contains $upgradeCode){$item} }}}}
+  $related=@(RelatedBundles)
+  if((Test-Path -LiteralPath $verb) -or (Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $installRoot) -or $related.Count){throw 'An existing Compositor installation, folder, or related bundle was found; refusing bundle installation testing'}
+  $upgradeBundle=$null
+  if($BundleUpgradeInstaller){
+   $upgradeBundle=[IO.Path]::GetFullPath($BundleUpgradeInstaller)
+   $upgradeExtract=Join-Path $run 'upgrade-bundle-contents'; $upgradeBa=Join-Path $run 'upgrade-bundle-bootstrapper'
+   & dotnet exec --roll-forward Major $wix burn extract $upgradeBundle -o $upgradeExtract -oba $upgradeBa
+   if($LASTEXITCODE){throw 'Cannot extract the upgrade bundle'}
+   [xml]$upgradeManifest=Get-Content -LiteralPath (Join-Path $upgradeBa 'manifest.xml') -Raw
+   if($upgradeManifest.BurnManifest.RelatedBundle.Id -ine $upgradeCode -or [version]$upgradeManifest.BurnManifest.Registration.Version -le [version]$manifest.version){throw 'Upgrade bundle must be a newer Compositor bundle'}
+  }
+  $activeBundle=$bundle; $activeMsi=$null; $sentinel=Join-Path $installRoot ('bundle-test-'+[Guid]::NewGuid().ToString('N')+'.txt')
+  try {
+   $result=RunApp $bundle @('-install','-quiet','-norestart') 'bundle-install'
+   Record 'bundle_per_user_install' ($result.exitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $installRoot 'Compositor.exe')) -and (Get-ItemProperty -LiteralPath $registration).InstallLocation.TrimEnd('\') -ieq $installRoot.TrimEnd('\')) $result
+   $installedBad=@($manifest.files | Where-Object {(Get-FileHash -LiteralPath (Join-Path $installRoot $_.path)).Hash -ine $_.sha256})
+   Record 'bundle_matches_portable_payload' ($installedBad.Count -eq 0) @{files=$manifest.files.Count;bad=$installedBad}
+   [IO.File]::WriteAllText($sentinel,'Bundle lifecycle test')
+   $repair=RunApp $bundle @('-repair','-quiet','-norestart') 'bundle-repair'
+   Record 'bundle_repair_preserves_user_file' ($repair.exitCode -eq 0 -and (Test-Path -LiteralPath $sentinel)) $repair
+   if($upgradeBundle){
+    $activeBundle=$upgradeBundle
+    $upgraded=RunApp $upgradeBundle @('-install','-quiet','-norestart') 'bundle-upgrade'
+    $afterUpgrade=@(RelatedBundles)
+    Record 'bundle_upgrade_preserves_user_file' ($upgraded.exitCode -eq 0 -and (Test-Path -LiteralPath $sentinel) -and (Test-Path -LiteralPath (Join-Path $installRoot 'Compositor.exe')) -and $afterUpgrade.Count -eq 1 -and [version]$afterUpgrade[0].DisplayVersion -eq [version]$upgradeManifest.BurnManifest.Registration.Version) @{process=$upgraded;relatedBundleCount=$afterUpgrade.Count}
+    $downgrade=RunApp $bundle @('-install','-quiet','-norestart') 'bundle-downgrade'
+    $afterDowngrade=@(RelatedBundles)
+    Record 'bundle_rejects_downgrade' ($downgrade.exitCode -eq 1638 -and (Test-Path -LiteralPath $sentinel) -and (Test-Path -LiteralPath (Join-Path $installRoot 'Compositor.exe')) -and $afterDowngrade.Count -eq 1 -and [version]$afterDowngrade[0].DisplayVersion -eq [version]$upgradeManifest.BurnManifest.Registration.Version) @{process=$downgrade;relatedBundleCount=$afterDowngrade.Count}
+   }
+   $removed=RunApp $activeBundle @('-uninstall','-quiet','-norestart') 'bundle-uninstall'
+   Record 'bundle_uninstall_preserves_user_file' ($removed.exitCode -eq 0 -and (Test-Path -LiteralPath $sentinel) -and -not(Test-Path -LiteralPath (Join-Path $installRoot 'Compositor.exe')) -and -not(Test-Path -LiteralPath $verb) -and @(RelatedBundles).Count -eq 0) $removed
+   $activeBundle=$null
+   if($upgradeBundle){
+    Remove-Item -LiteralPath $sentinel
+    if((Test-Path -LiteralPath $installRoot) -and -not @(Get-ChildItem -LiteralPath $installRoot -Force).Count){Remove-Item -LiteralPath $installRoot}
+    $customRoot=Join-Path $run 'bundle-upgrade-from-msi'; $customSentinel=Join-Path $customRoot 'keep.txt'
+    $activeMsi=$msi
+    $direct=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/i',$msi,'/qn','/norestart',"INSTALLFOLDER=$customRoot") 'bundle-base-msi-install'
+    Record 'bundle_base_msi_install' ($direct.exitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $customRoot 'Compositor.exe'))) $direct
+    [IO.File]::WriteAllText($customSentinel,'MSI upgrade test')
+    $activeBundle=$upgradeBundle
+    $transition=RunApp $upgradeBundle @('-install','-quiet','-norestart') 'bundle-upgrade-from-msi'
+    if($transition.exitCode -eq 0){$activeMsi=$null}
+    Record 'bundle_upgrade_from_msi' ($transition.exitCode -eq 0 -and (Test-Path -LiteralPath $customSentinel) -and (Get-ItemProperty -LiteralPath $registration).InstallLocation.TrimEnd('\') -ieq $customRoot.TrimEnd('\')) $transition
+    $removed=RunApp $upgradeBundle @('-uninstall','-quiet','-norestart') 'bundle-upgrade-from-msi-uninstall'
+    Record 'bundle_upgrade_from_msi_uninstall' ($removed.exitCode -eq 0 -and (Test-Path -LiteralPath $customSentinel) -and -not(Test-Path -LiteralPath (Join-Path $customRoot 'Compositor.exe'))) $removed
+    $activeBundle=$null
+   }
+  } finally {
+   if($activeBundle){$cleanup=RunApp $activeBundle @('-uninstall','-quiet','-norestart') 'bundle-failed-run-cleanup';if($cleanup.exitCode -ne 0){Write-Warning "Bundle cleanup failed with exit code $($cleanup.exitCode)"}}
+   if($activeMsi){$cleanupMsi=RunApp "$env:SystemRoot\System32\msiexec.exe" @('/x',$activeMsi,'/qn','/norestart') 'bundle-msi-cleanup';if($cleanupMsi.exitCode -ne 0){Write-Warning "MSI cleanup returned $($cleanupMsi.exitCode)"}}
+   if($upgradeBundle){$cleanupBase=RunApp $bundle @('-uninstall','-quiet','-norestart') 'bundle-base-cleanup';if($cleanupBase.exitCode -ne 0){Write-Warning "Base bundle cleanup returned $($cleanupBase.exitCode)"}}
+   if(@(RelatedBundles).Count){Write-Warning 'A related bundle registration remains after cleanup; inspect it before testing again'}
+   if(Test-Path -LiteralPath $sentinel){Remove-Item -LiteralPath $sentinel}
+   if((Test-Path -LiteralPath $installRoot) -and -not @(Get-ChildItem -LiteralPath $installRoot -Force).Count){Remove-Item -LiteralPath $installRoot}
   }
  }
  [ordered]@{timestamp=[DateTime]::UtcNow.ToString('o');machine=$env:COMPUTERNAME;checks=$checks;cleanVM=$false;humanAcceptance=$false;developmentPathsRemoved=$true;msiUpgradeExercised=[bool]$UpgradeInstaller} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $run 'report.json') -Encoding utf8
