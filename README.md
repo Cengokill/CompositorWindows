@@ -16,7 +16,7 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 **What you get**
 
-- An **x64 MSI**, or a **portable ZIP**. In the ZIP, run `Compositor.exe`.
+- A **setup EXE**, an **x64 MSI**, or a **portable ZIP**. In the ZIP, run `Compositor.exe`.
 - Windows 11 x64. The runtime libraries and the foreground-removal model are already in the package. There is no account, and there is no model download on first launch.
 - Unsigned builds. Windows can show an unknown-publisher warning. Compositor checks GitHub for a newer stable release at startup and periodically while open, and links to its page for manual installation. You can turn the check off in **Help → Check for Updates…**.
 

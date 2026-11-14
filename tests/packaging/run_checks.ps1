@@ -20,6 +20,26 @@ function RunApp([string]$exe,[string[]]$arguments,[string]$name){
  return [ordered]@{exitCode=$process.ExitCode;milliseconds=$timer.ElapsedMilliseconds}
 }
 $manifest=Get-Content -LiteralPath (Join-Path $package 'package-manifest.json') -Raw|ConvertFrom-Json
+$msi=Join-Path $package "CompositorWindows-$($manifest.version)-x64.msi"
+if(Test-Path -LiteralPath $msi){
+ $bundle=Join-Path $package "CompositorWindows-$($manifest.version)-setup.exe"
+ if(-not(Test-Path -LiteralPath $bundle -PathType Leaf)){throw 'Branded installer bundle is missing'}
+ $lock=Get-Content -LiteralPath (Join-Path $root 'scripts\msi\toolchain.json') -Raw | ConvertFrom-Json
+ $wix=Join-Path (Join-Path (Join-Path $root 'dependencies\packaging') $lock.assets[0].directory) $lock.assets[0].entry
+ $extracted=Join-Path $run 'bundle-contents'
+ & dotnet exec --roll-forward Major $wix burn extract $bundle -o $extracted -oba (Join-Path $run 'bundle-bootstrapper')
+ if($LASTEXITCODE){throw 'Cannot extract the installer bundle'}
+ $embedded=@(Get-ChildItem -LiteralPath $extracted -Recurse -File -Filter '*.msi')
+ Record 'bundle_contains_release_msi' ($embedded.Count -eq 1 -and (Get-FileHash -LiteralPath $embedded[0].FullName).Hash -eq (Get-FileHash -LiteralPath $msi).Hash) @{msiCount=$embedded.Count}
+ Add-Type -AssemblyName System.Drawing
+ $actual=[Drawing.Icon]::ExtractAssociatedIcon($bundle)
+ $expected=[Drawing.Icon]::new([string](Join-Path $root 'assets\app.ico'),$actual.Width,$actual.Height)
+ try {
+  $actualImage=$actual.ToBitmap(); $expectedImage=$expected.ToBitmap(); $same=$true
+  for($y=0;$y -lt $actual.Height;$y++){for($x=0;$x -lt $actual.Width;$x++){if($actualImage.GetPixel($x,$y).ToArgb() -ne $expectedImage.GetPixel($x,$y).ToArgb()){$same=$false;break}}}
+  Record 'bundle_icon' $same @{width=$actual.Width;height=$actual.Height}
+ } finally {if($actualImage){$actualImage.Dispose()};if($expectedImage){$expectedImage.Dispose()};$actual.Dispose();$expected.Dispose()}
+}
 $bad=@($manifest.files|Where-Object {(Get-FileHash -LiteralPath (Join-Path $portable $_.path) -Algorithm SHA256).Hash -ine $_.sha256})
 Record 'package_sha256' ($bad.Count -eq 0) @{files=$manifest.files.Count;bad=$bad}
 if($manifest.schema -eq 2){

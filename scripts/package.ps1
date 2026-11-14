@@ -208,7 +208,7 @@ Licenses and corresponding sources are in licenses and sources.
   Compress-Archive -LiteralPath $demoStage -DestinationPath (Join-Path $output "CompositorWindows-$Version-demo.zip") -CompressionLevel Optimal
  }
  if(-not $PortableOnly){& (Join-Path $PSScriptRoot 'msi\build-msi.ps1') -PackageDirectory $portable -OutputDirectory $output -Version $Version}
- Get-ChildItem -LiteralPath $output -File | Where-Object {$_.Extension -in @('.msi','.zip')} | ForEach-Object {"$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding utf8
+ Get-ChildItem -LiteralPath $output -File | Where-Object {$_.Extension -in @('.msi','.zip','.exe')} | ForEach-Object {"$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding utf8
  Write-Output "PACKAGE=$output"
 } finally {Pop-Location}
 

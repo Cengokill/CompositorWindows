@@ -1,0 +1,13 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="Compositor Windows" Manufacturer="Compositor Windows"
+          Version="$(var.Version)" UpgradeCode="CF84B6B3-6B88-4BCA-8704-914E1A59693F"
+          IconSourceFile="$(var.Icon)">
+    <BootstrapperApplication>
+      <bal:WixInternalUIBootstrapperApplication />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="$(var.Msi)" />
+    </Chain>
+  </Bundle>
+</Wix>
