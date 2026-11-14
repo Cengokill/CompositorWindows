@@ -101,6 +101,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("app.exit","File","Exit","Alt+F4",C::Application,G::WorkspaceSwitch,P::None,"Compositor/IO/CompositorApplicationDelegate.swift:39");
         add("app.about","Help","About Compositor","",C::Application,G::Always,P::None,"Native Windows application information");
         add("help.check_updates","Help","Check for Updates…","",C::Application,G::Always,P::None,"Windows signed development updater");
+        add("help.whats_new","Help","What's New","",C::Application,G::Always,P::None,"Bundled notes for the installed version");
         add("edit.undo","Edit","Undo","Ctrl+Z",C::Document,G::Undo,P::None,"Compositor/Document/EditorSession.swift:444",T::Undo);
         add("edit.redo","Edit","Redo","Ctrl+Shift+Z",C::Document,G::Redo,P::None,"Compositor/Document/EditorSession.swift:444",T::Redo);
         add("clipboard.cut","Clipboard","Cut","Ctrl+X",C::Pixels,G::Cut,P::FinishAppearance,"Compositor/CompositorApp.swift:113",T::Cut);

@@ -1,9 +1,11 @@
 #include "ui/MainWindow.h"
 #include "ui/WhatsNew.h"
 #include "ui/WorkspaceDropQueue.h"
+#include <QAction>
 #include <QApplication>
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QImage>
 #include <QLabel>
 #include <QMessageBox>
@@ -44,7 +46,7 @@ void extraction(){
 }
 void settings(){
     QSettings initial;require(ui::releaseNotesDue(initial,{1,5,6}),"fresh history did not show notes");
-    require(!initial.contains("updates/whatsNewVersion"),"due check saved an acknowledgement");
+    require(!initial.contains("updates/whatsNewDevelopmentVersion"),"due check saved an acknowledgement");
     ui::acknowledgeReleaseNotes(initial,{1,5,6});
     require(!ui::releaseNotesDue(initial,{1,5,6})&&!ui::releaseNotesDue(initial,{1,4,9}),"same or older version was due");
     require(ui::releaseNotesDue(initial,{1,10,0}),"numeric version ordering failed");
@@ -53,17 +55,46 @@ void settings(){
     QSettings reopened;require(!ui::releaseNotesDue(reopened,{1,10,0}),"acknowledgement did not persist");
     ui::acknowledgeReleaseNotes(reopened,{1,5,6});
     require(!ui::releaseNotesDue(reopened,{1,9,9})&&ui::releaseNotesDue(reopened,{1,10,1}),"older acknowledgement changed high-water mark");
-    reopened.setValue("updates/whatsNewVersion","invalid");reopened.sync();
+    reopened.setValue("updates/whatsNewDevelopmentVersion","invalid");reopened.sync();
     require(ui::releaseNotesDue(reopened,{2,0,0})&&ui::releaseNotesDue(reopened,{2,0,0}),"invalid history suppressed notes");
-    require(reopened.value("updates/whatsNewVersion").toString()=="invalid","due check replaced invalid history");
+    require(reopened.value("updates/whatsNewDevelopmentVersion").toString()=="invalid","due check replaced invalid history");
+}
+void developmentDoesNotAcknowledgeStable(){
+    QTemporaryDir package;require(package.isValid(),"package directory missing");
+    QFile policy(package.filePath("release-policy.json"));
+    require(policy.open(QIODevice::WriteOnly)&&policy.write("{\"channel\":\"stable\"}")>0,"release policy missing");policy.close();
+    QSettings settings;
+    require(ui::releaseNotesDue(settings,{1,5,6},package.path()),"fresh package did not show notes");
+    settings.setValue("updates/whatsNewVersion","1.5.5");settings.sync();
+    ui::acknowledgeReleaseNotes(settings,{1,5,6});
+    require(settings.value("updates/whatsNewDevelopmentVersion").toString()=="1.5.6","development acknowledgement missing");
+    require(settings.value("updates/whatsNewVersion").toString()=="1.5.5"&&ui::releaseNotesDue(settings,{1,5,6},package.path()),
+            "development launch suppressed packaged notes for the same version");
+    ui::acknowledgeReleaseNotes(settings,{1,5,6},package.path());
+    require(settings.value("updates/whatsNewVersion").toString()=="1.5.6"&&
+            !ui::releaseNotesDue(settings,{1,5,6},package.path()),"packaged acknowledgement did not persist");
+}
+void reopenFromHelp(){
+    QSettings settings;ui::acknowledgeReleaseNotes(settings,{1,5,6});
+    MainWindow window(true);window.show();
+    QAction* action=nullptr;
+    for(auto* candidate:window.findChildren<QAction*>())if(candidate->text()=="What's New")action=candidate;
+    require(action&&action->isEnabled(),"What's New action missing from Help");
+    action->trigger();waitFor([&]{return whatsNew(window)!=nullptr;},"Help did not open current notes");
+    require(whatsNew(window)->findChild<QTextBrowser*>("whatsNewContent")->toPlainText().contains("Animated GIF"),
+            "Help displayed the wrong notes");
+    whatsNew(window)->accept();waitFor([&]{return whatsNew(window)==nullptr;},"Help notes did not close");
+    require(settings.value("updates/whatsNewDevelopmentVersion").toString()=="1.5.6","Help changed the acknowledgement");
+    action->trigger();waitFor([&]{return whatsNew(window)!=nullptr;},"Help did not reopen notes");
+    whatsNew(window)->accept();
 }
 void firstLaunch(){
     MainWindow window(true);window.show();bool finished=false;
     window.startWhatsNew([&]{finished=true;});waitFor([&]{return whatsNew(window)!=nullptr||finished;},"first launch did not proceed");
     require(whatsNew(window)&&!finished,"first launch did not show dialog");
-    QSettings settings;require(!settings.contains("updates/whatsNewVersion"),"first launch acknowledged before dismissal");
+    QSettings settings;require(!settings.contains("updates/whatsNewDevelopmentVersion"),"first launch acknowledged before dismissal");
     whatsNew(window)->accept();waitFor([&]{return finished;},"first launch did not finish after dismissal");
-    require(settings.value("updates/whatsNewVersion").toString()=="1.5.6","first launch acknowledgement missing");
+    require(settings.value("updates/whatsNewDevelopmentVersion").toString()=="1.5.6","first launch acknowledgement missing");
     MainWindow next(true);next.show();bool again=false;next.startWhatsNew([&]{again=true;});
     waitFor([&]{return again;},"next launch did not finish");require(!whatsNew(next),"first launch notes shown twice");
 }
@@ -96,11 +127,11 @@ void missing(){
     initializeOlder();QCoreApplication::setApplicationVersion("9.9.9");MainWindow window(true);window.show();
     bool finished=false;window.startWhatsNew([&]{finished=true;});waitFor([&]{return finished;},"missing notes stalled startup");
     require(!whatsNew(window),"missing notes showed empty dialog");
-    QSettings settings;require(settings.value("updates/whatsNewVersion").toString()=="1.5.5","missing notes acknowledged a version never shown");
-    settings.remove("updates/whatsNewVersion");settings.sync();
+    QSettings settings;require(settings.value("updates/whatsNewDevelopmentVersion").toString()=="1.5.5","missing notes acknowledged a version never shown");
+    settings.remove("updates/whatsNewDevelopmentVersion");settings.sync();
     MainWindow fresh(true);fresh.show();bool freshFinished=false;fresh.startWhatsNew([&]{freshFinished=true;});
     waitFor([&]{return freshFinished;},"missing notes on first launch stalled startup");
-    require(!whatsNew(fresh)&&!settings.contains("updates/whatsNewVersion"),"missing notes on first launch were acknowledged");
+    require(!whatsNew(fresh)&&!settings.contains("updates/whatsNewDevelopmentVersion"),"missing notes on first launch were acknowledged");
 }
 void defersStartup(){
     initializeOlder();QTemporaryDir input;require(input.isValid(),"input directory missing");
@@ -160,7 +191,7 @@ int main(int argc,char** argv){
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsRoot.path());
     if(argc!=2)return 2;
     const std::map<std::string,std::function<void()>> cases{
-        {"extraction",extraction},{"settings",settings},{"first_launch",firstLaunch},
+        {"extraction",extraction},{"settings",settings},{"development_then_stable",developmentDoesNotAcknowledgeStable},{"reopen_from_help",reopenFromHelp},{"first_launch",firstLaunch},
         {"continue",[]{closeThrough("continue");}},{"escape",[]{closeThrough("escape");}},{"close",[]{closeThrough("close");}},
         {"missing",missing},{"defers_startup",defersStartup},{"cancel_close",cancelClose},{"long_content",longContent}};
     try{if(!cases.contains(argv[1]))throw std::runtime_error("unknown case");cases.at(argv[1])();std::cout<<"PASS "<<argv[1]<<'\n';return 0;}

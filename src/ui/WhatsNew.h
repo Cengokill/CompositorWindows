@@ -14,7 +14,7 @@ struct ReleaseNotes {
 // Extract only the named sections under the exact installed-version heading.
 ReleaseNotes releaseNotesForVersion(const QString& markdown,const QString& version);
 ReleaseNotes installedReleaseNotes();
-bool releaseNotesDue(QSettings& settings,const update::Version& installed);
-void acknowledgeReleaseNotes(QSettings& settings,const update::Version& installed);
+bool releaseNotesDue(QSettings& settings,const update::Version& installed,const QString& applicationDirectory={});
+void acknowledgeReleaseNotes(QSettings& settings,const update::Version& installed,const QString& applicationDirectory={});
 QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const ReleaseNotes& notes);
 }
