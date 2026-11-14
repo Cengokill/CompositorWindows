@@ -200,16 +200,18 @@ static int box_blur_plane(const float *src, float *dst, size_t width, size_t hei
         double sum = 0;
         for (int k = -radius; k <= radius; ++k) sum += src[y * width + clamped_index(k, width)];
         for (size_t x = 0; x < width; ++x) {
-        if (camera_cancelled(cancel)) { free(temp); return 0; }
+            if (x && (x & 4095) == 0 && camera_cancelled(cancel)) { free(temp); return 0; }
             temp[y * width + x] = (float)(sum / window);
             sum += src[y * width + clamped_index((int)x + radius + 1, width)];
             sum -= src[y * width + clamped_index((int)x - radius, width)];
         }
     }
     for (size_t x = 0; x < width; ++x) {
+        if (camera_cancelled(cancel)) { free(temp); return 0; }
         double sum = 0;
         for (int k = -radius; k <= radius; ++k) sum += temp[clamped_index(k, height) * width + x];
         for (size_t y = 0; y < height; ++y) {
+            if (y && (y & 4095) == 0 && camera_cancelled(cancel)) { free(temp); return 0; }
             dst[y * width + x] = (float)(sum / window);
             sum += temp[clamped_index((int)y + radius + 1, height) * width + x];
             sum -= temp[clamped_index((int)y - radius, height) * width + x];

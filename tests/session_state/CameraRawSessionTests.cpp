@@ -229,6 +229,48 @@ void cancel_keeps() {
     rawModal(f, [](QDialog& dialog) { field<QDoubleSpinBox>(dialog, "Exposure")->setValue(1); field<QDoubleSpinBox>(dialog, "Shadows")->setValue(100); }, false);
     require(f.a->document == before && f.a->history.undoCount() == 0 && f.a->toolState.filterSettings.cameraRaw.exposure == 0 && f.a->toolState.filterSettings.cameraRaw.shadows == 0, "Cancel does not remember or change pixels");
 }
+void texture_grading_session() {
+    auto initial = document(256, 64);
+    std::vector<Pixel> pixels(256 * 64);
+    for (int y = 0; y < 64; ++y) for (int x = 0; x < 256; ++x) {
+        const auto value = std::uint8_t(std::clamp(x + (y % 2 ? 20 : -20), 0, 255));
+        pixels[std::size_t(y) * 256 + x] = {value, value, value, 255};
+    }
+    const auto source = Raster::fromRgba(256, 64, reinterpret_cast<const std::uint8_t*>(pixels.data()), 256 * 4);
+    initial.layers.front().raster = source;
+    Fixture f(initial);
+    f.a->toolState.filterSettings.cameraRaw.grading.shadows = {30, 80, 0};
+    f.trigger("filter.camera_raw");
+    QPointer<ui::EditPanelSession> session;
+    for (auto* object : f.window.findChildren<QObject*>()) {
+        auto* candidate = dynamic_cast<ui::EditPanelSession*>(object);
+        if (candidate && candidate->panel() && candidate->panel()->isVisible() && candidate->canvas() == f.window.canvas()) session = candidate;
+    }
+    require(bool(session), "Camera Raw session opened");
+    auto* panel = session->panel();
+    field<QDoubleSpinBox>(*panel, "Texture")->setValue(-100);
+    field<QDoubleSpinBox>(*panel, "Texture")->setValue(100);
+    field<QDoubleSpinBox>(*panel, "Blending")->setValue(100);
+    field<QDoubleSpinBox>(*panel, "Balance")->setValue(-100);
+    auto settings = f.a->toolState.filterSettings.cameraRaw;
+    settings.texture = 100; settings.grading.blending = 100; settings.grading.balance = -100;
+    const auto expected = filters::renderCameraRaw(*source, settings, {}, nullptr).raster;
+    QElapsedTimer elapsed; elapsed.start();
+    while (elapsed.elapsed() < 15000) {
+        auto preview = session->previewDocument();
+        if (preview && preview->layers.front().raster->rgba() == expected->rgba()) break;
+        QTest::qWait(5);
+    }
+    require(session->previewDocument() && session->previewDocument()->layers.front().raster->rgba() == expected->rgba(), "preview converges to texture and grading settings");
+    panel->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    elapsed.restart();
+    while (session && elapsed.elapsed() < 15000) QTest::qWait(5);
+    require(!session && f.a->history.undoCount() == 1, "OK closes and creates one undo");
+    const auto committed = f.a->document;
+    require(committed->layers.front().raster->rgba() == expected->rgba(), "OK commits the preview pixels");
+    f.trigger("edit.undo"); require(f.a->document == initial, "Undo restores original pixels");
+    f.trigger("edit.redo"); require(f.a->document == committed, "Redo restores the grade");
+}
 void raw_import_history() {
     Fixture f;
     f.a->history.byteLimit=0;
@@ -525,7 +567,7 @@ void guided_lines() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_auto_white_balance", commit_auto_white_balance}, {"commit_during_native_preview", commit_during_native_preview}, {"native_preview_session", native_preview_session}, {"cancel_keeps", cancel_keeps}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
+    const std::map<std::string, void (*)()> cases{{"identity_ok", identity_ok}, {"commit_ok", commit_ok}, {"commit_auto_white_balance", commit_auto_white_balance}, {"commit_during_native_preview", commit_during_native_preview}, {"native_preview_session", native_preview_session}, {"cancel_keeps", cancel_keeps}, {"texture_grading_session", texture_grading_session}, {"raw_import_history", raw_import_history}, {"hidden_group", hidden_group}, {"dock_and_menu", dock_and_menu}, {"slider_knob_geometry", slider_knob_geometry}, {"guided_lines", guided_lines}};
     try {
         require(argc == 2 && cases.contains(argv[1]), "provide named case");
         cases.at(argv[1])();
