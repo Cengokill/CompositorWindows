@@ -288,6 +288,7 @@ private:
     void chooseCmykProfile();
     void refreshCmykActions();
     void refresh(bool render=true,bool rebuildLayers=true);
+    void refreshHistoryChrome(EditorProject* project);
     void setupGifTimeline();
     void refreshGifTimeline();
     void stopGifPlayback();
@@ -420,6 +421,7 @@ private:
     void setupLayerActions();
     void newBlankLayer();
     void finishVisibilitySwipe();
+    void refreshLayerVisibility(EditorProject& project, const Layer& layer);
     EditorProject* visibilityOwner_{};
     void refreshLayerPanel();
     void maskCommand(int);

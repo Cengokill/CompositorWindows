@@ -74,7 +74,7 @@ public:
     void rebuild();
     void updateSelection();
     void setFilter(const QString& search, bool selectedOnly);
-    void syncVisibilityChrome();
+    void syncVisibilityChrome(const std::string& id, bool visible);
     QMimeData* dragMime(bool maskCopy=false) const;
     bool accepts(const QMimeData*,const QPoint&,Qt::KeyboardModifiers) const;
     bool performDrop(const QMimeData*,const QPoint&,Qt::KeyboardModifiers);
