@@ -269,7 +269,9 @@ private:
     void initializeProject(EditorProject&);
     EditorProject* dropDestinationAt(QPoint,std::optional<Point>&);
     bool canReceiveLayerDrop(const QMimeData*,QPoint,Qt::KeyboardModifiers);
-    bool receiveLayerDrop(const QMimeData*,QPoint,Qt::KeyboardModifiers);
+    bool receiveLayerDrop(const QMimeData*,QPoint,Qt::KeyboardModifiers,const layers::Placement* listPlacement=nullptr);
+    bool canAcceptIncomingLayer(const QMimeData*) ;
+    void activateHoveredProject(const QMimeData*,QPoint);
     void switchProject();
     bool canSwitchProjects();
     ui::CommandState commandState(EditorProject* owner=nullptr);
@@ -501,7 +503,9 @@ protected:
     void keyReleaseEvent(QKeyEvent*)override;
     void changeEvent(QEvent*)override;
     void dragEnterEvent(QDragEnterEvent*)override;
+    void dragMoveEvent(QDragMoveEvent*)override;
     void dropEvent(QDropEvent*)override;
+    void acceptWorkspaceDrag(QDropEvent*,QPoint where);
 public:
     static QString userDownloadsDirectory();
     void importSelectedImages(const QStringList&,QObject* destination=nullptr);
