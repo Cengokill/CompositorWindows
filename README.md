@@ -22,16 +22,15 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.5.12
+## What's new in 1.5.13
 
 See the [release notes](docs/release-notes.md) for details.
 
-- **Rim Light.** Add directional colored lighting and glow around a detected subject.
-- **Sharpen.** Apply sharpening as a filter or an editable adjustment layer.
-- **Align and distribute.** Arrange selected layers using the Layer menu or Move toolbar.
-- **Crop.** Set custom ratios and snap the crop frame to document edges.
-
-<img width="1024" alt="RAW Development with a live preview and the Camera Raw button" src="https://github.com/user-attachments/assets/14fd198a-286b-459e-8086-5ebfd2843f8d" />
+- **Faster canvas interactions.** Alt+wheel zoom and layer visibility changes are more responsive, especially with multiple layers.
+- **Find selected layers.** Selecting a layer on the canvas scrolls its row into view and opens its parent folders.
+- **Shape editing.** With the Shape tool active, change the selected shape's fill with Background Color and see controls relevant to its type.
+- **More reliable interactions.** With Auto-select enabled, choose the layer under the pointer even inside the current layer's bounds. The Hand tool shows open and closed hand cursors.
+- **What's New.** Reopen release notes from Help; development builds no longer mark stable-package notes as read.
 
 The command palette (**Ctrl+Shift+P**) finds every command and tool by name.
 
