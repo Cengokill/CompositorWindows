@@ -816,7 +816,7 @@ void MainWindow::exportImage(){
     auto showMatte=[&]{
         const auto hex=matteColor.name();
         matte.setAccessibleName("Export background color");matte.setAccessibleDescription(hex);matte.setToolTip(hex);
-        if(kind()==ExportKind::Jpeg){matte.setText({});matte.setFixedSize(36,22);matte.setStyleSheet(QString("QPushButton#exportMatte { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QPushButton#exportMatte:hover { border-color: #bfc9d8; } QPushButton#exportMatte:pressed, QPushButton#exportMatte:focus { border-color: #78b0f7; }").arg(hex));}
+        if(kind()==ExportKind::Jpeg||kind()==ExportKind::Png){matte.setText({});matte.setFixedSize(36,22);matte.setStyleSheet(QString("QPushButton#exportMatte { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QPushButton#exportMatte:hover { border-color: #bfc9d8; } QPushButton#exportMatte:pressed, QPushButton#exportMatte:focus { border-color: #78b0f7; }").arg(hex));}
         else{matte.setMinimumSize(0,0);matte.setMaximumSize(QWIDGETSIZE_MAX,QWIDGETSIZE_MAX);matte.setStyleSheet({});matte.setText(hex);}
     };
     auto showPageSize=[&]{
@@ -925,7 +925,7 @@ void MainWindow::exportImage(){
     });
     connect(&debounce,&QTimer::timeout,&dialog,start);
     connect(&progress,&QTimer::timeout,&dialog,[&]{if(running&&runningGeneration==generation)bytesLabel.setText(QString("Encoding %1%").arg(percent->load()));});
-    auto applyKind=[&]{for(auto& box:channels)layout.setRowVisible(&box,kind()==ExportKind::ChannelPack);const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Png&&!transparency.isChecked())||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&jpegMode,kind()==ExportKind::Jpeg);layout.setRowVisible(&transparency,kind()==ExportKind::Png);layout.setRowVisible(&interlaced,kind()==ExportKind::Png);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
+    auto applyKind=[&]{for(auto& box:channels)layout.setRowVisible(&box,kind()==ExportKind::ChannelPack);const bool matteUsed=kind()==ExportKind::Jpeg||kind()==ExportKind::Pdf||(kind()==ExportKind::Png&&!transparency.isChecked())||(kind()==ExportKind::Tiff&&colorMode.currentIndex()==1);colorMode.setEnabled(cmykAllowed());profileButton.setEnabled(cmykAllowed()&&colorMode.currentIndex()==1);quality.setEnabled(kind()==ExportKind::Jpeg);matte.setEnabled(matteUsed);layout.setRowVisible(&matte,matteUsed||kind()==ExportKind::Png);scale.setEnabled(kind()==ExportKind::Pdf);layout.setRowVisible(&quality,kind()==ExportKind::Jpeg);layout.setRowVisible(&jpegMode,kind()==ExportKind::Jpeg);layout.setRowVisible(&transparency,kind()==ExportKind::Png);layout.setRowVisible(&interlaced,kind()==ExportKind::Png);layout.setRowVisible(&scale,kind()==ExportKind::Pdf);layout.setRowVisible(&pageSize,kind()==ExportKind::Pdf);layout.setRowVisible(&animatedPreview,kind()==ExportKind::Gif);};
     for(auto& box:channels)connect(&box,&QComboBox::currentIndexChanged,&dialog,changed);
     connect(&colorMode,&QComboBox::currentIndexChanged,&dialog,[&]{applyKind();changed();});
     connect(&profileButton,&QPushButton::clicked,&dialog,[&]{const auto path=chooseNativeCmykProfilePath();if(path.isEmpty())return;try{auto profile=imaging::readCmykProfile(nativePath(path));outputProfile=std::move(profile);profileButton.setText(QString::fromStdString(outputProfile->name));changed();}catch(const std::exception& error){QMessageBox::critical(&dialog,"CMYK profile",error.what());}});
@@ -939,7 +939,7 @@ void MainWindow::exportImage(){
     connect(&matte,&QPushButton::clicked,&dialog,[&]{auto color=QColorDialog::getColor(matteColor,&dialog,"Export background");if(color.isValid()){matteColor=color;showMatte();changed();}});
     connect(&buttons,&QDialogButtonBox::accepted,&dialog,[&]{if(!readyPath.isEmpty()&&!running)dialog.accept();});
     connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-    applyKind();changed();progress.start();
+    showMatte();applyKind();changed();progress.start();
     const auto response=dialog.exec();closed=true;stopAnimation();debounce.stop();progress.stop();cancel->store(true);watcher.waitForFinished();
     if(response!=QDialog::Accepted||readyPath.isEmpty())return;
     const auto chosen=kind();
