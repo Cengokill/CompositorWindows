@@ -73,6 +73,7 @@ public:
     ~LayerPanelController() override;
     void rebuild();
     void updateSelection();
+    void scrollSelectionToTop();
     void setFilter(const QString& search, bool selectedOnly);
     void syncVisibilityChrome(const std::string& id, bool visible);
     QMimeData* dragMime(bool maskCopy=false) const;

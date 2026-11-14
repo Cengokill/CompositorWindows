@@ -4,6 +4,7 @@
 #include "persistence/ProjectStore.h"
 #include <QTemporaryDir>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCursor>
 #include <QFont>
 #include <QLineEdit>
@@ -185,6 +186,63 @@ Document scrollExample(int count){
         auto mask=std::make_shared<GrayRaster>();mask->width=mask->height=1;mask->pixels={255};l.mask=Mask{mask};d.layers.push_back(l);}
     return d;
 }
+void canvas_selection_scroll(){
+    auto d=scrollExample(40);
+    for(int i=0;i<int(d.layers.size());++i)d.layers[i].transform={double(i*9),20,6,6};
+    MainWindow w(true);auto& p=w.addProject(d);auto* t=tree(w);t->setFixedHeight(240);
+    w.show();QApplication::processEvents();
+    auto* controls=w.findChild<QCheckBox*>("transformShowControls");check(controls,"missing transform controls");controls->setChecked(false);
+    auto* snapping=w.findChild<QCheckBox*>("transformSnapping");check(snapping,"missing transform snapping");snapping->setChecked(false);
+    auto* bar=t->verticalScrollBar();check(bar->maximum()>0,"scroll fixture has no overflow");
+    const auto before=*p.document;const auto undo=p.history.undoCount();
+    const auto click=[&](int index,int initial,Qt::KeyboardModifiers modifiers=Qt::NoModifier){
+        bar->setValue(initial);QApplication::processEvents();
+        const auto id="scroll-"+std::to_string(index);auto* row=item(w,id.c_str());
+        const int expected=std::clamp(bar->value()+t->visualItemRect(row).top(),bar->minimum(),bar->maximum());
+        const QPointF point(index*9+3,23);p.canvas->pointerDown(point,modifiers);p.canvas->pointerUp(point,modifiers);QApplication::processEvents();
+        check(p.active==id&&p.selected==std::vector<std::string>{id},"canvas click did not select target");
+        check(bar->value()==expected,"canvas selection did not align selected row at top");
+        check(*p.document==before&&p.history.undoCount()==undo,"canvas selection changed document or history");
+    };
+    click(12,0);click(30,bar->maximum());click(29,bar->value());
+    click(0,0);check(bar->value()==bar->maximum(),"last row did not use scroll limit");
+    click(20,0,Qt::ControlModifier);click(20,0);
+}
+void canvas_selection_scroll_context(){
+    auto d=scrollExample(40);
+    for(int i=0;i<int(d.layers.size());++i)d.layers[i].transform={double(i*9),20,6,6};
+    Layer outer;outer.id="outer";outer.name="Outer";outer.group=true;outer.transform={0,0,400,300};
+    Layer inner;inner.id="inner";inner.name="Inner";inner.group=true;inner.parentId=outer.id;inner.transform={0,0,400,300};
+    d.layers[12].parentId=inner.id;d.layers.push_back(inner);d.layers.push_back(outer);
+    MainWindow w(true);auto& p=w.addProject(d);auto* t=tree(w);t->setFixedHeight(240);
+    p.active="scroll-39";p.selected={p.active};p.collapsedGroups={"inner","outer"};controller(w)->rebuild();
+    w.show();QApplication::processEvents();
+    auto* controls=w.findChild<QCheckBox*>("transformShowControls");auto* snapping=w.findChild<QCheckBox*>("transformSnapping");
+    check(controls&&snapping,"missing transform controls");controls->setChecked(false);snapping->setChecked(false);
+    const auto before=*p.document;const auto undo=p.history.undoCount();
+    const auto click=[&](int index){const QPointF point(index*9+3,23);p.canvas->pointerDown(point,{});p.canvas->pointerUp(point,{});QApplication::processEvents();};
+    click(12);
+    check(p.active=="scroll-12"&&item(w,"outer")->isExpanded()&&item(w,"inner")->isExpanded(),"canvas selection did not reveal nested layer");
+    check(!p.collapsedGroups.contains("outer")&&!p.collapsedGroups.contains("inner"),"revealed ancestors did not stay expanded");
+    check(t->visualItemRect(item(w,"scroll-12")).top()==0||t->verticalScrollBar()->value()==t->verticalScrollBar()->maximum(),"nested layer not aligned at top");
+    check(*p.document==before&&p.history.undoCount()==undo,"revealing nested layer changed document or history");
+    auto* search=w.findChild<QLineEdit*>("layerSearch");check(search,"missing search");search->setText("no matching layer");
+    click(20);check(p.active=="scroll-20"&&item(w,"scroll-20")->isHidden()&&search->text()=="no matching layer","canvas selection changed or bypassed search filter");
+    search->clear();QApplication::processEvents();
+    auto* selected=w.findChild<QToolButton*>("layerSelectedFilter");check(selected,"missing selected filter");selected->click();click(12);
+    check(p.active=="scroll-12"&&!item(w,"scroll-12")->isHidden()&&item(w,"scroll-20")->isHidden(),"selected filter did not follow canvas selection");
+    selected->click();click(20);
+    auto* bar=t->verticalScrollBar();bar->setValue(0);QApplication::processEvents();
+    p.canvas->zoom=10;controls->setChecked(true);
+    p.canvas->pointerDown({180,20},{});check(bar->value()==0,"transform handle scrolled the Layers panel");p.canvas->pointerCancel();
+    controls->setChecked(false);p.canvas->pointerDown({183,23},{});p.canvas->pointerMove({193,23},{});p.canvas->pointerCancel();
+    check(*p.document==before&&p.history.undoCount()==undo,"cancelled transform changed document or history");
+    bar->setValue(0);QApplication::processEvents();
+    const auto row=t->topLevelItem(1);const auto point=t->visualItemRect(row).center();
+    QTest::mouseClick(t->viewport(),Qt::LeftButton,Qt::NoModifier,point);QApplication::processEvents();
+    check(bar->value()==0,"selection in Layers panel scrolled to top");
+    check(*p.document==before&&p.history.undoCount()==undo,"filter or panel selection changed document or history");
+}
 void middle_scroll(){
     for(const int count:{3,40}){
         MainWindow w(true);auto&p=w.addProject(scrollExample(count));w.show();QApplication::processEvents();
@@ -335,4 +393,4 @@ void middle_scroll_controls(){
 void source_cursor_conflict(){MainWindow w(true);auto d=example();for(auto&l:d.layers){l.raster.reset();l.transform={0,0,400,300};}w.addProject(d);w.show();QApplication::processEvents();auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor,"source Option name offers duplicate");auto*row=item(w,"c");const auto rect=tree(w)->visualItemRect(row);const auto size=row->icon(1).actualSize({36,36});check(size==QSize(36,27),"source thumbnail takes400x300canvas shape");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,rect.center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::AltModifier);const bool thumbnailAssertion=view->cursor().shape()!=Qt::DragCopyCursor;std::cout<<"SOURCE-TEST-CONFLICT CursorTests.optionOverALayerRowOffersDuplicatingExceptOverThumbnails row_top="<<rect.top()<<" row_height="<<rect.height()<<" thumbnail_center_y="<<picture.y()<<" clipping_boundary="<<rect.bottom()+1-rect.height()/4<<" actual_role="<<view->property("layerCursorRole").toString().toStdString()<<" expected=not-duplicate\n";mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"source return to plain name restores arrow");check(thumbnailAssertion,"upstream expected Option at image thumbnail center not duplicate; literal pinned source route gives duplicate");}
 void panel_cursors(){MainWindow w(true);auto&p=w.addProject(example());(void)p;w.show();QApplication::processEvents();auto*c=controller(w);auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"tool cursor persisted in layer name");view->setCursor(Qt::CrossCursor);c->refreshCursor({},name);check(view->cursor().shape()==Qt::ArrowCursor,"cursor refresh failed to restore arrow");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->cursor().shape()==Qt::ArrowCursor,"Ctrl away from thumbnail changed cursor");view->setCursor(Qt::CrossCursor);c->refreshCursor({},QPoint(-50,-50));check(view->cursor().shape()==Qt::CrossCursor,"outside modifier refresh touched other view cursor");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor&&view->property("layerCursorRole")=="duplicate","Alt row name did not offer duplicate");auto*row=item(w,"c");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,tree(w)->visualItemRect(row).center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->property("layerCursorRole")=="load-selection","Ctrl image did not offer load selection");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"plain row failed to restore arrow");}
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="folder_arrow_and_visibility_are_independent")folder_arrow_and_visibility_are_independent();else if(name=="name_cell_does_not_toggle_visibility")name_cell_does_not_toggle_visibility();else if(name=="search_and_selected_filter")search_and_selected_filter();else if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_rename")middle_scroll_rename();else if(name=="middle_scroll_capture")middle_scroll_capture();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="visibility_click_history")visibility_click_history();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="folder_arrow_and_visibility_are_independent")folder_arrow_and_visibility_are_independent();else if(name=="name_cell_does_not_toggle_visibility")name_cell_does_not_toggle_visibility();else if(name=="search_and_selected_filter")search_and_selected_filter();else if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="canvas_selection_scroll")canvas_selection_scroll();else if(name=="canvas_selection_scroll_context")canvas_selection_scroll_context();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_rename")middle_scroll_rename();else if(name=="middle_scroll_capture")middle_scroll_capture();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="visibility_click_history")visibility_click_history();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

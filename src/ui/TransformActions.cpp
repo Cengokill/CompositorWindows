@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LayerPanel.h"
 #include "PropertyControls.h"
 #include "editing/DocumentGeometry.h"
 #include "editing/Shapes.h"
@@ -92,6 +93,8 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
         if(selected.ids.size()>1||(active()&&active()->group))context.groupBox=transform;
         const auto intent=editing_transform::resolvePress(context,mapping.toView(point),mapping,overlay,{modifiers.testFlag(Qt::ShiftModifier),modifiers.testFlag(Qt::AltModifier),modifiers.testFlag(Qt::ControlModifier),false});
         if(!intent)return true;
+        const auto under=std::find_if(visible.rbegin(),visible.rend(),[&](const auto& layer){return editing_transform::contains(layer.transform,point);});
+        const bool selectedOnCanvas=!context.hasEdit&&(intent->picked||(intent->mode.kind==editing_transform::ModeKind::Move&&selected.ids.size()==1&&under!=visible.rend()&&under->id==p->active));
         if(intent->picked){p->active=intent->layerId;p->selected={p->active};p->maskSelected=false;}
         if(!transformSession_&&!startTransformSession(false))return true;
         auto& state=*transformSession_;
@@ -100,6 +103,7 @@ bool MainWindow::beginTransform(Point point,Qt::KeyboardModifiers modifiers){
         if(state.duplicateOnDrag){p->history.cancel();p->history.begin("Duplicate Layer",state.original,state.originalActive);}
         transformDrag_=editing_transform::Drag{state.draft,point,intent->mode,state.corners};
         beginPreviewGesture(p->canvas);if(canvas())canvas()->setCompositeHeld(true);refresh(false,false);
+        if(selectedOnCanvas)if(auto* controller=ui::LayerPanelController::find(layers_))controller->scrollSelectionToTop();
     }catch(const std::exception& error){cancelTransformSession();statusBar()->showMessage(error.what());}
     return true;
 }
