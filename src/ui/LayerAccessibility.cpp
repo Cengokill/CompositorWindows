@@ -143,6 +143,17 @@ public:
         }
         return QAccessibleWidget::childAt(x, y);
     }
+    void visibilityChanged(const std::string& id) {
+        const auto found=controls_.find(id);
+        if(found==controls_.end())return;
+        if(auto* control=QAccessible::accessibleInterface(found->second)){
+            QAccessibleEvent name(control,QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&name);
+            QAccessible::State changes;changes.checked=true;
+            QAccessibleStateChangeEvent state(control,changes);
+            QAccessible::updateAccessibility(&state);
+        }
+    }
     void changed() {
         for (auto it = controls_.begin(); it != controls_.end();) {
             auto* control = QAccessible::accessibleInterface(it->second);
@@ -193,5 +204,10 @@ void updateLayerAccessibility(QTreeWidget* tree) {
     if (!QAccessible::isActive()) return;
     if (auto* container = dynamic_cast<LayerContainer*>(QAccessible::queryAccessibleInterface(tree->parentWidget())))
         container->changed();
+}
+void updateLayerVisibilityAccessibility(QTreeWidget* tree, const std::string& id) {
+    if (!QAccessible::isActive()) return;
+    if (auto* container = dynamic_cast<LayerContainer*>(QAccessible::queryAccessibleInterface(tree->parentWidget())))
+        container->visibilityChanged(id);
 }
 }

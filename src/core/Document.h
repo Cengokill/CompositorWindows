@@ -263,6 +263,7 @@ class CompositeCache {
     uint64_t viewportTick_{};
     std::shared_ptr<const LayerRenderPreview> viewportPreview_;
     size_t lastViewportComposedTiles_{};
+    size_t lastViewportPatchedTiles_{};
     int lensPreviewMaxEdge_{};
 public:
     void setLensPreviewMaxEdge(int edge){if(edge<0)edge=0;if(lensPreviewMaxEdge_==edge)return;lensPreviewMaxEdge_=edge;reset();}
@@ -272,6 +273,7 @@ public:
     size_t viewportMetadataEntries()const{return viewportTiles_.size();}
     // Tiles whose pixels were produced by the renderer during the last viewport call.
     size_t lastViewportComposedTiles()const{return lastViewportComposedTiles_;}
+    size_t lastViewportPatchedTiles()const{return lastViewportPatchedTiles_;}
     void reset(){previous_.reset();output_.reset();viewportPrevious_.reset();viewportTiles_.clear();viewportUnits_=viewportPhaseX_=viewportPhaseY_=0;viewportTick_=0;viewportPreview_.reset();}
 };
 struct Snapshot { std::optional<Document> document; std::string activeLayer; uint64_t revision{}; };

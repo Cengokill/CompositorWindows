@@ -11,6 +11,7 @@
 #include <QWheelEvent>
 #include <QNativeGestureEvent>
 #include <QPointingDevice>
+#include <QScopeGuard>
 #include <QThread>
 #include <algorithm>
 #include <functional>
@@ -376,6 +377,77 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         drag(QPointF(inside.x(),line.y),inside,above);
         require(finished==5&&canceled==5&&!canvas.guidePreview(),"Move outside the document committed");
         closeEnough(canvas.guides.front().second,60,"Move outside edited the guide");
+    });
+    test("native_visibility_discards_stale_composites",[]{
+        MainWindow window(true);
+        Document document;
+        document.id=newId();
+        document.width=document.height=512;
+        for(const auto color:{Pixel{0,0,255,255},Pixel{255,0,0,255}}){
+            Layer layer;
+            layer.id=newId();
+            layer.name=color.r?"Red":"Blue";
+            layer.raster=Raster::filled(1024,1024,color);
+            layer.transform={0,0,512,512};
+            document.layers.push_back(std::move(layer));
+        }
+        auto& project=window.addProject(document);
+        auto& canvas=*project.canvas;
+        canvas.setFixedSize(400,320);
+        window.show();
+        canvas.zoomAt(.25,canvas.contentRect().center());
+        canvas.pan={0,0};
+        canvas.repaint();
+        flush();
+        require(canvas.deviceReady(),"Visibility canvas device unavailable");
+        auto* job=dynamic_cast<ui::ViewportCompositeJob*>(canvas.findChild<QObject*>("wheelZoomCompositeJob"));
+        require(job!=nullptr,"Visibility uses the viewport worker");
+        auto proceed=std::make_shared<std::atomic_bool>(false);
+        job->setProceedGate(proceed);
+        const auto openGate=qScopeGuard([&]{proceed->store(true);});
+        auto* tree=window.findChild<QTreeWidget*>("layersTree");
+        QTreeWidgetItem* eye=nullptr;
+        for(QTreeWidgetItemIterator it(tree);*it;++it)
+            if((*it)->data(0,Qt::UserRole).toString().toStdString()==document.layers.back().id)eye=*it;
+        require(eye!=nullptr,"Visibility row is missing");
+        const auto point=tree->visualRect(tree->indexFromItem(eye,4)).center();
+        const auto click=[&]{
+            for(const bool press:{true,false}){
+                QMouseEvent event(press?QEvent::MouseButtonPress:QEvent::MouseButtonRelease,
+                    point,tree->viewport()->mapToGlobal(point),Qt::LeftButton,press?Qt::LeftButton:Qt::NoButton,Qt::NoModifier);
+                QApplication::sendEvent(tree->viewport(),&event);
+            }
+        };
+        const auto undo=[&]{
+            for(auto* action:window.findChildren<QAction*>())if(action->property("commandId")=="edit.undo"){
+                require(action->isEnabled(),"Undo command is disabled");
+                action->trigger();
+                return;
+            }
+            throw std::runtime_error("Undo command is missing");
+        };
+        QImage frame;
+        canvas.readPresentationPixels=true;
+        canvas.observePresentation=[&](const auto& result){if(result.viewportReady)frame=result.pixels;};
+        const auto disconnectProbe=qScopeGuard([&]{canvas.observePresentation={};});
+        click();
+        canvas.repaint();
+        flush();
+        require(frame.isNull(),"A frame arrived while its worker was gated");
+        const auto firstEpoch=job->epoch();
+        click();
+        canvas.repaint();
+        require(job->epoch()>firstEpoch&&project.history.undoCount()==2&&project.document->layers.back().visible,
+                "Second click did not commit and invalidate the first result");
+        undo();
+        canvas.zoomAt(.35,canvas.contentRect().center());
+        proceed->store(true);
+        QElapsedTimer timer;
+        timer.start();
+        while(frame.isNull()&&timer.elapsed()<5000){QApplication::processEvents();QThread::msleep(1);}
+        require(!frame.isNull()&&!project.document->layers.back().visible,"Undo result was not presented");
+        const auto center=frame.pixelColor(frame.width()/2,frame.height()/2);
+        require(center.blue()>230&&center.red()<25,"A stale visibility result replaced the current frame");
     });
     std::cout<<"{\"suite\":\"native_viewport\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"backend\":\"D3D11_WARP\"}\n";return failed?1:0;
 }

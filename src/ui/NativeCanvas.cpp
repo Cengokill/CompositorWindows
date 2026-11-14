@@ -103,8 +103,22 @@ void NativeCanvas::clearMovePreview(){if(!movePreview_)return;movePreview_.reset
 void NativeCanvas::setCompositeHeld(bool held){compositeHeld_=held;}
 void NativeCanvas::invalidateComposite(){
     compositeDirty_=true;
+    if(layerVisibilityComposite_){
+        stopWheelZoom();
+        viewportPresented_=false;
+    }
     if(wheelZoomRequested_&&cancelWheelComposite)cancelWheelComposite();
     wheelZoomRequested_=false;
+}
+void NativeCanvas::updateLayerVisibilityComposite(bool background){
+    invalidateComposite();
+    if(background&&hasPresented_&&requestWheelComposite&&!deferViewportComposite&&!compositeHeld_&&!movePreview_){
+        // Reuse the viewport worker and leave the last presented frame in place.
+        layerVisibilityComposite_=true;
+        wheelZoomFrame_=wheelZoomPending_=true;
+        viewportPresented_=false;
+    }
+    update();
 }
 NativeCanvas::ViewportBounds NativeCanvas::viewportBounds() const{
     ViewportBounds result;if(documentWidth_<=0||documentHeight_<=0)return result;const double scale=pointsPerPixel();if(!(scale>0)||!std::isfinite(scale))return result;
@@ -130,6 +144,11 @@ void NativeCanvas::presentWheelComposite(CompositeViewport patch){
 }
 void NativeCanvas::failWheelComposite(){
     if(!wheelZoomPending_)return;
+    if(layerVisibilityComposite_){
+        invalidateComposite();
+        update();
+        return;
+    }
     stopWheelZoom();
     if(presentedViewport_){
         zoom=presentedViewport_->zoom;
@@ -142,6 +161,7 @@ void NativeCanvas::failWheelComposite(){
 void NativeCanvas::stopWheelZoom(){
     if(wheelZoomPending_&&cancelWheelComposite)cancelWheelComposite();
     wheelZoomPending_=wheelZoomRequested_=wheelZoomFrame_=false;
+    layerVisibilityComposite_=false;
     wheelHover_.reset();
 }
 void NativeCanvas::submitWheelZoom(){
@@ -393,6 +413,7 @@ if(wheelHover_){
     wheelHover_.reset();
     if(pointerHover)pointerHover(position,modifiers);
 }
+if(layerVisibilityComposite_&&!wheelZoomPending_)layerVisibilityComposite_=false;
 proofApplied_=false;const double scale=pointsPerPixel();const bool held=viewportDeferred_||movePreview_||compositeHeld_;
 const bool readyWheelFrame=wheelZoomFrame_&&viewportPresented_&&!held;
 const bool deferred=!held&&deferViewportComposite&&deferViewportComposite();
@@ -622,7 +643,7 @@ void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(
 graphics::CanvasViewport NativeCanvas::viewportState()const{const auto frame=contentRect();return {{frame.width(),frame.height()},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
 void NativeCanvas::installViewport(const graphics::CanvasViewport& state){
     const bool wasVisible=navigatorPlacement().visible;
-    const bool replacingWheelView=wheelZoomPending_;
+    const bool replacingWheelView=wheelZoomPending_||layerVisibilityComposite_;
     if(replacingWheelView){
         settleViewport();
         compositeDirty_=true;
@@ -966,7 +987,7 @@ void NativeCanvas::leaveEvent(QEvent*e){wheelHover_.reset();if(pointerLeave)poin
 bool NativeCanvas::event(QEvent*e){if(e->type()==QEvent::Show){watchPresentationWindow();refreshDisplayProfile();updateSelectionAnimation();}
     if(e->type()==QEvent::Hide){
         if(selectionTimer_)selectionTimer_->stop();
-        if(wheelZoomPending_){
+        if(wheelZoomPending_||layerVisibilityComposite_){
             invalidateComposite();
             wheelHover_.reset();
         }

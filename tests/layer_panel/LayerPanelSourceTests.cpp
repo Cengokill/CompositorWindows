@@ -1,6 +1,8 @@
 #include "ui/MainWindow.h"
 #include "ui/LayerPanel.h"
 #include "ui/NativeCanvas.h"
+#include "persistence/ProjectStore.h"
+#include <QTemporaryDir>
 #include <QApplication>
 #include <QCursor>
 #include <QFont>
@@ -34,6 +36,46 @@ QPoint namePoint(MainWindow&w,const char*id){auto*view=tree(w);auto*row=item(w,i
 QPoint eyePoint(MainWindow&w,const char*id){auto*view=tree(w);auto*row=item(w,id);return view->visualRect(view->indexFromItem(row,4)).center();}
 void mouse(MainWindow&w,QEvent::Type type,QPoint point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers flags={}){auto*view=tree(w)->viewport();QMouseEvent event(type,point,view->mapToGlobal(point),button,buttons,flags);QApplication::sendEvent(view,&event);}
 void thumbnail_cache(){MainWindow w(true);auto&p=w.addProject(example());auto*c=controller(w);const auto count=c->thumbnailRenderCount();check(count>=3,"thumbnail initial renders");c->rebuild();check(c->thumbnailRenderCount()==count,"unchanged rebuild regenerated thumbnails");p.active="a";p.selected={"a"};c->updateSelection();check(c->thumbnailRenderCount()==count,"selection regenerated thumbnail pixels");layer(p,"a").visible=false;c->rebuild();check(c->thumbnailRenderCount()==count,"visibility regenerated thumbnail pixels");layer(p,"b").transform.x+=40;c->rebuild();check(c->thumbnailRenderCount()==count+1,"transform did not invalidate only one thumbnail");check(item(w,"a")->icon(1).actualSize({36,36})==QSize(36,27),"actual panel thumbnail ignores canvas ratio");}
+void visibility_click_history(){
+    MainWindow w(true);
+    auto d=example();
+    for(auto& layer:d.layers){layer.name=layer.id;layer.id=newId();}
+    auto& p=w.addProject(d);
+    const auto id=d.layers.back().id;
+    w.show();
+    QApplication::processEvents();
+    controller(w)->setFilter("c",false);
+    const auto point=eyePoint(w,id.c_str());
+    const auto selection=p.selected;
+    auto* target=item(w,id.c_str());
+    for(const auto type:{QEvent::MouseButtonPress,QEvent::MouseButtonDblClick,QEvent::MouseButtonPress}){
+        mouse(w,type,point,Qt::LeftButton,Qt::LeftButton);
+        mouse(w,QEvent::MouseButtonRelease,point,Qt::LeftButton,Qt::NoButton);
+    }
+    check(!p.document->layers.back().visible&&target->checkState(0)==Qt::Unchecked,"rapid click leaves the eye and model hidden");
+    check(p.history.undoCount()==3&&p.selected==selection,"each rapid click adds one entry and preserves selection");
+    check(item(w,d.layers.front().id.c_str())->isHidden(),"eye changes preserve the filter");
+    const auto command=[&](const char* id){
+        for(auto* action:w.findChildren<QAction*>())if(action->property("commandId")==id){
+            check(action->isEnabled(),"history action is enabled");
+            action->trigger();
+            return;
+        }
+        throw std::runtime_error("history action missing");
+    };
+    const auto hidden=*p.document;
+    command("edit.undo");
+    check(*p.document==d&&item(w,id.c_str())->checkState(0)==Qt::Checked,"Undo restores the exact visible document and eye");
+    command("edit.redo");
+    check(*p.document==hidden&&item(w,id.c_str())->checkState(0)==Qt::Unchecked,"Redo restores the exact hidden document and eye");
+    QTemporaryDir directory;
+    check(directory.isValid(),"temporary project directory");
+    const auto path=std::filesystem::path(directory.filePath("Visibility.comp").toStdWString());
+    ProjectStore store(makeWicProjectCodec());
+    store.save(path,*p.document,p.active);
+    const auto reopened=store.load(path);
+    check(!reopened.document.layers.back().visible&&reopened.activeLayer==p.active,"save and reopen retain the hidden layer and active target");
+}
 void text_layer_icon(){
     MainWindow w(true);
     auto d=example();
@@ -293,4 +335,4 @@ void middle_scroll_controls(){
 void source_cursor_conflict(){MainWindow w(true);auto d=example();for(auto&l:d.layers){l.raster.reset();l.transform={0,0,400,300};}w.addProject(d);w.show();QApplication::processEvents();auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor,"source Option name offers duplicate");auto*row=item(w,"c");const auto rect=tree(w)->visualItemRect(row);const auto size=row->icon(1).actualSize({36,36});check(size==QSize(36,27),"source thumbnail takes400x300canvas shape");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,rect.center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::AltModifier);const bool thumbnailAssertion=view->cursor().shape()!=Qt::DragCopyCursor;std::cout<<"SOURCE-TEST-CONFLICT CursorTests.optionOverALayerRowOffersDuplicatingExceptOverThumbnails row_top="<<rect.top()<<" row_height="<<rect.height()<<" thumbnail_center_y="<<picture.y()<<" clipping_boundary="<<rect.bottom()+1-rect.height()/4<<" actual_role="<<view->property("layerCursorRole").toString().toStdString()<<" expected=not-duplicate\n";mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"source return to plain name restores arrow");check(thumbnailAssertion,"upstream expected Option at image thumbnail center not duplicate; literal pinned source route gives duplicate");}
 void panel_cursors(){MainWindow w(true);auto&p=w.addProject(example());(void)p;w.show();QApplication::processEvents();auto*c=controller(w);auto*view=tree(w)->viewport();const auto name=namePoint(w,"c");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"tool cursor persisted in layer name");view->setCursor(Qt::CrossCursor);c->refreshCursor({},name);check(view->cursor().shape()==Qt::ArrowCursor,"cursor refresh failed to restore arrow");view->setCursor(Qt::CrossCursor);mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->cursor().shape()==Qt::ArrowCursor,"Ctrl away from thumbnail changed cursor");view->setCursor(Qt::CrossCursor);c->refreshCursor({},QPoint(-50,-50));check(view->cursor().shape()==Qt::CrossCursor,"outside modifier refresh touched other view cursor");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton,Qt::AltModifier);check(view->cursor().shape()==Qt::DragCopyCursor&&view->property("layerCursorRole")=="duplicate","Alt row name did not offer duplicate");auto*row=item(w,"c");const QPoint picture(tree(w)->columnViewportPosition(1)+tree(w)->columnWidth(1)/2,tree(w)->visualItemRect(row).center().y());mouse(w,QEvent::MouseMove,picture,Qt::NoButton,Qt::NoButton,Qt::ControlModifier);check(view->property("layerCursorRole")=="load-selection","Ctrl image did not offer load selection");mouse(w,QEvent::MouseMove,name,Qt::NoButton,Qt::NoButton);check(view->cursor().shape()==Qt::ArrowCursor,"plain row failed to restore arrow");}
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="folder_arrow_and_visibility_are_independent")folder_arrow_and_visibility_are_independent();else if(name=="name_cell_does_not_toggle_visibility")name_cell_does_not_toggle_visibility();else if(name=="search_and_selected_filter")search_and_selected_filter();else if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_rename")middle_scroll_rename();else if(name=="middle_scroll_capture")middle_scroll_capture();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"provide one case");const std::string name=argv[1];if(name=="folder_arrow_and_visibility_are_independent")folder_arrow_and_visibility_are_independent();else if(name=="name_cell_does_not_toggle_visibility")name_cell_does_not_toggle_visibility();else if(name=="search_and_selected_filter")search_and_selected_filter();else if(name=="thumbnail_shapes")thumbnail_shapes();else if(name=="thumbnail_layer_placement")thumbnail_layer_placement();else if(name=="thumbnail_mask_edge")thumbnail_mask_edge();else if(name=="thumbnail_cache")thumbnail_cache();else if(name=="text_layer_icon")text_layer_icon();else if(name=="middle_scroll")middle_scroll();else if(name=="middle_scroll_rename")middle_scroll_rename();else if(name=="middle_scroll_capture")middle_scroll_capture();else if(name=="middle_scroll_cancel")middle_scroll_cancel();else if(name=="middle_scroll_controls")middle_scroll_controls();else if(name=="visibility_swipe")visibility_swipe();else if(name=="visibility_click_history")visibility_click_history();else if(name=="panel_cursors")panel_cursors();else if(name=="source_cursor_conflict")source_cursor_conflict();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

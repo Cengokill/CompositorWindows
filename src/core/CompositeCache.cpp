@@ -218,6 +218,7 @@ std::shared_ptr<const Raster> CompositeCache::render(const Document& doc){
 }
 CompositeViewport CompositeCache::renderViewport(const Document& input,double x,double y,double width,double height,double requestedUnits,size_t maxVisibleTiles,size_t maxRetainedTiles,std::shared_ptr<const LayerRenderPreview> preview,const std::function<bool()>& cancelled){
     lastViewportComposedTiles_=0;
+    lastViewportPatchedTiles_=0;
     Document doc=input;
     if(preview){auto found=std::find_if(doc.layers.begin(),doc.layers.end(),[&](const Layer& layer){return layer.id==preview->layer.id;});if(found==doc.layers.end()||!preview->identity)throw std::invalid_argument("Invalid viewport render preview");}
     validateDocument(doc);
@@ -294,7 +295,19 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             if(auto dirty=partial.find(key);dirty!=partial.end()){
                 const int ix=tx*256,iy=ty*256,w=std::min(256,pixelWidth-ix),h=std::min(256,pixelHeight-iy);const double dx=px+ix*units,dy=py+iy*units;const auto& box=dirty->second;
                 const int sx=std::clamp(int(std::floor((box.left-dx)/units))-1,0,w),sy=std::clamp(int(std::floor((box.top-dy)/units))-1,0,h),ex=std::clamp(int(std::ceil((box.right-dx)/units))+1,0,w),ey=std::clamp(int(std::ceil((box.bottom-dy)/units))+1,0,h);
-                if(ex>sx&&ey>sy){auto updated=std::make_shared<Raster::Tile>(*found->second.pixels);auto region=renderer.renderScaledPatch(doc,dx,dy,sx,sy,ex-sx,ey-sy,units);for(int row=0;row<ey-sy;++row)std::copy_n(region->tiles.front()->pixels.data()+size_t(row)*256,ex-sx,updated->pixels.data()+size_t(sy+row)*256+sx);found->second.pixels=std::move(updated);++lastViewportComposedTiles_;}
+                if(sx==0&&sy==0&&ex==w&&ey==h){
+                    // A complete tile can use the parallel renderer and needs no patch copy.
+                    found->second.pixels=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled)->tiles.front();
+                    ++lastViewportComposedTiles_;
+                }else if(ex>sx&&ey>sy){
+                    auto updated=std::make_shared<Raster::Tile>(*found->second.pixels);
+                    auto region=renderer.renderScaledPatch(doc,dx,dy,sx,sy,ex-sx,ey-sy,units);
+                    for(int row=0;row<ey-sy;++row)
+                        std::copy_n(region->tiles.front()->pixels.data()+size_t(row)*256,ex-sx,updated->pixels.data()+size_t(sy+row)*256+sx);
+                    found->second.pixels=std::move(updated);
+                    ++lastViewportComposedTiles_;
+                    ++lastViewportPatchedTiles_;
+                }
             }
             found->second.use=viewportTick_;
         }patch->tiles.push_back(found->second.pixels);

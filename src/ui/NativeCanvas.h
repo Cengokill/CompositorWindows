@@ -107,6 +107,7 @@ private:
     QTimer* viewportTimer_{};
     bool navigatorDeferred_{},navigatorDirty_{},navigating_{},viewportDeferred_{},viewportGesture_{},compositeHeld_{},viewportPresented_{},compositeDirty_{true};
     bool wheelZoomPending_{},wheelZoomRequested_{},wheelZoomFrame_{},hasPresented_{};
+    bool layerVisibilityComposite_{};
     std::optional<graphics::CanvasViewport> presentedViewport_;
     std::optional<std::pair<QPointF,Qt::KeyboardModifiers>> wheelHover_;
     double lastCompositeX_{},lastCompositeY_{},lastCompositeW_{},lastCompositeH_{},lastCompositeUnits_{1};
@@ -257,6 +258,7 @@ public:
     // While held, paint keeps the current frame instead of composing on the UI thread.
     void setCompositeHeld(bool held);
     void invalidateComposite();
+    void updateLayerVisibilityComposite(bool background);
     bool compositeHeld() const { return compositeHeld_; }
     struct ViewportBounds {
         double x{},y{},width{},height{},units{1}; bool valid{};

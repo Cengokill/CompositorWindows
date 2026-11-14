@@ -138,6 +138,34 @@ void progressive_deep_scaled(){
     fill(DeepImage::Format::Unorm16,1.f);fill(DeepImage::Format::HalfFloat,2.f);
 }
 Layer solid(const char* id,int width,int height,Pixel color,Transform transform){Layer layer;layer.id=id;layer.opacity=1;layer.raster=Raster::filled(width,height,color);layer.transform=transform;return layer;}
+void visibility_tile_paths(){
+    for(double units:{1.,2.}){
+        Document d;
+        d.id=newId();
+        d.width=1100;
+        d.height=460;
+        d.layers={solid("base",550,230,{20,40,80,255},{0,0,1100,460}),
+                  solid("middle",550,230,{20,100,50,180},{0,0,1100,460}),
+                  solid("eye",48,60,{120,20,35,150},{0,0,1100,460})};
+        const auto render=[&](CompositeCache& cache){
+            return cache.renderViewport(d,-.25,-.5,1101,461,units);
+        };
+        for(bool small:{false,true}){
+            d.layers.back().transform=small?Transform{24,30,48,60}:Transform{0,0,1100,460};
+            CompositeCache cache;
+            const auto initial=render(cache);
+            for(bool visible:{false,true}){
+                d.layers.back().visible=visible;
+                const auto updated=render(cache);
+                REQUIRE(cache.lastViewportComposedTiles()==(small?1:initial.raster->tiles.size()));
+                REQUIRE(cache.lastViewportPatchedTiles()==(small?1:0));
+                if(small) REQUIRE(updated.raster->tiles.back()==initial.raster->tiles.back());
+                CompositeCache fresh;
+                equal(*updated.raster,*render(fresh).raster);
+            }
+        }
+    }
+}
 void partial_metadata_damage(){
     Document d;d.id=newId();d.width=768;d.height=256;
     d.layers.push_back(solid("bg",768,256,{20,40,80,255},{0,0,768,256,0,false,false,Transform::Sampling::Nearest}));
@@ -301,4 +329,4 @@ void viewport_cancellation_reaches_renderer(){
     REQUIRE(cancelled&&polls>=4);
 }
 
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"visibility_tile_paths",visibility_tile_paths},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
