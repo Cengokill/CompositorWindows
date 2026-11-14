@@ -4,10 +4,12 @@
 #include "WorkspaceDropQueue.h"
 #include <QApplication>
 #include <QDialog>
+#include <QDir>
 #include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QJsonDocument>
 #include <QPointer>
 #include <QPushButton>
 #include <QResource>
@@ -28,16 +30,24 @@ static void initializeReleaseNotesResource(){Q_INIT_RESOURCE(release_notes);}
 namespace compositor::ui {
 namespace {
 constexpr auto seenVersionKey="updates/whatsNewVersion";
+constexpr auto developmentVersionKey="updates/whatsNewDevelopmentVersion";
+QString versionKey(const QString& applicationDirectory){
+    const auto directory=applicationDirectory.isEmpty()?QCoreApplication::applicationDirPath():applicationDirectory;
+    QFile policy(QDir(directory).filePath("release-policy.json"));
+    if(policy.open(QIODevice::ReadOnly)&&policy.size()<=4096&&
+       QJsonDocument::fromJson(policy.readAll()).object().value("channel").toString()=="stable")return seenVersionKey;
+    return developmentVersionKey;
+}
 bool hasContent(const QString& markdown){
     QTextDocument document;document.setMarkdown(markdown);
     return !document.toPlainText().trimmed().isEmpty();
 }
-std::optional<update::Version> storedVersion(QSettings& settings){
-    try{return update::Version::parse(settings.value(seenVersionKey).toString());}
+std::optional<update::Version> storedVersion(QSettings& settings,const QString& key){
+    try{return update::Version::parse(settings.value(key).toString());}
     catch(const std::exception&){return {};}
 }
-void storeVersion(QSettings& settings,const update::Version& version){
-    settings.setValue(seenVersionKey,version.text());settings.sync();
+void storeVersion(QSettings& settings,const update::Version& version,const QString& key){
+    settings.setValue(key,version.text());settings.sync();
     if(settings.status()!=QSettings::NoError)qWarning("Could not save the What's New version preference");
 }
 }
@@ -71,13 +81,14 @@ ReleaseNotes installedReleaseNotes(){
     if(!file.open(QIODevice::ReadOnly))return {};
     return releaseNotesForVersion(QString::fromUtf8(file.readAll()),QCoreApplication::applicationVersion());
 }
-bool releaseNotesDue(QSettings& settings,const update::Version& installed){
-    const auto seen=storedVersion(settings);
+bool releaseNotesDue(QSettings& settings,const update::Version& installed,const QString& applicationDirectory){
+    const auto seen=storedVersion(settings,versionKey(applicationDirectory));
     return !seen||installed>*seen;
 }
-void acknowledgeReleaseNotes(QSettings& settings,const update::Version& installed){
-    const auto seen=storedVersion(settings);
-    if(!seen||installed>*seen)storeVersion(settings,installed);
+void acknowledgeReleaseNotes(QSettings& settings,const update::Version& installed,const QString& applicationDirectory){
+    const auto key=versionKey(applicationDirectory);
+    const auto seen=storedVersion(settings,key);
+    if(!seen||installed>*seen)storeVersion(settings,installed,key);
 }
 
 QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const ReleaseNotes& notes){
@@ -127,6 +138,18 @@ QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const Release
 }
 
 namespace compositor {
+void MainWindow::showWhatsNew(){
+    if(auto* dialog=findChild<QDialog*>("whatsNewDialog");dialog&&dialog->isVisible()){
+        dialog->raise();dialog->activateWindow();return;
+    }
+    const auto notes=ui::installedReleaseNotes();if(notes.empty())return;
+    std::optional<update::Version> installed;
+    try{installed=update::Version::parse(QCoreApplication::applicationVersion());}catch(const std::exception&){}
+    if(!installed)return;
+    QSettings settings;
+    if(ui::releaseNotesDue(settings,*installed)){startWhatsNew();return;}
+    ui::openWhatsNewDialog(this,installed->text(),notes);
+}
 void MainWindow::startWhatsNew(std::function<void()> finished){
     if(findChild<QTimer*>("whatsNewStartup")||findChild<QDialog*>("whatsNewDialog"))return;
     auto* timer=new QTimer(this);timer->setObjectName("whatsNewStartup");timer->setInterval(100);

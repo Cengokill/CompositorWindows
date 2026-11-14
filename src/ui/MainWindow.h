@@ -520,6 +520,7 @@ public:
     void exerciseNativeUi(const QString& evidenceDirectory);
     // Wait for startup imports and dialogs, then present the installed release if due.
     void startWhatsNew(std::function<void()> finished={});
+    void showWhatsNew();
     // Test seam: holds the next background save on the worker before it writes.
     void setProjectSaveBeforeWriteForTesting(std::function<void()> hook){projectSaveBeforeWrite_=std::move(hook);}
     // Daily stable-release check: first after initialDelayMs, then re-evaluated every intervalMs.
