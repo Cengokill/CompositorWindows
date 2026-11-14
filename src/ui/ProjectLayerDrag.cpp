@@ -11,7 +11,6 @@
 
 namespace compositor::ui {
 namespace {
-constexpr qsizetype transferLimit=64*1024*1024;
 const Layer* findLayer(const Document& document,const std::string& id){
     for(const auto& layer:document.layers)if(layer.id==id)return &layer;
     return nullptr;
@@ -25,20 +24,23 @@ QByteArray packDirectory(const std::filesystem::path& root){
     QByteArray bytes;
     QDataStream stream(&bytes,QIODevice::WriteOnly);
     stream.setVersion(QDataStream::Qt_6_0);
-    std::vector<std::pair<QString,QByteArray>> files;
+    std::vector<std::pair<QString,std::filesystem::path>> files;
     for(const auto& entry:std::filesystem::recursive_directory_iterator(root)){
         if(!entry.is_regular_file())continue;
         const auto relative=std::filesystem::relative(entry.path(),root);
         const auto name=QString::fromStdWString(relative.generic_wstring());
         if(!safeRelative(name))return {};
-        QFile file(QString::fromStdWString(entry.path().wstring()));
-        if(!file.open(QIODevice::ReadOnly))return {};
-        files.emplace_back(name,file.readAll());
-        if(bytes.size()+files.back().second.size()>transferLimit)return {};
+        files.emplace_back(name,entry.path());
     }
     stream<<quint32(files.size());
-    for(const auto& [name,data]:files)stream<<name<<data;
-    return stream.status()==QDataStream::Ok&&bytes.size()<=transferLimit?bytes:QByteArray{};
+    for(const auto& [name,path]:files){
+        QFile file(QString::fromStdWString(path.wstring()));
+        if(!file.open(QIODevice::ReadOnly))return {};
+        const auto data=file.readAll();
+        if(file.error()!=QFileDevice::NoError)return {};
+        stream<<name<<data;
+    }
+    return stream.status()==QDataStream::Ok?bytes:QByteArray{};
 }
 }
 QStringList ProjectLayerMimeData::formats() const {
@@ -88,7 +90,7 @@ QByteArray packageLayerTransfer(const Document& document,const std::vector<std::
     }catch(...){return {};}
 }
 std::optional<LayerTransfer> documentFromLayerTransfer(const QByteArray& bytes){
-    if(bytes.isEmpty()||bytes.size()>transferLimit)return {};
+    if(bytes.isEmpty())return {};
     try{
         QDataStream stream(bytes);
         stream.setVersion(QDataStream::Qt_6_0);
@@ -101,7 +103,7 @@ std::optional<LayerTransfer> documentFromLayerTransfer(const QByteArray& bytes){
         for(quint32 index=0;index<count;++index){
             QString name;QByteArray data;
             stream>>name>>data;
-            if(stream.status()!=QDataStream::Ok||!safeRelative(name)||data.size()>transferLimit)return {};
+            if(stream.status()!=QDataStream::Ok||!safeRelative(name))return {};
             const auto parts=name.split(QRegularExpression("[/\\\\]"),Qt::SkipEmptyParts);
             QString relative;
             for(int part=0;part<parts.size()-1;++part){relative+=parts[part]+'/';if(!root.mkpath(relative))return {};}

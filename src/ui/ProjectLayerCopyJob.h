@@ -10,6 +10,7 @@ namespace compositor::ui {
 struct LayerCopyWork {
     Document source,destination;
     std::string root;
+    std::vector<std::string> listRoots;
     std::optional<Point> point;
     std::optional<layers::Placement> listPlacement;
     QPointer<QObject> target;

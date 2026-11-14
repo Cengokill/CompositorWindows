@@ -448,13 +448,13 @@ bool MainWindow::receiveLayerDrop(const QMimeData* mime,QPoint location,Qt::Keyb
     ui::ProjectLayerCopyJob::Host host;
     const layers::Placement heldPlacement=listPlacement?*listPlacement:layers::Placement{};
     const bool placeInList=listPlacement!=nullptr;
-    host.prepare=[this,project,sourceOwner,external,targetOwner,captured,point,heldPlacement,placeInList](const std::string& id)->std::optional<ui::LayerCopyWork>{
+    host.prepare=[this,project,sourceOwner,external,targetOwner,captured,point,heldPlacement,placeInList,roots](const std::string& id)->std::optional<ui::LayerCopyWork>{
         const Document* sourceDocument=external?&external->document:nullptr;
         if(!sourceDocument){auto* sourceProject=project(sourceOwner);if(!sourceProject||!sourceProject->document)return {};sourceDocument=&*sourceProject->document;}
         auto* target=captured?project(targetOwner):nullptr;if(captured&&!target)return {};
         if(!target){QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);target=&addEmptyProject(false);}
         ui::LayerCopyWork work;work.source=*sourceDocument;work.root=id;work.point=point;work.target=target->canvas;work.before={target->document,target->active};
-        if(placeInList){const auto layer=std::find_if(sourceDocument->layers.begin(),sourceDocument->layers.end(),[&](const Layer& item){return item.id==id;});if(layer!=sourceDocument->layers.end())work.point=layer->transform.fromUnit({.5,.5});work.listPlacement=heldPlacement;}
+        if(placeInList){work.listPlacement=heldPlacement;for(const auto& root:roots){bool nested=false;for(const auto& other:roots)if(root!=other&&layers::descendants(*sourceDocument,other).contains(root)){nested=true;break;}if(!nested)work.listRoots.push_back(root);}}
         if(target->document)work.destination=*target->document;
         else{work.destination.id=newId();work.destination.width=work.source.width;work.destination.height=work.source.height;Layer blank;blank.id=newId();blank.name="Layer 1";blank.transform={0,0,double(work.source.width),double(work.source.height)};work.destination.layers.push_back(std::move(blank));}
         target->projectBusy=true;try{refresh(false,false);}catch(...){target->projectBusy=false;throw;}return work;
@@ -470,6 +470,7 @@ bool MainWindow::receiveLayerDrop(const QMimeData* mime,QPoint location,Qt::Keyb
     host.finished=[this,project,sourceOwner]{if(auto* owner=project(sourceOwner))owner->projectBusy=false;managingProjectOpen_=false;refresh();};
     // Construct the worker owner before publishing busy state; it starts via a
     // queued event, so failed allocation cannot leave the workspace locked.
+    if(placeInList&&roots.size()>1)roots.resize(1);
     new ui::ProjectLayerCopyJob(std::move(roots),std::move(host),this);
     if(source!=projects_.end())(*source)->projectBusy=true;managingProjectOpen_=true;refresh(false,false);return true;
 }

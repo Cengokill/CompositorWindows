@@ -73,12 +73,12 @@ std::vector<RowGeom> visibleRows(QTreeWidget* tree){
     for(int i=0;i<tree->topLevelItemCount();++i)visit(visit,tree->topLevelItem(i));
     return rows;
 }
-Destination destination(QTreeWidget* tree,const Document& d,const QPoint& point){
+Destination destination(QTreeWidget* tree,const Document& d,const QPoint& point,bool mask=false){
     const auto* item=tree->itemAt(point);if(!item)return {{},DropZone::Bottom};
     const auto id=idOf(item);const auto* layer=findLayer(d,id);const auto rect=tree->visualItemRect(item);
     const auto rows=visibleRows(tree);
     // The list can end flush with the viewport, leaving no empty band for Bottom.
-    if(!rows.empty()&&rows.back().id==id&&point.y()>=rect.top()+rect.height()*3/4)
+    if(!mask&&!rows.empty()&&rows.back().id==id&&point.y()>=rect.top()+rect.height()*3/4)
         return {layer?layer->parentId:std::string{},DropZone::Bottom};
     if(layer&&layer->group&&point.y()>=rect.top()+rect.height()/4&&point.y()<rect.bottom()-rect.height()/4)return {id,DropZone::IntoGroup};
     // Every ordinary row is an insertion-above target, matching NativeLayerList.
@@ -215,6 +215,7 @@ struct LayerPanelController::DragFeedback {
     std::unordered_map<std::string,QPixmap> pixmaps;
     std::vector<std::string> ids;
     std::string maskId;
+    QPointer<QMimeData> incomingMime;
     Qt::KeyboardModifiers modifiers{};
     bool session{},outline{},line{};
     qreal progress=1;
@@ -423,9 +424,9 @@ void LayerPanelController::rebuild(){clearDragFeedback();finishMiddleScroll();re
     std::erase_if(thumbnailCache_->entries,[&](const auto&entry){const auto*l=state.document?findLayer(*state.document,entry.first.first):nullptr;return !l||(entry.first.second&&!l->mask);});
     updateSelection();rebuilding_=false;updateLayerAccessibility(tree_);
 }
-QMimeData* LayerPanelController::dragMime(bool maskCopy)const{const auto state=host_.state();std::vector<std::string> ordered;if(state.document){const std::unordered_set<std::string> selected(state.selection.ids.begin(),state.selection.ids.end());for(const auto& entry:layers::entries(*state.document,true,filtering()?std::unordered_set<std::string>{}:state.collapsed))if(selected.contains(entry.id))ordered.push_back(entry.id);}QMimeData* mime=!maskCopy&&host_.dragOwner?new ProjectLayerMimeData(host_.dragOwner(),ordered):new QMimeData;if(auto* project=dynamic_cast<ProjectLayerMimeData*>(mime))project->setTransfer([this,ordered]{const auto state=host_.state();return state.document?packageLayerTransfer(*state.document,ordered):QByteArray();});mime->setData(ownerMime,token_);if(maskCopy)mime->setData(maskMime,QByteArray::fromStdString(pressId_.empty()?state.selection.primary:pressId_));else{QJsonArray ids;for(const auto&id:state.selection.ids)ids.append(QString::fromStdString(id));mime->setData(layerMime,QJsonDocument(ids).toJson(QJsonDocument::Compact));}return mime;}
-bool LayerPanelController::accepts(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers)const{if(filtering()&&!tree_->itemAt(point))return false;if(host_.canEdit&&!host_.canEdit())return false;try{const auto state=host_.state();if(!state.document||mime->data(ownerMime)!=token_)return false;if(mime->hasFormat(projectLayerMime)&&host_.dragOwner){const auto payload=projectLayerPayload(mime);if(!payload||projectLayerIdentity(host_.dragOwner())!=payload->session)return false;}const auto dest=destination(tree_,*state.document,point);if(mime->hasFormat(maskMime)){const auto* source=findLayer(*state.document,mime->data(maskMime).toStdString());const auto* target=findLayer(*state.document,dest.id);return source&&source->mask&&target&&!target->group&&source!=target;}if(!mime->hasFormat(layerMime))return false;const auto ids=idsOf(mime);if(ids.empty())return false;std::string parent;if(dest.zone==DropZone::IntoGroup)parent=dest.id;else if(dest.zone==DropZone::Above)parent=findLayer(*state.document,dest.id)->parentId;else parent=dest.id;for(const auto&id:ids){const auto*l=findLayer(*state.document,id);if(!l||!layers::canPlace(*state.document,id,parent)||(modifiers.testFlag(Qt::AltModifier)&&l->group))return false;}return true;}catch(...){return false;}}
-bool LayerPanelController::performDrop(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers){if(!accepts(mime,point,modifiers))return false;bool changed=false;invoke([&]{const auto state=host_.state();const auto dest=destination(tree_,*state.document,point);auto result=mime->hasFormat(maskMime)?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id):dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier));changed=result.changed;if(changed){host_.commit(std::move(result),mime->hasFormat(maskMime));if(dest.zone==DropZone::IntoGroup)host_.collapse(dest.id,false);}});return changed;}
+QMimeData* LayerPanelController::dragMime(bool maskCopy)const{const auto state=host_.state();std::vector<std::string> ordered;if(state.document){const std::unordered_set<std::string> selected(state.selection.ids.begin(),state.selection.ids.end());for(const auto& entry:layers::entries(*state.document,true,filtering()?std::unordered_set<std::string>{}:state.collapsed))if(selected.contains(entry.id))ordered.push_back(entry.id);}QMimeData* mime=!maskCopy&&host_.dragOwner?new ProjectLayerMimeData(host_.dragOwner(),ordered):new QMimeData;if(auto* project=dynamic_cast<ProjectLayerMimeData*>(mime))project->setTransfer([document=state.document?std::optional<Document>(*state.document):std::nullopt,ordered]{return document?packageLayerTransfer(*document,ordered):QByteArray();});mime->setData(ownerMime,token_);if(maskCopy)mime->setData(maskMime,QByteArray::fromStdString(pressId_.empty()?state.selection.primary:pressId_));else{QJsonArray ids;for(const auto&id:state.selection.ids)ids.append(QString::fromStdString(id));mime->setData(layerMime,QJsonDocument(ids).toJson(QJsonDocument::Compact));}return mime;}
+bool LayerPanelController::accepts(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers)const{if(filtering()&&!tree_->itemAt(point))return false;if(host_.canEdit&&!host_.canEdit())return false;try{const auto state=host_.state();if(!state.document||mime->data(ownerMime)!=token_)return false;if(mime->hasFormat(projectLayerMime)&&host_.dragOwner){const auto payload=projectLayerPayload(mime);if(!payload||projectLayerIdentity(host_.dragOwner())!=payload->session)return false;}const auto dest=destination(tree_,*state.document,point,mime->hasFormat(maskMime));if(mime->hasFormat(maskMime)){const auto* source=findLayer(*state.document,mime->data(maskMime).toStdString());const auto* target=findLayer(*state.document,dest.id);return source&&source->mask&&target&&!target->group&&source!=target;}if(!mime->hasFormat(layerMime))return false;const auto ids=idsOf(mime);if(ids.empty())return false;std::string parent;if(dest.zone==DropZone::IntoGroup)parent=dest.id;else if(dest.zone==DropZone::Above)parent=findLayer(*state.document,dest.id)->parentId;else parent=dest.id;for(const auto&id:ids){const auto*l=findLayer(*state.document,id);if(!l||!layers::canPlace(*state.document,id,parent)||(modifiers.testFlag(Qt::AltModifier)&&l->group))return false;}return true;}catch(...){return false;}}
+bool LayerPanelController::performDrop(const QMimeData* mime,const QPoint& point,Qt::KeyboardModifiers modifiers){if(!accepts(mime,point,modifiers))return false;bool changed=false;invoke([&]{const auto state=host_.state();const auto dest=destination(tree_,*state.document,point,mime->hasFormat(maskMime));auto result=mime->hasFormat(maskMime)?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id):dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier));changed=result.changed;if(changed){host_.commit(std::move(result),mime->hasFormat(maskMime));if(dest.zone==DropZone::IntoGroup)host_.collapse(dest.id,false);}});return changed;}
 std::optional<DropCue> LayerPanelController::dropCue() const {return drag_?drag_->cue:std::nullopt;}
 int LayerPanelController::layerDragShift(const std::string& id) const {
     if(!drag_)return 0;
@@ -457,6 +458,7 @@ void LayerPanelController::clearDragFeedback(){
     drag_->pixmaps.clear();
     drag_->ids.clear();
     drag_->maskId.clear();
+    drag_->incomingMime.clear();
     drag_->session=false;
     drag_->scroll.stop();
 }
@@ -531,6 +533,7 @@ void LayerPanelController::autoScrollDrag(){
     auto* bar=tree_->verticalScrollBar();
     bar->setValue(std::clamp(bar->value()+(above?-16:16),bar->minimum(),bar->maximum()));
     if(!tree_->viewport()->rect().contains(point))return;
+    if(drag_->incomingMime){updateDragFeedback(drag_->incomingMime,point,drag_->modifiers,true);return;}
     QMimeData mime;
     mime.setData(ownerMime,token_);
     if(!drag_->maskId.empty())mime.setData(maskMime,QByteArray::fromStdString(drag_->maskId));
@@ -552,6 +555,7 @@ void LayerPanelController::updateDragFeedback(const QMimeData* mime,const QPoint
     // this overlay only paints the gap the existing drop would open.
     if(!drag_||!mime||(!incoming&&mime->data(ownerMime)!=token_)){clearDragFeedback();return;}
     drag_->session=true;
+    drag_->incomingMime=incoming?const_cast<QMimeData*>(mime):nullptr;
     drag_->modifiers=modifiers;
     if(mime->hasFormat(maskMime)){drag_->maskId=mime->data(maskMime).toStdString();drag_->ids.clear();}
     else{drag_->maskId.clear();drag_->ids=mime->hasFormat(layerMime)?idsOf(mime):std::vector<std::string>{};}
@@ -570,7 +574,7 @@ void LayerPanelController::updateDragFeedback(const QMimeData* mime,const QPoint
         try{
             const auto state=host_.state();
             if(state.document){
-                dest=destination(tree_,*state.document,point);
+                dest=destination(tree_,*state.document,point,mime->hasFormat(maskMime));
                 changed=mime->hasFormat(maskMime)
                     ?copyMask(*state.document,state.selection,mime->data(maskMime).toStdString(),dest.id).changed
                     :dropLayers(*state.document,state.selection,idsOf(mime),dest.id,dest.zone,modifiers.testFlag(Qt::AltModifier)).changed;
