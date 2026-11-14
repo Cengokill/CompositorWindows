@@ -12,6 +12,7 @@ Permettre de régler la compression JPEG et le chargement progressif, de choisir
 
 - Conserver le curseur existant de qualité **0 à 100**, son défaut actuel de 85 et la préférence `jpegExportQuality`. Une valeur plus faible privilégie un fichier plus léger ; JPEG reste un format avec perte. Cette échelle n'est pas présentée comme équivalente à celle de Photoshop, graduée de 0 à 12.
 - Ajouter un choix exclusif **Standard**, **Optimized**, **Progressive**. Standard vise la compatibilité ; Optimized utilise des tables Huffman optimisées ; Progressive organise les données en plusieurs passages pour permettre un affichage progressif. Garder Standard par défaut et ne jamais produire silencieusement un autre mode que celui sélectionné.
+- Dans le champ **Background** du JPEG, remplacer le bouton portant le nom de la couleur par un petit rectangle de largeur limitée, rempli avec la couleur sélectionnée et sans texte visible. Un clic ouvre toujours le même sélecteur de couleur ; une sélection actualise le rectangle, le fond utilisé et l'aperçu. Conserver un nom accessible pour les lecteurs d'écran.
 - Conserver le choix RGB ou CMYK et le profil CMYK, le fond de transparence choisi, le profil ICC et la résolution. L'aperçu doit provenir du JPEG effectivement encodé avec ces options.
 
 ### PNG
@@ -53,6 +54,7 @@ Permettre de régler la compression JPEG et le chargement progressif, de choisir
 
 - Construire avec le preset `windows-x64-release` documenté, puis exécuter les tests concernés : `ctest --preset windows-x64-release -R "^(export\\.ui|export_stream\\.|migration\\.cmyk_)" --output-on-failure`. Ajouter les cas pertinents aux cibles existantes et exécuter tout nouveau cas associé.
 - Avec des fichiers réellement exportés, vérifier les marqueurs JPEG et le nombre de passages, le décodage indépendant, RGB/CMYK, ICC, DPI, fond et limites de qualité. Vérifier les pixels PNG avec et sans alpha et avec ou sans entrelacement ; contrôler séparément Channel Pack.
+- Dans le dialogue JPEG, choisir plusieurs couleurs de fond et vérifier le rectangle sans texte, son nom accessible, le dialogue de couleur et les pixels du JPEG exporté ; annuler le sélecteur conserve la couleur précédente.
 - Dans le dialogue de production, vérifier les contrôles visibles selon le format, la restauration de la qualité, les changements rapides, l'annulation et les erreurs, l'absence de mutation du document et de l'historique, et l'identité des octets affichés/préparés/enregistrés.
 - Vérifier la conversion de taille pour chaque format, un fichier sous 0,01 Mb, les seuils d'arrondi et un changement de réglage. Vérifier l'absence de résultat périmé et la conservation d'une destination existante après annulation ou échec.
 - Mesurer temps et mémoire sur petits et grands documents, y compris le JPEG progressif ; reporter le matériel, les entrées, les limites et les résultats réellement observés.
@@ -61,7 +63,7 @@ Permettre de régler la compression JPEG et le chargement progressif, de choisir
 
 Après implémentation et tests, créer une branche de fonctionnalité à partir de `main` à jour en préservant le travail local, committer et pousser les seuls changements concernés, puis mettre à jour cette PR sans la fusionner. Lancer une fois la version finale et la laisser ouverte.
 
-Dans CompositorWindows : ouvrir un document avec zones transparentes et détails fins ; ouvrir **File → Export Image** ; essayer les trois modes JPEG et plusieurs qualités, puis PNG avec les deux options ; vérifier aperçu, taille en Mb et fichier enregistré. Pendant un encodage, changer rapidement de réglage puis annuler ; vérifier que le document reste inchangé. Contrôler le dialogue avec la mise à l'échelle Windows utilisée et faire une capture réelle montrant les réglages et la taille. Consigner séparément toute vérification impossible.
+Dans CompositorWindows : ouvrir un document avec zones transparentes et détails fins ; ouvrir **File → Export Image** ; essayer les trois modes JPEG et plusieurs qualités, puis PNG avec les deux options ; vérifier aperçu, taille en Mb et fichier enregistré. Pour le JPEG, vérifier que Background présente un petit rectangle coloré sans texte et que son clic ouvre le sélecteur de couleur ; changer la couleur puis annuler une autre sélection. Pendant un encodage, changer rapidement de réglage puis annuler ; vérifier que le document reste inchangé. Contrôler le dialogue avec la mise à l'échelle Windows utilisée et faire une capture réelle montrant les réglages et la taille. Consigner séparément toute vérification impossible.
 
 ## État de cette proposition
 
