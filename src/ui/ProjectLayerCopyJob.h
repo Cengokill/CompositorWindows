@@ -11,6 +11,7 @@ struct LayerCopyWork {
     Document source,destination;
     std::string root;
     std::optional<Point> point;
+    std::optional<layers::Placement> listPlacement;
     QPointer<QObject> target;
     ImportState before;
 };

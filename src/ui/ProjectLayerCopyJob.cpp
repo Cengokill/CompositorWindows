@@ -34,8 +34,8 @@ void ProjectLayerCopyJob::advance(){
     while(state.next<state.ids.size()){
         try{
             state.work=state.host.prepare(state.ids[state.next++]);if(!state.work)continue;
-            auto source=state.work->source,destination=state.work->destination;auto root=state.work->root;const auto point=state.work->point;auto cancelled=state.cancelled;
-            state.watcher.setFuture(QtConcurrent::run([source=std::move(source),destination=std::move(destination),root=std::move(root),point,cancelled]{Impl::Result result;try{layers::Limits limits;limits.cancelled=[cancelled]{return cancelled->load();};result.value=std::make_shared<layers::CopyResult>(layers::copySubtree(source,root,destination,point,limits));}catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}return result;}));
+            auto source=state.work->source,destination=state.work->destination;auto root=state.work->root;const auto point=state.work->point;const auto placement=state.work->listPlacement;auto cancelled=state.cancelled;
+            state.watcher.setFuture(QtConcurrent::run([source=std::move(source),destination=std::move(destination),root=std::move(root),point,placement,cancelled]{Impl::Result result;try{layers::Limits limits;limits.cancelled=[cancelled]{return cancelled->load();};auto copied=layers::copySubtree(source,root,destination,point,limits);if(placement){auto placed=layers::place(copied.edit.document,{},copied.ids.at(root),*placement);copied.edit.document=std::move(placed.document);copied.edit.selection=std::move(placed.selection);copied.edit.changed=true;copied.edit.action="Copy Layers from Project";}result.value=std::make_shared<layers::CopyResult>(std::move(copied));}catch(const std::exception& error){result.error=QString::fromUtf8(error.what());}return result;}));
             return;
         }catch(const std::exception& error){if(state.work){state.host.settled(*state.work);state.work.reset();}QPointer<ProjectLayerCopyJob> alive=this;state.host.error(QString::fromUtf8(error.what()));if(!alive)return;}
     }

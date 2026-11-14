@@ -38,7 +38,9 @@
 #include <QStatusBar>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QTabBar>
 #include <QDragEnterEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
@@ -65,6 +67,7 @@
 #include <knownfolders.h>
 #include <shlobj.h>
 #include <algorithm>
+#include <limits>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -374,13 +377,30 @@ void MainWindow::queueImageImports(const QStringList& paths,EditorProject* targe
     if(rawSettings.openCameraRaw&&editPanel_)statusBar()->showMessage("Finish or cancel the current edit to import the image and open Camera Raw.");
     ensureImportQueue()->enqueue(target->canvas,std::move(batch));
 }
+namespace {
+// The selected tab is hit-tested first and its rectangle overlaps the next title.
+// A cursor visibly on the other project was therefore still resolved as the source.
+int nearestDropTab(const QTabBar* bar,QPoint position){
+    if(!bar||bar->count()<1||position.y()<-8||position.y()>bar->height()+7)return -1;
+    const QPoint probed(position.x(),std::clamp(position.y(),0,std::max(0,bar->height()-1)));
+    int best=-1,bestDistance=std::numeric_limits<int>::max();
+    for(int i=0;i<bar->count();++i){
+        auto rect=bar->tabRect(i).adjusted(-6,0,6,0);
+        rect.setTop(0);rect.setHeight(bar->height());
+        if(!rect.contains(probed))continue;
+        const int distance=std::abs(probed.x()-bar->tabRect(i).center().x());
+        const bool preferOther=distance==bestDistance&&i!=bar->currentIndex()&&best==bar->currentIndex();
+        if(distance<bestDistance||preferOther){bestDistance=distance;best=i;}
+    }
+    return best;
+}
+}
 EditorProject* MainWindow::dropDestinationAt(QPoint location,std::optional<Point>& point){
     point.reset();auto* destination=current();
     if(auto* corner=tabs_->cornerWidget(Qt::TopRightCorner);corner&&corner->rect().contains(corner->mapFrom(this,location)))return nullptr;
-    auto* bar=tabs_->tabBar();const auto tabPoint=bar->mapFrom(this,location);const auto local=tabs_->mapFrom(this,location);
-    if(local.x()>=0&&local.x()<tabs_->width()&&local.y()>=bar->geometry().top()&&local.y()<=bar->geometry().bottom()){
-        const auto index=bar->tabAt(tabPoint);return index>=0&&size_t(index)<projects_.size()?projects_[size_t(index)].get():nullptr;
-    }
+    auto* bar=tabs_->tabBar();const auto tabPoint=bar->mapFrom(this,location);
+    if(const int index=nearestDropTab(bar,tabPoint);index>=0&&size_t(index)<projects_.size())return projects_[size_t(index)].get();
+    if(tabPoint.y()>=0&&tabPoint.y()<bar->height()&&tabPoint.x()>=0&&tabPoint.x()<bar->width())return nullptr;
     // The native menu/new-project chrome is outside ContentView. Editor tools,
     // docks and other content keep the current session with an absent point.
     if(menuBar()->rect().contains(menuBar()->mapFrom(this,location)))return nullptr;
@@ -391,23 +411,50 @@ bool MainWindow::canReceiveLayerDrop(const QMimeData* mime,QPoint location,Qt::K
     if(!canSwitchProjects()||modifiers.testFlag(Qt::AltModifier))return false;
     const auto payload=ui::projectLayerPayload(mime);if(!payload)return false;
     auto found=std::find_if(projects_.begin(),projects_.end(),[&](const auto& project){return ui::projectLayerIdentity(project->canvas)==payload->session&&(!payload->scoped||payload->owner==project->canvas);});
-    if(found==projects_.end())return false;auto* source=found->get();if(!ui::canEditLayers(commandState(source)))return false;
-    for(const auto& id:payload->ids)if(std::none_of(source->document->layers.begin(),source->document->layers.end(),[&](const Layer& layer){return layer.id==id;}))return false;
-    std::optional<Point> point;auto* target=dropDestinationAt(location,point);if(target==source)return false;
+    const bool external=found==projects_.end();
+    if(external){if(!mime->hasFormat(ui::layerTransferMime))return false;}
+    else{auto* source=found->get();if(!source->document||!ui::canEditLayers(commandState(source)))return false;for(const auto& id:payload->ids)if(std::none_of(source->document->layers.begin(),source->document->layers.end(),[&](const Layer& layer){return layer.id==id;}))return false;}
+    std::optional<Point> point;auto* target=dropDestinationAt(location,point);if(!external&&target==found->get())return false;
     return !target||(ui::canStartProjectOperation(commandState(target))&&(!target->document||ui::canEditLayers(commandState(target))));
 }
-bool MainWindow::receiveLayerDrop(const QMimeData* mime,QPoint location,Qt::KeyboardModifiers modifiers){
-    if(!canReceiveLayerDrop(mime,location,modifiers))return false;
-    const auto payload=*ui::projectLayerPayload(mime);std::optional<Point> point;auto* destination=dropDestinationAt(location,point);
-    auto source=std::find_if(projects_.begin(),projects_.end(),[&](const auto& project){return ui::projectLayerIdentity(project->canvas)==payload.session;});
-    QPointer<QObject> sourceOwner=(*source)->canvas,targetOwner=destination?destination->canvas:nullptr;const bool captured=destination!=nullptr;
+bool MainWindow::canAcceptIncomingLayer(const QMimeData* mime){
+    if(!canSwitchProjects()||!current()||!current()->document||!ui::canEditLayers(commandState(current())))return false;
+    const auto payload=ui::projectLayerPayload(mime);if(!payload||payload->ids.empty())return false;
+    auto found=std::find_if(projects_.begin(),projects_.end(),[&](const auto& project){return ui::projectLayerIdentity(project->canvas)==payload->session&&(!payload->scoped||payload->owner==project->canvas);});
+    if(found==projects_.end())return mime->hasFormat(ui::layerTransferMime);
+    return found->get()!=current()&&found->get()->document&&ui::canEditLayers(commandState(found->get()));
+}
+void MainWindow::activateHoveredProject(const QMimeData* mime,QPoint where){
+    if(!mime->hasFormat(ui::projectLayerMime)||!canSwitchProjects())return;
+    std::optional<Point> ignored;auto* hovered=dropDestinationAt(where,ignored);
+    if(!hovered||hovered==current())return;
+    for(size_t index=0;index<projects_.size();++index)if(projects_[index].get()==hovered){if(tabs_->currentIndex()!=int(index))tabs_->setCurrentIndex(int(index));return;}
+}
+bool MainWindow::receiveLayerDrop(const QMimeData* mime,QPoint location,Qt::KeyboardModifiers modifiers,const layers::Placement* listPlacement){
+    if(listPlacement){if(!canAcceptIncomingLayer(mime))return false;}
+    else if(!canReceiveLayerDrop(mime,location,modifiers))return false;
+    const auto payload=*ui::projectLayerPayload(mime);std::optional<Point> point;auto* destination=listPlacement?current():dropDestinationAt(location,point);
+    auto source=std::find_if(projects_.begin(),projects_.end(),[&](const auto& project){return ui::projectLayerIdentity(project->canvas)==payload.session&&(!payload.scoped||payload.owner==project->canvas);});
+    std::shared_ptr<const ui::LayerTransfer> external;
+    std::vector<std::string> roots=payload.ids;
+    if(source==projects_.end()){
+        auto loaded=ui::documentFromLayerTransfer(mime->data(ui::layerTransferMime));
+        if(!loaded){statusBar()->showMessage("The other window could not provide the dragged layers.");return false;}
+        roots=loaded->roots;
+        external=std::make_shared<const ui::LayerTransfer>(std::move(*loaded));
+    }
+    QPointer<QObject> sourceOwner=source==projects_.end()?nullptr:(*source)->canvas,targetOwner=destination?destination->canvas:nullptr;const bool captured=destination!=nullptr;
     auto project=[this](QObject* owner)->EditorProject*{for(auto& item:projects_)if(item->canvas==owner)return item.get();return nullptr;};
     ui::ProjectLayerCopyJob::Host host;
-    host.prepare=[this,project,sourceOwner,targetOwner,captured,point](const std::string& id)->std::optional<ui::LayerCopyWork>{
-        auto* sourceProject=project(sourceOwner);if(!sourceProject||!sourceProject->document)return {};
+    const layers::Placement heldPlacement=listPlacement?*listPlacement:layers::Placement{};
+    const bool placeInList=listPlacement!=nullptr;
+    host.prepare=[this,project,sourceOwner,external,targetOwner,captured,point,heldPlacement,placeInList](const std::string& id)->std::optional<ui::LayerCopyWork>{
+        const Document* sourceDocument=external?&external->document:nullptr;
+        if(!sourceDocument){auto* sourceProject=project(sourceOwner);if(!sourceProject||!sourceProject->document)return {};sourceDocument=&*sourceProject->document;}
         auto* target=captured?project(targetOwner):nullptr;if(captured&&!target)return {};
         if(!target){QScopedValueRollback<bool> selecting(selectingProjectForOpen_,true);target=&addEmptyProject(false);}
-        ui::LayerCopyWork work;work.source=*sourceProject->document;work.root=id;work.point=point;work.target=target->canvas;work.before={target->document,target->active};
+        ui::LayerCopyWork work;work.source=*sourceDocument;work.root=id;work.point=point;work.target=target->canvas;work.before={target->document,target->active};
+        if(placeInList){const auto layer=std::find_if(sourceDocument->layers.begin(),sourceDocument->layers.end(),[&](const Layer& item){return item.id==id;});if(layer!=sourceDocument->layers.end())work.point=layer->transform.fromUnit({.5,.5});work.listPlacement=heldPlacement;}
         if(target->document)work.destination=*target->document;
         else{work.destination.id=newId();work.destination.width=work.source.width;work.destination.height=work.source.height;Layer blank;blank.id=newId();blank.name="Layer 1";blank.transform={0,0,double(work.source.width),double(work.source.height)};work.destination.layers.push_back(std::move(blank));}
         target->projectBusy=true;try{refresh(false,false);}catch(...){target->projectBusy=false;throw;}return work;
@@ -423,16 +470,18 @@ bool MainWindow::receiveLayerDrop(const QMimeData* mime,QPoint location,Qt::Keyb
     host.finished=[this,project,sourceOwner]{if(auto* owner=project(sourceOwner))owner->projectBusy=false;managingProjectOpen_=false;refresh();};
     // Construct the worker owner before publishing busy state; it starts via a
     // queued event, so failed allocation cannot leave the workspace locked.
-    new ui::ProjectLayerCopyJob(payload.ids,std::move(host),this);
-    (*source)->projectBusy=true;managingProjectOpen_=true;refresh(false,false);return true;
+    new ui::ProjectLayerCopyJob(std::move(roots),std::move(host),this);
+    if(source!=projects_.end())(*source)->projectBusy=true;managingProjectOpen_=true;refresh(false,false);return true;
 }
-void MainWindow::dragEnterEvent(QDragEnterEvent*event){
+void MainWindow::acceptWorkspaceDrag(QDropEvent* event,QPoint where){
     if(!canSwitchProjects())return;
-    if(event->mimeData()->hasFormat(ui::projectLayerMime)){if(canReceiveLayerDrop(event->mimeData(),event->position().toPoint(),event->modifiers())){event->setDropAction(Qt::CopyAction);event->accept();}return;}
+    if(event->mimeData()->hasFormat(ui::projectLayerMime)){activateHoveredProject(event->mimeData(),where);if(canReceiveLayerDrop(event->mimeData(),where,event->modifiers())){event->setDropAction(Qt::CopyAction);event->accept();}return;}
     if(ui::VirtualDropJob::hasVirtualFiles(*event->mimeData())){event->setDropAction(Qt::CopyAction);event->accept();return;}
     if(event->mimeData()->hasImage()){event->acceptProposedAction();return;}
-    for(const auto&url:event->mimeData()->urls())if(url.isLocalFile()){event->acceptProposedAction();return;}
+    for(const auto& url:event->mimeData()->urls())if(url.isLocalFile()){event->acceptProposedAction();return;}
 }
+void MainWindow::dragEnterEvent(QDragEnterEvent* event){acceptWorkspaceDrag(event,event->position().toPoint());}
+void MainWindow::dragMoveEvent(QDragMoveEvent* event){acceptWorkspaceDrag(event,event->position().toPoint());}
 void MainWindow::dropEvent(QDropEvent*event){
     // ContentView.swift:102 and ProjectTabs.swift:163 reject pre-blocked UI
     // drops. Already-accepted provider/OS requests use receiveDropPaths and wait.
