@@ -43,6 +43,13 @@ void extraction(){
     require(ui::releaseNotesForVersion(markdown,"1.5.60").empty(),"partial version matched");
     require(ui::releaseNotesForVersion("# Compositor Windows 1.5.6\n## Fixes\n  \n","1.5.6").empty(),"empty section counted as content");
     require(!ui::installedReleaseNotes().empty(),"running version lacks embedded notes");
+    QFile resource(":/docs/release-notes.md");require(resource.open(QIODevice::ReadOnly),"embedded notes missing");
+    const auto release=ui::releaseNotesForVersion(QString::fromUtf8(resource.readAll()),"1.5.13");
+    QPointer<QDialog> dialog=ui::openWhatsNewDialog(nullptr,"1.5.13",release);
+    const auto displayed=dialog->findChild<QTextBrowser*>("whatsNewContent")->toPlainText();
+    require(displayed.contains("Alt+wheel")&&displayed.contains("layer visibility"),"1.5.13 performance improvements missing");
+    require(displayed.contains("parent folders")&&displayed.contains("Background Color"),"1.5.13 features missing");
+    dialog->reject();
 }
 void settings(){
     QSettings initial;require(ui::releaseNotesDue(initial,{1,5,6}),"fresh history did not show notes");
