@@ -110,6 +110,8 @@ private:
     bool layerVisibilityComposite_{};
     std::optional<graphics::CanvasViewport> presentedViewport_;
     std::optional<std::pair<QPointF,Qt::KeyboardModifiers>> wheelHover_;
+    // Alt+wheel notches that arrive while a wheel composite is still running fold into one target.
+    std::optional<double> queuedWheelZoom_;QPointF queuedWheelAnchor_;Qt::KeyboardModifiers queuedWheelModifiers_{};
     double lastCompositeX_{},lastCompositeY_{},lastCompositeW_{},lastCompositeH_{},lastCompositeUnits_{1};
     std::shared_ptr<const Raster> navigatorRaster_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> navigatorBitmap_;
@@ -127,6 +129,7 @@ private:
     void stopWheelZoom();
     void finishWheelZoomForPointer();
     void submitWheelZoom();
+    void applyWheelZoom(double target,QPointF position,Qt::KeyboardModifiers modifiers);
     bool profileKnown_{},presentationAttempted_{};
     QString presentationDiagnostic_;
     uint64_t presentationBytes_{},profileDiscoveryCount_{};

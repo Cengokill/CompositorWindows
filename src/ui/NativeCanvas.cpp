@@ -141,6 +141,13 @@ void NativeCanvas::presentWheelComposite(CompositeViewport patch){
     compositeDirty_=false;
     wheelZoomPending_=wheelZoomRequested_=false;
     presentComposite(std::move(patch.raster),patch.documentX,patch.documentY,patch.unitsPerPixel,false);
+    if(queuedWheelZoom_&&!compositeHeld_&&!movePreview_){
+        // Paint the frame that just finished, then start the next step from the folded notches.
+        const double target=*queuedWheelZoom_;const auto anchor=queuedWheelAnchor_;const auto modifiers=queuedWheelModifiers_;
+        queuedWheelZoom_.reset();
+        repaint();
+        if(target!=zoom)applyWheelZoom(target,anchor,modifiers);
+    }
 }
 void NativeCanvas::failWheelComposite(){
     if(!wheelZoomPending_)return;
@@ -163,6 +170,17 @@ void NativeCanvas::stopWheelZoom(){
     wheelZoomPending_=wheelZoomRequested_=wheelZoomFrame_=false;
     layerVisibilityComposite_=false;
     wheelHover_.reset();
+    queuedWheelZoom_.reset();
+}
+void NativeCanvas::applyWheelZoom(double target,QPointF position,Qt::KeyboardModifiers modifiers){
+    settleViewport();
+    zoomAt(target,position);
+    wheelZoomFrame_=true;
+    wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));
+    viewportPresented_=false;
+    wheelHover_=std::pair{position,modifiers};
+    submitWheelZoom();
+    if(navigatorTimer_->isActive())navigatorTimer_->start();
 }
 void NativeCanvas::submitWheelZoom(){
     if(!wheelZoomPending_||wheelZoomRequested_||deferViewportComposite||!requestWheelComposite)return;
@@ -886,17 +904,16 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     if(modifiers.testFlag(Qt::AltModifier)){
         if(compositeHeld_||movePreview_)return;
         const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();
-        const double target=std::clamp(zoom*std::exp(steps*(notch?std::log(1.25):.015)),.001,32.);
-        if(target!=zoom){
-            settleViewport();
-            zoomAt(target,e->position());
-            wheelZoomFrame_=true;
-            wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));
-            viewportPresented_=false;
-            wheelHover_=std::pair{e->position(),modifiers};
-            submitWheelZoom();
-            if(navigatorTimer_->isActive())navigatorTimer_->start();
+        const double base=queuedWheelZoom_?*queuedWheelZoom_:zoom;
+        const double target=std::clamp(base*std::exp(steps*(notch?std::log(1.25):.015)),.001,32.);
+        if(wheelZoomRequested_){
+            // Cancelling the running composite for every notch lets no frame finish while
+            // notches arrive faster than one composite takes. Fold the notch into one target
+            // and apply it when the running frame has been presented.
+            if(target!=base){queuedWheelZoom_=target;queuedWheelAnchor_=e->position();queuedWheelModifiers_=modifiers;}
+            return;
         }
+        if(target!=zoom)applyWheelZoom(target,e->position(),modifiers);
         return;
     }else{
         viewportGesture_=true;

@@ -259,6 +259,26 @@ void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
     std::cout<<"frames="<<frames.size()<<" max_channel_difference="<<maximum<<'\n';
     require(maximum==0,"A presented zoom frame differs from the synchronous render");
 
+    // Notches that arrive while a frame is composing fold into one later step.
+    // Cancelling the running frame for each of them would present only the last.
+    frames.clear();
+    canvas.observePresentation=[&](auto frame){frames.push_back(std::move(frame));};
+    const double burstStart=canvas.zoom;
+    const auto burstPoint=canvas.documentPoint(anchor);
+    for(int notch=0;notch<6;++notch)wheel(canvas,anchor,1);
+    waitUntil(expectFinal);
+    canvas.observePresentation={};
+    require(frames.size()>=2,"A burst of wheel notches presented no intermediate frame");
+    require(std::abs(frames.front().zoom-burstStart*1.25)<burstStart*1e-9,"First burst frame skipped its notch");
+    require(std::abs(canvas.zoom-burstStart*std::pow(1.25,6))<canvas.zoom*1e-9,"Folded wheel notches changed the final zoom");
+    const auto burstAfter=canvas.documentPoint(anchor);
+    require(std::abs(burstPoint.x()-burstAfter.x())<1e-6&&std::abs(burstPoint.y()-burstAfter.y())<1e-6,
+        "A burst of wheel notches moved the document point under the cursor");
+    for(const auto& frame:frames)
+        require(pixelDifference(frame.pixels,captureReference(frame.zoom,frame.pan))==0,"A burst frame differs from the synchronous render");
+    require(*project.document==document&&!project.history.canUndo()&&!project.history.modified(),
+        "A wheel burst changed the document or history");
+
     if(lens||interval!=30||!photo.empty())return;
     auto* zoomJob=dynamic_cast<ui::ViewportCompositeJob*>(
         canvas.findChild<QObject*>("wheelZoomCompositeJob",Qt::FindDirectChildrenOnly));
