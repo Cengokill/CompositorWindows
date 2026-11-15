@@ -224,6 +224,37 @@ void navigator_overview_isolated(){
     auto untouched=view.renderViewport(d,256,0,256,256,1,4,8);REQUIRE(untouched.raster->pixel(0,0).r>200);
 }
 void unsupported_blank_adjustment(){Document d;d.width=d.height=30000;Layer adjustment;adjustment.id=newId();adjustment.adjustmentJson="{\"kind\":\"unsupported\"}";d.layers={adjustment};for(bool viewport:{false,true}){CompositeCache cache;bool rejected=false;try{if(viewport)cache.renderViewport(d,0,0,30000,30000);else cache.render(d);}catch(const std::exception&){rejected=true;}REQUIRE(rejected);}d.layers[0].visible=false;CompositeCache cache;REQUIRE(unique(*cache.render(d))==1);}
+void lens_large_viewport(){
+    Document d;d.id=newId();d.width=2240;d.height=3360;
+    auto source=Raster::filled(4,4,{20,20,20,255});
+    const Pixel white{255,255,255,255};source=source->replacing(2,1,1,1,&white,1);
+    Layer photo;photo.id=newId();photo.raster=source;photo.transform={0,0,2240,3360,0,false,false,Transform::Sampling::Nearest};
+    d.layers={photo};CompositeCache cache;
+    const auto before=cache.renderViewport(d,0,0,d.width,d.height,8).raster->rgba();
+    Layer lens;lens.id=newId();lens.adjustmentJson=effects::defaultAdjustmentJson("Lens Effects");lens.transform={0,0,2240,3360};
+    auto json=QJsonDocument::fromJson(QByteArray::fromStdString(lens.adjustmentJson)).object();
+    auto filter=json["filterLayerSettings"].toObject();auto settings=filter["lens"].toObject();settings["effect"]="Prism";filter["lens"]=settings;json["filterLayerSettings"]=filter;
+    lens.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers.push_back(lens);
+    cache.setLensPreviewMaxEdge(256);
+    const auto after=cache.renderViewport(d,0,0,d.width,d.height,8).raster->rgba();
+    REQUIRE(after!=before);
+}
+void lens_large_full_render(){
+    auto d=document(2240,3360,{32,32,32,255});d.layers[0].opacity=1;
+    Layer lens;lens.id=newId();lens.adjustmentJson=effects::defaultAdjustmentJson("Lens Effects");lens.transform={0,0,2240,3360};
+    auto json=QJsonDocument::fromJson(QByteArray::fromStdString(lens.adjustmentJson)).object();
+    auto filter=json["filterLayerSettings"].toObject();auto settings=filter["lens"].toObject();settings["effect"]="Mist";filter["lens"]=settings;json["filterLayerSettings"]=filter;
+    lens.adjustmentJson=QJsonDocument(json).toJson(QJsonDocument::Compact).toStdString();d.layers.push_back(lens);
+    auto pixel=SoftwareRenderer().render(d,0,0,1,1);
+    REQUIRE(pixel&&pixel->width==1&&pixel->height==1);
+    QTemporaryDir temporary;REQUIRE(temporary.isValid());
+    const auto output=std::filesystem::path(temporary.filePath("lens-large.png").toStdWString());
+    exportDocumentAtomic(d,output);
+    const auto decoded=imaging::WicCodec::decode(output).image;
+    REQUIRE(decoded.width==d.width&&decoded.height==d.height);
+    const auto first=pixel->pixel(0,0);
+    REQUIRE(decoded.pixels[0]==first.r&&decoded.pixels[1]==first.g&&decoded.pixels[2]==first.b&&decoded.pixels[3]==first.a);
+}
 
 void move_translation_damage(){
     Document document;document.id=newId();document.width=1920;document.height=1080;
@@ -304,7 +335,7 @@ void lens_global_cache(){
     auto after=cache.renderViewport(d,256,0,256,32);
     for(int y=0;y<32;++y)for(int x=0;x<256;++x)REQUIRE(after.raster->pixel(x,y)==changed->pixel(x+256,y));
     bool rejected=false;try{SoftwareRenderer().renderScaled(d,0,0,1,1,0);}catch(const std::invalid_argument&){rejected=true;}REQUIRE(rejected);
-    d.width=3000;d.height=2000;d.layers[0].transform={0,0,3000,2000};d.layers[1].transform={0,0,3000,2000};
+    d.width=3000;d.height=3000;d.layers[0].transform={0,0,3000,3000};d.layers[1].transform={0,0,3000,3000};
     rejected=false;try{SoftwareRenderer().render(d,0,0,1,1);}catch(const std::runtime_error&){rejected=true;}REQUIRE(rejected);
 }
 void vignette_cache(){
@@ -329,4 +360,4 @@ void viewport_cancellation_reaches_renderer(){
     REQUIRE(cancelled&&polls>=4);
 }
 
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"visibility_tile_paths",visibility_tile_paths},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"lens_large_viewport",lens_large_viewport},{"lens_large_full_render",lens_large_full_render},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"visibility_tile_paths",visibility_tile_paths},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
