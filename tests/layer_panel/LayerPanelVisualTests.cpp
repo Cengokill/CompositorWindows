@@ -106,10 +106,17 @@ int main(int argc, char** argv) {
             QTest::qWait(150);
             save("width_261");
             const auto dockTopLeft = dock->mapTo(&window, QPoint{});
-            if (!window.grab(QRect(dockTopLeft.x() - t::resizeHitWidth, dockTopLeft.y(),
-                                   dock->width() + t::resizeHitWidth, dock->height()))
-                     .save(directory + "/resize_edge.png"))
+            const auto edgeImage = window.grab(QRect(dockTopLeft.x() - t::resizeHitWidth, dockTopLeft.y(),
+                                                     dock->width() + t::resizeHitWidth, dock->height())).toImage();
+            if (!edgeImage.save(directory + "/resize_edge.png"))
                 throw std::runtime_error("Cannot save resize edge");
+            const int listTop = tree->mapTo(dock, QPoint{}).y();
+            for (int y = listTop; y < qMin(listTop + 160, edgeImage.height()); ++y)
+                for (int x = 0; x < t::resizeHitWidth; ++x) {
+                    const auto color = edgeImage.pixelColor(x, y);
+                    if (color.red() > 180 && color.green() > 180 && color.blue() > 180)
+                        throw std::runtime_error("Layer rows leaked left of the narrow dock");
+                }
             window.resizeDocks({dock}, {t::maxWidth}, Qt::Horizontal);
             QTest::qWait(150);
             save("width_372");
@@ -183,6 +190,14 @@ int main(int argc, char** argv) {
                   !typeFilter->property("active").toBool(), "inert type filter");
     window.addFeasibilityDocument();
     QTest::qWait(100);
+    window.resizeDocks({dock}, {t::minWidth}, Qt::Horizontal);
+    QCoreApplication::processEvents();
+    const auto dockBounds = QRect(dock->mapTo(&window, QPoint{}), dock->size());
+    const auto treeBounds = QRect(tree->mapTo(&window, QPoint{}), tree->size());
+    const auto viewportBounds = QRect(tree->viewport()->mapTo(&window, QPoint{}), tree->viewport()->size());
+    okay &= check(treeBounds.left() >= dockBounds.left() && treeBounds.right() <= dockBounds.right() &&
+                  viewportBounds.left() >= dockBounds.left() && viewportBounds.right() <= dockBounds.right(),
+                  "narrow panel contains layer list");
     if (tree->topLevelItemCount() >= 2) {
         tree->clearSelection();
         tree->topLevelItem(0)->setSelected(true);

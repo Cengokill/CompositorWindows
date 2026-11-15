@@ -49,6 +49,7 @@ protected:
     }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
+        painter.fillRect(rect(), QColor(ui::layer_panel::background));
         painter.fillRect(QRect(width() - ui::layer_panel::separatorWidth, 0,
                                ui::layer_panel::separatorWidth, height()),
                          QColor(ui::layer_panel::separator));
@@ -76,7 +77,7 @@ private:
     void sync() {
         if (!window_ || !dock_ || !dock_->isVisible()) { hide(); return; }
         const auto topLeft = dock_->mapTo(window_, QPoint{});
-        setGeometry(topLeft.x() - width() + ui::layer_panel::separatorWidth,
+        setGeometry(topLeft.x() - width(),
                     topLeft.y(), width(), dock_->height());
         show();
         raise();
@@ -265,16 +266,26 @@ QDockWidget* MainWindow::setupLayersDock() {
         opacityPressUndoCount_.reset();
         if (!canEditAppearance()) return;
         finishOpacityEdit();
+        stopGifPlayback();
         opacityOwner_ = current();
         if (opacityOwner_) {
             opacityPressUndoCount_ = opacityOwner_->history.undoCount();
             opacityOwner_->history.begin("Layer Opacity", opacityOwner_->document, opacityOwner_->active);
         }
     });
-    connect(opacity_, &QSlider::sliderReleased, this, [this] { finishOpacityEdit(); refresh(false); });
+    connect(opacity_, &QSlider::sliderReleased, this, [this] {
+        finishOpacityEdit();
+        if (auto* project = current(); project && project->canvas) project->canvas->scheduleNavigator();
+        refresh(false);
+    });
     connect(opacity_, &QSlider::valueChanged, this, [this](int value) {
-        if (!refreshing_ && canEditAppearance())
-            edit("Layer Opacity", [&](Document&) { active()->opacity = value / 100.; });
+        if (refreshing_ || !canEditAppearance()) return;
+        if (auto* project = current(); project == opacityOwner_ && opacity_->isSliderDown()) {
+            active()->opacity = value / 100.;
+            // Keep the last frame while the existing viewport worker renders this value.
+            project->canvas->updateLayerVisibilityComposite(true);
+            refreshOpacityPercent();
+        } else edit("Layer Opacity", [&](Document&) { active()->opacity = value / 100.; });
     });
     return dock;
 }
