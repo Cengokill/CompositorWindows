@@ -1,0 +1,199 @@
+#include "ui/MainWindow.h"
+#include "ui/LayerPanelTokens.h"
+#include <QAbstractItemView>
+#include <QApplication>
+#include <QComboBox>
+#include <QDir>
+#include <QDockWidget>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#include <QMenu>
+#include <QSettings>
+#include <QShortcut>
+#include <QSlider>
+#include <QStackedWidget>
+#include <QStyle>
+#include <QStyleOptionSlider>
+#include <QTemporaryDir>
+#include <QTest>
+#include <QToolButton>
+#include <QTreeWidget>
+#include <QVBoxLayout>
+#include <iostream>
+#include <stdexcept>
+
+using namespace compositor;
+namespace t = compositor::ui::layer_panel;
+
+int main(int argc, char** argv) {
+    QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName("CompositorFixture");
+    QCoreApplication::setApplicationName("LayerPanelVisual");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QTemporaryDir settings;
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings.path());
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settings.path());
+    MainWindow window(true);
+    window.resize(1280, 850);
+    window.show();
+    QTest::qWait(200);
+    auto* dock = window.findChild<QDockWidget*>("layersDock");
+    auto* header = window.findChild<QWidget*>("layersHeader");
+    auto* searchField = window.findChild<QWidget*>("layerSearchField");
+    auto* title = window.findChild<QWidget*>("layersTitle");
+    auto* appearance = window.findChild<QWidget*>("layerAppearance");
+    auto* percent = window.findChild<QLineEdit*>("layerOpacityPercent");
+    auto* slider = window.findChild<QSlider*>("layerOpacity");
+    auto* footer = window.findChild<QWidget*>("layerFooter");
+    auto* resizeEdge = window.findChild<QWidget*>("layerResizeEdge");
+    auto* tree = window.findChild<QTreeWidget*>("layersTree");
+    auto* blend = window.findChild<QComboBox*>("layerBlend");
+    auto* searchButton = window.findChild<QToolButton*>("layerSearchButton");
+    if (!dock || !header || !searchField || !title || !appearance || !percent || !slider || !footer ||
+        !tree || !blend || !searchButton || !resizeEdge) return 2;
+    auto check = [](bool condition, const char* name) {
+        if (!condition) std::cerr << "FAIL " << name << '\n';
+        return condition;
+    };
+    if (argc == 3 && QString::fromLocal8Bit(argv[1]) == "--capture") {
+        const QString directory = QString::fromLocal8Bit(argv[2]);
+        if (!QDir().mkpath(directory)) return 2;
+        auto save = [&](const QString& name) {
+            QCoreApplication::processEvents();
+            QTest::qWait(70);
+            const auto image = dock->grab();
+            if (!image.save(directory + "/" + name + ".png")) throw std::runtime_error("Cannot save panel capture");
+        };
+        try {
+            save("no_document");
+            window.addFeasibilityDocument();
+            QTest::qWait(180);
+            save("populated");
+            searchButton->click();
+            save("search_active");
+            searchButton->click();
+            blend->showPopup();
+            QTest::qWait(100);
+            save("blend_open");
+            if (!blend->view()->window()->grab().save(directory + "/blend_popup.png"))
+                throw std::runtime_error("Cannot save blend popup");
+            blend->hidePopup();
+            auto* effectsButton = window.findChild<QToolButton*>("layerEffectsButton");
+            if (effectsButton && effectsButton->menu()) {
+                effectsButton->click();
+                QTest::qWait(80);
+                if (!effectsButton->menu()->isVisible() ||
+                    !effectsButton->menu()->grab().save(directory + "/effects_popup.png"))
+                    throw std::runtime_error("Cannot save effects popup");
+                effectsButton->menu()->hide();
+            }
+            if (tree->topLevelItemCount() >= 2) {
+                tree->clearSelection();
+                tree->topLevelItem(0)->setSelected(true);
+                tree->topLevelItem(1)->setSelected(true);
+                QTest::qWait(100);
+            }
+            save("multiple_selected");
+            if (auto* group = window.findChild<QToolButton*>("layerGroupButton")) group->click();
+            QTest::qWait(130);
+            save("folder_selected");
+            for (const auto* name : {"layerAddButton", "layerGroupButton", "layerAddMaskButton",
+                                     "layerAdjustmentButton", "layerFilterLayerButton", "layerEffectsButton",
+                                     "layerDeleteButton"})
+                if (auto* button = window.findChild<QToolButton*>(name)) button->setEnabled(false);
+            save("footer_disabled");
+            window.resizeDocks({dock}, {t::minWidth}, Qt::Horizontal);
+            QTest::qWait(150);
+            save("width_261");
+            const auto dockTopLeft = dock->mapTo(&window, QPoint{});
+            if (!window.grab(QRect(dockTopLeft.x() - t::resizeHitWidth, dockTopLeft.y(),
+                                   dock->width() + t::resizeHitWidth, dock->height()))
+                     .save(directory + "/resize_edge.png"))
+                throw std::runtime_error("Cannot save resize edge");
+            window.resizeDocks({dock}, {t::maxWidth}, Qt::Horizontal);
+            QTest::qWait(150);
+            save("width_372");
+            std::cout << "CAPTURED " << directory.toStdString() << '\n';
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << '\n';
+            return 2;
+        }
+    }
+    bool okay = true;
+    okay &= check(header->height() == t::headerHeight, "header height");
+    okay &= check(searchField->height() == t::searchHeight, "search field height");
+    const auto family = title->font().family();
+    okay &= check((family == "Segoe UI Variable" || family == "Segoe UI") &&
+                  title->font().pixelSize() == t::titleFont, "panel font");
+    okay &= check(dock->minimumWidth() == t::minWidth && dock->maximumWidth() == t::maxWidth, "panel bounds");
+    okay &= check(dock->width() == t::minWidth, "default panel width");
+    okay &= check(resizeEdge->width() == t::resizeHitWidth &&
+                  resizeEdge->cursor().shape() == Qt::SplitHCursor, "resize edge");
+    auto* appearanceLayout = qobject_cast<QVBoxLayout*>(appearance->layout());
+    okay &= check(appearanceLayout && appearanceLayout->contentsMargins() ==
+                  QMargins(t::appearancePadding, t::appearancePadding,
+                           t::appearancePadding, t::appearancePadding), "appearance margins");
+    okay &= check(percent->width() == t::percentWidth, "percent width");
+    okay &= check(slider->height() == t::sliderHeight, "slider height");
+    QStyleOptionSlider option;
+    option.initFrom(slider);
+    option.orientation = Qt::Horizontal;
+    option.minimum = slider->minimum();
+    option.maximum = slider->maximum();
+    option.sliderPosition = slider->sliderPosition();
+    const auto groove = slider->style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderGroove, slider);
+    const auto handle = slider->style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, slider);
+    okay &= check(groove.height() == t::sliderTrack, "slider track thickness");
+    okay &= check(handle.width() == t::sliderKnobWidth && handle.height() == t::sliderKnobHeight,
+                  "slider knob dimensions");
+    auto* add = window.findChild<QToolButton*>("layerAddButton");
+    auto* group = window.findChild<QToolButton*>("layerGroupButton");
+    auto* mask = window.findChild<QToolButton*>("layerAddMaskButton");
+    auto* adjustment = window.findChild<QToolButton*>("layerAdjustmentButton");
+    auto* filter = window.findChild<QToolButton*>("layerFilterLayerButton");
+    auto* effects = window.findChild<QToolButton*>("layerEffectsButton");
+    okay &= check(add && group && mask && adjustment && filter && effects, "footer controls");
+    if (add && group && mask && adjustment && filter && effects) {
+        okay &= check(group->x() - add->x() == t::footerIconSize + 2 * t::footerIconHorizontal,
+                      "plain footer gap");
+        okay &= check(adjustment->x() - mask->x() == t::footerIconSize + 2 * t::footerIconHorizontal,
+                      "mask to menu gap");
+        okay &= check(filter->x() - adjustment->x() ==
+                      t::footerIconSize + t::footerChevronGap + t::footerChevronSize +
+                      2 * t::footerMenuHorizontal, "menu footer gap");
+        okay &= check(adjustment->menu() && adjustment->menu()->actions().size() == 9 &&
+                      filter->menu() && !filter->menu()->actions().isEmpty() &&
+                      effects->menu() && effects->menu()->actions().size() == 6, "footer menus");
+    }
+    for (const auto* name : {"layerAddButton", "layerGroupButton", "layerAddMaskButton",
+                             "layerAdjustmentButton", "layerFilterLayerButton", "layerEffectsButton",
+                             "layerDeleteButton"}) {
+        auto* button = window.findChild<QToolButton*>(name);
+        okay &= check(button && !button->toolTip().isEmpty(), "footer tooltip");
+    }
+    searchButton->click();
+    auto* edit = window.findChild<QLineEdit*>("layerSearch");
+    okay &= check(searchField->isVisible() && edit && edit->hasFocus(), "search visible and focused");
+    okay &= check(edit && edit->width() >= edit->fontMetrics().horizontalAdvance("Search Layers"),
+                  "search placeholder fits");
+    auto* typeFilter = window.findChild<QToolButton*>("layerTypeFilterButton");
+    if (typeFilter) typeFilter->click();
+    okay &= check(typeFilter && !typeFilter->menu() && !typeFilter->isCheckable() &&
+                  !typeFilter->property("active").toBool(), "inert type filter");
+    window.addFeasibilityDocument();
+    QTest::qWait(100);
+    if (tree->topLevelItemCount() >= 2) {
+        tree->clearSelection();
+        tree->topLevelItem(0)->setSelected(true);
+        tree->topLevelItem(1)->setSelected(true);
+        QTest::qWait(100);
+        auto* deleteButton = window.findChild<QToolButton*>("layerDeleteButton");
+        okay &= check(deleteButton && deleteButton->toolTip() == "Delete selected layers",
+                      "multiple selection delete tooltip");
+    }
+    std::cout << "font=" << family.toStdString() << " header=" << header->height() << " search=" << searchField->height()
+              << " groove=" << groove.height() << " handle=" << handle.width() << 'x' << handle.height()
+              << " width=" << dock->width() << '\n';
+    return okay ? 0 : 1;
+}

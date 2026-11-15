@@ -359,6 +359,9 @@ private:
     bool canvasNavigationAllowed();
     void finishOpacityEdit();
     void withdrawOpacityPress();
+    QDockWidget* setupLayersDock();
+    void setupLayerFooter();
+    void refreshLayerFooterTooltips();
     QWidget* createLayerOpacityControl();
     void refreshOpacityPercent();
     void detachOpacityPercent();

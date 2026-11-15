@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "LastFilterJob.h"
 #include "LayerPanel.h"
+#include "LayerPanelWidgets.h"
 #include "LayerCopyCommit.h"
 #include "graphics/Downsample.h"
 #include <QMenuBar>
@@ -20,8 +21,8 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QColorDialog>
-#include <QToolButton>
 #include <QMenu>
+#include <QStackedWidget>
 #include <algorithm>
 
 namespace compositor {
@@ -212,7 +213,8 @@ void MainWindow::setupLayerActions(){
     struct Entry{const char* text;const char* name;ui::MaskCommand command;};
     for(const auto& entry:std::vector<Entry>{{"Add White Mask (Reveal Selection)","maskAddReveal",ui::MaskCommand::AddReveal},{"Add Black Mask (Hide Selection)","maskAddHide",ui::MaskCommand::AddHide},{"Reveal All","maskRevealAll",ui::MaskCommand::RevealAll},{"Hide All","maskHideAll",ui::MaskCommand::HideAll},{"Enable / Disable Mask","maskToggleEnabled",ui::MaskCommand::ToggleEnabled},{"Link / Unlink Mask","maskToggleLink",ui::MaskCommand::ToggleLink},{"Delete Mask","maskDelete",ui::MaskCommand::Delete},{"Edit Image","maskEditImage",ui::MaskCommand::EditImage},{"Edit Mask","maskEditMask",ui::MaskCommand::EditMask},{"Select Image Alpha","maskLoadAlpha",ui::MaskCommand::LoadAlpha},{"Select Mask Black Areas","maskLoadBlack",ui::MaskCommand::LoadBlack}}){auto*a=action(masks,entry.text,{},[this,command=entry.command]{maskCommand(int(command));});a->setObjectName(entry.name);a->setProperty("maskCommand",int(entry.command));}
 
-    auto*parent=layers_->parentWidget();auto*layout=qobject_cast<QVBoxLayout*>(parent->layout());if(layout){auto*editTarget=new QComboBox(parent);editTarget->setObjectName("layerEditTarget");editTarget->setAccessibleName("Layer editing target");editTarget->addItems({"Edit image","Edit mask"});layout->addWidget(editTarget);editTarget->hide();connect(editTarget,&QComboBox::currentIndexChanged,this,[this](int value){if(!refreshing_)maskCommand(int(value?ui::MaskCommand::EditMask:ui::MaskCommand::EditImage));});auto*footer=new QHBoxLayout;auto addButton=[&](QString text,QString name,std::function<void()> fn){auto*button=new QPushButton(text,parent);button->setObjectName(name);button->setAccessibleName(text);connect(button,&QPushButton::clicked,this,[this,fn]{try{fn();}catch(const std::exception&e){statusBar()->showMessage(e.what());}});footer->addWidget(button);};addButton("Group","layerGroupButton",[this]{layerCommand(1);});addButton("Add Mask","layerAddMaskButton",[this]{maskCommand(int(ui::MaskCommand::AddReveal));});auto*effectsButton=new QToolButton(parent);effectsButton->setObjectName("layerEffectsButton");effectsButton->setText("Effects");effectsButton->setAccessibleName("Effects");effectsButton->setPopupMode(QToolButton::InstantPopup);auto*effectsMenu=new QMenu(effectsButton);effectsMenu->setObjectName("layerEffectsMenu");const std::pair<const char*,int> effectKinds[]={{"Stroke",0},{"Drop Shadow",1},{"Color Overlay",2},{"Inner Shadow",3},{"Outer Glow",4},{"Inner Glow",5}};for(const auto& kind:effectKinds){auto*item=effectsMenu->addAction(kind.first);bindCommand(item,"Effects",kind.first,[this,which=kind.second]{editLayerEffect(which);});}effectsButton->setMenu(effectsMenu);footer->addWidget(effectsButton);addButton("Delete","layerDeleteButton",[this]{auto*p=current();if(p&&p->maskSelected&&layerSelection().ids.size()==1)maskCommand(int(ui::MaskCommand::Delete));else layerCommand(6);});layout->addLayout(footer);}}
+    setupLayerFooter();
+}
 void MainWindow::editLayerEffect(int kind){
     auto* project=current();if(!project||!project->document||!canEditLayers())return;
     const auto id=project->active;if(id.empty())return;
@@ -262,5 +264,14 @@ void MainWindow::editLayerEffect(int kind){
     if(dialog.exec()!=QDialog::Accepted){*project->document=original;if(textSession_&&textSession_->owner==project&&textSession_->layerId==id)publishTextEdit();else refresh(false,false);return;}
     project->history.begin(titles[std::clamp(kind,0,5)],original,project->active);project->history.end(project->document,project->active);refresh();
 }
-void MainWindow::refreshLayerPanel(){if(auto* controller=ui::LayerPanelController::find(layers_))controller->rebuild();}
+void MainWindow::refreshLayerPanel(){
+    if(auto* controller=ui::LayerPanelController::find(layers_))controller->rebuild();
+    auto* stack=findChild<QStackedWidget*>("layerListStack");
+    auto* empty=dynamic_cast<ui::EmptyState*>(findChild<QWidget*>("layerEmptyState"));
+    if(!stack||!empty)return;
+    const auto* project=current();
+    const bool hasLayers=project&&project->document&&!project->document->layers.empty();
+    empty->setDetail(project&&project->document?"Import a file or add a blank layer.":"Create a canvas or import a file.");
+    stack->setCurrentWidget(hasLayers?static_cast<QWidget*>(layers_):static_cast<QWidget*>(empty));
+}
 }

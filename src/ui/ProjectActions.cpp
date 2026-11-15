@@ -17,7 +17,6 @@
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QStandardItemModel>
-#include <QDockWidget>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QEvent>
@@ -115,8 +114,6 @@ private:
         if(bar.height()<30||bar.width()<=0)return;
         const QRect goal(bar.right()+1,bar.top(),38,bar.height());
         const QRect separator(bar.left(),bar.bottom(),goal.right()-bar.left()+1,1);
-        if(auto* dock=tabs_->window()->findChild<QDockWidget*>("layersDock"))
-            if(auto* title=dock->titleBarWidget())if(title->height()!=bar.height())title->setFixedHeight(bar.height());
         if(geometry()==goal&&line_->geometry()==separator)return;
         aligning_=true;
         setGeometry(goal);
