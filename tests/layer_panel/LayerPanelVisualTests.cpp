@@ -55,6 +55,26 @@ int main(int argc, char** argv) {
         if (!condition) std::cerr << "FAIL " << name << '\n';
         return condition;
     };
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--accent-colors") {
+        window.addFeasibilityDocument();
+        QTest::qWait(100);
+        const auto sliderImage = slider->grab().toImage();
+        const auto sliderBlue = sliderImage.pixelColor(sliderImage.width() / 2, sliderImage.height() / 2);
+        const auto thumbnailRect = tree->visualRect(tree->model()->index(0, 1));
+        const auto thumbnailImage = tree->viewport()->grab().toImage();
+        const auto scale = thumbnailImage.devicePixelRatio();
+        bool selectedBlue = false;
+        for (int y = int(thumbnailRect.top() * scale); y < int((thumbnailRect.bottom() + 1) * scale); ++y)
+            for (int x = int(thumbnailRect.left() * scale); x < int((thumbnailRect.right() + 1) * scale); ++x)
+                selectedBlue |= thumbnailImage.pixelColor(x, y) == QColor("#007aff");
+        const bool sliderMatches = check(sliderBlue == QColor("#067dff"), "Mac slider accent");
+        const bool thumbnailMatches = check(selectedBlue, "Mac selected thumbnail accent");
+        if (!sliderMatches || !thumbnailMatches) {
+            std::cerr << "slider=" << sliderBlue.name().toStdString() << " thumbnail=" << selectedBlue << '\n';
+            return 1;
+        }
+        return 0;
+    }
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--blend-hover") {
         window.addFeasibilityDocument();
         blend->showPopup();

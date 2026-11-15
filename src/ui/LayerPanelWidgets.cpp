@@ -301,6 +301,7 @@ Slider::Slider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orien
     setFixedHeight(t::sliderHeight);
     setMinimumWidth(t::sliderMinimumWidth);
     setStyle(new SliderStyle);
+    setStyleSheet(QString("QSlider::sub-page:horizontal { background: %1; }").arg(t::accent));
 }
 
 PercentField::PercentField(QWidget* parent) : QLineEdit(parent) {

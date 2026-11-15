@@ -10,6 +10,7 @@ inline constexpr auto secondary = "#a3a3a3";
 inline constexpr auto disabled = "#666666";
 inline constexpr auto separator = "#393939";
 inline constexpr auto accent = "#067dff";
+inline constexpr auto selectedThumbnail = "#007aff";
 inline constexpr auto control = "#353535";
 inline constexpr auto field = "#22292b";
 inline constexpr auto track = "#424242";

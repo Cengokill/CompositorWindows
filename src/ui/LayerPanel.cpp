@@ -1,5 +1,6 @@
 #include "LayerPanel.h"
 #include "EditorIcons.h"
+#include "LayerPanelTokens.h"
 #include <QStyledItemDelegate>
 #include "LayerAccessibility.h"
 #include "ProjectLayerDrag.h"
@@ -150,7 +151,7 @@ public:
             if(!icon.isNull()) {
                 const QRect box(opt.rect.center()-QPoint(15,15),QSize(30,30));icon.paint(painter,box);
                 painter->save();painter->setRenderHint(QPainter::Antialiasing);painter->setBrush(Qt::NoBrush);
-                painter->setPen(QPen(activeTarget?QColor("#72aafa"):QColor("#50545e"),activeTarget?1.5:1));painter->drawRoundedRect(QRectF(box).adjusted(-1,-1,1,1),3,3);painter->restore();
+                painter->setPen(QPen(activeTarget?QColor(layer_panel::selectedThumbnail):QColor("#50545e"),activeTarget?1.5:1));painter->drawRoundedRect(QRectF(box).adjusted(-1,-1,1,1),3,3);painter->restore();
             }return;
         }
         opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
