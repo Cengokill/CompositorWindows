@@ -2,6 +2,7 @@
 #include "effects/Adjustments.h"
 #include "graphics/Downsample.h"
 #include "graphics/SamplingSource.h"
+#include "graphics/ParallelBatch.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -282,6 +283,12 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
     auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview,lensPreviewMaxEdge_);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
+    // Tiles are independent pure renders. Compose them together on the render pool instead of one
+    // batch per tile. Previews and adjustments keep their serial renderer: their callbacks and
+    // the Lens Effects frame cache are not safe to run from several tiles at once.
+    struct TileJob {std::pair<int,int> key;double x,y;int width,height;size_t slot;bool fresh;Tile result;};
+    std::vector<TileJob> jobs;
+    const bool tileParallel=!preview&&std::none_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();});
     for(int ty=ty0;ty<ty1;++ty)for(int tx=tx0;tx<tx1;++tx){
         if(cancelled&&cancelled()){reset();throw std::runtime_error("Viewport composition cancelled");}
         const std::pair<int,int> key{tx,ty};auto found=viewportTiles_.find(key);if(found==viewportTiles_.end()){
@@ -290,6 +297,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             else if(direct){const size_t index=size_t(ty)*((direct->width+255)/256)+tx;tile=index<direct->tiles.size()&&direct->tiles[index]?direct->tiles[index]:zeroTile();}
             else if(mirror)tile=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,tx*256,ty*256,doc.width,doc.height);
             else if(!touches(painted,dx-margin*units,dy-margin*units,(w+margin*2.)*units,(h+margin*2.)*units))tile=zeroTile();
+            else if(tileParallel){jobs.push_back({key,dx,dy,w,h,patch->tiles.size(),true,{}});++lastViewportComposedTiles_;}
             else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();++lastViewportComposedTiles_;}
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
@@ -299,7 +307,8 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
                 const int sx=std::clamp(int(std::floor((box.left-dx)/units))-1,0,w),sy=std::clamp(int(std::floor((box.top-dy)/units))-1,0,h),ex=std::clamp(int(std::ceil((box.right-dx)/units))+1,0,w),ey=std::clamp(int(std::ceil((box.bottom-dy)/units))+1,0,h);
                 if(sx==0&&sy==0&&ex==w&&ey==h){
                     // A complete tile can use the parallel renderer and needs no patch copy.
-                    found->second.pixels=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled)->tiles.front();
+                    if(tileParallel)jobs.push_back({key,dx,dy,w,h,patch->tiles.size(),false,{}});
+                    else found->second.pixels=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled)->tiles.front();
                     ++lastViewportComposedTiles_;
                 }else if(ex>sx&&ey>sy){
                     auto updated=std::make_shared<Raster::Tile>(*found->second.pixels);
@@ -313,6 +322,32 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             }
             found->second.use=viewportTick_;
         }patch->tiles.push_back(found->second.pixels);
+    }
+    if(!jobs.empty()){
+        const auto compose=[&](TileJob& job,const std::function<bool()>& stop){
+            auto scaled=renderer.renderScaled(doc,job.x,job.y,job.width,job.height,units,stop);
+            job.result=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();
+        };
+        try{
+            if(jobs.size()==1)compose(jobs.front(),cancelled);
+            else{
+                // The cancellation callback belongs to this thread, so poll it between groups.
+                constexpr size_t group=32;
+                for(size_t first=0;first<jobs.size();first+=group){
+                    if(cancelled&&cancelled()){reset();throw std::runtime_error("Viewport composition cancelled");}
+                    const size_t count=std::min(group,jobs.size()-first);
+                    graphics::runParallelRenderBatch(count,[&](size_t index){compose(jobs[first+index],{});});
+                }
+            }
+        }catch(...){
+            // Entries added for tiles that never finished hold no pixels.
+            for(const auto& job:jobs)if(job.fresh)viewportTiles_.erase(job.key);
+            throw;
+        }
+        for(auto& job:jobs){
+            if(auto entry=viewportTiles_.find(job.key);entry!=viewportTiles_.end())entry->second.pixels=job.result;
+            patch->tiles[job.slot]=job.result;
+        }
     }
     // The returned patch owns its visible immutable tiles; cache entries and
     // their metadata are bounded independently of document area and zoom.
