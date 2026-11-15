@@ -163,6 +163,14 @@ template<class P> class Render {
         });
     }
     void drawNormalStack(std::vector<P>& pixels)const{
+        // A layer that shows the same raster object through an equal transform as
+        // the layer above it samples the same value at every point. The caller
+        // guarantees no mask, adjustment, effect, hierarchy, preview or deep data.
+        std::vector<uint8_t> repeatsAbove(order.size(),0);
+        for(size_t k=0;k+1<order.size();++k){
+            const auto& below=layers[size_t(order[k])].layer;const auto& above=layers[size_t(order[k+1])].layer;
+            repeatsAbove[k]=below.raster==above.raster&&below.transform==above.transform;
+        }
         runRows([&](int first,int last,bool pollRows){
             ReducedTileReadScope tiles;
             std::vector<P> partial;
@@ -172,8 +180,18 @@ template<class P> class Render {
                 for(size_t i=begin;i<begin+region.width;++i){
                     const auto point=position(i);
                     P pixel{};
-                    for(auto layer=order.rbegin();layer!=order.rend();++layer){
-                        const auto source=own(*layer,point);
+                    P sampled{},previous{};double previousOpacity=0;
+                    for(size_t k=order.size();k-->0;){
+                        const auto index=order[k];
+                        const double opacity=layers[size_t(index)].layer.opacity;
+                        P source;
+                        if(k+1<order.size()&&repeatsAbove[k]){
+                            source=opacity==previousOpacity?previous:(opacity==1?sampled:scale(sampled,opacity));
+                        }else{
+                            sampled=shaped(index,point);
+                            source=opacity==1?sampled:scale(sampled,opacity);
+                        }
+                        previous=source;previousOpacity=opacity;
                         if(alpha(source)==255){
                             pixel=source;
                             break;
