@@ -234,8 +234,8 @@ QDockWidget* MainWindow::setupLayersDock() {
     layers_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     layers_->setStyleSheet(QString(
         "QTreeView#layersTree { background: %1; border: 0; }"
-        "QTreeView#layersTree::item:selected { background: %2; }"
-        "QTreeView#layersTree::item:hover { background: %3; }")
+        "QTreeView#layersTree::item:hover { background: %3; }"
+        "QTreeView#layersTree::item:selected { background: %2; }")
         .arg(t::background, t::selectedRow, t::hoveredRow));
     auto* empty = new ui::EmptyState(list);
     empty->setObjectName("layerEmptyState");

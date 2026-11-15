@@ -19,6 +19,8 @@ inline constexpr auto hover = "#353535";
 inline constexpr auto pressed = "#444444";
 inline constexpr auto popup = "#202020";
 inline constexpr auto selectedRow = "#444444";
+inline constexpr auto focusedRow = "#0059d1";
+inline constexpr auto focusedRowDetail = "#b3cdf1";
 inline constexpr auto hoveredRow = "#303030";
 
 inline constexpr int minWidth = 261;

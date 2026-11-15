@@ -19,7 +19,8 @@ QWidget* MainWindow::createLayerOpacityControl(){
         edit("Layer Opacity",[&](Document&){active()->opacity=opacity;});
     };
     opacityPercent_->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
-    layout->addWidget(opacity_,1);auto*unit=new QWidget(control);auto*unitLayout=new QHBoxLayout(unit);unitLayout->setContentsMargins(0,0,0,0);unitLayout->setSpacing(t::percentSpacing);unitLayout->addWidget(opacityPercent_);auto*percent=new QLabel("%",unit);percent->setFont(ui::layerPanelFont(t::captionFont));percent->setStyleSheet(QString("QLabel { color: %1; font-family: '%2'; font-size: %3px; }").arg(t::primary,ui::layerPanelFont(t::captionFont).family()).arg(t::captionFont));unitLayout->addWidget(percent);layout->addWidget(unit);return control;
+    // Segoe's visible glyphs sit low in their line box; align the track optically with the label.
+    layout->addWidget(opacity_,1,Qt::AlignBottom);auto*unit=new QWidget(control);auto*unitLayout=new QHBoxLayout(unit);unitLayout->setContentsMargins(0,0,0,0);unitLayout->setSpacing(t::percentSpacing);unitLayout->addWidget(opacityPercent_);auto*percent=new QLabel("%",unit);percent->setFont(ui::layerPanelFont(t::captionFont));percent->setStyleSheet(QString("QLabel { color: %1; font-family: '%2'; font-size: %3px; }").arg(t::primary,ui::layerPanelFont(t::captionFont).family()).arg(t::captionFont));unitLayout->addWidget(percent);layout->addWidget(unit);return control;
 }
 void MainWindow::refreshOpacityPercent(){if(opacityPercent_){opacityPercent_->setEnabled(canEditAppearance());opacityPercent_->synchronize();}}
 void MainWindow::detachOpacityPercent(){if(opacityPercent_)opacityPercent_->detach();}

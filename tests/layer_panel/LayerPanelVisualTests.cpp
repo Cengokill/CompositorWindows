@@ -5,7 +5,9 @@
 #include <QComboBox>
 #include <QDir>
 #include <QDockWidget>
+#include <QHeaderView>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QSettings>
@@ -44,12 +46,13 @@ int main(int argc, char** argv) {
     auto* appearance = window.findChild<QWidget*>("layerAppearance");
     auto* percent = window.findChild<QLineEdit*>("layerOpacityPercent");
     auto* slider = window.findChild<QSlider*>("layerOpacity");
+    auto* opacityLabel = window.findChild<QLabel*>("layerOpacityLabel");
     auto* footer = window.findChild<QWidget*>("layerFooter");
     auto* resizeEdge = window.findChild<QWidget*>("layerResizeEdge");
     auto* tree = window.findChild<QTreeWidget*>("layersTree");
     auto* blend = window.findChild<QComboBox*>("layerBlend");
     auto* searchButton = window.findChild<QToolButton*>("layerSearchButton");
-    if (!dock || !header || !searchField || !title || !appearance || !percent || !slider || !footer ||
+    if (!dock || !header || !searchField || !title || !appearance || !percent || !slider || !opacityLabel || !footer ||
         !tree || !blend || !searchButton || !resizeEdge) return 2;
     auto check = [](bool condition, const char* name) {
         if (!condition) std::cerr << "FAIL " << name << '\n';
@@ -71,6 +74,49 @@ int main(int argc, char** argv) {
         const bool thumbnailMatches = check(selectedBlue, "Mac selected thumbnail accent");
         if (!sliderMatches || !thumbnailMatches) {
             std::cerr << "slider=" << sliderBlue.name().toStdString() << " thumbnail=" << selectedBlue << '\n';
+            return 1;
+        }
+        return 0;
+    }
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--focused-selection") {
+        window.addFeasibilityDocument();
+        QTest::qWait(100);
+        const auto nameRect = tree->visualRect(tree->model()->index(0, 0));
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, nameRect.center());
+        QCoreApplication::processEvents();
+        const auto sample = [&] {
+            const auto image = tree->viewport()->grab().toImage();
+            const auto scale = image.devicePixelRatio();
+            return image.pixelColor(int((nameRect.right() - 4) * scale), int(nameRect.center().y() * scale));
+        };
+        const auto focused = sample();
+        const auto focusedImage = tree->viewport()->grab().toImage();
+        const auto scale = focusedImage.devicePixelRatio();
+        const auto rowTop = tree->visualItemRect(tree->topLevelItem(0)).top() + 3;
+        bool fullRowBlue = true;
+        for (const int x : {3, tree->header()->sectionViewportPosition(0) + 4,
+                            tree->viewport()->width() / 2, tree->viewport()->width() - 8})
+            fullRowBlue &= focusedImage.pixelColor(int(x * scale), int(rowTop * scale)) == QColor(t::focusedRow);
+        const auto thumbnailRect = tree->visualRect(tree->model()->index(0, 1));
+        bool thumbnailBorderBlue = false;
+        for (int y = int(thumbnailRect.top() * scale); y < int((thumbnailRect.bottom() + 1) * scale); ++y)
+            for (int x = int(thumbnailRect.left() * scale); x < int((thumbnailRect.right() + 1) * scale); ++x)
+                thumbnailBorderBlue |= focusedImage.pixelColor(x, y) == QColor(t::selectedThumbnail);
+        QWidget* canvas = nullptr;
+        for (auto* widget : window.findChildren<QWidget*>())
+            if (widget->accessibleName() == "Image canvas") { canvas = widget; break; }
+        if (!canvas) return 2;
+        canvas->setFocus(Qt::MouseFocusReason);
+        QCoreApplication::processEvents();
+        const auto unfocused = sample();
+        const bool focusedMatches = check(focused == QColor("#0059d1") && fullRowBlue && thumbnailBorderBlue,
+                                          "focused Mac row and thumbnail blue");
+        const bool unfocusedMatches = check(unfocused == QColor(t::selectedRow) && tree->topLevelItem(0)->isSelected(),
+                                            "unfocused Mac row stays selected and gray");
+        if (!focusedMatches || !unfocusedMatches) {
+            std::cerr << "focused=" << focused.name().toStdString()
+                      << " fullRowBlue=" << fullRowBlue << " thumbnailBorderBlue=" << thumbnailBorderBlue
+                      << " unfocused=" << unfocused.name().toStdString() << '\n';
             return 1;
         }
         return 0;
@@ -110,6 +156,12 @@ int main(int argc, char** argv) {
             window.addFeasibilityDocument();
             QTest::qWait(180);
             save("populated");
+            const auto firstName = tree->visualRect(tree->model()->index(0, 0));
+            QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, firstName.center());
+            save("selected_focused");
+            for (auto* widget : window.findChildren<QWidget*>())
+                if (widget->accessibleName() == "Image canvas") { widget->setFocus(Qt::MouseFocusReason); break; }
+            save("selected_unfocused");
             searchButton->click();
             save("search_active");
             searchButton->click();
@@ -189,6 +241,11 @@ int main(int argc, char** argv) {
                            t::appearancePadding, t::appearancePadding), "appearance margins");
     okay &= check(percent->width() == t::percentWidth, "percent width");
     okay &= check(slider->height() == t::sliderHeight, "slider height");
+    okay &= check(slider->mapTo(appearance, QPoint(0, slider->height() - 1)).y() ==
+                  percent->mapTo(appearance, QPoint(0, percent->height() - 1)).y() &&
+                  slider->mapTo(appearance, QPoint(0, slider->height() - 1)).y() ==
+                  opacityLabel->mapTo(appearance, QPoint(0, opacityLabel->height() - 1)).y(),
+                  "opacity slider vertical alignment");
     QStyleOptionSlider option;
     option.initFrom(slider);
     option.orientation = Qt::Horizontal;

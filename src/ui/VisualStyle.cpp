@@ -77,7 +77,7 @@ public:
         if(eye) {
             painter->save(); painter->setRenderHint(QPainter::Antialiasing);
             auto r=QRectF(option->rect);r.adjust(0,2,0,-2);
-            painter->setPen(QPen(QColor(option->state&State_On?ink:muted),1.2));painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(option->state&State_Selected?QColor(Qt::white):QColor(option->state&State_On?ink:muted),1.2));painter->setBrush(Qt::NoBrush);
             QPainterPath path;path.moveTo(r.left(),r.center().y());path.quadTo(r.center().x(),r.top()-2,r.right(),r.center().y());path.quadTo(r.center().x(),r.bottom()+2,r.left(),r.center().y());
             painter->drawPath(path);painter->drawEllipse(r.center(),2,2);
             if(!(option->state&State_On))painter->drawLine(r.topLeft(),r.bottomRight());
