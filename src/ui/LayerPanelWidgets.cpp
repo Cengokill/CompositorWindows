@@ -172,6 +172,10 @@ void paintSymbol(QPainter& painter, const QString& symbol, QRectF bounds, const 
         if (!xml.isStartElement()) continue;
         const auto name = xml.name();
         const auto a = xml.attributes();
+        if (name == "svg") {
+            const auto stroke = a.value("stroke-width").toDouble();
+            if (stroke > 0) painter.setPen(QPen(color, stroke, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        }
         painter.setBrush(a.value("fill") == "currentColor" ? QBrush(color) : QBrush(Qt::NoBrush));
         if (name == "line")
             painter.drawLine(QPointF(number(a, "x1"), number(a, "y1")), QPointF(number(a, "x2"), number(a, "y2")));
