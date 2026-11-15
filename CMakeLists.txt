@@ -145,6 +145,14 @@ target_compile_options(compositor_platform PRIVATE /W4 /WX /utf-8)
 target_link_libraries(compositor_platform PUBLIC d2d1 d3d11 dxgi dxguid mscms bcrypt gdi32 user32 advapi32 Qt6::Core)
 add_library(compositor_ui src/ui/NativeCanvas.cpp src/ui/MainWindow.cpp src/ui/FileActions.cpp src/ui/BrushActions.cpp)
 target_sources(compositor_ui PRIVATE src/ui/EditorIcons.cpp)
+target_sources(compositor_ui PRIVATE src/ui/LayerPanelWidgets.cpp)
+qt_add_resources(compositor_ui layer_panel_icons PREFIX "/" FILES
+  assets/icons/lucide/search.svg assets/icons/lucide/x.svg
+  assets/icons/lucide/list-filter.svg assets/icons/lucide/list-checks.svg
+  assets/icons/lucide/layers.svg assets/icons/lucide/square-plus.svg
+  assets/icons/lucide/folder-plus.svg assets/icons/lucide/panel-top.svg
+  assets/icons/lucide/circle.svg assets/icons/lucide/sparkles.svg
+  assets/icons/lucide/trash.svg assets/icons/lucide/chevron-down.svg)
 target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp)
 qt_add_resources(compositor_ui visual_assets PREFIX "/" FILES assets/fonts/InterVariable.ttf assets/icons/chevron-down.png assets/icons/chevron-up.png)
 qt_add_resources(compositor_ui release_notes PREFIX "/" FILES docs/release-notes.md)

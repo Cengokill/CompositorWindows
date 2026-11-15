@@ -1,4 +1,5 @@
 #pragma once
+#include "LayerPanelWidgets.h"
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -12,10 +13,10 @@
 namespace compositor::ui {
 // LayerAppearanceControls.swift: text is a draft until focus leaves. Its
 // captured layer identity prevents a stale field from editing a new selection.
-class LayerOpacityField final:public QLineEdit {
+class LayerOpacityField final:public PercentField {
 public:
     struct Target {QPointer<QObject> owner;std::string layer;double opacity{};};
-    using QLineEdit::QLineEdit;
+    using PercentField::PercentField;
     std::function<std::optional<Target>()> target;
     std::function<void(const Target&,double)> apply;
     std::function<void()> releaseFocus;
