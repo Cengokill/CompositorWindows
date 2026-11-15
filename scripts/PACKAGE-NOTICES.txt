@@ -34,3 +34,10 @@ terms apply. Windows system components are supplied by Windows 11.
 
 The installer uses NSIS with zlib compression. NSIS-COPYING.txt contains
 notices for the installer system. No external fonts or Apple icons are used.
+
+The Layers panel uses modified Lucide SVG icons from
+https://github.com/lucide-icons/lucide. They are simplified to SVG primitives
+for the Qt renderer included in the application. Lucide is ISC licensed; some
+of the included icons derive from Feather and also carry its MIT notice.
+Both license texts and the original source list are in
+assets/icons/lucide/LICENSE in the application source.

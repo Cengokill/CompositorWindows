@@ -2,11 +2,14 @@
 #include "ui/MainWindow.h"
 #include "ui/PropertyControls.h"
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
+#include <QSignalSpy>
 #include <QSlider>
 #include <QTest>
 #include <QToolBar>
+#include <QTreeWidget>
 #include <cstdio>
 #include <map>
 #include <stdexcept>
@@ -39,6 +42,27 @@ void opacityTrack(){
     require(f.project.history.undoCount()==0&&f.project.document->layers[0].opacity==slider->value()/100.,"track draft must use one pending opacity edit");
     QTest::mouseRelease(slider,Qt::LeftButton,{},at);require(f.project.history.undoCount()==1,"track release must commit exactly one edit");
     invoke(f.window,"edit.undo");require(f.project.document==f.before,"opacity Undo restores exact document");
+}
+void opacityManyLayers(){
+    auto document=sample();
+    const auto source=document.layers.front();
+    for(int index=1;index<80;++index){auto layer=source;layer.id="layer-"+std::to_string(index);document.layers.push_back(std::move(layer));}
+    MainWindow window(true);auto& project=window.addProject(document);window.show();QApplication::processEvents();
+    auto* slider=window.findChild<QSlider*>("layerOpacity");auto* tree=window.findChild<QTreeWidget*>("layersTree");
+    require(slider&&tree&&slider->isEnabled(),"layer opacity controls missing");
+    const Document before=*project.document;
+    QSignalSpy resets(tree->model(),&QAbstractItemModel::modelReset);
+    const QPoint knob(slider->width()-6,slider->height()/2);
+    QTest::mousePress(slider,Qt::LeftButton,{},knob);
+    QElapsedTimer timer;timer.start();
+    for(int value=95;value>=20;value-=5){slider->setValue(value);QApplication::processEvents();}
+    const auto elapsed=timer.elapsed();
+    require(resets.isEmpty(),"opacity drag rebuilt the layer list");
+    require(project.history.undoCount()==0&&project.document->layers.back().opacity==0.2,"opacity draft changed history or target");
+    QTest::mouseRelease(slider,Qt::LeftButton,{},knob);
+    require(project.history.undoCount()==1,"opacity drag must commit one edit");
+    invoke(window,"edit.undo");require(*project.document==before,"opacity undo did not restore all layers");
+    std::printf("opacity_80_layers_16_updates_ms=%lld\n",static_cast<long long>(elapsed));
 }
 void opacityDoubleClick(){
     Fixture f;auto* slider=f.window.findChild<QSlider*>("layerOpacity");require(slider&&slider->isVisible(),"opacity slider missing");
@@ -93,4 +117,4 @@ void cameraRawTrackAnchors(){
     require(low.pixel(low.width()-11,y)==mid.pixel(mid.width()-11,y),"track end colour moved with the knob");
 }
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"transform_typing",transformTyping},{"opacity_track_history",opacityTrack},{"brush_field_focus",brushField},{"slider_double_click",sliderDoubleClick},{"camera_raw_alignment",cameraRawAlignment},{"camera_raw_mixer_sliders",cameraRawMixerSlidersTravel},{"camera_raw_track_anchors",cameraRawTrackAnchors},{"opacity_double_click_history",opacityDoubleClick}};try{require(argc==2&&cases.contains(argv[1]),"provide named property UI case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"transform_typing",transformTyping},{"opacity_track_history",opacityTrack},{"opacity_many_layers",opacityManyLayers},{"brush_field_focus",brushField},{"slider_double_click",sliderDoubleClick},{"camera_raw_alignment",cameraRawAlignment},{"camera_raw_mixer_sliders",cameraRawMixerSlidersTravel},{"camera_raw_track_anchors",cameraRawTrackAnchors},{"opacity_double_click_history",opacityDoubleClick}};try{require(argc==2&&cases.contains(argv[1]),"provide named property UI case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& error){std::fprintf(stderr,"FAIL %s\n",error.what());return 1;}}

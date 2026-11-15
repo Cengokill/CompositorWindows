@@ -1,5 +1,6 @@
 #include "LayerPanel.h"
 #include "EditorIcons.h"
+#include "LayerPanelTokens.h"
 #include <QStyledItemDelegate>
 #include "LayerAccessibility.h"
 #include "ProjectLayerDrag.h"
@@ -125,35 +126,39 @@ public:
     void paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const override {
         QStyleOptionViewItem opt(option);initStyleOption(&opt,index);
         const bool activeTarget=index.data(Qt::BackgroundRole).value<QBrush>().style()!=Qt::NoBrush;
+        const bool focusedSelection=(opt.state&QStyle::State_Selected)&&opt.widget->hasFocus();
         opt.backgroundBrush=Qt::NoBrush;opt.state&=~QStyle::State_HasFocus;
+        const auto drawCell=[&]{opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);if(focusedSelection)painter->fillRect(opt.rect,QColor(layer_panel::focusedRow));};
         if(index.column()==0) {
-            const auto text=opt.text;opt.text.clear();opt.features&=~QStyleOptionViewItem::HasCheckIndicator;opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
+            const auto text=opt.text;opt.text.clear();opt.features&=~QStyleOptionViewItem::HasCheckIndicator;drawCell();
+            if(focusedSelection){const auto* tree=static_cast<const QTreeWidget*>(opt.widget);const int left=tree->header()->sectionViewportPosition(0);painter->fillRect(QRect(left,opt.rect.top(),opt.rect.left()-left,opt.rect.height()),QColor(layer_panel::focusedRow));}
             // Keep the model's name/editing/accessibility roles intact; only paint changes.
             auto r=opt.rect.adjusted(5,5,-5,-4);
-            painter->save();painter->setPen(opt.palette.color(QPalette::Text));
+            painter->save();painter->setPen(focusedSelection?QColor(Qt::white):opt.palette.color(QPalette::Text));
             painter->drawText(r.adjusted(0,0,0,-16),Qt::AlignVCenter,opt.fontMetrics.elidedText(text,Qt::ElideRight,r.width()));
-            auto font=opt.font;font.setPixelSize(10);painter->setFont(font);painter->setPen(QColor("#969ba6"));
+            auto font=opt.font;font.setPixelSize(10);painter->setFont(font);painter->setPen(focusedSelection?QColor(layer_panel::focusedRowDetail):QColor("#969ba6"));
             painter->drawText(r.adjusted(0,18,0,0),Qt::AlignVCenter,index.data(Qt::UserRole+2).toString());painter->restore();return;
         }
         if(index.column()==4) {
-            opt.text.clear();opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
+            opt.text.clear();drawCell();
             QStyleOption check;check.initFrom(opt.widget);check.rect=QRect(opt.rect.center()-QPoint(8,8),QSize(16,16));
+            if(focusedSelection)check.state|=QStyle::State_Selected;
             check.state&=~QStyle::State_On;if(index.siblingAtColumn(0).data(Qt::CheckStateRole).toInt()==Qt::Checked)check.state|=QStyle::State_On;
             opt.widget->style()->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck,&check,painter,opt.widget);return;
         }
         if(index.column()==2) {
-            const auto icon=opt.icon;opt.icon={};opt.text.clear();opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
+            const auto icon=opt.icon;opt.icon={};opt.text.clear();drawCell();
             icon.paint(painter,QRect(opt.rect.center()-QPoint(7,7),QSize(14,14)));return;
         }
         if(index.column()==1||index.column()==3) {
-            const auto icon=opt.icon;opt.icon={};opt.text.clear();opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
+            const auto icon=opt.icon;opt.icon={};opt.text.clear();drawCell();
             if(!icon.isNull()) {
                 const QRect box(opt.rect.center()-QPoint(15,15),QSize(30,30));icon.paint(painter,box);
                 painter->save();painter->setRenderHint(QPainter::Antialiasing);painter->setBrush(Qt::NoBrush);
-                painter->setPen(QPen(activeTarget?QColor("#72aafa"):QColor("#50545e"),activeTarget?1.5:1));painter->drawRoundedRect(QRectF(box).adjusted(-1,-1,1,1),3,3);painter->restore();
+                painter->setPen(QPen(activeTarget?QColor(layer_panel::selectedThumbnail):QColor("#50545e"),activeTarget?1.5:1));painter->drawRoundedRect(QRectF(box).adjusted(-1,-1,1,1),3,3);painter->restore();
             }return;
         }
-        opt.widget->style()->drawControl(QStyle::CE_ItemViewItem,&opt,painter,opt.widget);
+        drawCell();
     }
 };
 }
@@ -171,6 +176,7 @@ LayerPanelController::LayerPanelController(QTreeWidget* tree,Host host):QObject(
         invoke([&]{host_.collapse(idOf(item),false);});}});
     connect(tree_,&QTreeWidget::customContextMenuRequested,this,[this](QPoint p){if(host_.canEdit&&!host_.canEdit())return;invoke([&]{contextMenu(p);});});
     tree_->setMouseTracking(true);tree_->viewport()->setMouseTracking(true);tree_->viewport()->setCursor(Qt::ArrowCursor);qApp->installEventFilter(this);
+    connect(qApp,&QApplication::focusChanged,tree_,[tree=tree_](QWidget*,QWidget*){tree->viewport()->update();});
 #ifdef Q_OS_WIN
     qApp->installNativeEventFilter(this);
 #endif

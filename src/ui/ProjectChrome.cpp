@@ -1,5 +1,5 @@
 #include "ProjectChrome.h"
-#include "EditorIcons.h"
+#include "LayerPanelTokens.h"
 #include <QAbstractButton>
 #include <QAccessibleWidget>
 #include <QDockWidget>
@@ -238,27 +238,12 @@ public:
     RememberedLayerWidth(QMainWindow* window, QDockWidget* dock, QTreeWidget* tree)
         : QObject(dock), window_(window), dock_(dock) {
         setObjectName("rememberedLayerPanelWidth");
-        // Source LayersPanel.swift:7 permits 202...352. The former tree minimum
-        // of 270 made both the source minimum and its 252 default impossible.
+        // The list does not impose a wider minimum than the footer.
         tree->setMinimumWidth(0);
-        // LayersPanel.swift39...55 uses three icon-only footer actions. Keep
-        // their existing callbacks/names while allowing the source202 minimum.
-        for (const auto* name : {"layerGroupButton", "layerAddMaskButton", "layerEffectsButton", "layerDeleteButton"})
-            if (auto* button = dock->findChild<QAbstractButton*>(name)) {
-                const auto label = button->accessibleName(); button->setToolTip(label); button->setText({});
-                button->setFixedSize(36, 36); button->setIconSize({20, 20});
-                if(qstrcmp(name,"layerEffectsButton")!=0)
-                    button->setIcon(editorIcon(qstrcmp(name,"layerGroupButton")==0 ? EditorIcon::Group
-                        : qstrcmp(name,"layerAddMaskButton")==0 ? EditorIcon::Mask : EditorIcon::Delete));
-                button->setStyleSheet("QAbstractButton { background: transparent; border: 1px solid transparent; border-radius: 6px; }"
-                    "QAbstractButton:hover { background: rgba(128,128,128,32); }"
-                    "QAbstractButton:pressed { background: rgba(128,128,128,55); }"
-                    "QAbstractButton:focus { border: 1px solid palette(highlight); }");
-            }
-        dock->setMinimumWidth(202); dock->setMaximumWidth(352);
+        dock->setMinimumWidth(layer_panel::minWidth); dock->setMaximumWidth(layer_panel::maxWidth);
         QSettings settings;
-        const double stored = settings.value("layersPanelWidth", 252.0).toDouble();
-        wanted_ = std::isfinite(stored) ? int(std::lround(std::clamp(stored, 202.0, 352.0))) : 252;
+        const double stored = settings.value("layersPanelWidth", double(layer_panel::minWidth)).toDouble();
+        wanted_ = std::isfinite(stored) ? int(std::lround(std::clamp(stored, double(layer_panel::minWidth), double(layer_panel::maxWidth)))) : layer_panel::minWidth;
         dock->installEventFilter(this);
         timer_.setSingleShot(true); timer_.setInterval(100);
         QObject::connect(&timer_, &QTimer::timeout, this, [this] { save(); });
@@ -270,7 +255,7 @@ private:
         if (watched == dock_) {
             if (event->type() == QEvent::Show && !ready_) QTimer::singleShot(0, this, [this] { apply(); });
             if (event->type() == QEvent::Resize && ready_ && !applying_ && !dock_->isFloating()) {
-                remembered_ = std::clamp(dock_->width(), 202, 352); changed_ = true; timer_.start();
+                remembered_ = std::clamp(dock_->width(), layer_panel::minWidth, layer_panel::maxWidth); changed_ = true; timer_.start();
             }
             if (event->type() == QEvent::Close && ready_) save();
         }
@@ -289,8 +274,8 @@ private:
     QPointer<QMainWindow> window_;
     QPointer<QDockWidget> dock_;
     QTimer timer_;
-    int wanted_{252};
-    int remembered_{252};
+    int wanted_{layer_panel::minWidth};
+    int remembered_{layer_panel::minWidth};
     bool ready_{}, applying_{}, changed_{};
 };
 }
@@ -308,15 +293,14 @@ void installProjectChrome(QMainWindow* window, QTabWidget* tabs, QDockWidget* do
     if (auto* existing = QAccessible::queryAccessibleInterface(tabs->tabBar()); existing && !dynamic_cast<ProjectTabBar*>(existing))
         QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(existing));
     tabs->setAccessibleName("Project workspace"); tabs->tabBar()->setAccessibleName("Project tabs");
-    // Both docks share a QMainWindow column. Keep all numeric contents visible
-    // by wrapping Transform labels when the source-sized Layers panel narrows.
+    // Both docks share a QMainWindow column. Keep numeric contents visible
+    // by wrapping Transform labels when the Layers panel narrows.
     if (auto* transform = window->findChild<QDockWidget*>("transformDock"))
         if (auto* form = qobject_cast<QFormLayout*>(transform->widget()->layout())) {
             form->setRowWrapPolicy(QFormLayout::WrapLongRows);
             const auto own = form->contentsMargins(), aligned = dock->widget()->layout()->contentsMargins();
             form->setContentsMargins(aligned.left(), own.top(), aligned.right(), own.bottom());
-            // Qt includes this gap in its wrapped minimum: retain space while
-            // fitting the full numeric field at the source's202-pixel minimum.
+            // Qt includes this gap in its wrapped minimum.
             form->setHorizontalSpacing(4);
         }
     new RememberedLayerWidth(window, dock, tree);
