@@ -61,7 +61,7 @@ public:
             painter->drawLine(QPoint(x + 3, y + 3), QPoint(x + 8, y - 4));
             painter->restore();
             item.rect.adjust(t::blendMenuTextInset, 0, 0, 0);
-            item.state &= ~QStyle::State_Selected;
+            item.state &= ~(QStyle::State_Selected | QStyle::State_MouseOver);
             item.palette.setColor(QPalette::Text, Qt::white);
         }
         item.palette.setColor(QPalette::Highlight, QColor(t::accent));

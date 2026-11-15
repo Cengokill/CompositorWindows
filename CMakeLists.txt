@@ -668,6 +668,8 @@ add_executable(layer_panel_visual_tests tests/layer_panel/LayerPanelVisualTests.
 target_link_libraries(layer_panel_visual_tests PRIVATE compositor_ui Qt6::Test)
 add_test(NAME layer_panel.visual_geometry COMMAND layer_panel_visual_tests)
 set_tests_properties(layer_panel.visual_geometry PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+add_test(NAME layer_panel.blend_hover COMMAND layer_panel_visual_tests --blend-hover)
+set_tests_properties(layer_panel.blend_hover PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 add_executable(gif_timeline_tests tests/layer_panel/GifTimelineTests.cpp)
 target_link_libraries(gif_timeline_tests PRIVATE compositor_ui Qt6::Test)
 add_test(NAME layer_panel.gif_timeline COMMAND gif_timeline_tests)

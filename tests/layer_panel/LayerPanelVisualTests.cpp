@@ -55,6 +55,27 @@ int main(int argc, char** argv) {
         if (!condition) std::cerr << "FAIL " << name << '\n';
         return condition;
     };
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--blend-hover") {
+        window.addFeasibilityDocument();
+        blend->showPopup();
+        QTest::qWait(100);
+        auto* view = blend->view();
+        const auto row = view->visualRect(view->model()->index(blend->currentIndex(), 0));
+        const QPoint sample(row.right() - 12, row.center().y());
+        const auto background = [&] { return view->viewport()->grab().toImage().pixelColor(sample); };
+        const auto before = background();
+        QTest::mouseMove(view->viewport(), row.center());
+        QCoreApplication::processEvents();
+        const auto hovered = background();
+        blend->hidePopup();
+        if (!check(before == QColor(t::accent), "selected Blend background") ||
+            !check(hovered == QColor(t::accent), "hovered selected Blend background")) {
+            std::cerr << "before=" << before.name().toStdString()
+                      << " hovered=" << hovered.name().toStdString() << '\n';
+            return 1;
+        }
+        return 0;
+    }
     if (argc == 3 && QString::fromLocal8Bit(argv[1]) == "--capture") {
         const QString directory = QString::fromLocal8Bit(argv[2]);
         if (!QDir().mkpath(directory)) return 2;
@@ -77,6 +98,11 @@ int main(int argc, char** argv) {
             save("blend_open");
             if (!blend->view()->window()->grab().save(directory + "/blend_popup.png"))
                 throw std::runtime_error("Cannot save blend popup");
+            const auto selected = blend->view()->visualRect(blend->view()->model()->index(blend->currentIndex(), 0));
+            QTest::mouseMove(blend->view()->viewport(), selected.center());
+            QTest::qWait(70);
+            if (!blend->view()->window()->grab().save(directory + "/blend_popup_hover.png"))
+                throw std::runtime_error("Cannot save hovered blend popup");
             blend->hidePopup();
             auto* effectsButton = window.findChild<QToolButton*>("layerEffectsButton");
             if (effectsButton && effectsButton->menu()) {
