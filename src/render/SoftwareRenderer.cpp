@@ -7,9 +7,12 @@
 
 namespace compositor {
 namespace {
-constexpr uint64_t lensFramePixelBudget=5000000;
-bool lensFrameFits(int width,int height){
-    return width<=30000&&height<=30000&&uint64_t(width)*height<=lensFramePixelBudget;
+constexpr uint64_t lensViewportPixelBudget=5000000;
+// A 2240x3360 SDR photo exceeds the viewport budget but fits the full-render
+// working memory bound; keep viewport and deep renders at the smaller cap.
+constexpr uint64_t lensFullSdrPixelBudget=8000000;
+bool lensFrameFits(int width,int height,uint64_t budget=lensViewportPixelBudget){
+    return width<=30000&&height<=30000&&uint64_t(width)*height<=budget;
 }
 graphics::StackRenderer stack(const Document& document,const std::shared_ptr<const LayerRenderPreview>& preview,int lensPreviewMaxEdge,const std::function<bool()>& cancelled={}){
     return graphics::StackRenderer([&document,lensPreviewMaxEdge,cancelled](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){
@@ -64,7 +67,7 @@ std::shared_ptr<const Raster> SoftwareRenderer::render(const Document& document,
     if(effects::hasLensAdjustment(document)){
         const int margin=effects::adjustmentStackPadding(document);
         const int left=std::min(-margin,x),top=std::min(-margin,y),right=std::max(document.width+margin,x+width),bottom=std::max(document.height+margin,y+height);
-        if(!lensFrameFits(right-left,bottom-top))throw std::runtime_error("Lens Effects full-image render exceeds working memory budget");
+        if(!lensFrameFits(right-left,bottom-top,lensFullSdrPixelBudget))throw std::runtime_error("Lens Effects full-image render exceeds working memory budget");
         if(!lensFrame_||!lensDocument_||*lensDocument_!=document||lensX_!=left||lensY_!=top||lensUnits_!=1||lensFrame_->width!=right-left||lensFrame_->height!=bottom-top){
             lensFrame_=stack(document,preview_,lensPreviewMaxEdge_).render(document,left,top,right-left,bottom-top);
             lensDocument_=document;lensX_=left;lensY_=top;lensUnits_=1;

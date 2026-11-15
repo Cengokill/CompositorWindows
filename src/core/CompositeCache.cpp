@@ -1,4 +1,5 @@
 #include "Document.h"
+#include "effects/Adjustments.h"
 #include "graphics/Downsample.h"
 #include "graphics/SamplingSource.h"
 #include <algorithm>
@@ -148,10 +149,11 @@ std::vector<uint8_t> invalidTiles(const std::optional<Document>& previous,const 
     if(damage.all){std::fill(dirty.begin(),dirty.end(),uint8_t(1));return dirty;}
     markTiles(dirty,damage.regions,units,columns,rows);return dirty;
 }
-void validateCulledAdjustments(const Document& doc,std::shared_ptr<const LayerRenderPreview> preview={}){
+void validateCulledAdjustments(const Document& doc){
     // Even a transparent stack must report malformed or unsupported live effects.
-    // One canonical pixel validates visible adjustment callbacks before blank culling.
-    if(std::any_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();}))SoftwareRenderer(std::move(preview)).render(doc,0,0,1,1);
+    // A full-image Lens Effects render exceeds its budget on large documents,
+    // even when the viewport below is small. Validate metadata before culling.
+    for(const auto& layer:doc.layers)if(layer.visible&&!layer.adjustmentJson.empty())effects::validateAdjustmentJson(layer.adjustmentJson);
 }
 std::shared_ptr<const Raster> tiled(int width,int height,Tile value){auto raster=std::make_shared<Raster>();raster->width=width;raster->height=height;raster->tiles.assign(size_t((width+255)/256)*((height+255)/256),std::move(value));return raster;}
 double jsonField(const std::string& json,std::size_t from,const char* key,double fallback){
@@ -276,7 +278,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
         if(tx<tx0||tx>=tx1||ty<ty0||ty>=ty1||dependent){it=viewportTiles_.erase(it);continue;}
         Bounds region{INFINITY,INFINITY,-INFINITY,-INFINITY};for(const auto& box:damage)if(box.right>dx&&box.bottom>dy&&box.left<dx+256*units&&box.top<dy+256*units){region.left=std::min(region.left,box.left);region.top=std::min(region.top,box.top);region.right=std::max(region.right,box.right);region.bottom=std::max(region.bottom,box.bottom);}partial.emplace(it->first,region);++it;
     }
-    if(all||!damage.empty())validateCulledAdjustments(doc,preview);
+    if(all||!damage.empty())validateCulledAdjustments(doc);
     viewportUnits_=units;viewportPhaseX_=px;viewportPhaseY_=py;++viewportTick_;
     auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview,lensPreviewMaxEdge_);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
