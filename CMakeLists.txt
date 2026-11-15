@@ -148,7 +148,7 @@ target_sources(compositor_ui PRIVATE src/ui/EditorIcons.cpp)
 target_sources(compositor_ui PRIVATE src/ui/LayerPanelWidgets.cpp)
 qt_add_resources(compositor_ui layer_panel_icons PREFIX "/" FILES
   assets/icons/lucide/search.svg assets/icons/lucide/x.svg
-  assets/icons/lucide/list-filter.svg assets/icons/lucide/list-checks.svg
+  assets/icons/lucide/list-checks.svg
   assets/icons/lucide/layers.svg assets/icons/lucide/square-plus.svg
   assets/icons/lucide/folder-plus.svg assets/icons/lucide/panel-top.svg
   assets/icons/lucide/circle.svg assets/icons/lucide/sparkles.svg

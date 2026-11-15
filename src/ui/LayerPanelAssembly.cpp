@@ -34,7 +34,6 @@ public:
         setFixedWidth(t::resizeHitWidth);
         setCursor(Qt::SplitHCursor);
         setToolTip("Drag to resize the panel");
-        setAttribute(Qt::WA_NoSystemBackground);
         window->installEventFilter(this);
         dock->installEventFilter(this);
         QTimer::singleShot(0, this, [this] { sync(); });
@@ -48,10 +47,9 @@ protected:
         return false;
     }
     void paintEvent(QPaintEvent*) override {
+        // Only the divider is painted; the dock contents remain visible under the hit area.
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(ui::layer_panel::background));
-        painter.fillRect(QRect(width() - ui::layer_panel::separatorWidth, 0,
-                               ui::layer_panel::separatorWidth, height()),
+        painter.fillRect(QRect(0, 0, ui::layer_panel::separatorWidth, height()),
                          QColor(ui::layer_panel::separator));
     }
     void mousePressEvent(QMouseEvent* event) override {
@@ -87,7 +85,9 @@ private:
             if (transformTopLeft.x() == topLeft.x())
                 bottom = std::max(bottom, transformTopLeft.y() + transform_->height());
         }
-        setGeometry(topLeft.x() - width(),
+        // Start on the main window's dock separator and extend into the dock column,
+        // so the workspace keeps its full visible and clickable area.
+        setGeometry(topLeft.x() - ui::layer_panel::separatorWidth,
                     topLeft.y(), width(), bottom - topLeft.y());
         show();
         raise();
@@ -130,13 +130,6 @@ QDockWidget* MainWindow::setupLayersDock() {
     searchButton->setObjectName("layerSearchButton");
     searchButton->setAccessibleName("Search layers");
     searchButton->setToolTip("Search layers by name");
-    auto* filterButton = new ui::IconButton("list-filter", header);
-    filterButton->setObjectName("layerTypeFilterButton");
-    filterButton->setAccessibleName("Filter the layer list");
-    filterButton->setToolTip("Filter layer types (coming later)");
-    connect(filterButton, &QToolButton::clicked, this, [] {
-        // TODO: layer type filter and popover described in LAYERS_PANEL.md §3.3.
-    });
     auto* selected = new ui::IconButton("list-checks", header);
     selected->setObjectName("layerSelectedFilter");
     selected->setCheckable(true);
@@ -145,7 +138,6 @@ QDockWidget* MainWindow::setupLayersDock() {
     headerLayout->addWidget(title, 1);
     headerLayout->addWidget(searchField, 1);
     headerLayout->addWidget(searchButton);
-    headerLayout->addWidget(filterButton);
     headerLayout->addWidget(selected);
     dock->setTitleBarWidget(header);
 
@@ -358,15 +350,15 @@ void MainWindow::setupLayerFooter() {
                                    "New adjustment layer", "layerAdjustmentFooterMenu");
     auto* filterMenu = addMenu("checker-circle", "layerFilterLayerButton", "New filter layer",
                                "New filter layer", "layerFilterLayerFooterMenu");
-    for (auto* barAction : menuBar()->actions()) {
-        if (barAction->text() != "&Adjustments" || !barAction->menu()) continue;
-        for (auto* action : barAction->menu()->actions()) {
-            if (!action->menu() || action->text() != "New Adjustment Layer") continue;
-            const QStringList imageAdjustments{"Hue/Saturation…", "Levels…", "Curves…", "Exposure…",
-                "Gradient Map…", "Grain…", "Invert…", "Black and White…", "Color Balance…"};
-            for (auto* item : action->menu()->actions())
-                (imageAdjustments.contains(item->text()) ? adjustmentMenu : filterMenu)->addAction(item);
-        }
+    // Select the registered live-adjustment commands by ID, in their menu order, so
+    // renamed menu labels cannot empty these menus.
+    const QString liveAdjustment = "adjust.new.";
+    const QStringList imageAdjustments{"hue_saturation", "levels", "curves", "exposure",
+        "gradient_map", "grain", "invert", "black_white", "color_balance"};
+    for (auto* action : menuBar()->findChildren<QAction*>()) {
+        const auto id = action->property("commandId").toString();
+        if (!id.startsWith(liveAdjustment)) continue;
+        (imageAdjustments.contains(id.mid(liveAdjustment.size())) ? adjustmentMenu : filterMenu)->addAction(action);
     }
     auto* effectsMenu = addMenu("sparkles", "layerEffectsButton", "Effects", "Add layer effect", "layerEffectsMenu");
     const std::pair<const char*, int> effects[]{{"Stroke", 0}, {"Drop Shadow", 1}, {"Color Overlay", 2},

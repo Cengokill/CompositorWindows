@@ -15,6 +15,8 @@
 #include <QStyleOptionSlider>
 #include <QStyledItemDelegate>
 #include <QXmlStreamReader>
+#include <map>
+#include <vector>
 
 static void initializeLayerPanelIcons() { Q_INIT_RESOURCE(layer_panel_icons); }
 
@@ -129,6 +131,56 @@ public:
     }
 };
 
+// An icon's primitives, parsed once from its bundled SVG on the UI thread.
+struct ParsedIcon {
+    struct Shape { QPainterPath path; bool filled{}; };
+    qreal stroke{};
+    std::vector<Shape> shapes;
+};
+
+const ParsedIcon& parsedIcon(const QString& symbol) {
+    static std::map<QString, ParsedIcon> cache; // Node-based: returned references stay valid.
+    if (const auto found = cache.find(symbol); found != cache.end()) return found->second;
+    ParsedIcon icon;
+    QFile file(":/assets/icons/lucide/" + symbol + ".svg");
+    if (!file.open(QIODevice::ReadOnly)) qWarning("Layers panel icon %s is missing", qPrintable(symbol));
+    QXmlStreamReader xml(&file);
+    auto number = [](const QXmlStreamAttributes& attributes, const char* key) {
+        return attributes.value(QLatin1StringView(key)).toDouble();
+    };
+    while (file.isOpen() && !xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement()) continue;
+        const auto name = xml.name();
+        const auto a = xml.attributes();
+        if (name == u"svg") { icon.stroke = a.value(QLatin1StringView("stroke-width")).toDouble(); continue; }
+        ParsedIcon::Shape shape;
+        shape.filled = a.value(QLatin1StringView("fill")) == u"currentColor";
+        if (name == u"line") {
+            shape.path.moveTo(number(a, "x1"), number(a, "y1"));
+            shape.path.lineTo(number(a, "x2"), number(a, "y2"));
+        } else if (name == u"rect") {
+            shape.path.addRoundedRect(QRectF(number(a, "x"), number(a, "y"), number(a, "width"), number(a, "height")),
+                                      number(a, "rx"), number(a, "rx"));
+        } else if (name == u"circle") {
+            shape.path.addEllipse(QPointF(number(a, "cx"), number(a, "cy")), number(a, "r"), number(a, "r"));
+        } else if (name == u"polygon" || name == u"polyline") {
+            const auto values = a.value(QLatin1StringView("points")).toString().split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
+            QPolygonF points;
+            for (int i = 0; i + 1 < values.size(); i += 2) points << QPointF(values[i].toDouble(), values[i + 1].toDouble());
+            shape.path.addPolygon(points);
+            if (name == u"polygon") shape.path.closeSubpath();
+        } else {
+            // The painter supports only these SVG primitives; report anything it would drop.
+            qWarning("Layers panel icon %s uses unsupported SVG element <%s>", qPrintable(symbol),
+                     qPrintable(name.toString()));
+            continue;
+        }
+        icon.shapes.push_back(std::move(shape));
+    }
+    return cache.emplace(symbol, std::move(icon)).first->second;
+}
+
 void paintSymbol(QPainter& painter, const QString& symbol, QRectF bounds, const QColor& color) {
     static const bool resourcesReady = [] { initializeLayerPanelIcons(); return true; }();
     Q_UNUSED(resourcesReady);
@@ -161,36 +213,11 @@ void paintSymbol(QPainter& painter, const QString& symbol, QRectF bounds, const 
         painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter.setBrush(Qt::NoBrush);
     }
-    QFile file(":/assets/icons/lucide/" + symbol + ".svg");
-    if (!file.open(QIODevice::ReadOnly)) { painter.restore(); return; }
-    QXmlStreamReader xml(&file);
-    auto number = [](const QXmlStreamAttributes& attributes, const char* key) {
-        return attributes.value(QLatin1StringView(key)).toDouble();
-    };
-    while (!xml.atEnd()) {
-        xml.readNext();
-        if (!xml.isStartElement()) continue;
-        const auto name = xml.name();
-        const auto a = xml.attributes();
-        if (name == "svg") {
-            const auto stroke = a.value("stroke-width").toDouble();
-            if (stroke > 0) painter.setPen(QPen(color, stroke, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        }
-        painter.setBrush(a.value("fill") == "currentColor" ? QBrush(color) : QBrush(Qt::NoBrush));
-        if (name == "line")
-            painter.drawLine(QPointF(number(a, "x1"), number(a, "y1")), QPointF(number(a, "x2"), number(a, "y2")));
-        else if (name == "rect")
-            painter.drawRoundedRect(QRectF(number(a, "x"), number(a, "y"), number(a, "width"), number(a, "height")),
-                                    number(a, "rx"), number(a, "rx"));
-        else if (name == "circle")
-            painter.drawEllipse(QPointF(number(a, "cx"), number(a, "cy")), number(a, "r"), number(a, "r"));
-        else if (name == "polygon" || name == "polyline") {
-            const auto values = a.value("points").toString().split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
-            QPolygonF points;
-            for (int i = 0; i + 1 < values.size(); i += 2) points << QPointF(values[i].toDouble(), values[i + 1].toDouble());
-            if (name == "polygon") painter.drawPolygon(points);
-            else painter.drawPolyline(points);
-        }
+    const auto& icon = parsedIcon(symbol);
+    if (icon.stroke > 0) painter.setPen(QPen(color, icon.stroke, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    for (const auto& shape : icon.shapes) {
+        painter.setBrush(shape.filled ? QBrush(color) : QBrush(Qt::NoBrush));
+        painter.drawPath(shape.path);
     }
     painter.restore();
 }
@@ -300,7 +327,10 @@ void CapsuleDropdown::paintEvent(QPaintEvent* event) {
 Slider::Slider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orientation, parent) {
     setFixedHeight(t::sliderHeight);
     setMinimumWidth(t::sliderMinimumWidth);
-    setStyle(new SliderStyle);
+    // QWidget::setStyle does not take ownership.
+    auto* style = new SliderStyle;
+    style->setParent(this);
+    setStyle(style);
     setStyleSheet(QString("QSlider::sub-page:horizontal { background: %1; }").arg(t::accent));
 }
 

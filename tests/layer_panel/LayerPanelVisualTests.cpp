@@ -76,8 +76,10 @@ int main(int argc, char** argv) {
             bool separatorPainted = false;
             for (int x = int(edge.left() * scale); x < int((edge.right() + 2) * scale); ++x)
                 separatorPainted |= edgeImage.pixelColor(x, int((transformTop + 5) * scale)) == QColor(t::separator);
+            const QRect workspace(window.centralWidget()->mapTo(&window, QPoint{}), window.centralWidget()->size());
             return resizeEdge->geometry().bottom() >= transformBottom &&
-                resizeEdge->geometry().right() + 1 == transform->mapTo(&window, QPoint{}).x() &&
+                resizeEdge->geometry().left() + t::separatorWidth == transform->mapTo(&window, QPoint{}).x() &&
+                !resizeEdge->geometry().intersects(workspace) &&
                 separatorPainted;
         };
         const bool narrow = continuous();
@@ -327,10 +329,7 @@ int main(int argc, char** argv) {
     okay &= check(searchField->isVisible() && edit && edit->hasFocus(), "search visible and focused");
     okay &= check(edit && edit->width() >= edit->fontMetrics().horizontalAdvance("Search Layers"),
                   "search placeholder fits");
-    auto* typeFilter = window.findChild<QToolButton*>("layerTypeFilterButton");
-    if (typeFilter) typeFilter->click();
-    okay &= check(typeFilter && !typeFilter->menu() && !typeFilter->isCheckable() &&
-                  !typeFilter->property("active").toBool(), "inert type filter");
+    okay &= check(!window.findChild<QToolButton*>("layerTypeFilterButton"), "no inert type filter");
     window.addFeasibilityDocument();
     QTest::qWait(100);
     window.resizeDocks({dock}, {t::minWidth}, Qt::Horizontal);
