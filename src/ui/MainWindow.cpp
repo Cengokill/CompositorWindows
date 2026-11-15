@@ -6,6 +6,7 @@
 #include "ProjectChrome.h"
 #include "EditorIcons.h"
 #include "VisualStyle.h"
+#include "LayerPanelTokens.h"
 #include "PaletteSwatches.h"
 #include <QSettings>
 #include <QToolButton>
@@ -206,7 +207,7 @@ setupPaletteControls(rail);
 rail->setPalette(paletteSwatches_);
 setupGifTimeline();
 auto*dock=setupLayersDock();
-auto*inspector=new QDockWidget("Transform",this);inspector->setObjectName("transformDock");auto*formWidget=new QWidget;auto*form=new QFormLayout(formWidget);const char*names[]{"X","Y","Width","Height","Angle"};for(int i=0;i<5;++i){auto*spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};spin->setCompactDisplay(true);spin->setDecimals(3);spin->setRange(i==2||i==3?1:-1000000,i==2||i==3?300000:1000000);spin->setAccessibleName(names[i]);geometry_[i]=spin;form->addRow(names[i],spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){if(!refreshing_)editTransformGeometry(i,value);});}inspector->setWidget(formWidget);addDockWidget(Qt::RightDockWidgetArea,inspector);setupBrushControls();setupAdjustmentActions();setupSelectionActions();setupLayerActions();setupTransformActions();setupDrawingActions();setupTypeControls();setupRetouchActions();{QSettings settings;commands_->restoreShortcuts(settings);}statusBar()->showMessage("Create a canvas or import an image");ui::installProjectChrome(this,tabs_,dock,layers_);ui::styleWorkspace(this);refresh(false);addEmptyProject(false);}
+auto*inspector=new QDockWidget("Transform",this);inspector->setObjectName("transformDock");inspector->setStyleSheet(QString("QDockWidget#transformDock, QWidget#sectionTitle, QWidget#transformContent { background: %1; }").arg(ui::layer_panel::background));auto*formWidget=new QWidget;formWidget->setObjectName("transformContent");auto*form=new QFormLayout(formWidget);const char*names[]{"X","Y","Width","Height","Angle"};for(int i=0;i<5;++i){auto*spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};spin->setCompactDisplay(true);spin->setDecimals(3);spin->setRange(i==2||i==3?1:-1000000,i==2||i==3?300000:1000000);spin->setAccessibleName(names[i]);geometry_[i]=spin;form->addRow(names[i],spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){if(!refreshing_)editTransformGeometry(i,value);});}inspector->setWidget(formWidget);addDockWidget(Qt::RightDockWidgetArea,inspector);setupBrushControls();setupAdjustmentActions();setupSelectionActions();setupLayerActions();setupTransformActions();setupDrawingActions();setupTypeControls();setupRetouchActions();{QSettings settings;commands_->restoreShortcuts(settings);}statusBar()->showMessage("Create a canvas or import an image");ui::installProjectChrome(this,tabs_,dock,layers_);ui::styleWorkspace(this);refresh(false);addEmptyProject(false);}
 void MainWindow::restoreHistorySnapshot(Snapshot snapshot){
     stopGifPlayback();
     beginPreviewGesture();

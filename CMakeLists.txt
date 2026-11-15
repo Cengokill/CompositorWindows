@@ -674,6 +674,8 @@ add_test(NAME layer_panel.accent_colors COMMAND layer_panel_visual_tests --accen
 set_tests_properties(layer_panel.accent_colors PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 add_test(NAME layer_panel.focused_selection COMMAND layer_panel_visual_tests --focused-selection)
 set_tests_properties(layer_panel.focused_selection PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+add_test(NAME layer_panel.transform_background COMMAND layer_panel_visual_tests --transform-background)
+set_tests_properties(layer_panel.transform_background PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 add_executable(gif_timeline_tests tests/layer_panel/GifTimelineTests.cpp)
 target_link_libraries(gif_timeline_tests PRIVATE compositor_ui Qt6::Test)
 add_test(NAME layer_panel.gif_timeline COMMAND gif_timeline_tests)

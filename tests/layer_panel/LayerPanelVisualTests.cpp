@@ -40,6 +40,7 @@ int main(int argc, char** argv) {
     window.show();
     QTest::qWait(200);
     auto* dock = window.findChild<QDockWidget*>("layersDock");
+    auto* transform = window.findChild<QDockWidget*>("transformDock");
     auto* header = window.findChild<QWidget*>("layersHeader");
     auto* searchField = window.findChild<QWidget*>("layerSearchField");
     auto* title = window.findChild<QWidget*>("layersTitle");
@@ -52,12 +53,26 @@ int main(int argc, char** argv) {
     auto* tree = window.findChild<QTreeWidget*>("layersTree");
     auto* blend = window.findChild<QComboBox*>("layerBlend");
     auto* searchButton = window.findChild<QToolButton*>("layerSearchButton");
-    if (!dock || !header || !searchField || !title || !appearance || !percent || !slider || !opacityLabel || !footer ||
+    if (!dock || !transform || !header || !searchField || !title || !appearance || !percent || !slider || !opacityLabel || !footer ||
         !tree || !blend || !searchButton || !resizeEdge) return 2;
     auto check = [](bool condition, const char* name) {
         if (!condition) std::cerr << "FAIL " << name << '\n';
         return condition;
     };
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--transform-background") {
+        const auto sample = [](QWidget* widget) {
+            const auto image = widget->grab().toImage();
+            const auto scale = image.devicePixelRatio();
+            return image.pixelColor(int(5 * scale), int(5 * scale));
+        };
+        const auto titleColor = sample(transform->titleBarWidget());
+        const auto contentColor = sample(transform->widget());
+        const bool matches = check(titleColor == QColor(t::background) && contentColor == QColor(t::background),
+                                   "Transform title and content match Layers background");
+        if (!matches) std::cerr << "title=" << titleColor.name().toStdString()
+                                << " content=" << contentColor.name().toStdString() << '\n';
+        return matches ? 0 : 1;
+    }
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--accent-colors") {
         window.addFeasibilityDocument();
         QTest::qWait(100);
@@ -153,6 +168,8 @@ int main(int argc, char** argv) {
         };
         try {
             save("no_document");
+            if (!transform->grab().save(directory + "/transform.png"))
+                throw std::runtime_error("Cannot save Transform capture");
             window.addFeasibilityDocument();
             QTest::qWait(180);
             save("populated");
