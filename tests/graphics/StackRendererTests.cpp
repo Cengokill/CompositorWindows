@@ -56,6 +56,33 @@ int main(){
             require(candidate->rgba()==reference->rgba(),"Normal stack differed from bottom-to-top reference");
         }
     });
+    test("duplicate-layers-share-one-sample-without-changing-rounding",[]{
+        constexpr int w=301,h=207;
+        std::vector<uint8_t> bytes(size_t(w)*h*4);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+            const uint8_t a=uint8_t(x<20||y>190?(x*7+y*3)%256:(x%5?255:100+x%90));
+            auto* p=&bytes[(size_t(y)*w+x)*4];p[0]=uint8_t((x*3+y)%256*a/255);p[1]=uint8_t((x+y*5)%256*a/255);p[2]=uint8_t((x*11+y*2)%256*a/255);p[3]=a;
+        }
+        const auto shared=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);
+        const std::array<double,9> opacities{1,.99,.99,.5,.5,.5,1,.25,.99};
+        for(const auto sampling:{Transform::Sampling::High,Transform::Sampling::Smooth,Transform::Sampling::Nearest})
+        for(const bool shiftOne:{false,true}){
+            Document duplicated,distinct;duplicated.width=distinct.width=w;duplicated.height=distinct.height=h;
+            for(size_t i=0;i<opacities.size();++i){
+                Layer l;l.id="layer-"+std::to_string(i);l.raster=shared;l.opacity=opacities[i];
+                l.transform={0,0,double(w),double(h),0,false,false,sampling};
+                if(shiftOne&&i==4)l.transform.x=.5;
+                duplicated.layers.push_back(l);
+                l.raster=std::make_shared<Raster>(*shared);
+                distinct.layers.push_back(std::move(l));
+            }
+            for(double units:{.625,1.,1.91,3.25,5.}){
+                const auto candidate=StackRenderer().renderScaled(duplicated,-.75,-.125,256,256,units);
+                const auto reference=StackRenderer().renderScaled(distinct,-.75,-.125,256,256,units);
+                require(candidate->rgba()==reference->rgba(),"Duplicate layers sampled once changed the composite");
+            }
+        }
+    });
     test("G-R-013-placed-mask-exterior-edge-majority",[]{Document d;auto image=layer("image",{255,0,0,255},8,4);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=3;gray->pixels.assign(9,255);gray->pixels[4]=0;image.mask=Mask{gray};image.mask->placement=Transform{2,0,3,3,0,false,false,Transform::Sampling::Nearest};d.layers={image};
         auto white=StackRenderer().render(d,0,0,8,4);require(white->pixel(0,0).a==255&&white->pixel(7,3).a==255&&white->pixel(3,1).a==0,"Reveal mask exterior or center differs");
         gray=std::make_shared<GrayRaster>(*gray);gray->pixels.assign(9,0);gray->pixels[4]=255;d.layers[0].mask->raster=gray;auto black=StackRenderer().render(d,0,0,8,4);require(black->pixel(0,0).a==0&&black->pixel(7,3).a==0&&black->pixel(3,1).a==255,"Hide mask exterior or center differs");
