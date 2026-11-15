@@ -67,10 +67,28 @@ int main(int argc, char** argv) {
         };
         const auto titleColor = sample(transform->titleBarWidget());
         const auto contentColor = sample(transform->widget());
-        const bool matches = check(titleColor == QColor(t::background) && contentColor == QColor(t::background),
-                                   "Transform title and content match Layers background");
+        const auto continuous = [&] {
+            const auto transformTop = transform->mapTo(&window, QPoint{}).y();
+            const auto transformBottom = transformTop + transform->height() - 1;
+            const auto edgeImage = window.grab().toImage();
+            const auto scale = edgeImage.devicePixelRatio();
+            const auto edge = resizeEdge->geometry();
+            bool separatorPainted = false;
+            for (int x = int(edge.left() * scale); x < int((edge.right() + 2) * scale); ++x)
+                separatorPainted |= edgeImage.pixelColor(x, int((transformTop + 5) * scale)) == QColor(t::separator);
+            return resizeEdge->geometry().bottom() >= transformBottom &&
+                resizeEdge->geometry().right() + 1 == transform->mapTo(&window, QPoint{}).x() &&
+                separatorPainted;
+        };
+        const bool narrow = continuous();
+        window.resizeDocks({dock}, {t::maxWidth}, Qt::Horizontal);
+        QTest::qWait(100);
+        const bool wide = continuous();
+        const bool matches = check(titleColor == QColor(t::background) && contentColor == QColor(t::background) &&
+                                   narrow && wide, "Transform background and left border continue Layers");
         if (!matches) std::cerr << "title=" << titleColor.name().toStdString()
-                                << " content=" << contentColor.name().toStdString() << '\n';
+                                << " content=" << contentColor.name().toStdString()
+                                << " narrow=" << narrow << " wide=" << wide << '\n';
         return matches ? 0 : 1;
     }
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == "--accent-colors") {
@@ -170,6 +188,11 @@ int main(int argc, char** argv) {
             save("no_document");
             if (!transform->grab().save(directory + "/transform.png"))
                 throw std::runtime_error("Cannot save Transform capture");
+            const auto edge = resizeEdge->geometry();
+            const auto columnBottom = transform->mapTo(&window, QPoint(0, transform->height())).y();
+            if (!window.grab(QRect(edge.left(), edge.top(), edge.width() + transform->width(),
+                                   columnBottom - edge.top())).save(directory + "/right_column.png"))
+                throw std::runtime_error("Cannot save right column capture");
             window.addFeasibilityDocument();
             QTest::qWait(180);
             save("populated");

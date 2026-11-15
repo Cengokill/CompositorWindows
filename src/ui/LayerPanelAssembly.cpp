@@ -41,7 +41,7 @@ public:
     }
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
-        if ((watched == dock_ || watched == window_) &&
+        if ((watched == dock_ || watched == transform_ || watched == window_) &&
             (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
              event->type() == QEvent::Show || event->type() == QEvent::Hide))
             QTimer::singleShot(0, this, [this] { sync(); });
@@ -76,14 +76,25 @@ protected:
 private:
     void sync() {
         if (!window_ || !dock_ || !dock_->isVisible()) { hide(); return; }
+        if (!transform_) {
+            transform_ = window_->findChild<QDockWidget*>("transformDock");
+            if (transform_) transform_->installEventFilter(this);
+        }
         const auto topLeft = dock_->mapTo(window_, QPoint{});
+        int bottom = topLeft.y() + dock_->height();
+        if (transform_ && transform_->isVisible()) {
+            const auto transformTopLeft = transform_->mapTo(window_, QPoint{});
+            if (transformTopLeft.x() == topLeft.x())
+                bottom = std::max(bottom, transformTopLeft.y() + transform_->height());
+        }
         setGeometry(topLeft.x() - width(),
-                    topLeft.y(), width(), dock_->height());
+                    topLeft.y(), width(), bottom - topLeft.y());
         show();
         raise();
     }
     QPointer<QMainWindow> window_;
     QPointer<QDockWidget> dock_;
+    QPointer<QDockWidget> transform_;
     qreal startX_{};
     int startWidth_{};
     bool dragging_{};
