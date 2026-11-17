@@ -413,20 +413,27 @@ void NativeCanvas::drawRulers(){
     }
 }
 void NativeCanvas::draw(bool present){
+bool standIn=false;
 if(wheelZoomPending_){
-    // Leave the previous DXGI frame on screen while the new viewport is
-    // incomplete. Drawing here would use its tiles with the new mapping.
     if(compositeHeld_||movePreview_)return;
     if(deferViewportComposite){
         if(deferViewportComposite())return;
     }else{
         submitWheelZoom();
-        if(wheelZoomRequested_)return;
+        if(wheelZoomRequested_){
+            // Until the exact patch arrives, show the last presented patch through the new
+            // mapping. It is only a placeholder: it is not reported as a ready frame, it does
+            // not replace the last presented viewport, and the exact patch replaces it.
+            standIn=present&&canDrawZoomStandIn();
+            if(!standIn)return;
+        }
     }
-    wheelZoomPending_=false;
-    viewportPresented_=false;
+    if(!standIn){
+        wheelZoomPending_=false;
+        viewportPresented_=false;
+    }
 }
-if(wheelHover_){
+if(wheelHover_&&!standIn){
     const auto [position,modifiers]=*wheelHover_;
     wheelHover_.reset();
     if(pointerHover)pointerHover(position,modifiers);
@@ -435,7 +442,7 @@ if(layerVisibilityComposite_&&!wheelZoomPending_)layerVisibilityComposite_=false
 proofApplied_=false;const double scale=pointsPerPixel();const bool held=viewportDeferred_||movePreview_||compositeHeld_;
 const bool readyWheelFrame=wheelZoomFrame_&&viewportPresented_&&!held;
 const bool deferred=!held&&deferViewportComposite&&deferViewportComposite();
-const bool skipComposite=held||deferred||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){const bool same=request.x==lastCompositeX_&&request.y==lastCompositeY_&&request.width==lastCompositeW_&&request.height==lastCompositeH_&&request.units==lastCompositeUnits_;if(compositeDirty_||!raster_||!same){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;lastCompositeX_=request.x;lastCompositeY_=request.y;lastCompositeW_=request.width;lastCompositeH_=request.height;lastCompositeUnits_=request.units;compositeDirty_=false;upload();}}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
+const bool skipComposite=standIn||held||deferred||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){const bool same=request.x==lastCompositeX_&&request.y==lastCompositeY_&&request.width==lastCompositeW_&&request.height==lastCompositeH_&&request.units==lastCompositeUnits_;if(compositeDirty_||!raster_||!same){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;lastCompositeX_=request.x;lastCompositeY_=request.y;lastCompositeW_=request.width;lastCompositeH_=request.height;lastCompositeUnits_=request.units;compositeDirty_=false;upload();}}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds,standIn);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
 if(proofing){if(textOverlay_)drawTextOverlay(true);context_->PopAxisAlignedClip();finishCmykProof(bounds);context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);}
 if(showPixelGrid&&zoom>=8){
     const auto area=D2D1::RectF(std::max(0.f,left),std::max(0.f,top),std::min(float(width()),bounds.right),std::min(float(height()),bounds.bottom));
@@ -612,9 +619,11 @@ auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();updat
     if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}
     check(hr,"Canvas present");
     if(hr==S_OK){
-        hasPresented_=true;
-        presentedViewport_=viewportState();
-        if(observePresentation)observePresentation({zoom,pan,!skipComposite||readyWheelFrame,std::move(pixels)});
+        if(!standIn){
+            hasPresented_=true;
+            presentedViewport_=viewportState();
+        }
+        if(observePresentation)observePresentation({zoom,pan,!standIn&&(!skipComposite||readyWheelFrame),std::move(pixels)});
     }
 }
 std::optional<int> NativeCanvas::cropResizeHandle(editing::Rect crop,Point point,const editing_transform::ViewMapping& mapping){
@@ -774,8 +783,12 @@ bool NativeCanvas::sharpPatchCoversView()const{
     if(right<=left||bottom<=top)return true;
     return rasterX_<=left+.51&&rasterY_<=top+.51&&rasterX_+raster_->width*rasterUnits_>=right-.51&&rasterY_+raster_->height*rasterUnits_>=bottom-.51;
 }
-void NativeCanvas::drawDocumentStandIn(D2D1_RECT_F bounds){
-    if(!context_||wheelZoomFrame_||sharpPatchCoversView())return;
+bool NativeCanvas::canDrawZoomStandIn()const{
+    if(!context_||!hasPresented_||!raster_||rasterUnits_<=0||!presentedViewport_)return false;
+    return presentedViewport_->zoom!=zoom||presentedViewport_->pan.x!=pan.x()||presentedViewport_->pan.y!=pan.y();
+}
+void NativeCanvas::drawDocumentStandIn(D2D1_RECT_F bounds,bool zoomStandIn){
+    if(!context_||(wheelZoomFrame_&&!zoomStandIn)||sharpPatchCoversView())return;
     ensureNavigatorBitmap();
     if(!navigatorBitmap_||!navigatorRaster_||navigatorUnits_<=0||documentWidth_<=0)return;
     const auto& image=*navigatorRaster_;
