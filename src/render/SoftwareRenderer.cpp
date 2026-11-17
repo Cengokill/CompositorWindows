@@ -1,6 +1,7 @@
 #include "core/Document.h"
 #include "graphics/StackRenderer.h"
 #include "effects/Adjustments.h"
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
@@ -103,6 +104,18 @@ std::shared_ptr<const Raster> SoftwareRenderer::renderScaled(const Document& doc
     const int margin=int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel));
     auto rendered=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel,cancelled);
     return margin?cropRaster(*rendered,margin,margin,width,height):rendered;
+}
+std::vector<std::shared_ptr<const Raster>> SoftwareRenderer::renderScaledTiles(const Document& document,const std::vector<ScaledTile>& tiles,double unitsPerPixel,const std::function<bool()>& cancelled)const {
+    // Adjustment layers keep renderScaled's padding, Lens Effects frame and callbacks.
+    if(std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();})){
+        std::vector<std::shared_ptr<const Raster>> result;result.reserve(tiles.size());
+        for(const auto& tile:tiles){
+            if(tile.offsetX||tile.offsetY)throw std::invalid_argument("Adjustment layers render whole scaled tiles");
+            result.push_back(renderScaled(document,tile.x,tile.y,tile.width,tile.height,unitsPerPixel,cancelled));
+        }
+        return result;
+    }
+    return stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaledTiles(document,tiles,unitsPerPixel,cancelled);
 }
 std::shared_ptr<const Raster> SoftwareRenderer::renderCursorRegion(const Document& document,double x,double y,int width,int height,double unitsPerPixel)const {
     return graphics::StackRenderer([&document](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){

@@ -5,6 +5,7 @@
 
 namespace compositor::graphics {
 inline constexpr uint32_t parallelBatchMaxWorkers=16;
+inline constexpr uint32_t parallelRenderMaxWorkers=64;
 // Synchronous independent jobs on one private native pool shared by callers.
 // 0 selects min(logical CPUs,16);1 runs on the caller. The callback and everything
 // it refers to must remain valid and safe for concurrent access until return.

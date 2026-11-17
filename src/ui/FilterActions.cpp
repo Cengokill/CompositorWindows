@@ -647,7 +647,7 @@ public:
                 lastViewport_=std::move(viewport);
                 if(canvas&&result.viewport){
                     auto& frame=*result.viewport;
-                    canvas->presentComposite(std::move(frame.raster),frame.documentX,frame.documentY,frame.unitsPerPixel,false);
+                    canvas->presentComposite(std::move(frame),false);
                 }
             }
             if(runningViewportOnly_){

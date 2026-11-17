@@ -19,6 +19,10 @@ public:
     // Export stays at step 1. x/y is the corner before the first pixel center.
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,
         double unitsPerPixel,const std::function<bool()>& cancelled={})const;
+    // Each tile exactly as renderScaled. Their rows are shared out over the render
+    // pool; cancelled is polled on the calling thread between groups of rows.
+    std::vector<std::shared_ptr<const Raster>> renderScaledTiles(const Document&,const std::vector<ScaledTile>&,
+        double unitsPerPixel,const std::function<bool()>& cancelled={})const;
     // Bounded non-adjustment preview patch, preserving the parent tile's exact
     // floating-point sample expressions through integer pixel offsets.
     std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const;

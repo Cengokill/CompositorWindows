@@ -34,7 +34,7 @@ std::function<void()> installLensViewportPreview(
         const auto* document=preview?preview.get():(project.document?&*project.document:nullptr);
         if(canvas->viewportBounds()!=requested->bounds||!document||result.document!=*document)return;
         if(!result.error.isEmpty()){error(result.error);return;}
-        canvas->presentComposite(std::move(result.view.raster),result.view.documentX,result.view.documentY,result.view.unitsPerPixel,false);
+        canvas->presentComposite(std::move(result.view),false);
     },canvas);
     canvas->deferViewportComposite=[canvas,owner=&project,requested,view=host.view,valid=host.valid,job]{
         if(!valid())return false;

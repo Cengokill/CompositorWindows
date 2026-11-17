@@ -1,6 +1,10 @@
 #include "graphics/StackRenderer.h"
 #include "graphics/MaskSampling.h"
 #include "graphics/RasterSampling.h"
+#include "graphics/BilinearRows.h"
+#include <cmath>
+#include <cstring>
+#include <random>
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -17,6 +21,10 @@ void alphas(const Raster&r,std::array<uint8_t,4> expected){for(int y=0;y<2;++y)f
 std::shared_ptr<const Raster> invert(const Layer&,std::shared_ptr<const Raster> in,RenderRegion){std::vector<Pixel> p(size_t(in->width)*in->height);for(int y=0;y<in->height;++y)for(int x=0;x<in->width;++x){auto a=in->pixel(x,y);p[size_t(y)*in->width+x]={uint8_t(a.a-a.r),uint8_t(a.a-a.g),uint8_t(a.a-a.b),a.a};}return in->replacing(0,0,in->width,in->height,p.data(),in->width);}
 }
 int main(){
+  // Every test runs with the AVX and AVX2 paths, then with the portable paths.
+  for(const bool wide:{true,false}){
+    setWideVectorsAllowed(wide);
+    if(!wide)std::cout<<"-- portable paths\n";
     test("bilinear-rgba-matches-scalar-rounding",[]{
         std::array<Pixel,4> pixels{{{0,42,8,255},{1,70,117,255},{80,80,113,128},{46,9,91,128}}};
         for(int x=0;x<257;++x)for(int y=0;y<257;++y){
@@ -64,7 +72,8 @@ int main(){
             auto* p=&bytes[(size_t(y)*w+x)*4];p[0]=uint8_t((x*3+y)%256*a/255);p[1]=uint8_t((x+y*5)%256*a/255);p[2]=uint8_t((x*11+y*2)%256*a/255);p[3]=a;
         }
         const auto shared=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);
-        const std::array<double,9> opacities{1,.99,.99,.5,.5,.5,1,.25,.99};
+        // The second set puts a fully opaque duplicate above copies with other opacities.
+        for(const std::vector<double> opacities:{std::vector<double>{1,.99,.99,.5,.5,.5,1,.25,.99},std::vector<double>{.5,.75,1}})
         for(const auto sampling:{Transform::Sampling::High,Transform::Sampling::Smooth,Transform::Sampling::Nearest})
         for(const bool shiftOne:{false,true}){
             Document duplicated,distinct;duplicated.width=distinct.width=w;duplicated.height=distinct.height=h;
@@ -214,6 +223,73 @@ int main(){
             require(candidate->rgba()==reference->rgba(),"Skipping layers outside the region changed the composite");
         }
     });
+    test("opacity-fixed-point-matches-lround-for-every-byte",[]{
+        size_t found=0;
+        std::vector<double> opacities{.9,.5,.37,1./3,.99,.01,.25,.75,0.,1.};
+        for(int i=0;i<=1000;++i)opacities.push_back(i/1000.);
+        for(const double opacity:opacities){
+            uint32_t multiplier{},offset{};
+            if(!opacityFixedPoint(opacity,multiplier,offset))continue;
+            ++found;
+            for(int n=0;n<256;++n)require((uint64_t(n)*multiplier+offset)>>16==uint64_t(std::clamp(std::lround(n*opacity),0L,255L)),"Fixed-point opacity differs from lround");
+        }
+        require(found>opacities.size()/2,"Fixed-point opacity is rarely found");
+    });
+    test("avx-row-sampler-matches-portable-sampler",[]{
+        if(!bilinearRowAvxAvailable()){std::cout<<"SKIP avx-row-sampler: no AVX\n";return;}
+        std::mt19937 random(1234);
+        constexpr size_t width=257;constexpr int span=300;
+        std::vector<uint32_t> upper(span+1),lower(span+1);std::vector<float> upperWide((span+1)*4),lowerWide((span+1)*4);
+        std::vector<int> x(width);std::vector<double> fx(width),fxComplement(width);std::vector<float> fxWide(width*4),fxComplementWide(width*4);std::vector<uint8_t> inside(width);
+        // Fractions that make many samples land exactly on a half, and arbitrary ones.
+        const std::array<double,6> exactFractions{0,.25,.5,.75,.125,.375};
+        for(int trial=0;trial<400;++trial){
+            const bool structured=trial%2==0;
+            for(int i=0;i<=span;++i){
+                const auto a=uint32_t(trial%5==0?255:random()%256);
+                const auto channel=[&]{return uint32_t(structured?(random()%3)*a/2:random()%(a+1));};
+                upper[size_t(i)]=channel()|channel()<<8|channel()<<16|a<<24;
+                const auto b=uint32_t(trial%5==0?255:random()%256);
+                lower[size_t(i)]=uint32_t(random()%(b+1))|uint32_t(random()%(b+1))<<8|uint32_t(random()%(b+1))<<16|b<<24;
+            }
+            widenPixels(upper.data(),upper.size(),upperWide.data());widenPixels(lower.data(),lower.size(),lowerWide.data());
+            for(size_t c=0;c<width;++c){
+                x[c]=int(random()%span);inside[c]=random()%17!=0;
+                fx[c]=structured?exactFractions[random()%exactFractions.size()]:std::uniform_real_distribution<double>(0,1)(random);fxComplement[c]=1-fx[c];
+            }
+            widenWeights(fx.data(),width,fxWide.data());widenWeights(fxComplement.data(),width,fxComplementWide.data());
+            const double fy=structured?exactFractions[size_t(trial)%exactFractions.size()]:std::uniform_real_distribution<double>(0,1)(random);
+            const std::array<double,6> choices{1,.9,.5,.37,1./3,.99};
+            const double opacity=choices[size_t(trial)%choices.size()];
+            BilinearRow row{upper.data(),lower.data(),upperWide.data(),lowerWide.data(),0,x.data(),fx.data(),fxComplement.data(),fxWide.data(),fxComplementWide.data(),inside.data(),fy};
+            if(trial%3!=0)row.opacityFixed=opacityFixedPoint(opacity,row.opacityMultiplier,row.opacityOffset);
+            std::vector<int> stopA(width,-1);for(size_t c=0;c<width;c+=7)stopA[c]=3;
+            auto stopB=stopA;
+            std::vector<uint32_t> rawA(width,7),rawB(width,7),scaledA(width,7),scaledB(width,7);
+            const bool withRaw=trial%4!=0;
+            const auto a=sampleBilinearRowPortable(row,stopA.data(),5,width,opacity,withRaw?rawA.data():nullptr,scaledA.data());
+            const auto b=sampleBilinearRowAvx(row,stopB.data(),5,width,opacity,withRaw?rawB.data():nullptr,scaledB.data());
+            require(a==b&&stopA==stopB&&scaledA==scaledB&&(!withRaw||rawA==rawB),"AVX row sampler differs from bilinearPixel");
+        }
+    });
+    test("scaled-tiles-with-offsets-match-whole-tiles",[]{
+        constexpr int w=301,h=207;
+        std::vector<uint8_t> bytes(size_t(w)*h*4);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+            const uint8_t a=uint8_t(x<20||y>190?(x*7+y*3)%256:(x%5?255:100+x%90));
+            auto* p=&bytes[(size_t(y)*w+x)*4];p[0]=uint8_t((x*3+y)%256*a/255);p[1]=uint8_t((x+y*5)%256*a/255);p[2]=uint8_t((x*11+y*2)%256*a/255);p[3]=a;
+        }
+        Document document;document.width=w;document.height=h;
+        for(int i=0;i<6;++i){Layer l;l.id="layer-"+std::to_string(i);l.raster=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);l.opacity=i%2?.9:.6;l.transform={i*.25,i*.5,double(w),double(h)};if(i==4)l.transform.rotation=17;document.layers.push_back(std::move(l));}
+        for(double units:{.625,1.,1.91,3.25}){
+            const auto whole=StackRenderer().renderScaled(document,-.75,-.125,256,256,units);
+            const std::vector<ScaledTile> parts{{-.75,-.125,256,256,0,0},{-.75,-.125,37,200,11,5},{-.75,-.125,256-131,1,131,255},{-.75,-.125,1,256,255,0}};
+            const auto rendered=StackRenderer().renderScaledTiles(document,parts,units);
+            require(rendered.size()==parts.size(),"Missing scaled tile");
+            for(size_t i=0;i<parts.size();++i)for(int y=0;y<parts[i].height;++y)for(int x=0;x<parts[i].width;++x)
+                require(rendered[i]->pixel(x,y)==whole->pixel(x+parts[i].offsetX,y+parts[i].offsetY),"Offset tile differs from the whole tile");
+        }
+    });
     test("G-R-013-placed-mask-exterior-edge-majority",[]{Document d;auto image=layer("image",{255,0,0,255},8,4);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=3;gray->pixels.assign(9,255);gray->pixels[4]=0;image.mask=Mask{gray};image.mask->placement=Transform{2,0,3,3,0,false,false,Transform::Sampling::Nearest};d.layers={image};
         auto white=StackRenderer().render(d,0,0,8,4);require(white->pixel(0,0).a==255&&white->pixel(7,3).a==255&&white->pixel(3,1).a==0,"Reveal mask exterior or center differs");
         gray=std::make_shared<GrayRaster>(*gray);gray->pixels.assign(9,0);gray->pixels[4]=255;d.layers[0].mask->raster=gray;auto black=StackRenderer().render(d,0,0,8,4);require(black->pixel(0,0).a==0&&black->pixel(7,3).a==0&&black->pixel(3,1).a==255,"Hide mask exterior or center differs");
@@ -296,5 +372,6 @@ int main(){
         auto faded=plate;faded.opacity=.5;scene.layers={backdrop,faded};
         auto mixed=StackRenderer().render(scene,0,0,8,8)->pixel(4,4);
         require(mixed.r>200&&mixed.g>80&&mixed.g<180&&mixed.b==mixed.g,"half layer opacity hid red overlay over white");});
+  }
     std::cout<<"{\"suite\":\"stack_renderer\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false}\n";return failed?1:0;
 }

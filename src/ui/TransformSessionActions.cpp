@@ -192,7 +192,7 @@ void MainWindow::applyViewportComposite(ui::ViewportCompositeJob::Result result)
     const bool dragging=transformDrag_&&transformOwner_==result.owner;
     result.owner->composite=std::move(result.cache);
     if(!dragging)previewSealed_=true;
-    canvas->presentComposite(result.view.raster,result.view.documentX,result.view.documentY,result.view.unitsPerPixel,!dragging);
+    canvas->presentComposite(result.view,!dragging);
     if(!dragging){canvas->setCompositeHeld(false);canvas->setNavigatorDeferred(false);}
 }
 void MainWindow::applyMovePreview(ui::MovePreviewJob::Result result){

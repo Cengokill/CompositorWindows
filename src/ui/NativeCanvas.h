@@ -94,6 +94,9 @@ private:
     std::optional<SampleRing> sampleRing_;
     int documentWidth_{},documentHeight_{};
     double rasterX_{},rasterY_{},rasterUnits_{1};
+    // The composed part of raster_ in document units; zero width when all of it is.
+    double rasterCoverX_{},rasterCoverY_{},rasterCoverWidth_{},rasterCoverHeight_{};
+    void setRasterCover(const CompositeViewport& patch){rasterCoverX_=patch.coverX;rasterCoverY_=patch.coverY;rasterCoverWidth_=patch.coverWidth;rasterCoverHeight_=patch.coverHeight;}
     struct DisplayTile { std::shared_ptr<const Raster::Tile> source; Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap; };
     std::unordered_map<const Raster::Tile*,DisplayTile> displayTiles_;
     platform::DisplayProfile displayProfile_;
@@ -278,6 +281,8 @@ public:
     std::function<bool()> deferViewportComposite;
     // Install a finished composite and, when requested, drop the move sprite in the same frame.
     void presentComposite(std::shared_ptr<const Raster> raster,double x,double y,double units,bool clearPreview);
+    // presentComposite for a viewport patch, which may hold pixels only near its view.
+    void presentComposite(CompositeViewport patch,bool clearPreview){presentComposite(std::move(patch.raster),patch.documentX,patch.documentY,patch.unitsPerPixel,clearPreview);setRasterCover(patch);}
     void setDocumentSize(int width,int height);
     void setSelection(std::shared_ptr<const GrayRaster>,std::shared_ptr<const editing::SelectionOutline> outline={});
     void setSelectionDraft(std::optional<editing::LassoDraft> value){selectionDraft_=std::move(value);update();}

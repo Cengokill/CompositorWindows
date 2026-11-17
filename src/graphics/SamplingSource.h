@@ -59,6 +59,10 @@ public:
     // Unit coordinates remain in the original source, including any extended
     // ceil/aligned reduction coverage, so live and committed geometry agrees.
     Pixel sample(Point unit,Transform::Sampling)const;
+    // sample()'s position in reduced-grid units, for callers that read the grid directly.
+    Point mapped(Point unit)const;
+    // Reduced pixels x..x+count-1 of row y, all inside the grid, under one cache lock.
+    void readPixels(int x,int y,int count,Pixel* output)const;
     double sampleGray(Point unit,Transform::Sampling,uint8_t exterior=0)const;
 private:
     friend class ReducedSourceCache;
@@ -68,6 +72,8 @@ private:
     SamplingGrid grid_;
     int level_{};
     Pixel readReducedPixel(int x,int y)const;
+    // A reduced tile through the current ReducedTileReadScope; valid until its next lookup.
+    const Raster::Tile& scopedTile(int tx,int ty)const;
 };
 class ReducedSourceCache {
 public:

@@ -4,17 +4,24 @@
 #include "StackRenderer.h"
 #include "LayerEffects.h"
 #include "RasterSampling.h"
+#include "BilinearRows.h"
+#include "CompositeRows.h"
 #include "SamplingSource.h"
 #include "Downsample.h"
 #include "ParallelBatch.h"
 #include <algorithm>
+#include <climits>
+#include <cstddef>
 #include <cmath>
 #include <numbers>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <type_traits>
 
 namespace compositor::graphics {
+// The row samplers read Pixel as its four packed bytes.
+static_assert(sizeof(Pixel)==4&&std::is_standard_layout_v<Pixel>&&offsetof(Pixel,r)==0&&offsetof(Pixel,a)==3);
 namespace {
 // clamp(lround(v),0,255) without the library call made for every channel of every sample.
 // Truncation then the exact fraction rounds halves away from zero like lround.
@@ -62,6 +69,24 @@ Pixel composite(Pixel a,Pixel b,Blend mode){
     return blendPixel(a,b,mode);
 }
 WidePixel composite(WidePixel a,WidePixel b,Blend mode){return blendWidePixel(a,b,mode);}
+// composite()'s opaque-destination Normal case for four packed pixels. A source
+// alpha of 255 leaves remaining 0, so the formula returns the source as well.
+// (v*0x8081)>>23 is v/255 for every v up to 255*255+127.
+bool opaque4(__m128i pixels){const auto alphas=_mm_set1_epi32(int(0xFF000000));return _mm_movemask_epi8(_mm_cmpeq_epi32(_mm_and_si128(pixels,alphas),alphas))==0xFFFF;}
+__m128i overOpaque4(__m128i destination,__m128i source){
+    const auto zero=_mm_setzero_si128(),alphas=_mm_set1_epi32(int(0xFF000000));
+    const auto half=[&](__m128i dst,__m128i src){
+        const auto alpha=_mm_shufflehi_epi16(_mm_shufflelo_epi16(src,_MM_SHUFFLE(3,3,3,3)),_MM_SHUFFLE(3,3,3,3));
+        const auto scaled=_mm_add_epi16(_mm_mullo_epi16(dst,_mm_sub_epi16(_mm_set1_epi16(255),alpha)),_mm_set1_epi16(127));
+        const auto quotient=_mm_srli_epi16(_mm_mulhi_epu16(scaled,_mm_set1_epi16(-32639)),7); // 0x8081
+        return _mm_min_epi16(_mm_add_epi16(src,quotient),_mm_set1_epi16(255));
+    };
+    const auto blended=_mm_or_si128(_mm_packus_epi16(half(_mm_unpacklo_epi8(destination,zero),_mm_unpacklo_epi8(source,zero)),
+        half(_mm_unpackhi_epi8(destination,zero),_mm_unpackhi_epi8(source,zero))),alphas);
+    // A transparent source returns the destination unchanged.
+    const auto transparent=_mm_cmpeq_epi32(_mm_and_si128(source,alphas),zero);
+    return _mm_or_si128(_mm_and_si128(transparent,destination),_mm_andnot_si128(transparent,blended));
+}
 struct Inverse {
     double cosine,sine,x,y,width,height,flipX,flipY;
     explicit Inverse(const Transform& t):x(t.x),y(t.y),width(t.width),height(t.height),flipX(t.flipX?-1.:1.),flipY(t.flipY?-1.:1.){
@@ -194,74 +219,272 @@ template<class P> class Render {
         const double slack=region.unitsPerPixel+1;
         return maxX+slack>left&&minX-slack<right&&maxY+slack>top&&minY-slack<bottom;
     }
-    void drawNormalStack(std::vector<P>& pixels)const{
+    // Pixels clamp(left+i,0,width-1) of image row y: the original raster, or the reduced grid.
+    static void readClampedRow(const Layer& layer,const ReducedSource* reduced,int width,int y,int left,int count,Pixel* output){
+        const auto read=[&](int x,int run,Pixel* into){
+            if(reduced){reduced->readPixels(x,y,run,into);return;}
+            const auto& raster=*layer.raster;const size_t columns=size_t(raster.width+255)/256;
+            while(run>0){const int chunk=std::min(run,256-(x&255));std::copy_n(raster.tiles[size_t(y>>8)*columns+size_t(x>>8)]->pixels.data()+size_t(y&255)*256+size_t(x&255),chunk,into);x+=chunk;into+=chunk;run-=chunk;}
+        };
+        const int before=std::clamp(-left,0,count),inside=std::clamp(std::min(left+count,width)-std::max(left,0),0,count-before);
+        if(inside>0)read(std::max(left,0),inside,output+before);
+        if(before){Pixel edge;read(0,1,&edge);std::fill_n(output,before,edge);}
+        if(before+inside<count){Pixel edge;read(width-1,1,&edge);std::fill_n(output+before+inside,count-before-inside,edge);}
+    }
+public:
+    struct NormalPlan {
+        struct Geometry {const Transform* transform{};const ReducedSource* reduced{};int width{},height{};double sine{};};
+        std::vector<int> stack;std::vector<uint8_t> repeatsAbove;std::vector<double> opacities;
+        std::vector<std::array<uint8_t,256>> scaled;std::vector<Blend> blends;std::vector<uint8_t> normal;
+        std::vector<Geometry> geometries;std::vector<int> geometryOf;
+        struct Fixed {bool ok{};uint32_t multiplier{},offset{};};std::vector<Fixed> fixedOpacity;
+    };
+    // The per-region part of the normal stack: nullopt when a layer needs drawOwn or adjust.
+    std::optional<NormalPlan> normalPlan()const{
+        if constexpr(!std::is_same_v<P,Pixel>)return std::nullopt;
+        else{
+        if(!parallel||order.size()<=1||!std::all_of(order.begin(),order.end(),[&](int index){
+            const auto& info=layers[size_t(index)];
+            const auto& layer=info.layer;
+            // A layer mask is part of shaped(). A folder mask varies per pixel, so drawOwn keeps it.
+            return info.source<0&&layer.raster&&!layer.deep&&layer.adjustmentJson.empty()&&!layer.effects.active()&&
+                std::none_of(info.ancestors.begin(),info.ancestors.end(),[&](int a){const auto& folder=layers[size_t(a)].layer;return folder.mask&&folder.mask->enabled&&folder.mask->raster;});
+        }))return std::nullopt;
+        NormalPlan plan;
         // A layer that shows the same raster object through an equal transform and
         // mask as the layer above it samples the same value at every point. The
         // caller guarantees no adjustment, effect, clipping, folder mask, preview or
         // deep data, so a folder only multiplies its children's opacity.
         // A layer reads nothing (transparent, a no-op in every blend) outside the
         // sampled extent of its image, so layers that miss this region are skipped.
-        std::vector<int> stack;stack.reserve(order.size());
+        auto& stack=plan.stack;stack.reserve(order.size());
         const double units=region.unitsPerPixel,left=region.x+offsetX*units,top=region.y+offsetY*units;
         const double right=left+region.width*units,bottom=top+region.height*units;
         for(int index:order)if(reaches(index,left,top,right,bottom))stack.push_back(index);
-        if(stack.empty())return;
-        std::vector<uint8_t> repeatsAbove(stack.size(),0);
+        if(stack.empty())return plan;
+        auto& repeatsAbove=plan.repeatsAbove;repeatsAbove.assign(stack.size(),0);
         for(size_t k=0;k+1<stack.size();++k){
             const auto& below=layers[size_t(stack[k])].layer;const auto& above=layers[size_t(stack[k+1])].layer;
             repeatsAbove[k]=below.raster==above.raster&&below.transform==above.transform&&below.mask==above.mask;
         }
         // drawOwn's opacity: the layer's own times folders(), whose unmasked
         // ancestors each contribute opacity*1, in the same order.
-        std::vector<double> opacities(stack.size());
-        std::vector<std::array<uint8_t,256>> scaled(stack.size());
+        auto& opacities=plan.opacities;opacities.resize(stack.size());
+        auto& scaled=plan.scaled;scaled.resize(stack.size());
         for(size_t k=0;k<stack.size();++k){
             const auto& info=layers[size_t(stack[k])];
             double folder=1;for(int a:info.ancestors)folder*=layers[size_t(a)].layer.opacity*1.;
             opacities[k]=info.layer.opacity*(folder*1.);
             if(opacities[k]!=1)for(int value=0;value<256;++value)scaled[k][size_t(value)]=byte(value*opacities[k]);
+            plan.fixedOpacity.emplace_back();
+            if(opacities[k]!=1)plan.fixedOpacity.back().ok=opacityFixedPoint(opacities[k],plan.fixedOpacity.back().multiplier,plan.fixedOpacity.back().offset);
         }
+        auto& blends=plan.blends;blends.resize(stack.size());
+        for(size_t k=0;k<stack.size();++k)blends[k]=layers[size_t(stack[k])].layer.blend;
+        for(const auto blend:blends)plan.normal.push_back(blend==Blend::Normal);
+        // Layers without a layer mask sampled bilinearly through an equal transform
+        // and image grid share their taps, so each geometry is mapped once per row.
+        auto& geometries=plan.geometries;auto& geometryOf=plan.geometryOf;geometryOf.assign(stack.size(),-1);
+        for(size_t k=0;k<stack.size();++k){
+            const auto& info=layers[size_t(stack[k])];const auto& l=info.layer;
+            if(l.transform.sampling==Transform::Sampling::Nearest||(l.mask&&l.mask->enabled&&l.mask->raster))continue;
+            typename NormalPlan::Geometry geometry{&l.transform,info.reducedImage.get(),info.reducedImage?info.reducedImage->grid().width:l.raster->width,info.reducedImage?info.reducedImage->grid().height:l.raster->height,info.imageInverse.sine};
+            const auto same=[&](const typename NormalPlan::Geometry& g){
+                if(*g.transform!=*geometry.transform||g.width!=geometry.width||g.height!=geometry.height||bool(g.reduced)!=bool(geometry.reduced))return false;
+                if(!g.reduced)return true;
+                const auto &a=g.reduced->grid(),&b=geometry.reduced->grid();
+                return a.x==b.x&&a.y==b.y&&a.step==b.step&&g.reduced->source()->width==geometry.reduced->source()->width&&g.reduced->source()->height==geometry.reduced->source()->height;
+            };
+            const auto found=std::find_if(geometries.begin(),geometries.end(),same);
+            geometryOf[k]=int(found-geometries.begin());
+            if(found==geometries.end())geometries.push_back(geometry);
+        }
+        return plan;
+        }
+    }
+    // Rows first..last-1 of the normal stack described by plan.
+    void drawNormalRows(const NormalPlan& plan,std::vector<P>& pixels,int first,int last,bool pollRows)const{
+        const auto& stack=plan.stack;const auto& repeatsAbove=plan.repeatsAbove;const auto& opacities=plan.opacities;
+        const auto& scaled=plan.scaled;const auto& blends=plan.blends;const auto& geometries=plan.geometries;const auto& geometryOf=plan.geometryOf;
+        if(stack.empty())return;
         const auto withOpacity=[&](Pixel p,size_t k){const auto& table=scaled[k];return Pixel{table[p.r],table[p.g],table[p.b],table[p.a]};};
-        runRows([&](int first,int last,bool pollRows){
+        {
             ReducedTileReadScope tiles;
-            std::vector<std::pair<P,Blend>> partial;
+            // One row at a time, one layer at a time from the top: each layer's
+            // samples for the row are read together instead of every layer per pixel.
+            const size_t width=size_t(region.width),count=stack.size();
+            // An unrotated layer (sine exactly 0) maps x from the column alone and y from
+            // the row alone, so its column taps hold for the whole band.
+            struct RowTaps {bool mapped{},uniform{},upright{},columnsMapped{};int y{},left{},right{};double fy{};std::vector<int> x;std::vector<double> fx,fxComplement;std::vector<float> fxWide,fxComplementWide;std::vector<uint8_t> inside;};
+            // Each layer keeps its last two source rows: the next output row usually
+            // reads one of them again, and always does when zoomed in.
+            struct Line {int y{INT_MIN},left{},span{};bool widened{};std::vector<uint32_t> packed;std::vector<float> wide;};
+            // Buffers stay with the thread between bands: a frame has hundreds of bands,
+            // and allocating and clearing them each time costs more than some bands do.
+            struct Scratch {std::vector<P> sources,raw;std::vector<int> stop;std::vector<double> centreX;std::vector<Point> points;std::vector<RowTaps> taps;std::vector<uint8_t> outside;std::vector<std::array<Line,2>> lines;};
+            static thread_local Scratch scratch;
+            const auto atLeast=[](auto& buffer,size_t size){if(buffer.size()<size)buffer.resize(size);};
+            atLeast(scratch.sources,count*width);atLeast(scratch.raw,width);atLeast(scratch.stop,width);atLeast(scratch.centreX,width);atLeast(scratch.points,width);
+            atLeast(scratch.taps,geometries.size());atLeast(scratch.outside,width);atLeast(scratch.lines,count);
+            auto& sources=scratch.sources;auto& raw=scratch.raw;auto& stop=scratch.stop;auto& centreX=scratch.centreX;auto& points=scratch.points;auto& taps=scratch.taps;auto& lines=scratch.lines;
+            const auto& outside=scratch.outside;
+            // position()'s pixel centres: x depends only on the column and y only on the row.
+            for(size_t column=0;column<width;++column)centreX[column]=region.x+(double(column+offsetX)+0.5)*region.unitsPerPixel;
+            for(size_t g=0;g<geometries.size();++g){auto& entry=taps[g];entry.mapped=entry.columnsMapped=false;entry.upright=geometries[g].sine==0;}
+            for(size_t k=0;k<count;++k)for(auto& slot:lines[k])slot.y=INT_MIN;
+            const bool wide=bilinearRowAvxAvailable();
+            const auto widenColumns=[&](RowTaps& entry){
+                entry.fxWide.resize(width*4);entry.fxComplementWide.resize(width*4);
+                widenWeights(entry.fx.data(),width,entry.fxWide.data());widenWeights(entry.fxComplement.data(),width,entry.fxComplementWide.data());
+            };
+            const auto line=[&](size_t k,const typename NormalPlan::Geometry& geometry,int y,int left,int span,const Line* keep)->const Line&{
+                for(auto& slot:lines[k])if(slot.y==y&&slot.left==left&&slot.span==span)return slot;
+                auto& slot=&lines[k][0]==keep?lines[k][1]:lines[k][0];
+                slot.y=y;slot.left=left;slot.span=span;slot.packed.resize(size_t(span));
+                readClampedRow(layers[size_t(stack[k])].layer,geometry.reduced,geometry.width,y,left,span,reinterpret_cast<Pixel*>(slot.packed.data()));
+                // Zoomed out, a sample reads few of a row's pixels and the next output row
+                // rarely reuses them, so the AVX sampler converts the four it reads instead.
+                slot.widened=wide&&size_t(span)*4<=width*5;
+                if(slot.widened){slot.wide.resize(size_t(span)*4);widenPixels(slot.packed.data(),size_t(span),slot.wide.data());}
+                return slot;
+            };
             for(int row=first;row<last;++row){
                 if(pollRows&&cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
-                const size_t begin=size_t(row)*region.width;
-                for(size_t i=begin;i<begin+region.width;++i){
-                    const auto point=position(i);
-                    P pixel{};
-                    P sampled{},previous{};double previousOpacity=0;
-                    for(size_t k=stack.size();k-->0;){
-                        const auto index=stack[k];
-                        const double opacity=opacities[k];
-                        P source;
-                        if(k+1<stack.size()&&repeatsAbove[k]){
-                            source=opacity==previousOpacity?previous:(opacity==1?sampled:withOpacity(sampled,k));
-                        }else{
-                            sampled=shaped(index,point);
-                            source=opacity==1?sampled:withOpacity(sampled,k);
+                const size_t begin=size_t(row)*width;
+                const double centreY=region.y+(double(size_t(row)+offsetY)+0.5)*region.unitsPerPixel;
+                bool pointsReady=false;
+                const auto rowPoints=[&]{if(!pointsReady){for(size_t column=0;column<width;++column)points[column]={centreX[column],centreY};pointsReady=true;}};
+                std::fill_n(stop.begin(),width,-1);
+                for(size_t g=0;g<geometries.size();++g)taps[g].mapped=false;
+                // Once every pixel of the row is opaque, no lower layer is read.
+                size_t active=width;
+                for(size_t k=count;k-->0&&active;){
+                    const int index=stack[k];
+                    const double opacity=opacities[k];
+                    P* source=sources.data()+k*width;
+                    const bool repeat=k+1<count&&repeatsAbove[k];
+                    const P* above=repeat?source+width:nullptr;
+                    const bool sameOpacity=repeat&&opacity==opacities[k+1];
+                    const RowTaps* rowTaps=nullptr;
+                    if constexpr(std::is_same_v<P,Pixel>)if(!repeat&&geometryOf[k]>=0){
+                        auto& entry=taps[size_t(geometryOf[k])];const auto& geometry=geometries[size_t(geometryOf[k])];
+                        // shaped()'s coordinates: imageInverse, then the reduced grid's mapping.
+                        const auto& inverse=layers[size_t(index)].imageInverse;
+                        const auto mapped=[&](Point centre){const auto unit=inverse(centre);return geometry.reduced?geometry.reduced->mapped(unit):unit;};
+                        if(entry.upright&&!entry.mapped){
+                            if(!entry.columnsMapped){
+                                entry.columnsMapped=true;entry.left=INT_MAX;entry.right=INT_MIN;
+                                entry.x.resize(width);entry.fx.resize(width);entry.fxComplement.resize(width);entry.inside.assign(width,0);
+                                for(size_t column=0;column<width;++column){
+                                    int tap;double fraction;
+                                    if(!bilinearTap(geometry.width,mapped({centreX[column],centreY}).x,tap,fraction))continue;
+                                    entry.inside[column]=1;entry.x[column]=tap;entry.fx[column]=fraction;entry.fxComplement[column]=1-fraction;
+                                    entry.left=std::min(entry.left,tap);entry.right=std::max(entry.right,tap+1);
+                                }
+                                if(wide)widenColumns(entry);
+                            }
+                            entry.mapped=entry.uniform=true;
+                            // Outside the image vertically, the whole row reads transparent.
+                            if(!bilinearTap(geometry.height,mapped({centreX[0],centreY}).y,entry.y,entry.fy))entry.y=INT_MIN;
+                        }else if(!entry.mapped){
+                            entry.mapped=true;entry.uniform=true;entry.left=INT_MAX;entry.right=INT_MIN;
+                            entry.x.resize(width);entry.fx.resize(width);entry.fxComplement.resize(width);entry.inside.assign(width,0);
+                            bool firstTap=true;
+                            for(size_t column=0;column<width;++column){
+                                BilinearTaps tap;
+                                if(!bilinearTaps(geometry.width,geometry.height,mapped({centreX[column],centreY}),tap))continue;
+                                if(firstTap){entry.y=tap.y;entry.fy=tap.fy;firstTap=false;}
+                                else if(tap.y!=entry.y||tap.fy!=entry.fy)entry.uniform=false;
+                                entry.inside[column]=1;entry.x[column]=tap.x;entry.fx[column]=tap.fx;entry.fxComplement[column]=1-tap.fx;
+                                entry.left=std::min(entry.left,tap.x);entry.right=std::max(entry.right,tap.x+1);
+                            }
+                            if(wide)widenColumns(entry);
                         }
-                        previous=source;previousOpacity=opacity;
-                        const Blend blend=layers[size_t(index)].layer.blend;
-                        // An opaque Normal layer replaces everything beneath it, so lower layers
-                        // are never sampled. Other blends read the pixels below and are replayed.
-                        if(blend==Blend::Normal&&alpha(source)==255){
-                            pixel=source;
-                            break;
-                        }
-                        if(blend!=Blend::Normal||alpha(source)!=0)partial.push_back({source,blend});
+                        // A rotated layer reads different source rows across the row and keeps shaped().
+                        if(entry.uniform)rowTaps=&entry;
                     }
-                    // Source-over rounds at each layer. Replay samples above
-                    // the opaque pixel in the original bottom-to-top order.
-                    for(auto sample=partial.rbegin();sample!=partial.rend();++sample)
-                        pixel=composite(pixel,sample->first,sample->second);
-                    partial.clear();
-                    pixels[i]=pixel;
+                    if(rowTaps){
+                        // Both source rows once, with sampleRasterPixels' edge clamping.
+                        const auto& geometry=geometries[size_t(geometryOf[k])];
+                        BilinearRow bilinear{};
+                        if(rowTaps->upright&&rowTaps->y==INT_MIN)bilinear.inside=outside.data();
+                        else if(rowTaps->left<=rowTaps->right){
+                            const int span=rowTaps->right-rowTaps->left+1;
+                            const auto& upper=line(k,geometry,std::clamp(rowTaps->y,0,geometry.height-1),rowTaps->left,span,nullptr);
+                            const auto& lower=line(k,geometry,std::clamp(rowTaps->y+1,0,geometry.height-1),rowTaps->left,span,&upper);
+                            bilinear={upper.packed.data(),lower.packed.data(),upper.widened?upper.wide.data():nullptr,upper.widened?lower.wide.data():nullptr,rowTaps->left,rowTaps->x.data(),rowTaps->fx.data(),rowTaps->fxComplement.data(),rowTaps->fxWide.data(),rowTaps->fxComplementWide.data(),rowTaps->inside.data(),rowTaps->fy,plan.fixedOpacity[k].ok,plan.fixedOpacity[k].multiplier,plan.fixedOpacity[k].offset};
+                        }else bilinear.inside=rowTaps->inside.data();
+                        // raw is only read by a lower layer that repeats this one.
+                        const bool rawNeeded=k>0&&repeatsAbove[k-1];
+                        active-=sampleBilinearRow(bilinear,stop.data(),blends[k]==Blend::Normal?int(k):-1,width,opacity,rawNeeded?reinterpret_cast<uint32_t*>(raw.data()):nullptr,reinterpret_cast<uint32_t*>(source));
+                        continue;
+                    }
+                    rowPoints();
+                    for(size_t column=0;column<width;++column){
+                        if(stop[column]>=0)continue;
+                        P value;
+                        if(repeat)value=sameOpacity?above[column]:(opacity==1?raw[column]:withOpacity(raw[column],k));
+                        else{raw[column]=shaped(index,points[column]);value=opacity==1?raw[column]:withOpacity(raw[column],k);}
+                        source[column]=value;
+                        // An opaque Normal layer replaces everything beneath it, so lower
+                        // layers are never sampled there. Other blends are replayed.
+                        if(blends[k]==Blend::Normal&&alpha(value)==255){stop[column]=int(k);--active;}
+                    }
                 }
+                // Source-over rounds at each layer: replay the samples above the
+                // opaque one bottom to top. Transparent samples are no-ops in every blend.
+                const auto replay=[&](size_t column,size_t from,P pixel){
+                    for(size_t k=from;k<count;++k){
+                        const P& value=sources[k*width+column];
+                        if(blends[k]!=Blend::Normal||alpha(value)!=0)pixel=composite(pixel,value,blends[k]);
+                    }
+                    pixels[begin+column]=pixel;
+                };
+                size_t column=0;
+                if constexpr(std::is_same_v<P,Pixel>){
+                    // Sixteen pixels that start at the same layer advance together, four
+                    // at a time while each four is opaque and the layer Normal, which
+                    // most layers are. Four independent chains keep the processor busy.
+                    constexpr size_t blocks=4;
+                    for(;column+4*blocks<=width;column+=4*blocks){
+                        const int opaque=stop[column];
+                        if(!std::all_of(stop.begin()+ptrdiff_t(column),stop.begin()+ptrdiff_t(column+4*blocks),[&](int value){return value==opaque;})){
+                            for(size_t j=column;j<column+4*blocks;++j)replay(j,size_t(stop[j]+1),stop[j]>=0?sources[size_t(stop[j])*width+j]:P{});
+                            continue;
+                        }
+                        if(compositeRowsAvx2Available()){
+                            // Eight pixels a register: the same arithmetic in AVX2 lanes. Other
+                            // layers come back here and use composite() for all sixteen.
+                            P* out=pixels.data()+begin+column;
+                            for(size_t j=0;j<4*blocks;++j)out[j]=opaque>=0?sources[size_t(opaque)*width+column+j]:P{};
+                            struct Context {const P* sources;size_t width,column;const Blend* blends;} context{sources.data(),width,column,blends.data()};
+                            compositeSixteenAvx2(reinterpret_cast<const uint32_t*>(sources.data())+column,width,plan.normal.data(),size_t(opaque+1),count,reinterpret_cast<uint32_t*>(out),
+                                [](void* data,size_t k,uint32_t* sixteen){
+                                    const auto& c=*static_cast<const Context*>(data);auto* pixel=reinterpret_cast<Pixel*>(sixteen);
+                                    for(size_t j=0;j<16;++j){const Pixel& v=c.sources[k*c.width+c.column+j];if(c.blends[k]!=Blend::Normal||v.a!=0)pixel[j]=composite(pixel[j],v,c.blends[k]);}
+                                },&context);
+                            continue;
+                        }
+                        std::array<__m128i,blocks> state;
+                        for(size_t b=0;b<blocks;++b)state[b]=opaque>=0?_mm_loadu_si128(reinterpret_cast<const __m128i*>(sources.data()+size_t(opaque)*width+column+4*b)):_mm_setzero_si128();
+                        for(size_t k=size_t(opaque+1);k<count;++k){
+                            const P* layerRow=sources.data()+k*width+column;
+                            for(size_t b=0;b<blocks;++b){
+                                const auto value=_mm_loadu_si128(reinterpret_cast<const __m128i*>(layerRow+4*b));
+                                if(blends[k]==Blend::Normal&&opaque4(state[b])){state[b]=overOpaque4(state[b],value);continue;}
+                                alignas(16) std::array<Pixel,4> four;_mm_store_si128(reinterpret_cast<__m128i*>(four.data()),state[b]);
+                                for(size_t j=0;j<4;++j){const P& v=layerRow[4*b+j];if(blends[k]!=Blend::Normal||alpha(v)!=0)four[j]=composite(four[j],v,blends[k]);}
+                                state[b]=_mm_load_si128(reinterpret_cast<const __m128i*>(four.data()));
+                            }
+                        }
+                        for(size_t b=0;b<blocks;++b)_mm_storeu_si128(reinterpret_cast<__m128i*>(pixels.data()+begin+column+4*b),state[b]);
+                    }
+                }
+                for(;column<width;++column)replay(column,size_t(stop[column]+1),stop[column]>=0?sources[size_t(stop[column])*width+column]:P{});
             }
-        });
+        }
     }
+private:
     void adjust(int index,std::vector<P>& pixels,bool folderClip)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;
         if(l.opacity==0||(folderClip&&std::any_of(info.ancestors.begin(),info.ancestors.end(),[&](int parent){return layers[size_t(parent)].layer.opacity==0;})))return;
@@ -312,14 +535,8 @@ public:
     auto run()const{
         std::vector<P> result(pixelCount);
         if constexpr(std::is_same_v<P,Pixel>){
-            if(parallel&&order.size()>1&&std::all_of(order.begin(),order.end(),[&](int index){
-                const auto& info=layers[size_t(index)];
-                const auto& layer=info.layer;
-                // A layer mask is part of shaped(). A folder mask varies per pixel, so drawOwn keeps it.
-                return info.source<0&&layer.raster&&!layer.deep&&layer.adjustmentJson.empty()&&!layer.effects.active()&&
-                    std::none_of(info.ancestors.begin(),info.ancestors.end(),[&](int a){const auto& folder=layers[size_t(a)].layer;return folder.mask&&folder.mask->enabled&&folder.mask->raster;});
-            })){
-                drawNormalStack(result);
+            if(const auto plan=normalPlan()){
+                runRows([&](int first,int last,bool pollRows){drawNormalRows(*plan,result,first,last,pollRows);});
                 return rasterFromPixels(result,region.width,region.height);
             }
         }
@@ -347,13 +564,62 @@ std::shared_ptr<const Raster> StackRenderer::render(const Document& d,int x,int 
     if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{double(x),double(y),width,height,1},adjustment_,preview_,0,0,deepAdjustment_).run());
     return Render<Pixel>(d,{double(x),double(y),width,height,1},adjustment_,preview_).run();
 }
-std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled)const{
+namespace {
+void validateScaled(double x,double y,int width,int height,double unitsPerPixel){
     if(width<1||height<1||width>30000||height>30000||uint64_t(width)*height>100000000||
        !std::isfinite(x)||!std::isfinite(y)||std::abs(x)>10000000||std::abs(y)>10000000||
        !std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768)
         throw std::invalid_argument("Invalid scaled render region");
+}
+}
+std::shared_ptr<const Raster> StackRenderer::renderScaled(const Document& d,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled)const{
+    validateScaled(x,y,width,height,unitsPerPixel);
     if(hdrDocument(d))return rasterFromDeep(*Render<WidePixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,deepAdjustment_,cancelled,true).run());
     return Render<Pixel>(d,{x,y,width,height,unitsPerPixel},adjustment_,preview_,0,0,{},cancelled,true).run();
+}
+std::vector<std::shared_ptr<const Raster>> StackRenderer::renderScaledTiles(const Document& d,const std::vector<ScaledTile>& tiles,double unitsPerPixel,const std::function<bool()>& cancelled)const{
+    for(const auto& tile:tiles){
+        validateScaled(tile.x,tile.y,tile.width,tile.height,unitsPerPixel);
+        if(tile.offsetX<0||tile.offsetY<0||tile.offsetX>30000-tile.width||tile.offsetY>30000-tile.height)throw std::invalid_argument("Invalid scaled tile offset");
+    }
+    std::vector<std::shared_ptr<const Raster>> result(tiles.size());
+    const auto poll=[&]{if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");};
+    // Jobs run in groups so that the caller's cancellation is polled between them.
+    const auto runGroups=[&](size_t count,const std::function<void(size_t)>& job){
+        constexpr size_t group=128;
+        for(size_t first=0;first<count;first+=group){poll();runParallelRenderBatch(std::min(group,count-first),[&](size_t index){job(first+index);});}
+        poll();
+    };
+    if(hdrDocument(d)||preview_){
+        runGroups(tiles.size(),[&](size_t i){
+            const auto& tile=tiles[i];
+            result[i]=tile.offsetX||tile.offsetY?renderScaledPatch(d,tile.x,tile.y,tile.offsetX,tile.offsetY,tile.width,tile.height,unitsPerPixel):renderScaled(d,tile.x,tile.y,tile.width,tile.height,unitsPerPixel);
+        });
+        return result;
+    }
+    std::vector<std::optional<Render<Pixel>>> renders(tiles.size());
+    std::vector<std::optional<Render<Pixel>::NormalPlan>> plans(tiles.size());
+    runGroups(tiles.size(),[&](size_t i){
+        renders[i].emplace(d,RenderRegion{tiles[i].x,tiles[i].y,tiles[i].width,tiles[i].height,unitsPerPixel},adjustment_,preview_,tiles[i].offsetX,tiles[i].offsetY,deepAdjustment_,std::function<bool()>{},true);
+        plans[i]=renders[i]->normalPlan();
+    });
+    // Bands of every tile together, so a slow tile or processor does not hold the frame.
+    struct Job {size_t tile;int first,last;};
+    std::vector<Job> jobs;
+    std::vector<std::vector<Pixel>> pixels(tiles.size());
+    constexpr int rowsPerBand=16;
+    for(size_t i=0;i<tiles.size();++i){
+        if(!plans[i]){jobs.push_back({i,-1,-1});continue;}
+        pixels[i].resize(size_t(tiles[i].width)*tiles[i].height);
+        for(int first=0;first<tiles[i].height;first+=rowsPerBand)jobs.push_back({i,first,std::min(first+rowsPerBand,tiles[i].height)});
+    }
+    runGroups(jobs.size(),[&](size_t j){
+        const auto& job=jobs[j];
+        if(job.first<0)result[job.tile]=renders[job.tile]->run();
+        else renders[job.tile]->drawNormalRows(*plans[job.tile],pixels[job.tile],job.first,job.last,false);
+    });
+    for(size_t i=0;i<tiles.size();++i)if(plans[i])result[i]=rasterFromPixels(pixels[i],tiles[i].width,tiles[i].height);
+    return result;
 }
 std::shared_ptr<const Raster> StackRenderer::renderScaledPatch(const Document& d,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const{
     if(offsetX<0||offsetY<0||width<1||height<1||offsetX>255||offsetY>255||width>256-offsetX||height>256-offsetY||!std::isfinite(tileX)||!std::isfinite(tileY)||std::abs(tileX)>10000000||std::abs(tileY)>10000000||!std::isfinite(unitsPerPixel)||unitsPerPixel<1./32||unitsPerPixel>32768||std::any_of(d.layers.begin(),d.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();}))throw std::invalid_argument("Invalid bounded non-adjustment render patch");
