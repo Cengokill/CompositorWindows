@@ -16,7 +16,9 @@
 
 namespace compositor::graphics {
 namespace {
-uint8_t byte(double v){return uint8_t(std::clamp(std::lround(v),0L,255L));}
+// clamp(lround(v),0,255) without the library call made for every channel of every sample.
+// Truncation then the exact fraction rounds halves away from zero like lround.
+uint8_t byte(double v){if(v>=255.5)return 255;if(!(v>=.5))return 0;const int whole=int(v);return uint8_t(whole+(v-whole>=.5));}
 Pixel scale(Pixel p,double v){return{byte(p.r*v),byte(p.g*v),byte(p.b*v),byte(p.a*v)};}
 Pixel interpolate(Pixel a,Pixel b,double t){return{byte(a.r+(b.r-a.r)*t),byte(a.g+(b.g-a.g)*t),byte(a.b+(b.b-a.b)*t),byte(a.a+(b.a-a.a)*t)};}
 Pixel opaque(Pixel p){unsigned a=p.a;auto c=[&](unsigned v){return uint8_t(a?std::min(255u,(v*255+a/2)/a):0);};return{c(p.r),c(p.g),c(p.b),255};}
@@ -45,6 +47,17 @@ Pixel composite(Pixel a,Pixel b,Blend mode){
             return uint8_t(std::min(255u,src+(dst*remaining+127)/255));
         };
         return {channel(a.r,b.r),channel(a.g,b.g),channel(a.b,b.b),255};
+    }
+    if(mode==Blend::Normal){
+        // blendPixel's Normal case, expression for expression (its mixed colour
+        // is the source colour), without the per-pixel dispatch and lround call.
+        const double da=a.a/255.,sa=b.a/255.;
+        if(sa==0)return a;
+        if(da==0)return b;
+        Pixel out;out.a=byte((sa+da-sa*da)*255);
+        const auto channel=[&](uint8_t dst,uint8_t src){const double bc=dst/(255.*da),sc=src/(255.*sa);return std::min(out.a,byte(255*(sa*(1-da)*sc+da*(1-sa)*bc+sa*da*sc)));};
+        out.r=channel(a.r,b.r);out.g=channel(a.g,b.g);out.b=channel(a.b,b.b);
+        return out;
     }
     return blendPixel(a,b,mode);
 }
@@ -162,15 +175,53 @@ template<class P> class Render {
         }
         });
     }
-    void drawNormalStack(std::vector<P>& pixels)const{
-        // A layer that shows the same raster object through an equal transform as
-        // the layer above it samples the same value at every point. The caller
-        // guarantees no mask, adjustment, effect, hierarchy, preview or deep data.
-        std::vector<uint8_t> repeatsAbove(order.size(),0);
-        for(size_t k=0;k+1<order.size();++k){
-            const auto& below=layers[size_t(order[k])].layer;const auto& above=layers[size_t(order[k+1])].layer;
-            repeatsAbove[k]=below.raster==above.raster&&below.transform==above.transform;
+    bool reaches(int index,double left,double top,double right,double bottom)const{
+        // Unit extent that sampling accepts: the image, or a reduction grid that can extend past it.
+        const auto& info=layers[size_t(index)];
+        double u0=0,v0=0,u1=1,v1=1;
+        if(info.reducedImage){
+            const auto& grid=info.reducedImage->grid();const auto& source=*info.reducedImage->source();
+            u0=std::min(0.,double(grid.x)/source.width);v0=std::min(0.,double(grid.y)/source.height);
+            u1=std::max(1.,(double(grid.x)+double(grid.width)*grid.step)/source.width);v1=std::max(1.,(double(grid.y)+double(grid.height)*grid.step)/source.height);
         }
+        double minX=INFINITY,minY=INFINITY,maxX=-INFINITY,maxY=-INFINITY;
+        for(const Point corner:{Point{u0,v0},Point{u1,v0},Point{u0,v1},Point{u1,v1}}){
+            const auto p=info.layer.transform.fromUnit(corner);
+            minX=std::min(minX,p.x);minY=std::min(minY,p.y);maxX=std::max(maxX,p.x);maxY=std::max(maxY,p.y);
+        }
+        if(!std::isfinite(minX)||!std::isfinite(minY)||!std::isfinite(maxX)||!std::isfinite(maxY))return true;
+        // A pixel and a document unit of slack cover the rounding between this and Inverse.
+        const double slack=region.unitsPerPixel+1;
+        return maxX+slack>left&&minX-slack<right&&maxY+slack>top&&minY-slack<bottom;
+    }
+    void drawNormalStack(std::vector<P>& pixels)const{
+        // A layer that shows the same raster object through an equal transform and
+        // mask as the layer above it samples the same value at every point. The
+        // caller guarantees no adjustment, effect, clipping, folder mask, preview or
+        // deep data, so a folder only multiplies its children's opacity.
+        // A layer reads nothing (transparent, a no-op in every blend) outside the
+        // sampled extent of its image, so layers that miss this region are skipped.
+        std::vector<int> stack;stack.reserve(order.size());
+        const double units=region.unitsPerPixel,left=region.x+offsetX*units,top=region.y+offsetY*units;
+        const double right=left+region.width*units,bottom=top+region.height*units;
+        for(int index:order)if(reaches(index,left,top,right,bottom))stack.push_back(index);
+        if(stack.empty())return;
+        std::vector<uint8_t> repeatsAbove(stack.size(),0);
+        for(size_t k=0;k+1<stack.size();++k){
+            const auto& below=layers[size_t(stack[k])].layer;const auto& above=layers[size_t(stack[k+1])].layer;
+            repeatsAbove[k]=below.raster==above.raster&&below.transform==above.transform&&below.mask==above.mask;
+        }
+        // drawOwn's opacity: the layer's own times folders(), whose unmasked
+        // ancestors each contribute opacity*1, in the same order.
+        std::vector<double> opacities(stack.size());
+        std::vector<std::array<uint8_t,256>> scaled(stack.size());
+        for(size_t k=0;k<stack.size();++k){
+            const auto& info=layers[size_t(stack[k])];
+            double folder=1;for(int a:info.ancestors)folder*=layers[size_t(a)].layer.opacity*1.;
+            opacities[k]=info.layer.opacity*(folder*1.);
+            if(opacities[k]!=1)for(int value=0;value<256;++value)scaled[k][size_t(value)]=byte(value*opacities[k]);
+        }
+        const auto withOpacity=[&](Pixel p,size_t k){const auto& table=scaled[k];return Pixel{table[p.r],table[p.g],table[p.b],table[p.a]};};
         runRows([&](int first,int last,bool pollRows){
             ReducedTileReadScope tiles;
             std::vector<std::pair<P,Blend>> partial;
@@ -181,15 +232,15 @@ template<class P> class Render {
                     const auto point=position(i);
                     P pixel{};
                     P sampled{},previous{};double previousOpacity=0;
-                    for(size_t k=order.size();k-->0;){
-                        const auto index=order[k];
-                        const double opacity=layers[size_t(index)].layer.opacity;
+                    for(size_t k=stack.size();k-->0;){
+                        const auto index=stack[k];
+                        const double opacity=opacities[k];
                         P source;
-                        if(k+1<order.size()&&repeatsAbove[k]){
-                            source=opacity==previousOpacity?previous:(opacity==1?sampled:scale(sampled,opacity));
+                        if(k+1<stack.size()&&repeatsAbove[k]){
+                            source=opacity==previousOpacity?previous:(opacity==1?sampled:withOpacity(sampled,k));
                         }else{
                             sampled=shaped(index,point);
-                            source=opacity==1?sampled:scale(sampled,opacity);
+                            source=opacity==1?sampled:withOpacity(sampled,k);
                         }
                         previous=source;previousOpacity=opacity;
                         const Blend blend=layers[size_t(index)].layer.blend;
@@ -264,8 +315,9 @@ public:
             if(parallel&&order.size()>1&&std::all_of(order.begin(),order.end(),[&](int index){
                 const auto& info=layers[size_t(index)];
                 const auto& layer=info.layer;
-                return info.parent<0&&info.source<0&&layer.raster&&!layer.deep&&!layer.mask&&
-                    layer.adjustmentJson.empty()&&!layer.effects.active();
+                // A layer mask is part of shaped(). A folder mask varies per pixel, so drawOwn keeps it.
+                return info.source<0&&layer.raster&&!layer.deep&&layer.adjustmentJson.empty()&&!layer.effects.active()&&
+                    std::none_of(info.ancestors.begin(),info.ancestors.end(),[&](int a){const auto& folder=layers[size_t(a)].layer;return folder.mask&&folder.mask->enabled&&folder.mask->raster;});
             })){
                 drawNormalStack(result);
                 return rasterFromPixels(result,region.width,region.height);

@@ -19,7 +19,7 @@ template<class Reader> inline Pixel sampleRasterPixels(int width,int height,cons
     double x=unit.x*width,y=unit.y*height;
     if(!std::isfinite(x)||!std::isfinite(y)||x<0||y<0||x>=width||y>=height)return {};
     if(sampling==Transform::Sampling::Nearest)return pixel(int(x),int(y));
-    x-=.5;y-=.5;const int ix=int(std::floor(x)),iy=int(std::floor(y));const double fx=x-ix,fy=y-iy;
+    x-=.5;y-=.5;const int ix=floorToInt(x),iy=floorToInt(y);const double fx=x-ix,fy=y-iy;
     const auto get=[&](int xx,int yy){return pixel(std::clamp(xx,0,width-1),std::clamp(yy,0,height-1));};
     const auto p00=get(ix,iy),p10=get(ix+1,iy),p01=get(ix,iy+1),p11=get(ix+1,iy+1);
     const auto bilinear=[&](__m128d a,__m128d b,__m128d c,__m128d d){
@@ -43,6 +43,11 @@ template<class Reader> inline Pixel sampleRasterPixels(int width,int height,cons
     const auto channels=uint32_t(_mm_cvtsi128_si32(packed));
     return {uint8_t(channels),uint8_t(channels>>8),uint8_t(channels>>16),uint8_t(channels>>24)};
 }
-inline Pixel sampleRaster(const Raster& raster,Point unit,Transform::Sampling sampling){return sampleRasterPixels(raster.width,raster.height,[&](int x,int y){return raster.pixel(x,y);},unit,sampling);}
+// The sampler only reads clamped in-bounds pixels, so read the tile directly
+// instead of calling Raster::pixel and its bounds check for each of four taps.
+inline Pixel sampleRaster(const Raster& raster,Point unit,Transform::Sampling sampling){
+    const size_t columns=size_t(raster.width+255)/256;
+    return sampleRasterPixels(raster.width,raster.height,[&](int x,int y){return raster.tiles[size_t(y>>8)*columns+size_t(x>>8)]->pixels[size_t(y&255)*256+size_t(x&255)];},unit,sampling);
+}
 inline double sampleGray(const GrayRaster& raster,Point unit,Transform::Sampling sampling,uint8_t exterior=0){return sampleMask(raster,unit,sampling,exterior);}
 }

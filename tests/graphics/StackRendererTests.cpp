@@ -111,6 +111,109 @@ int main(){
             }
         }
     });
+    test("normal-composite-matches-core-blend-pixel-and-lround",[]{
+        // Every destination and source alpha, through the renderer's own rounding and
+        // Normal composite, against core blendPixel with std::lround opacity scaling.
+        constexpr int side=256;
+        const auto lround=[](double v){return uint8_t(std::clamp(std::lround(v),0L,255L));};
+        for(int pattern=0;pattern<3;++pattern)for(const double opacity:{1.,.37,.99,.5}){
+            std::vector<uint8_t> below(size_t(side)*side*4),above(below.size());
+            for(int y=0;y<side;++y)for(int x=0;x<side;++x){
+                const auto da=uint8_t(y),sa=uint8_t(x);
+                auto* d=&below[(size_t(y)*side+x)*4];auto* s=&above[(size_t(y)*side+x)*4];
+                d[0]=uint8_t(pattern==0?da:da*(x%7)/6);d[1]=uint8_t(da/2);d[2]=uint8_t(pattern==2?da*(y%3)/2:da/3);d[3]=da;
+                s[0]=uint8_t(pattern==0?sa:sa*(y%5)/4);s[1]=uint8_t(sa/3);s[2]=uint8_t(pattern==1?sa:sa*(x%3)/2);s[3]=sa;
+            }
+            Document document;document.width=document.height=side;
+            for(const auto* bytes:{&below,&above}){Layer l;l.id=bytes==&below?"below":"above";l.raster=Raster::fromRgba(side,side,bytes->data(),size_t(side)*4);l.transform={0,0,side,side,0,false,false,Transform::Sampling::Nearest};document.layers.push_back(std::move(l));}
+            document.layers.back().opacity=opacity;
+            const auto actual=StackRenderer().renderScaled(document,0,0,side,side,1);
+            for(int y=0;y<side;++y)for(int x=0;x<side;++x){
+                const auto* d=&below[(size_t(y)*side+x)*4];const auto* s=&above[(size_t(y)*side+x)*4];
+                Pixel source{s[0],s[1],s[2],s[3]};
+                if(opacity!=1)source={lround(source.r*opacity),lround(source.g*opacity),lround(source.b*opacity),lround(source.a*opacity)};
+                const Pixel destination{d[0],d[1],d[2],d[3]};
+                const auto expected=destination.a==255&&source.a==255?source:blendPixel(destination,source,Blend::Normal);
+                if(destination.a==255&&source.a!=255&&source.a!=0)continue; // The opaque-destination integer path predates this test.
+                require(actual->pixel(x,y)==expected,"Normal composite differs from core blendPixel");
+            }
+        }
+    });
+    test("masked-and-grouped-stack-matches-per-layer-reference",[]{
+        constexpr int w=269,h=273;
+        std::vector<uint8_t> bytes(size_t(w)*h*4);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+            const uint8_t a=uint8_t(x<30||y>240?(x*5+y*7)%256:(x%7?255:90+x%100));
+            auto* p=&bytes[(size_t(y)*w+x)*4];p[0]=uint8_t((x*3+y)%256*a/255);p[1]=uint8_t((x+y*5)%256*a/255);p[2]=uint8_t((x*11+y*2)%256*a/255);p[3]=a;
+        }
+        const auto raster=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);
+        auto gradient=std::make_shared<GrayRaster>();gradient->width=97;gradient->height=61;gradient->pixels.resize(size_t(97)*61);
+        for(int y=0;y<61;++y)for(int x=0;x<97;++x)gradient->pixels[size_t(y)*97+x]=uint8_t((x*9+y*4)%256);
+        const std::array<Blend,8> blends{Blend::Normal,Blend::Multiply,Blend::Normal,Blend::Normal,Blend::Screen,Blend::Normal,Blend::Normal,Blend::Normal};
+        const std::array<double,8> opacities{1,1,.8,.8,1,.6,1,.99};
+        for(const bool folderMask:{false,true})for(const bool duplicates:{false,true}){
+            Document document;document.width=w;document.height=h;
+            Layer outer;outer.id="outer";outer.group=true;outer.opacity=.75;outer.transform={0,0,w,h};
+            Layer inner;inner.id="inner";inner.group=true;inner.parentId="outer";inner.opacity=.5;inner.transform={0,0,w,h};
+            if(folderMask)inner.mask=Mask{gradient};
+            document.layers={outer,inner};
+            for(size_t i=0;i<blends.size();++i){
+                Layer l;l.id="layer-"+std::to_string(i);l.raster=duplicates&&i%2?document.layers.back().raster:std::make_shared<Raster>(*raster);
+                l.blend=blends[i];l.opacity=opacities[i];
+                l.transform=duplicates&&i%2?document.layers.back().transform:Transform{i%3*.25,i%2*.5,w,h};
+                if(i==2||i==3)l.mask=Mask{gradient};
+                if(i==4)l.mask=Mask{gradient,true,true,Transform{10,20,120,90}};
+                if(i>=2&&i<5)l.parentId="inner";else if(i>=5&&i<7)l.parentId="outer";
+                document.layers.push_back(std::move(l));
+            }
+            auto preview=std::make_shared<LayerRenderPreview>();
+            preview->layer=document.layers.back();
+            preview->identity=std::make_shared<int>(0);
+            for(double units:{.625,1.,1.91,3.25,5.}){
+                const auto candidate=StackRenderer().renderScaled(document,-.75,-.125,256,256,units);
+                const auto reference=StackRenderer({},preview).renderScaled(document,-.75,-.125,256,256,units);
+                require(candidate->rgba()==reference->rgba(),"Masked or grouped stack differed from per-layer reference");
+            }
+        }
+    });
+    test("layers-outside-the-region-are-skipped-without-changing-pixels",[]{
+        // Layer edges just inside and just outside each side of the region, at
+        // direct and reduced scales, with rotation, flips and blend modes.
+        constexpr int w=181,h=143;
+        std::vector<uint8_t> bytes(size_t(w)*h*4);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+            const uint8_t a=uint8_t(x<9||y<5||x>w-7?(x*5+y*7)%256:(x%7?255:90+x%100));
+            auto* p=&bytes[(size_t(y)*w+x)*4];p[0]=uint8_t((x*3+y)%256*a/255);p[1]=uint8_t((x+y*5)%256*a/255);p[2]=uint8_t((x*11+y*2)%256*a/255);p[3]=a;
+        }
+        const auto raster=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);
+        for(double units:{.625,1.,1.91,3.25,5.})for(const Point origin:{Point{-.75,-.125},Point{1203.5,611.25}}){
+            Document document;document.width=4000;document.height=3000;
+            Layer background;background.id="background";background.raster=Raster::filled(64,48,{30,60,90,200});background.transform={0,0,4000,3000};
+            document.layers.push_back(background);
+            const double side=256*units;
+            int i=0;
+            // Small layers read deep reduction levels, whose grid overhangs the image edge.
+            for(double scale:{.4,.2,.13,.05,.035})for(double d:{-2.5,-.6,-.4,0.,.4,.6,2.5,8.}){
+                const double lw=w*units*scale,lh=h*units*scale;
+                const double gap=d*units;
+                const std::array<Transform,4> placed{{
+                    {origin.x+side+gap,origin.y+side/3,lw,lh},{origin.x-lw-gap,origin.y+side/2,lw,lh},
+                    {origin.x+side/4,origin.y+side+gap,lw,lh},{origin.x+side/2,origin.y-lh-gap,lw,lh}}};
+                for(auto transform:placed){
+                    Layer l;l.id="edge-"+std::to_string(i);l.raster=std::make_shared<Raster>(*raster);
+                    transform.flipX=i%3==1;transform.flipY=i%5==2;if(i%7==3)transform.rotation=90;
+                    l.transform=transform;l.opacity=i%2?.85:1;l.blend=i%6==5?Blend::Multiply:Blend::Normal;
+                    document.layers.push_back(std::move(l));++i;
+                }
+            }
+            auto preview=std::make_shared<LayerRenderPreview>();
+            preview->layer=document.layers.back();
+            preview->identity=std::make_shared<int>(0);
+            const auto candidate=StackRenderer().renderScaled(document,origin.x,origin.y,256,256,units);
+            const auto reference=StackRenderer({},preview).renderScaled(document,origin.x,origin.y,256,256,units);
+            require(candidate->rgba()==reference->rgba(),"Skipping layers outside the region changed the composite");
+        }
+    });
     test("G-R-013-placed-mask-exterior-edge-majority",[]{Document d;auto image=layer("image",{255,0,0,255},8,4);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=3;gray->pixels.assign(9,255);gray->pixels[4]=0;image.mask=Mask{gray};image.mask->placement=Transform{2,0,3,3,0,false,false,Transform::Sampling::Nearest};d.layers={image};
         auto white=StackRenderer().render(d,0,0,8,4);require(white->pixel(0,0).a==255&&white->pixel(7,3).a==255&&white->pixel(3,1).a==0,"Reveal mask exterior or center differs");
         gray=std::make_shared<GrayRaster>(*gray);gray->pixels.assign(9,0);gray->pixels[4]=255;d.layers[0].mask->raster=gray;auto black=StackRenderer().render(d,0,0,8,4);require(black->pixel(0,0).a==0&&black->pixel(7,3).a==0&&black->pixel(3,1).a==255,"Hide mask exterior or center differs");

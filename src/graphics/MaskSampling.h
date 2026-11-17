@@ -7,6 +7,8 @@
 #include <unordered_map>
 
 namespace compositor::graphics {
+// std::floor of an in-range sample coordinate without the library call made per tap.
+inline int floorToInt(double v){const int whole=int(v);return whole-(v<whole);}
 // An optional supplied thumbnail reproduces the source threshold exactly.
 // Otherwise masks larger than96 pixels use an area-downsample approximation
 // to the source CoreGraphics high-quality thumbnail (not Mac differential).
@@ -39,7 +41,7 @@ template<class Reader> inline double sampleMaskPixels(int width,int height,const
     double x=unit.x*width,y=unit.y*height;
     if(!std::isfinite(x)||!std::isfinite(y)||x<0||y<0||x>=width||y>=height)return exterior/255.;
     if(sampling==Transform::Sampling::Nearest)return pixel(int(x),int(y))/255.;
-    x-=.5;y-=.5;const int ix=int(std::floor(x)),iy=int(std::floor(y));const double fx=x-ix,fy=y-iy;
+    x-=.5;y-=.5;const int ix=floorToInt(x),iy=floorToInt(y);const double fx=x-ix,fy=y-iy;
     const auto get=[&](int xx,int yy){return double(pixel(std::clamp(xx,0,width-1),std::clamp(yy,0,height-1)));};
     return ((1-fy)*((1-fx)*get(ix,iy)+fx*get(ix+1,iy))+fy*((1-fx)*get(ix,iy+1)+fx*get(ix+1,iy+1)))/255.;
 }
