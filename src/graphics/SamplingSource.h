@@ -42,7 +42,10 @@ private:
         int x{},y{};
         std::shared_ptr<const Raster::Tile> tile;
     };
-    std::array<Entry,8> entries_;
+    // Each layer of a deep stack reads its own tiles for every pixel, so the table must hold the
+    // tiles of many sources at once. Eight direct-mapped entries sent every sample to the shared mutex.
+    static constexpr size_t entryCount=512;
+    std::array<Entry,entryCount> entries_;
     ReducedTileReadScope* previous_{};
 };
 
