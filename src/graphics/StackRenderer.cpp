@@ -173,7 +173,7 @@ template<class P> class Render {
         }
         runRows([&](int first,int last,bool pollRows){
             ReducedTileReadScope tiles;
-            std::vector<P> partial;
+            std::vector<std::pair<P,Blend>> partial;
             for(int row=first;row<last;++row){
                 if(pollRows&&cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
                 const size_t begin=size_t(row)*region.width;
@@ -192,16 +192,19 @@ template<class P> class Render {
                             source=opacity==1?sampled:scale(sampled,opacity);
                         }
                         previous=source;previousOpacity=opacity;
-                        if(alpha(source)==255){
+                        const Blend blend=layers[size_t(index)].layer.blend;
+                        // An opaque Normal layer replaces everything beneath it, so lower layers
+                        // are never sampled. Other blends read the pixels below and are replayed.
+                        if(blend==Blend::Normal&&alpha(source)==255){
                             pixel=source;
                             break;
                         }
-                        if(alpha(source)!=0)partial.push_back(source);
+                        if(blend!=Blend::Normal||alpha(source)!=0)partial.push_back({source,blend});
                     }
                     // Source-over rounds at each layer. Replay samples above
                     // the opaque pixel in the original bottom-to-top order.
                     for(auto sample=partial.rbegin();sample!=partial.rend();++sample)
-                        pixel=composite(pixel,*sample,Blend::Normal);
+                        pixel=composite(pixel,sample->first,sample->second);
                     partial.clear();
                     pixels[i]=pixel;
                 }
@@ -262,7 +265,7 @@ public:
                 const auto& info=layers[size_t(index)];
                 const auto& layer=info.layer;
                 return info.parent<0&&info.source<0&&layer.raster&&!layer.deep&&!layer.mask&&
-                    layer.blend==Blend::Normal&&layer.adjustmentJson.empty()&&!layer.effects.active();
+                    layer.adjustmentJson.empty()&&!layer.effects.active();
             })){
                 drawNormalStack(result);
                 return rasterFromPixels(result,region.width,region.height);

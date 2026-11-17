@@ -83,6 +83,34 @@ int main(){
             }
         }
     });
+    test("scaled-stack-with-blend-modes-matches-bottom-to-top-reference",[]{
+        constexpr int w=269,h=273;
+        std::vector<uint8_t> bytes(size_t(w)*h*4);
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+            const uint8_t a=uint8_t(x<30||y>240?(x*5+y*7)%256:(x%7?255:90+x%100));
+            auto* p=&bytes[(size_t(y)*w+x)*4];p[0]=uint8_t((x*3+y)%256*a/255);p[1]=uint8_t((x+y*5)%256*a/255);p[2]=uint8_t((x*11+y*2)%256*a/255);p[3]=a;
+        }
+        const auto raster=Raster::fromRgba(w,h,bytes.data(),size_t(w)*4);
+        const std::array<Blend,9> blends{Blend::Normal,Blend::Multiply,Blend::Normal,Blend::Screen,Blend::Overlay,Blend::Normal,Blend::SoftLight,Blend::Multiply,Blend::Normal};
+        const std::array<double,9> opacities{1,1,.8,1,.6,1,1,.5,1};
+        for(const bool distinct:{false,true})for(const size_t opaqueAt:{size_t(3),size_t(5),size_t(100)}){
+            Document document;document.width=w;document.height=h;
+            for(size_t i=0;i<blends.size();++i){
+                Layer l;l.id="blend-"+std::to_string(i);l.raster=distinct?std::make_shared<Raster>(*raster):raster;l.blend=blends[i];l.opacity=opacities[i];
+                l.transform={i%3*.25,i%2*.5,w,h};
+                if(i==opaqueAt)l.raster=Raster::filled(w,h,{20,90,160,255});
+                document.layers.push_back(std::move(l));
+            }
+            auto preview=std::make_shared<LayerRenderPreview>();
+            preview->layer=document.layers.back();
+            preview->identity=std::make_shared<int>(0);
+            for(double units:{.625,1.,1.91,3.25,5.}){
+                const auto candidate=StackRenderer().renderScaled(document,-.75,-.125,256,256,units);
+                const auto reference=StackRenderer({},preview).renderScaled(document,-.75,-.125,256,256,units);
+                require(candidate->rgba()==reference->rgba(),"Blend stack differed from bottom-to-top reference");
+            }
+        }
+    });
     test("G-R-013-placed-mask-exterior-edge-majority",[]{Document d;auto image=layer("image",{255,0,0,255},8,4);auto gray=std::make_shared<GrayRaster>();gray->width=gray->height=3;gray->pixels.assign(9,255);gray->pixels[4]=0;image.mask=Mask{gray};image.mask->placement=Transform{2,0,3,3,0,false,false,Transform::Sampling::Nearest};d.layers={image};
         auto white=StackRenderer().render(d,0,0,8,4);require(white->pixel(0,0).a==255&&white->pixel(7,3).a==255&&white->pixel(3,1).a==0,"Reveal mask exterior or center differs");
         gray=std::make_shared<GrayRaster>(*gray);gray->pixels.assign(9,0);gray->pixels[4]=255;d.layers[0].mask->raster=gray;auto black=StackRenderer().render(d,0,0,8,4);require(black->pixel(0,0).a==0&&black->pixel(7,3).a==0&&black->pixel(3,1).a==255,"Hide mask exterior or center differs");
