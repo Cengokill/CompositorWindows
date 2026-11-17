@@ -14,7 +14,10 @@
 #include <QColorDialog>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QKeyEvent>
+#include <QTabBar>
 #include <QComboBox>
 #include <QTimer>
 #include <QSignalBlocker>
@@ -201,6 +204,33 @@ void MainWindow::stepSelectionAutoscroll(){
     updateSelection({pixel.x(),pixel.y()},selectionModifiers_,false);
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event){
+    if(tabs_&&(event->type()==QEvent::DragEnter||event->type()==QEvent::DragMove||event->type()==QEvent::Drop)){
+        auto* widget=qobject_cast<QWidget*>(watched);
+        auto* bar=tabs_->tabBar();
+        auto* corner=tabs_->cornerWidget(Qt::TopRightCorner);
+        const bool tabStrip=widget&&widget->window()==this&&((bar&&(widget==bar||bar->isAncestorOf(widget)))||(corner&&(widget==corner||corner->isAncestorOf(widget))));
+        if(tabStrip){
+            auto* drag=static_cast<QDropEvent*>(event);
+            const QPoint where=widget->mapTo(this,drag->position().toPoint());
+            if(event->type()==QEvent::Drop){
+                QDropEvent forwarded(where,drag->possibleActions(),drag->mimeData(),drag->buttons(),drag->modifiers());
+                dropEvent(&forwarded);
+                drag->setDropAction(forwarded.dropAction());
+                if(forwarded.isAccepted())drag->accept();else drag->ignore();
+            }else{
+                acceptWorkspaceDrag(drag,where);
+                // A rejected DragEnter leaves no Qt target, so later DragMove events never arrive.
+                // Accept every move with a one-pixel answer and use IgnoreAction until the tab is legal.
+                if(auto* move=dynamic_cast<QDragMoveEvent*>(drag)){
+                    const QRect here(move->position().toPoint(),QSize(1,1));
+                    const bool allowed=move->isAccepted()&&move->dropAction()!=Qt::IgnoreAction;
+                    if(!allowed)move->setDropAction(Qt::IgnoreAction);
+                    move->accept(here);
+                }
+            }
+            return true;
+        }
+    }
     // Escape leaves canvas-only mode before the canvas or text handlers can cancel a crop, gradient, transform, or text draft.
     // A held canvas gesture keeps Escape, which cancels that gesture as usual.
     if(canvasOnly_&&event->type()==QEvent::KeyPress&&static_cast<QKeyEvent*>(event)->key()==Qt::Key_Escape){

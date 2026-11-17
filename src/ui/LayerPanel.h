@@ -11,10 +11,16 @@
 #include <QImage>
 #include <QSizeF>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <vector>
+
+class QDrag;
+class QPainter;
 
 namespace compositor::ui {
 enum class DropZone { Above, IntoGroup, Bottom };
+struct DropCue { std::string id; DropZone zone{}; };
 enum class MaskCommand { AddReveal, AddHide, RevealAll, HideAll, ToggleEnabled, Delete, ToggleLink, EditImage, EditMask, LoadAlpha, LoadBlack };
 struct PanelState {
     const Document* document{};
@@ -64,6 +70,10 @@ public:
         std::function<void(const std::string&,bool)> setVisibilityInSwipe;
         std::function<void()> endVisibilitySwipe;
         std::function<QObject*()> dragOwner;
+        // A layer drag from another project window. The point is global.
+        std::function<bool(const QMimeData*,QPoint,Qt::KeyboardModifiers,bool drop)> deliverExternalDrop;
+        // Copy a layer from another project into this panel's list. perform is false for the live cursor.
+        std::function<bool(const QMimeData*,const std::string&,DropZone,bool perform)> incomingLayerDrop;
         // Thumbnail enablement and target selection have a narrower source
         // guard than structural layer edits. Selection may retain a draft.
         std::function<bool()> targetEnabled;
@@ -79,6 +89,8 @@ public:
     QMimeData* dragMime(bool maskCopy=false) const;
     bool accepts(const QMimeData*,const QPoint&,Qt::KeyboardModifiers) const;
     bool performDrop(const QMimeData*,const QPoint&,Qt::KeyboardModifiers);
+    std::optional<DropCue> dropCue() const;
+    int layerDragShift(const std::string&) const;
     static LayerPanelController* find(QTreeWidget*);
     void finishVisibilitySwipe();
     void refreshCursor(Qt::KeyboardModifiers,const QPoint& viewportPoint);
@@ -120,5 +132,16 @@ private:
     void contextMenu(const QPoint&);
     void selectionChanged();
     void invoke(const std::function<void()>&);
+    struct DragFeedback;
+    std::unique_ptr<DragFeedback> drag_;
+    void updateDragFeedback(const QMimeData*,const QPoint&,Qt::KeyboardModifiers,bool incoming=false);
+    bool incomingLayerDrag(const QMimeData*) const;
+    void dismissDragCue();
+    void clearDragFeedback();
+    void cacheDragRows();
+    void paintDragFeedback(QPainter&) const;
+    void autoScrollDrag();
+    int shownShift(const std::string&) const;
+    void armDragGhost(QDrag&,bool maskCopy) const;
 };
 }
