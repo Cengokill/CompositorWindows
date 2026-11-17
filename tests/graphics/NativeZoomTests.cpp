@@ -253,6 +253,7 @@ void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
     require(pixelDifference(stretched,final)>0,"Frame oracle accepted a resampled placeholder");
     int maximum=0;
     for(const auto& frame:frames){
+        if(!frame.viewportReady)continue;// A placeholder is a scaled older patch by design.
         const auto expected=captureReference(frame.zoom,frame.pan);
         maximum=std::max(maximum,pixelDifference(frame.pixels,expected));
     }
@@ -268,6 +269,7 @@ void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
     for(int notch=0;notch<6;++notch)wheel(canvas,anchor,1);
     waitUntil(expectFinal);
     canvas.observePresentation={};
+    frames.erase(std::remove_if(frames.begin(),frames.end(),[](const auto& frame){return !frame.viewportReady;}),frames.end());
     require(frames.size()>=2,"A burst of wheel notches presented no intermediate frame");
     require(std::abs(frames.front().zoom-burstStart*1.25)<burstStart*1e-9,"First burst frame skipped its notch");
     require(std::abs(canvas.zoom-burstStart*std::pow(1.25,6))<canvas.zoom*1e-9,"Folded wheel notches changed the final zoom");
@@ -313,11 +315,19 @@ void checkFrames(bool lens,int interval,const std::filesystem::path& photo={}){
     wheel(canvas,anchor,-1);
     canvas.repaint();
     QApplication::processEvents();
-    require(frames.empty(),"Canvas presented a frame while its zoom render was held");
+    // While the exact patch is held, the last patch is shown through the new mapping as a placeholder.
+    // It is never reported as a ready frame and it is not the exact render.
+    require(!frames.empty(),"Canvas showed nothing while its zoom render was held");
+    require(std::none_of(frames.begin(),frames.end(),[](const auto& frame){return frame.viewportReady;}),
+        "Canvas presented a ready frame while its zoom render was held");
+    require(frames.back().zoom==canvas.zoom&&frames.back().pan==canvas.pan,"The zoom placeholder did not follow the new zoom");
+    require(pixelDifference(frames.back().pixels,captureReference(frames.back().zoom,frames.back().pan))>0,
+        "The zoom placeholder was identical to the exact render");
     auto& other=window.addProject(fixture(96,1,0,false,false),"Zoom test second tab",false);
     other.canvas->repaint();
     auto* tabs=qobject_cast<QTabWidget*>(window.centralWidget());
     require(tabs&&tabs->currentWidget()==other.page,"Second test project did not become active");
+    frames.clear();
     gate->store(true);
     QApplication::processEvents();
     require(frames.empty(),"A hidden canvas presented a zoom result");

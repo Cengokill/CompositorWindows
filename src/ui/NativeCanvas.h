@@ -118,7 +118,8 @@ private:
     double navigatorOriginX_{},navigatorOriginY_{},navigatorUnits_{1};
     void refreshNavigator();
     void drawNavigator();
-    void drawDocumentStandIn(D2D1_RECT_F bounds);
+    void drawDocumentStandIn(D2D1_RECT_F bounds,bool zoomStandIn=false);
+    bool canDrawZoomStandIn()const;
     bool sharpPatchCoversView() const;
     void ensureNavigatorBitmap();
     bool navigatorContains(QPointF) const;
