@@ -240,16 +240,33 @@ public:
         struct Fixed {bool ok{};uint32_t multiplier{},offset{};};std::vector<Fixed> fixedOpacity;
     };
     // The per-region part of the normal stack: nullopt when a layer needs drawOwn or adjust.
-    std::optional<NormalPlan> normalPlan()const{
+    // run()'s layers as steps: runs of layers for the normal stack, and the adjustment
+    // layers between them. nullopt when a layer needs drawOwn's general path.
+    struct StackStep {int adjustment{-1};NormalPlan segment;};
+    std::optional<std::vector<StackStep>> stackSteps()const{
         if constexpr(!std::is_same_v<P,Pixel>)return std::nullopt;
         else{
         if(!parallel||order.size()<=1||!std::all_of(order.begin(),order.end(),[&](int index){
             const auto& info=layers[size_t(index)];
             const auto& layer=info.layer;
+            // An adjustment reads and replaces the whole composite below it, as in run().
+            if(!layer.adjustmentJson.empty())return info.source<0;
             // A layer mask is part of shaped(). A folder mask varies per pixel, so drawOwn keeps it.
-            return info.source<0&&layer.raster&&!layer.deep&&layer.adjustmentJson.empty()&&!layer.effects.active()&&
+            return info.source<0&&layer.raster&&!layer.deep&&!layer.effects.active()&&
                 std::none_of(info.ancestors.begin(),info.ancestors.end(),[&](int a){const auto& folder=layers[size_t(a)].layer;return folder.mask&&folder.mask->enabled&&folder.mask->raster;});
         }))return std::nullopt;
+        std::vector<StackStep> steps;std::vector<int> run;
+        const auto flush=[&]{if(!run.empty()){steps.push_back({-1,normalPlan(run)});run.clear();}};
+        for(int index:order){
+            if(layers[size_t(index)].layer.adjustmentJson.empty()){run.push_back(index);continue;}
+            flush();steps.push_back({index,{}});
+        }
+        flush();
+        return steps;
+        }
+    }
+    // The normal stack of the given layers, in order, all eligible for it.
+    NormalPlan normalPlan(const std::vector<int>& segment)const{
         NormalPlan plan;
         // A layer that shows the same raster object through an equal transform and
         // mask as the layer above it samples the same value at every point. The
@@ -257,10 +274,10 @@ public:
         // deep data, so a folder only multiplies its children's opacity.
         // A layer reads nothing (transparent, a no-op in every blend) outside the
         // sampled extent of its image, so layers that miss this region are skipped.
-        auto& stack=plan.stack;stack.reserve(order.size());
+        auto& stack=plan.stack;stack.reserve(segment.size());
         const double units=region.unitsPerPixel,left=region.x+offsetX*units,top=region.y+offsetY*units;
         const double right=left+region.width*units,bottom=top+region.height*units;
-        for(int index:order)if(reaches(index,left,top,right,bottom))stack.push_back(index);
+        for(int index:segment)if(reaches(index,left,top,right,bottom))stack.push_back(index);
         if(stack.empty())return plan;
         auto& repeatsAbove=plan.repeatsAbove;repeatsAbove.assign(stack.size(),0);
         for(size_t k=0;k+1<stack.size();++k){
@@ -300,9 +317,9 @@ public:
             if(found==geometries.end())geometries.push_back(geometry);
         }
         return plan;
-        }
     }
-    // Rows first..last-1 of the normal stack described by plan.
+    // Rows first..last-1 of the normal stack described by plan, composited over
+    // what pixels already holds there: transparent, or the steps below this one.
     void drawNormalRows(const NormalPlan& plan,std::vector<P>& pixels,int first,int last,bool pollRows)const{
         const auto& stack=plan.stack;const auto& repeatsAbove=plan.repeatsAbove;const auto& opacities=plan.opacities;
         const auto& scaled=plan.scaled;const auto& blends=plan.blends;const auto& geometries=plan.geometries;const auto& geometryOf=plan.geometryOf;
@@ -449,14 +466,14 @@ public:
                     for(;column+4*blocks<=width;column+=4*blocks){
                         const int opaque=stop[column];
                         if(!std::all_of(stop.begin()+ptrdiff_t(column),stop.begin()+ptrdiff_t(column+4*blocks),[&](int value){return value==opaque;})){
-                            for(size_t j=column;j<column+4*blocks;++j)replay(j,size_t(stop[j]+1),stop[j]>=0?sources[size_t(stop[j])*width+j]:P{});
+                            for(size_t j=column;j<column+4*blocks;++j)replay(j,size_t(stop[j]+1),stop[j]>=0?sources[size_t(stop[j])*width+j]:pixels[begin+j]);
                             continue;
                         }
                         if(compositeRowsAvx2Available()){
                             // Eight pixels a register: the same arithmetic in AVX2 lanes. Other
                             // layers come back here and use composite() for all sixteen.
                             P* out=pixels.data()+begin+column;
-                            for(size_t j=0;j<4*blocks;++j)out[j]=opaque>=0?sources[size_t(opaque)*width+column+j]:P{};
+                            if(opaque>=0)for(size_t j=0;j<4*blocks;++j)out[j]=sources[size_t(opaque)*width+column+j];
                             struct Context {const P* sources;size_t width,column;const Blend* blends;} context{sources.data(),width,column,blends.data()};
                             compositeSixteenAvx2(reinterpret_cast<const uint32_t*>(sources.data())+column,width,plan.normal.data(),size_t(opaque+1),count,reinterpret_cast<uint32_t*>(out),
                                 [](void* data,size_t k,uint32_t* sixteen){
@@ -466,7 +483,7 @@ public:
                             continue;
                         }
                         std::array<__m128i,blocks> state;
-                        for(size_t b=0;b<blocks;++b)state[b]=opaque>=0?_mm_loadu_si128(reinterpret_cast<const __m128i*>(sources.data()+size_t(opaque)*width+column+4*b)):_mm_setzero_si128();
+                        for(size_t b=0;b<blocks;++b)state[b]=_mm_loadu_si128(reinterpret_cast<const __m128i*>(opaque>=0?sources.data()+size_t(opaque)*width+column+4*b:pixels.data()+begin+column+4*b));
                         for(size_t k=size_t(opaque+1);k<count;++k){
                             const P* layerRow=sources.data()+k*width+column;
                             for(size_t b=0;b<blocks;++b){
@@ -480,10 +497,12 @@ public:
                         for(size_t b=0;b<blocks;++b)_mm_storeu_si128(reinterpret_cast<__m128i*>(pixels.data()+begin+column+4*b),state[b]);
                     }
                 }
-                for(;column<width;++column)replay(column,size_t(stop[column]+1),stop[column]>=0?sources[size_t(stop[column])*width+column]:P{});
+                for(;column<width;++column)replay(column,size_t(stop[column]+1),stop[column]>=0?sources[size_t(stop[column])*width+column]:pixels[begin+column]);
             }
         }
     }
+    // An adjustment step of stackSteps over the whole region.
+    void adjustStep(int index,std::vector<P>& pixels)const{adjust(index,pixels,true);}
 private:
     void adjust(int index,std::vector<P>& pixels,bool folderClip)const{
         const auto& info=layers[size_t(index)];const auto& l=info.layer;
@@ -535,8 +554,12 @@ public:
     auto run()const{
         std::vector<P> result(pixelCount);
         if constexpr(std::is_same_v<P,Pixel>){
-            if(const auto plan=normalPlan()){
-                runRows([&](int first,int last,bool pollRows){drawNormalRows(*plan,result,first,last,pollRows);});
+            if(const auto steps=stackSteps()){
+                for(const auto& step:*steps){
+                    if(step.adjustment<0){runRows([&](int first,int last,bool pollRows){drawNormalRows(step.segment,result,first,last,pollRows);});continue;}
+                    if(cancelled&&cancelled())throw std::runtime_error("Stack render cancelled");
+                    adjust(step.adjustment,result,true);
+                }
                 return rasterFromPixels(result,region.width,region.height);
             }
         }
@@ -598,27 +621,35 @@ std::vector<std::shared_ptr<const Raster>> StackRenderer::renderScaledTiles(cons
         return result;
     }
     std::vector<std::optional<Render<Pixel>>> renders(tiles.size());
-    std::vector<std::optional<Render<Pixel>::NormalPlan>> plans(tiles.size());
+    std::vector<std::optional<std::vector<Render<Pixel>::StackStep>>> steps(tiles.size());
     runGroups(tiles.size(),[&](size_t i){
         renders[i].emplace(d,RenderRegion{tiles[i].x,tiles[i].y,tiles[i].width,tiles[i].height,unitsPerPixel},adjustment_,preview_,tiles[i].offsetX,tiles[i].offsetY,deepAdjustment_,std::function<bool()>{},true);
-        plans[i]=renders[i]->normalPlan();
+        steps[i]=renders[i]->stackSteps();
     });
-    // Bands of every tile together, so a slow tile or processor does not hold the frame.
-    struct Job {size_t tile;int first,last;};
+    // Step by step for every tile together: the bands of all tiles for a run of layers,
+    // then all tiles for an adjustment, so a slow tile or processor does not hold the frame.
+    struct Job {size_t tile;int first,last;bool adjustment;};
     std::vector<Job> jobs;
     std::vector<std::vector<Pixel>> pixels(tiles.size());
     constexpr int rowsPerBand=16;
-    for(size_t i=0;i<tiles.size();++i){
-        if(!plans[i]){jobs.push_back({i,-1,-1});continue;}
-        pixels[i].resize(size_t(tiles[i].width)*tiles[i].height);
-        for(int first=0;first<tiles[i].height;first+=rowsPerBand)jobs.push_back({i,first,std::min(first+rowsPerBand,tiles[i].height)});
+    size_t phases=1;
+    for(size_t i=0;i<tiles.size();++i)if(steps[i]){phases=std::max(phases,steps[i]->size());pixels[i].resize(size_t(tiles[i].width)*tiles[i].height);}
+    for(size_t phase=0;phase<phases;++phase){
+        jobs.clear();
+        for(size_t i=0;i<tiles.size();++i){
+            if(!steps[i]){if(!phase)jobs.push_back({i,-1,-1,false});continue;}
+            if(phase>=steps[i]->size())continue;
+            if((*steps[i])[phase].adjustment>=0){jobs.push_back({i,0,0,true});continue;}
+            for(int first=0;first<tiles[i].height;first+=rowsPerBand)jobs.push_back({i,first,std::min(first+rowsPerBand,tiles[i].height),false});
+        }
+        runGroups(jobs.size(),[&](size_t j){
+            const auto& job=jobs[j];auto& render=*renders[job.tile];
+            if(job.first<0)result[job.tile]=render.run();
+            else if(job.adjustment)render.adjustStep((*steps[job.tile])[phase].adjustment,pixels[job.tile]);
+            else render.drawNormalRows((*steps[job.tile])[phase].segment,pixels[job.tile],job.first,job.last,false);
+        });
     }
-    runGroups(jobs.size(),[&](size_t j){
-        const auto& job=jobs[j];
-        if(job.first<0)result[job.tile]=renders[job.tile]->run();
-        else renders[job.tile]->drawNormalRows(*plans[job.tile],pixels[job.tile],job.first,job.last,false);
-    });
-    for(size_t i=0;i<tiles.size();++i)if(plans[i])result[i]=rasterFromPixels(pixels[i],tiles[i].width,tiles[i].height);
+    for(size_t i=0;i<tiles.size();++i)if(steps[i])result[i]=rasterFromPixels(pixels[i],tiles[i].width,tiles[i].height);
     return result;
 }
 std::shared_ptr<const Raster> StackRenderer::renderScaledPatch(const Document& d,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel)const{

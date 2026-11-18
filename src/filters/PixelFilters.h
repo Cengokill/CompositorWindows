@@ -72,6 +72,9 @@ struct Limits {
     // Covers a 100-megapixel Apply (linear intermediates plus one tiled Raster).
     std::uint64_t maxWorkingBytes{4000000000};
     std::function<bool()> cancelled;
+    // Only these output pixels are kept by the caller; filters that honour it skip the rest.
+    struct Rect {int left{},top{},right{},bottom{};};
+    std::optional<Rect> needed;
 };
 // Opaque grayscale planes in RGBA order, extracted from premultiplied pixels.
 std::array<std::shared_ptr<const Raster>,4> splitChannels(const Raster&,const Limits& = {});

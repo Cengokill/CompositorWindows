@@ -15,9 +15,13 @@ constexpr uint64_t lensFullSdrPixelBudget=8000000;
 bool lensFrameFits(int width,int height,uint64_t budget=lensViewportPixelBudget){
     return width<=30000&&height<=30000&&uint64_t(width)*height<=budget;
 }
-graphics::StackRenderer stack(const Document& document,const std::shared_ptr<const LayerRenderPreview>& preview,int lensPreviewMaxEdge,const std::function<bool()>& cancelled={}){
-    return graphics::StackRenderer([&document,lensPreviewMaxEdge,cancelled](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){
-        return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge},cancelled);
+// tileMargin is the padding, in pixels, that the caller crops from every side of each render.
+// The highest spatial adjustment then needs only the pixels inside it.
+graphics::StackRenderer stack(const Document& document,const std::shared_ptr<const LayerRenderPreview>& preview,int lensPreviewMaxEdge,const std::function<bool()>& cancelled={},int tileMargin=0){
+    return graphics::StackRenderer([&document,lensPreviewMaxEdge,cancelled,tileMargin](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){
+        effects::AdjustmentRegion adjustment{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge};
+        if(tileMargin>0&&effects::adjustmentPaddingAbove(document,layer.id)==0){adjustment.neededLeft=adjustment.neededTop=tileMargin;adjustment.neededRight=region.width-tileMargin;adjustment.neededBottom=region.height-tileMargin;}
+        return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,adjustment,cancelled);
     },preview,[&document,cancelled,lensPreviewMaxEdge](const Layer& layer,std::shared_ptr<const DeepImage> current,graphics::RenderRegion region){return effects::applyAdjustment(std::move(current),layer.adjustmentJson,nullptr,{region.x,region.y,region.unitsPerPixel,double(document.width),double(document.height),lensPreviewMaxEdge},cancelled);});
 }
 std::shared_ptr<const Raster> cropRaster(const Raster& source,int ox,int oy,int width,int height){
@@ -102,20 +106,27 @@ std::shared_ptr<const Raster> SoftwareRenderer::renderScaled(const Document& doc
         return cropRaster(*lensFrame_,ox,oy,width,height);
     }
     const int margin=int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel));
-    auto rendered=stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel,cancelled);
+    auto rendered=stack(document,preview_,lensPreviewMaxEdge_,cancelled,margin).renderScaled(document,x-margin*unitsPerPixel,y-margin*unitsPerPixel,width+2*margin,height+2*margin,unitsPerPixel,cancelled);
     return margin?cropRaster(*rendered,margin,margin,width,height):rendered;
 }
 std::vector<std::shared_ptr<const Raster>> SoftwareRenderer::renderScaledTiles(const Document& document,const std::vector<ScaledTile>& tiles,double unitsPerPixel,const std::function<bool()>& cancelled)const {
-    // Adjustment layers keep renderScaled's padding, Lens Effects frame and callbacks.
-    if(std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();})){
+    const bool adjusted=std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();});
+    if(adjusted)for(const auto& tile:tiles)if(tile.offsetX||tile.offsetY)throw std::invalid_argument("Adjustment layers render whole scaled tiles");
+    // The Lens Effects frame is shared by every tile and is built once, by the first.
+    if(effects::hasLensAdjustment(document)){
         std::vector<std::shared_ptr<const Raster>> result;result.reserve(tiles.size());
-        for(const auto& tile:tiles){
-            if(tile.offsetX||tile.offsetY)throw std::invalid_argument("Adjustment layers render whole scaled tiles");
-            result.push_back(renderScaled(document,tile.x,tile.y,tile.width,tile.height,unitsPerPixel,cancelled));
-        }
+        for(const auto& tile:tiles)result.push_back(renderScaled(document,tile.x,tile.y,tile.width,tile.height,unitsPerPixel,cancelled));
         return result;
     }
-    return stack(document,preview_,lensPreviewMaxEdge_,cancelled).renderScaledTiles(document,tiles,unitsPerPixel,cancelled);
+    // renderScaled's padding for spatial adjustments: each tile is rendered with the same
+    // margin and cropped. Adjustments run on worker threads, so their callback gets no
+    // cancellation; the renderer polls it on this thread between groups.
+    const int margin=adjusted?int(std::ceil(effects::adjustmentStackPadding(document)/unitsPerPixel)):0;
+    std::vector<ScaledTile> padded;padded.reserve(tiles.size());
+    for(const auto& tile:tiles)padded.push_back(margin?ScaledTile{tile.x-margin*unitsPerPixel,tile.y-margin*unitsPerPixel,tile.width+2*margin,tile.height+2*margin}:tile);
+    auto result=stack(document,preview_,lensPreviewMaxEdge_,{},margin).renderScaledTiles(document,padded,unitsPerPixel,cancelled);
+    if(margin)for(size_t i=0;i<result.size();++i)result[i]=cropRaster(*result[i],margin,margin,tiles[i].width,tiles[i].height);
+    return result;
 }
 std::shared_ptr<const Raster> SoftwareRenderer::renderCursorRegion(const Document& document,double x,double y,int width,int height,double unitsPerPixel)const {
     return graphics::StackRenderer([&document](const Layer& layer,std::shared_ptr<const Raster> current,graphics::RenderRegion region){

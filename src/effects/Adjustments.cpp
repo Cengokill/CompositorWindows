@@ -181,9 +181,11 @@ bool hasLensAdjustment(const Document& document){
     return false;
 }
 int adjustmentPadding(std::string_view json){const auto s=settings(parse(json));return s.kind==18?(s.identity()?0:int(std::ceil(s.sharpenRadius*3+2))):s.kind==16?(s.identity()?0:int(std::ceil(s.tonal.radius*3+2))):s.kind==9?int(std::ceil(s.blurRadius*3+2)):s.kind==10?int(std::ceil(s.blurDistance+2)):s.kind==12?int(std::ceil(std::max(s.progressiveFrom,s.progressiveTo)*3+2)):s.kind==13?int(std::ceil(s.bloomRadius*3+2)):s.kind==14?int(std::ceil(s.rgbSplitDistance*5/3+s.rgbSplitBlur+2)):0;}
-int adjustmentStackPadding(const Document& document){
+namespace {
+int stackPadding(const Document& document,std::string_view stopAt){
     double margin=0;
     for(auto it=document.layers.rbegin();it!=document.layers.rend();++it){
+        if(!stopAt.empty()&&it->id==stopAt)break;
         if(!it->visible||it->adjustmentJson.empty())continue;
         const auto s=settings(parse(it->adjustmentJson));
         if(s.kind==14&&s.rgbSplitRadial){
@@ -195,6 +197,9 @@ int adjustmentStackPadding(const Document& document){
     }
     return int(margin);
 }
+}
+int adjustmentStackPadding(const Document& document){return stackPadding(document,{});}
+int adjustmentPaddingAbove(const Document& document,std::string_view layerId){return layerId.empty()?0:stackPadding(document,layerId);}
 std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> source,std::string_view json,const GrayRaster* selection,AdjustmentRegion region,const std::function<bool()>& cancelled){
  auto cancel=[&]{if(cancelled&&cancelled())throw std::runtime_error("Adjustment cancelled");};cancel();
  if(!source||source->width<1||source->height<1||source->width>30000||source->height>30000||uint64_t(source->width)*source->height>100000000)throw std::invalid_argument("Invalid source raster");
@@ -216,6 +221,7 @@ std::shared_ptr<const Raster> applyAdjustment(std::shared_ptr<const Raster> sour
   if(s.kind==16)filter.tonalLayer=s.tonal;if(s.kind==17)filter.lens=s.lens;
   auto kind=s.kind==18?filters::Kind::Sharpen:s.kind==17?filters::Kind::LensEffects:s.kind==16?filters::Kind::TonalContrast:s.kind==15?filters::Kind::Vignette:s.kind==9?filters::Kind::GaussianBlur:s.kind==10?filters::Kind::MotionBlur:s.kind==11?filters::Kind::AddNoise:s.kind==12?filters::Kind::ProgressiveBlur:s.kind==13?filters::Kind::Bloom:filters::Kind::RgbSplit;
   filters::Limits limits;limits.cancelled=cancelled;
+  if(region.neededLeft>=0&&(s.kind==9||s.kind==13||s.kind==18))limits.needed=filters::Limits::Rect{std::clamp(region.neededLeft,0,source->width),std::clamp(region.neededTop,0,source->height),std::clamp(region.neededRight,0,source->width),std::clamp(region.neededBottom,0,source->height)};
   if(s.kind==17&&region.previewMaxEdge>0){
       const int longest=std::max(source->width,source->height);
       if(longest>region.previewMaxEdge){

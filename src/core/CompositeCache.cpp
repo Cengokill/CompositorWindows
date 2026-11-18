@@ -284,11 +284,14 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
     auto painted=paintedBounds(doc,units,preview.get());auto direct=units==1&&px==0&&py==0&&!preview?directRaster(doc):std::shared_ptr<const Raster>{};SoftwareRenderer renderer(preview,lensPreviewMaxEdge_);const int margin=spatialMargin(doc,units);
     auto patch=std::make_shared<Raster>();patch->width=patchWidth;patch->height=patchHeight;patch->tiles.reserve(size_t(tx1-tx0)*size_t(ty1-ty0));
     // Tiles are independent pure renders. Compose them together on the render pool instead of one
-    // batch per tile. Previews and adjustments keep their serial renderer: their callbacks and
+    // batch per tile. Previews and Lens Effects keep their serial renderer: preview callbacks and
     // the Lens Effects frame cache are not safe to run from several tiles at once.
     struct TileJob {std::pair<int,int> key;double x,y;TilePixels box;size_t slot;bool fresh;Tile result;};
     std::vector<TileJob> jobs;
     const bool tileParallel=!preview&&std::none_of(doc.layers.begin(),doc.layers.end(),[](const Layer& layer){return !layer.adjustmentJson.empty();});
+    // Adjustment layers other than Lens Effects render their tiles together as well,
+    // each with renderScaled's margin. Only tileParallel tiles may be composed in part.
+    const bool batched=!preview&&!lens;
     // Edge tiles of the grid stick out of the view by up to a tile on each side. The
     // parallel renderer composes only the pixels that can reach the view, with a pixel
     // of slack, and each cached tile records the rectangle of pixels it holds.
@@ -308,7 +311,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             // Composed for a smaller view during a zoom. Compose all of it once, so that
             // the pan that usually follows reuses it instead of growing it step by step.
             const TilePixels box{0,0,w,h};
-            if(tileParallel)jobs.push_back({key,dx,dy,box,patch->tiles.size(),false,{}});
+            if(batched)jobs.push_back({key,dx,dy,box,patch->tiles.size(),false,{}});
             else{found->second.pixels=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled)->tiles.front();found->second.valid={0,0,256,256};}
             ++lastViewportComposedTiles_;
             found->second.use=viewportTick_;
@@ -321,7 +324,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
             else if(direct){const size_t index=size_t(ty)*((direct->width+255)/256)+tx;tile=index<direct->tiles.size()&&direct->tiles[index]?direct->tiles[index]:zeroTile();}
             else if(mirror)tile=mirrorTile(*flipped->raster,flipped->transform.flipX,flipped->transform.flipY,tx*256,ty*256,doc.width,doc.height);
             else if(!touches(painted,dx-margin*units,dy-margin*units,(w+margin*2.)*units,(h+margin*2.)*units))tile=zeroTile();
-            else if(tileParallel){jobs.push_back({key,dx,dy,need,patch->tiles.size(),true,{}});++lastViewportComposedTiles_;}
+            else if(batched){jobs.push_back({key,dx,dy,need,patch->tiles.size(),true,{}});++lastViewportComposedTiles_;}
             else {auto scaled=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled);tile=scaled&&!scaled->tiles.empty()&&scaled->tiles.front()?scaled->tiles.front():zeroTile();++lastViewportComposedTiles_;}
             while(viewportTiles_.size()>=maxRetainedTiles){auto oldest=std::min_element(viewportTiles_.begin(),viewportTiles_.end(),[](const auto& a,const auto& b){return a.second.use<b.second.use;});viewportTiles_.erase(oldest);}
             found=viewportTiles_.emplace(key,ViewportTile{std::move(tile),viewportTick_}).first;
@@ -334,7 +337,7 @@ CompositeViewport CompositeCache::renderViewport(const Document& input,double x,
                 const int ex=std::clamp(int(std::ceil((box.right-dx)/units))+1,sx,right0),ey=std::clamp(int(std::ceil((box.bottom-dy)/units))+1,sy,bottom0);
                 if(sx==left0&&sy==top0&&ex==right0&&ey==bottom0&&ex>sx&&ey>sy){
                     // Every held pixel: the parallel renderer, and no patch copy.
-                    if(tileParallel)jobs.push_back({key,dx,dy,TilePixels{sx,sy,ex,ey},patch->tiles.size(),false,{}});
+                    if(batched)jobs.push_back({key,dx,dy,TilePixels{sx,sy,ex,ey},patch->tiles.size(),false,{}});
                     else found->second.pixels=renderer.renderScaled(doc,dx,dy,w,h,units,cancelled)->tiles.front();
                     ++lastViewportComposedTiles_;
                 }else if(ex>sx&&ey>sy){
