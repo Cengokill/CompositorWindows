@@ -17,7 +17,7 @@ SnapLines documentSnapLines(Point size, std::span<const Guide> guides, const Sna
     if (policy.documentEdges) lines.ys.push_back(size.y);
     if (policy.guides)
         for (const auto& guide : guides) (guide.horizontal ? lines.ys : lines.xs).push_back(guide.position);
-    if (policy.grid && grid.valid()) {
+    if (policy.grid && grid.visible && grid.valid()) {
         lines.gridX = grid.step();
         lines.gridY = grid.step();
     }

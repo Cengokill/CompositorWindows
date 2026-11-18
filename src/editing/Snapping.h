@@ -21,7 +21,7 @@ struct SnapPolicy {
 };
 
 // Layout grid in document pixels. Snapping uses every line, major and minor,
-// so its step is spacing / subdivisions. Visibility is not part of snapping.
+// so its step is spacing / subdivisions. A hidden grid gives no snap lines.
 struct LayoutGrid {
     bool visible{};
     double spacing{100};
