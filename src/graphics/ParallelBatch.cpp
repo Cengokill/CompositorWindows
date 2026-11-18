@@ -14,8 +14,8 @@ thread_local const void* currentPool=nullptr;
 class NativePool {
 public:
     PTP_POOL pool{};TP_CALLBACK_ENVIRON environment{};
-    const uint32_t workers=std::clamp<uint32_t>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS),1,parallelBatchMaxWorkers);
-    NativePool(){
+    const uint32_t workers;
+    explicit NativePool(uint32_t maximum):workers(std::clamp<uint32_t>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS),1,maximum)){
         InitializeThreadpoolEnvironment(&environment);
         pool=CreateThreadpool(nullptr);
         if(!pool)throw std::system_error(int(GetLastError()),std::system_category(),"Create graphics CPU pool");
@@ -70,11 +70,12 @@ void runBatch(NativePool& pool,size_t count,uint32_t workerLimit,const std::func
 }
 }
 void runParallelBatch(size_t count,uint32_t workerLimit,const std::function<void(size_t)>& callback){
-    static NativePool pool;
+    static NativePool pool(parallelBatchMaxWorkers);
     runBatch(pool,count,workerLimit,callback);
 }
 void runParallelRenderBatch(size_t count,const std::function<void(size_t)>& callback){
-    static NativePool pool;
+    // Viewport composition is split into many small jobs, so every logical processor helps.
+    static NativePool pool(parallelRenderMaxWorkers);
     runBatch(pool,count,0,callback);
 }
 }

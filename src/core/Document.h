@@ -226,6 +226,9 @@ public:
     virtual std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const=0;
     virtual std::shared_ptr<const DeepImage> renderDeep(const Document&,int,int,int,int,const std::function<bool()>& = {}) const;
 };
+// One tile of a scaled render: the corner before its first pixel centre and its size.
+// offsetX and offsetY select pixels inside a larger tile at x, y with the same sample positions.
+struct ScaledTile {double x{},y{};int width{},height{},offsetX{},offsetY{};};
 class SoftwareRenderer final:public IRasterBackend {
     std::shared_ptr<const LayerRenderPreview> preview_;
     int lensPreviewMaxEdge_{};
@@ -241,6 +244,8 @@ public:
     std::shared_ptr<const Raster> render(const Document&,int x,int y,int width,int height) const override;
     std::shared_ptr<const DeepImage> renderDeep(const Document&,int x,int y,int width,int height,const std::function<bool()>& cancelled={}) const override;
     std::shared_ptr<const Raster> renderScaled(const Document&,double x,double y,int width,int height,double unitsPerPixel,const std::function<bool()>& cancelled={}) const;
+    // renderScaled for each tile of one grid, rendered together on the render pool.
+    std::vector<std::shared_ptr<const Raster>> renderScaledTiles(const Document&,const std::vector<ScaledTile>&,double unitsPerPixel,const std::function<bool()>& cancelled={}) const;
     std::shared_ptr<const Raster> renderScaledPatch(const Document&,double tileX,double tileY,int offsetX,int offsetY,int width,int height,double unitsPerPixel) const;
     // Cursor previews have at most1024 samples per axis; ceil-to-screen sizing
     // can require a positive step slightly below the viewport minimum1/32.
@@ -250,6 +255,8 @@ struct CompositeViewport {
     std::shared_ptr<const Raster> raster;
     double documentX{},documentY{},unitsPerPixel{1};
     int documentWidth{},documentHeight{};
+    // The part of raster that holds composed pixels, in document units. Empty when all of it does.
+    double coverX{},coverY{},coverWidth{},coverHeight{};
 };
 // Recompose only document tiles affected by changed source tiles. Value snapshots
 // and tile identities keep mouse-up and the next stroke independent of flattening.
@@ -257,7 +264,9 @@ class CompositeCache {
     std::optional<Document> previous_;
     std::shared_ptr<const Raster> output_;
     std::optional<Document> viewportPrevious_;
-    struct ViewportTile {std::shared_ptr<const Raster::Tile> pixels;uint64_t use{};};
+    // A tile composed only where the view could reach records that rectangle of its pixels.
+    struct TilePixels {int left{},top{},right{256},bottom{256};};
+    struct ViewportTile {std::shared_ptr<const Raster::Tile> pixels;uint64_t use{};TilePixels valid{};};
     std::map<std::pair<int,int>,ViewportTile> viewportTiles_;
     double viewportUnits_{},viewportPhaseX_{},viewportPhaseY_{};
     uint64_t viewportTick_{};

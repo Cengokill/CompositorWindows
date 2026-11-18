@@ -255,17 +255,47 @@ Pixel ReducedSource::pixel(int x,int y)const{std::lock_guard lock(storage_->mute
 uint8_t ReducedSource::gray(int x,int y)const{return pixel(x,y).r;}
 Pixel ReducedSource::readReducedPixel(int x,int y)const{
     if(!tileReadScope||level_==0)return pixel(x,y);
-    const int tx=x/256,ty=y/256;
-    const auto index=(std::hash<const ReducedSource*>{}(this)/16+size_t(tx)+size_t(ty)*3)%tileReadScope->entries_.size();
-    auto& entry=tileReadScope->entries_[index];
-    if(entry.source!=this||entry.x!=tx||entry.y!=ty){
+    return scopedTile(x/256,y/256).pixels[size_t(y%256)*256+x%256];
+}
+const Raster::Tile& ReducedSource::scopedTile(int tx,int ty)const{
+    auto& entries=tileReadScope->entries_;constexpr size_t mask=ReducedTileReadScope::entryCount-1;
+    size_t hash=(reinterpret_cast<uintptr_t>(this)>>4)*0x9E3779B97F4A7C15ull;
+    hash^=size_t(tx)*0xC2B2AE3D27D4EB4Full+size_t(ty)*0x165667B19E3779F9ull;hash^=hash>>29;
+    // Probe four neighbouring entries so two tiles that hash alike do not evict each other per pixel.
+    for(size_t probe=0;probe<4;++probe){
+        const auto& entry=entries[(hash+probe)&mask];
+        if(entry.source==this&&entry.x==tx&&entry.y==ty)return *entry.tile;
+    }
+    size_t victim=hash&mask;
+    for(size_t probe=0;probe<4;++probe)if(!entries[(hash+probe)&mask].tile){victim=(hash+probe)&mask;break;}
+    if(victim==(hash&mask)&&entries[victim].tile)victim=(hash+((hash>>40)&3))&mask;
+    auto& entry=entries[victim];
+    {
         std::lock_guard lock(storage_->mutex);
         entry={this,tx,ty,storage_->tile(source_,level_,tx,ty)};
     }
-    return entry.tile->pixels[size_t(y%256)*256+x%256];
+    return *entry.tile;
+}
+Point ReducedSource::mapped(Point unit)const{
+    return {(unit.x*source_->width-grid_.x)/(double(grid_.width)*grid_.step),(unit.y*source_->height-grid_.y)/(double(grid_.height)*grid_.step)};
+}
+void ReducedSource::readPixels(int x,int y,int count,Pixel* output)const{
+    if(count<1)return;
+    if(x<0||y<0||count>grid_.width-x||y>=grid_.height)throw std::out_of_range("Reduced row read outside the grid");
+    if(!tileReadScope||level_==0){
+        std::lock_guard lock(storage_->mutex);
+        storage_->readRow(source_,level_,x,y,count,output);
+        return;
+    }
+    // Through the pass's tile table: the shared cache lock is taken only on a miss.
+    while(count>0){
+        const int run=std::min(count,256-x%256);
+        std::copy_n(scopedTile(x/256,y/256).pixels.data()+size_t(y%256)*256+x%256,run,output);
+        x+=run;output+=run;count-=run;
+    }
 }
 Pixel ReducedSource::sample(Point unit,Transform::Sampling sampling)const{
-    const Point mapped{(unit.x*source_->width-grid_.x)/(double(grid_.width)*grid_.step),(unit.y*source_->height-grid_.y)/(double(grid_.height)*grid_.step)};
+    const Point mapped=this->mapped(unit);
     if(!tileReadScope){
         std::lock_guard lock(storage_->mutex);
         return sampleRasterPixels(grid_.width,grid_.height,[&](int x,int y){return storage_->pixel(source_,level_,x,y);},mapped,sampling);
@@ -288,7 +318,7 @@ void ReducedSourceCache::clear(){std::lock_guard lock(storage_->mutex);storage_-
 ReducedSourceCache& ReducedSourceCache::shared(){
     // Several visible sources can span multiple reduction levels in one
     // wheel notch. Retain up to 128 MiB of shared reduced tiles.
-    static ReducedSourceCache cache(512,128);
+    static ReducedSourceCache cache(2048,256);
     return cache;
 }
 }

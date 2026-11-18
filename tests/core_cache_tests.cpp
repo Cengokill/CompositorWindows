@@ -22,6 +22,8 @@ using namespace compositor;
 #define REQUIRE(...) do{if(!(__VA_ARGS__))throw std::runtime_error(std::string(__FILE__)+":"+std::to_string(__LINE__)+": " #__VA_ARGS__);}while(false)
 Document document(int width,int height,Pixel color={90,40,20,128}){Document d;d.id=newId();d.width=width;d.height=height;Layer layer;layer.id=newId();layer.raster=Raster::filled(width,height,color);layer.transform={0,0,double(width),double(height),0,false,false,Transform::Sampling::Nearest};layer.opacity=.75;d.layers={layer};return d;}
 void equal(const Raster& a,const Raster& b,int slop=0){REQUIRE(a.width==b.width&&a.height==b.height);for(int y=0;y<a.height;++y)for(int x=0;x<a.width;++x){const auto p=a.pixel(x,y),q=b.pixel(x,y);auto delta=[&](uint8_t u,uint8_t v){return std::abs(int(u)-int(v));};if(delta(p.r,q.r)>slop||delta(p.g,q.g)>slop||delta(p.b,q.b)>slop||delta(p.a,q.a)>slop)throw std::runtime_error("pixel mismatch at "+std::to_string(x)+","+std::to_string(y)+" tiled="+std::to_string(p.r)+","+std::to_string(p.g)+","+std::to_string(p.b)+","+std::to_string(p.a)+" full="+std::to_string(q.r)+","+std::to_string(q.g)+","+std::to_string(q.b)+","+std::to_string(q.a));}}
+// A viewport patch holds composed pixels inside its cover rectangle, or everywhere when it has none.
+bool covered(const CompositeViewport& view,int x,int y){if(view.coverWidth<=0)return true;const double cx=view.documentX+(x+.5)*view.unitsPerPixel,cy=view.documentY+(y+.5)*view.unitsPerPixel;return cx>=view.coverX&&cy>=view.coverY&&cx<view.coverX+view.coverWidth&&cy<view.coverY+view.coverHeight;}
 size_t unique(const Raster& raster){std::set<const Raster::Tile*> pointers;for(auto& tile:raster.tiles){REQUIRE(tile);pointers.insert(tile.get());}return pointers.size();}
 void blank_30000(){Document d;d.width=d.height=30000;CompositeCache cache;Raster::resetMaterializationCount();auto full=cache.render(d);REQUIRE(full->width==30000&&full->height==30000&&full->tiles.size()==13924&&unique(*full)==1);REQUIRE(full->pixel(29999,29999)==Pixel{}&&cache.render(d)==full);auto view=cache.renderViewport(d,0,0,30000,30000);REQUIRE(view.documentWidth==30000&&view.documentHeight==30000&&view.unitsPerPixel==16);REQUIRE(view.raster->tiles.size()==64&&unique(*view.raster)==1&&view.raster->pixel(1874,1874)==Pixel{});REQUIRE(Raster::materializationCount()==0);}
 void identity_fastpath(){auto d=document(768,512);d.layers[0].opacity=1;CompositeCache cache;REQUIRE(cache.render(d)==d.layers[0].raster);auto view=cache.renderViewport(d,256,256,256,256);REQUIRE(view.documentX==256&&view.documentY==256&&view.unitsPerPixel==1&&view.raster->tiles.size()==1&&view.raster->tiles[0]==d.layers[0].raster->tiles[4]);}
@@ -32,12 +34,65 @@ void identity_fastpath_respects_effects(){
     equal(*full,*SoftwareRenderer().render(d,0,0,d.width,d.height));
     auto view=cache.renderViewport(d,0,0,256,256);REQUIRE(view.raster->pixel(10,10)==Pixel{255,0,0,255});
 }
-void normal_equivalence(){auto d=document(513,259);Layer over=d.layers[0];over.id=newId();over.raster=Raster::filled(50,100,{0,160,0,200});over.transform={21.5,48.25,80,170,19,true,false,Transform::Sampling::Smooth};over.blend=Blend::Multiply;d.layers.push_back(over);CompositeCache cache;auto full=cache.render(d);equal(*full,*SoftwareRenderer().render(d,0,0,d.width,d.height));REQUIRE(cache.render(d)==full);auto view=cache.renderViewport(d,260,0,240,258);REQUIRE(view.documentX==256&&view.unitsPerPixel==1);for(int y=0;y<view.raster->height;++y)for(int x=0;x<view.raster->width;++x)REQUIRE(view.raster->pixel(x,y)==full->pixel(x+256,y));}
+void normal_equivalence(){auto d=document(513,259);Layer over=d.layers[0];over.id=newId();over.raster=Raster::filled(50,100,{0,160,0,200});over.transform={21.5,48.25,80,170,19,true,false,Transform::Sampling::Smooth};over.blend=Blend::Multiply;d.layers.push_back(over);CompositeCache cache;auto full=cache.render(d);equal(*full,*SoftwareRenderer().render(d,0,0,d.width,d.height));REQUIRE(cache.render(d)==full);auto view=cache.renderViewport(d,260,0,240,258);REQUIRE(view.documentX==256&&view.unitsPerPixel==1);for(int y=0;y<view.raster->height;++y)for(int x=0;x<view.raster->width;++x)REQUIRE(!covered(view,x,y)||view.raster->pixel(x,y)==full->pixel(x+256,y));}
 void offscreen_invalidation(){auto d=document(768,256);CompositeCache cache;auto fullBefore=cache.render(d);auto left=cache.renderViewport(d,0,0,256,256,1,1,3);auto right=cache.renderViewport(d,512,0,256,256,1,1,3);Pixel changed{0,0,255,255};d.layers[0].raster=d.layers[0].raster->replacing(600,50,1,1,&changed,1);auto leftAfter=cache.renderViewport(d,0,0,256,256,1,1,3);REQUIRE(leftAfter.raster->tiles[0]==left.raster->tiles[0]);auto rightAfter=cache.renderViewport(d,512,0,256,256,1,1,3);REQUIRE(rightAfter.raster->tiles[0]!=right.raster->tiles[0]&&rightAfter.raster->pixel(88,50).b==191);auto full=cache.render(d);REQUIRE(full->tiles[0]==fullBefore->tiles[0]&&full->pixel(600,50).b==191);REQUIRE(right.raster->pixel(88,50).b!=191);equal(*full,*SoftwareRenderer().render(d,0,0,768,256));}
 void bounded_eviction(){auto d=document(768,256);CompositeCache cache;auto first=cache.renderViewport(d,0,0,256,256,1,1,2);auto middle=cache.renderViewport(d,256,0,256,256,1,1,2);auto last=cache.renderViewport(d,512,0,256,256,1,1,2);auto again=cache.renderViewport(d,0,0,256,256,1,1,2);REQUIRE(again.raster->tiles[0]!=first.raster->tiles[0]);equal(*again.raster,*first.raster);REQUIRE(middle.raster->tiles.size()==1&&last.raster->tiles.size()==1);}
 void metadata_and_hidden_source(){auto d=document(513,1,{255,0,0,255});Layer mask=d.layers[0];mask.id=newId();mask.visible=false;mask.opacity=1;mask.raster=Raster::filled(513,1,{0,0,0,128});d.layers[0].maskSourceId=mask.id;d.layers[0].opacity=1;d.layers.push_back(mask);CompositeCache cache;auto before=cache.renderViewport(d,512,0,1,1);REQUIRE(before.raster->pixel(0,0).a==128);d.layers[1].raster=Raster::filled(513,1,{0,0,0,64});cache.renderViewport(d,0,0,1,1);auto after=cache.renderViewport(d,512,0,1,1);REQUIRE(after.raster->pixel(0,0).a==64&&before.raster->pixel(0,0).a==128);d.layers[0].visible=false;auto empty=cache.renderViewport(d,512,0,1,1);REQUIRE(empty.raster->pixel(0,0)==Pixel{});}
 void full_after_partial(){auto d=document(513,257);CompositeCache cache;auto partial=cache.renderViewport(d,0,0,32,32);REQUIRE(partial.raster->width==256&&partial.raster->height==256);auto full=cache.render(d);REQUIRE(full->width==513&&full->height==257&&full->tiles.size()==6);equal(*full,*SoftwareRenderer().render(d,0,0,513,257));}
-void lod_large_content(){Document d;d.width=d.height=30000;Layer layer;layer.id=newId();layer.raster=Raster::filled(1,1,{30,60,90,255});layer.transform={0,0,30000,30000};d.layers={layer};CompositeCache cache;auto view=cache.renderViewport(d,0,0,30000,30000,1,4,8);REQUIRE(view.unitsPerPixel==64&&view.raster->tiles.size()==4&&view.raster->width==469);REQUIRE(view.raster->pixel(200,200)==Pixel{30,60,90,255});auto zoomed=cache.renderViewport(d,1234,2345,30,30,1,4,8);REQUIRE(zoomed.unitsPerPixel==1&&zoomed.raster->tiles.size()<=4&&zoomed.raster->pixel(10,10)==Pixel{30,60,90,255});auto smallest=cache.renderViewport(d,0,0,30000,30000,30000,1,1);REQUIRE(smallest.raster->width==1&&smallest.unitsPerPixel==30000);}
+void partial_edges_then_pan_and_edit(){
+    // A zoom composes edge tiles only near the view; a pan, a repeat and an edit then
+    // show the same pixels as a full render wherever the patch says it holds them.
+    Document d;d.id=newId();d.width=1500;d.height=900;
+    for(int i=0;i<4;++i){
+        std::vector<Pixel> pixels(size_t(700)*500);
+        for(int y=0;y<500;++y)for(int x=0;x<700;++x){const auto a=uint8_t(150+(x*3+y+i*40)%106);pixels[size_t(y)*700+x]={uint8_t((x+i*30)%256*a/255),uint8_t((y*2)%256*a/255),uint8_t((x+y)%256*a/255),a};}
+        Layer layer;layer.id=newId();layer.raster=Raster::fromRgba(700,500,reinterpret_cast<const uint8_t*>(pixels.data()),700*4);
+        layer.transform={i*150.,i*90.,1100,700};layer.opacity=.9;d.layers.push_back(std::move(layer));
+    }
+    for(double units:{.5,2.}){
+        CompositeCache cache;
+        const auto check=[&](const CompositeViewport& view,const Document& document,bool partial){
+            const auto reference=SoftwareRenderer().renderScaled(document,view.documentX,view.documentY,view.raster->width,view.raster->height,units);
+            bool skipped=false;
+            for(int y=0;y<view.raster->height;++y)for(int x=0;x<view.raster->width;++x){
+                if(!covered(view,x,y)){skipped|=view.raster->pixel(x,y)!=reference->pixel(x,y);continue;}
+                REQUIRE(view.raster->pixel(x,y)==reference->pixel(x,y));
+            }
+            REQUIRE(!partial||skipped);
+        };
+        const auto zoomed=cache.renderViewport(d,301,205,400,300,units,64,256);
+        REQUIRE(zoomed.coverWidth>0&&zoomed.coverHeight>0);check(zoomed,d,true);
+        const auto panned=cache.renderViewport(d,341,235,400,300,units,64,256);check(panned,d,false);
+        const auto again=cache.renderViewport(d,341,235,400,300,units,64,256);REQUIRE(cache.lastViewportComposedTiles()==0);check(again,d,false);
+        Pixel changed{0,0,200,255};auto edited=d;edited.layers[3].raster=edited.layers[3].raster->replacing(10,10,1,1,&changed,1);
+        const auto after=cache.renderViewport(edited,341,235,400,300,units,64,256);check(after,edited,false);
+    }
+}
+void spatial_adjustments_compose_only_kept_pixels(){
+    // Viewport tiles render with a margin and keep only their middle, so the highest spatial
+    // adjustment computes only that. A full render computes every pixel: they must agree.
+    Document d;d.id=newId();d.width=700;d.height=520;
+    std::vector<Pixel> pixels(size_t(700)*520);
+    for(int y=0;y<520;++y)for(int x=0;x<700;++x){const auto a=uint8_t(x<350?255:120+(x*7+y*3)%136);pixels[size_t(y)*700+x]={uint8_t((x*5+y)%256*a/255),uint8_t((y*3+x/2)%256*a/255),uint8_t(((x^y)*7)%256*a/255),a};}
+    Layer image;image.id=newId();image.raster=Raster::fromRgba(700,520,reinterpret_cast<const uint8_t*>(pixels.data()),700*4);image.transform={0,0,700,520};
+    Layer over=image;over.id=newId();over.opacity=.6;over.transform={90,40,500,400,17,false,false,Transform::Sampling::High};
+    const auto adjustment=[](const char* kind){Layer layer;layer.id=newId();layer.adjustmentJson=effects::defaultAdjustmentJson(kind);layer.transform={0,0,700,520};return layer;};
+    const std::vector<std::vector<const char*>> stacks{{"Gaussian Blur"},{"Bloom / Glow"},{"Sharpen"},{"Gaussian Blur","Bloom / Glow"}};
+    for(const auto& kinds:stacks){
+        auto document=d;document.layers={image,over};
+        for(const auto* kind:kinds)document.layers.push_back(adjustment(kind));
+        const auto full=SoftwareRenderer().render(document,0,0,700,520);
+        CompositeCache cache;
+        const auto view=cache.renderViewport(document,130,70,420,300,1,64,256);
+        REQUIRE(view.unitsPerPixel==1);
+        for(int y=0;y<view.raster->height;++y)for(int x=0;x<view.raster->width;++x){
+            const int dx=int(view.documentX)+x,dy=int(view.documentY)+y;
+            if(dx<0||dy<0||dx>=700||dy>=520||!covered(view,x,y))continue;
+            REQUIRE(view.raster->pixel(x,y)==full->pixel(dx,dy));
+        }
+    }
+}
+void lod_large_content(){Document d;d.width=d.height=30000;Layer layer;layer.id=newId();layer.raster=Raster::filled(1,1,{30,60,90,255});layer.transform={0,0,30000,30000};d.layers={layer};CompositeCache cache;auto view=cache.renderViewport(d,0,0,30000,30000,1,4,8);REQUIRE(view.unitsPerPixel==64&&view.raster->tiles.size()==4&&view.raster->width==469);REQUIRE(view.raster->pixel(200,200)==Pixel{30,60,90,255});auto zoomed=cache.renderViewport(d,1234,2345,30,30,1,4,8);REQUIRE(zoomed.unitsPerPixel==1&&zoomed.raster->tiles.size()<=4&&zoomed.raster->pixel(int((1240-zoomed.documentX)/zoomed.unitsPerPixel),int((2350-zoomed.documentY)/zoomed.unitsPerPixel))==Pixel{30,60,90,255});auto smallest=cache.renderViewport(d,0,0,30000,30000,30000,1,1);REQUIRE(smallest.raster->width==1&&smallest.unitsPerPixel==30000);}
 void scaled_renderer_contract(){auto d=document(10,4);std::vector<Pixel> pixels(40);for(int y=0;y<4;++y)for(int x=0;x<10;++x)pixels[size_t(y)*10+x]={uint8_t(x*20),uint8_t(y*40),0,255};d.layers[0].raster=Raster::fromRgba(10,4,reinterpret_cast<const uint8_t*>(pixels.data()),40);d.layers[0].opacity=1;SoftwareRenderer renderer;equal(*renderer.render(d,0,0,10,4),*renderer.renderScaled(d,0,0,10,4,1));auto scaled=renderer.renderScaled(d,.25,.25,5,2,2);for(int y=0;y<2;++y)for(int x=0;x<5;++x)REQUIRE(scaled->pixel(x,y)==pixels[size_t(y*2+1)*10+x*2+1]);}
 void scaled_grain_partition(){auto d=document(1032,8,{100,100,100,255});Layer grain;grain.id=newId();grain.adjustmentJson=effects::defaultAdjustmentJson("Grain");grain.transform={0,0,1032,8};d.layers.push_back(grain);SoftwareRenderer renderer;auto full=renderer.renderScaled(d,0,0,258,2,4);auto left=renderer.renderScaled(d,0,0,256,2,4),right=renderer.renderScaled(d,1024,0,2,2,4);for(int y=0;y<2;++y)for(int x=0;x<258;++x)REQUIRE(full->pixel(x,y)==(x<256?left->pixel(x,y):right->pixel(x-256,y)));}
 void outside_and_rejections(){auto d=document(20,20);CompositeCache cache;REQUIRE(!cache.renderViewport(d,21,0,5,5).raster);REQUIRE(!cache.renderViewport(d,0,0,0,0).raster);for(auto action:std::vector<std::function<void()>>{[&]{cache.renderViewport(d,0,0,-1,1);},[&]{cache.renderViewport(d,NAN,0,1,1);},[&]{cache.renderViewport(d,0,0,1,1,0);},[&]{cache.renderViewport(d,0,0,1,1,1,2,1);}}){bool rejected=false;try{action();}catch(const std::invalid_argument&){rejected=true;}REQUIRE(rejected);}for(double units:{0.,-1.,double(NAN),double(INFINITY),1/64.}){bool rejected=false;try{SoftwareRenderer().renderScaled(d,0,0,1,1,units);}catch(const std::invalid_argument&){rejected=true;}REQUIRE(rejected);}auto halfDocument=d;halfDocument.layers[0].opacity=1;const std::array<Pixel,2> pair{{{255,0,0,255},{0,255,0,255}}};halfDocument.layers[0].raster=halfDocument.layers[0].raster->replacing(0,0,2,1,pair.data(),2);auto half=SoftwareRenderer().renderScaled(halfDocument,0,0,4,2,.5);REQUIRE(half->width==4&&half->height==2);for(int y=0;y<2;++y)for(int x=0;x<4;++x)REQUIRE(half->pixel(x,y)==pair[size_t(x/2)]);cache.reset();REQUIRE(cache.renderViewport(d,0,0,20,20).raster->pixel(10,10)==SoftwareRenderer().render(d,10,10,1,1)->pixel(0,0));}
@@ -360,4 +415,25 @@ void viewport_cancellation_reaches_renderer(){
     REQUIRE(cancelled&&polls>=4);
 }
 
-int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"lens_large_viewport",lens_large_viewport},{"lens_large_full_render",lens_large_full_render},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"visibility_tile_paths",visibility_tile_paths},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+void parallel_tiles_match_serial(){
+    auto d=document(1030,770);
+    Layer over=d.layers[0];over.id=newId();over.raster=Raster::filled(90,60,{0,160,0,200});over.transform={21.5,48.25,700,540,13,false,false,Transform::Sampling::Smooth};over.opacity=.6;d.layers.push_back(over);
+    Layer top=d.layers[0];top.id=newId();top.opacity=.99;d.layers.push_back(top);
+    const auto sameAsSerial=[&](const Document& doc,double units,const CompositeViewport& view){
+        const int columns=(view.raster->width+255)/256;REQUIRE(view.unitsPerPixel==units);
+        for(size_t i=0;i<view.raster->tiles.size();++i){
+            const int ix=int(i%columns)*256,iy=int(i/columns)*256,w=std::min(256,view.raster->width-ix),h=std::min(256,view.raster->height-iy);
+            const auto reference=SoftwareRenderer().renderScaled(doc,view.documentX+ix*units,view.documentY+iy*units,w,h,units);
+            REQUIRE(reference->tiles.front()->pixels==view.raster->tiles[i]->pixels);
+        }
+    };
+    for(const double units:{.625,1.,1.91,3.25}){
+        CompositeCache cache;auto doc=d;
+        auto view=cache.renderViewport(doc,0,0,doc.width,doc.height,units,64,256);
+        REQUIRE(cache.lastViewportComposedTiles()>=2);sameAsSerial(doc,units,view);
+        // Damage that recomposes whole retained tiles and patches others must still match a fresh serial render.
+        doc.layers[1].opacity=.3;view=cache.renderViewport(doc,0,0,doc.width,doc.height,units,64,256);sameAsSerial(doc,units,view);
+        doc.layers[2].visible=false;view=cache.renderViewport(doc,0,0,doc.width,doc.height,units,64,256);sameAsSerial(doc,units,view);
+    }
+}
+int main(int argc,char** argv){std::map<std::string,void(*)()> tests{{"sharpen_adjustment_tile_seam",sharpen_adjustment_tile_seam},{"lens_global_cache",lens_global_cache},{"lens_large_viewport",lens_large_viewport},{"lens_large_full_render",lens_large_full_render},{"tonal_adjustment_tile_seam",tonal_adjustment_tile_seam},{"vignette_cache",vignette_cache},{"lod_offscreen_invalidation",lod_offscreen_invalidation},{"visibility_tile_paths",visibility_tile_paths},{"partial_metadata_damage",partial_metadata_damage},{"group_visibility_damage",group_visibility_damage},{"flip_full_frame_matches",flip_full_frame_matches},{"unsupported_blank_adjustment",unsupported_blank_adjustment},{"navigator_overview_isolated",navigator_overview_isolated},{"blur_adjustment_tile_seam",blur_adjustment_tile_seam},{"rgb_split_adjustment_tile_seam",rgb_split_adjustment_tile_seam},{"filter_default_points_tiles",filter_default_points_tiles},{"progressive_deep_scaled",progressive_deep_scaled},{"blank_30000",blank_30000},{"identity_fastpath",identity_fastpath},{"identity_fastpath_respects_effects",identity_fastpath_respects_effects},{"normal_equivalence",normal_equivalence},{"offscreen_invalidation",offscreen_invalidation},{"bounded_eviction",bounded_eviction},{"metadata_and_hidden_source",metadata_and_hidden_source},{"full_after_partial",full_after_partial},{"lod_large_content",lod_large_content},{"spatial_adjustments_compose_only_kept_pixels",spatial_adjustments_compose_only_kept_pixels},{"partial_edges_then_pan_and_edit",partial_edges_then_pan_and_edit},{"scaled_renderer_contract",scaled_renderer_contract},{"scaled_grain_partition",scaled_grain_partition},{"outside_and_rejections",outside_and_rejections},{"blank_culling",blank_culling},{"move_translation_damage",move_translation_damage},{"viewport_cancellation_reaches_renderer",viewport_cancellation_reaches_renderer},{"parallel_tiles_match_serial",parallel_tiles_match_serial}};try{if(argc!=2||!tests.contains(argv[1]))throw std::runtime_error("Specify cache test");tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}

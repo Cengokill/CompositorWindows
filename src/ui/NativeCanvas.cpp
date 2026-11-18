@@ -131,7 +131,7 @@ void NativeCanvas::presentComposite(std::shared_ptr<const Raster> raster,double 
     // The deferred provider keeps this frame during painting. Once it is
     // removed or disabled, the next paint should draw the canonical document.
     if(wheelZoomPending_&&deferViewportComposite)wheelZoomPending_=wheelZoomRequested_=false;
-    raster_=std::move(raster);rasterX_=x;rasterY_=y;rasterUnits_=units>0?units:1;viewportPresented_=!deferViewportComposite;if(clearPreview)movePreview_.reset();upload();update();
+    raster_=std::move(raster);rasterX_=x;rasterY_=y;rasterUnits_=units>0?units:1;rasterCoverWidth_=rasterCoverHeight_=0;viewportPresented_=!deferViewportComposite;if(clearPreview)movePreview_.reset();upload();update();
 }
 void NativeCanvas::presentWheelComposite(CompositeViewport patch){
     if(!wheelZoomPending_)return;
@@ -140,7 +140,14 @@ void NativeCanvas::presentWheelComposite(CompositeViewport patch){
     lastCompositeH_=bounds.height;lastCompositeUnits_=bounds.units;
     compositeDirty_=false;
     wheelZoomPending_=wheelZoomRequested_=false;
-    presentComposite(std::move(patch.raster),patch.documentX,patch.documentY,patch.unitsPerPixel,false);
+    presentComposite(std::move(patch),false);
+    if(queuedWheelZoom_&&!compositeHeld_&&!movePreview_){
+        // Paint the frame that just finished, then start the next step from the folded notches.
+        const double target=*queuedWheelZoom_;const auto anchor=queuedWheelAnchor_;const auto modifiers=queuedWheelModifiers_;
+        queuedWheelZoom_.reset();
+        repaint();
+        if(target!=zoom)applyWheelZoom(target,anchor,modifiers);
+    }
 }
 void NativeCanvas::failWheelComposite(){
     if(!wheelZoomPending_)return;
@@ -163,6 +170,17 @@ void NativeCanvas::stopWheelZoom(){
     wheelZoomPending_=wheelZoomRequested_=wheelZoomFrame_=false;
     layerVisibilityComposite_=false;
     wheelHover_.reset();
+    queuedWheelZoom_.reset();
+}
+void NativeCanvas::applyWheelZoom(double target,QPointF position,Qt::KeyboardModifiers modifiers){
+    settleViewport();
+    zoomAt(target,position);
+    wheelZoomFrame_=true;
+    wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));
+    viewportPresented_=false;
+    wheelHover_=std::pair{position,modifiers};
+    submitWheelZoom();
+    if(navigatorTimer_->isActive())navigatorTimer_->start();
 }
 void NativeCanvas::submitWheelZoom(){
     if(!wheelZoomPending_||wheelZoomRequested_||deferViewportComposite||!requestWheelComposite)return;
@@ -395,20 +413,27 @@ void NativeCanvas::drawRulers(){
     }
 }
 void NativeCanvas::draw(bool present){
+bool standIn=false;
 if(wheelZoomPending_){
-    // Leave the previous DXGI frame on screen while the new viewport is
-    // incomplete. Drawing here would use its tiles with the new mapping.
     if(compositeHeld_||movePreview_)return;
     if(deferViewportComposite){
         if(deferViewportComposite())return;
     }else{
         submitWheelZoom();
-        if(wheelZoomRequested_)return;
+        if(wheelZoomRequested_){
+            // Until the exact patch arrives, show the last presented patch through the new
+            // mapping. It is only a placeholder: it is not reported as a ready frame, it does
+            // not replace the last presented viewport, and the exact patch replaces it.
+            standIn=present&&canDrawZoomStandIn();
+            if(!standIn)return;
+        }
     }
-    wheelZoomPending_=false;
-    viewportPresented_=false;
+    if(!standIn){
+        wheelZoomPending_=false;
+        viewportPresented_=false;
+    }
 }
-if(wheelHover_){
+if(wheelHover_&&!standIn){
     const auto [position,modifiers]=*wheelHover_;
     wheelHover_.reset();
     if(pointerHover)pointerHover(position,modifiers);
@@ -417,7 +442,7 @@ if(layerVisibilityComposite_&&!wheelZoomPending_)layerVisibilityComposite_=false
 proofApplied_=false;const double scale=pointsPerPixel();const bool held=viewportDeferred_||movePreview_||compositeHeld_;
 const bool readyWheelFrame=wheelZoomFrame_&&viewportPresented_&&!held;
 const bool deferred=!held&&deferViewportComposite&&deferViewportComposite();
-const bool skipComposite=held||deferred||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){const bool same=request.x==lastCompositeX_&&request.y==lastCompositeY_&&request.width==lastCompositeW_&&request.height==lastCompositeH_&&request.units==lastCompositeUnits_;if(compositeDirty_||!raster_||!same){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;lastCompositeX_=request.x;lastCompositeY_=request.y;lastCompositeW_=request.width;lastCompositeH_=request.height;lastCompositeUnits_=request.units;compositeDirty_=false;upload();}}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
+const bool skipComposite=standIn||held||deferred||viewportPresented_;viewportPresented_=false;if(!skipComposite&&viewportProvider){const auto request=viewportBounds();if(request.valid){const bool same=request.x==lastCompositeX_&&request.y==lastCompositeY_&&request.width==lastCompositeW_&&request.height==lastCompositeH_&&request.units==lastCompositeUnits_;if(compositeDirty_||!raster_||!same){auto patch=viewportProvider(request.x,request.y,request.width,request.height,request.units);raster_=std::move(patch.raster);rasterX_=patch.documentX;rasterY_=patch.documentY;rasterUnits_=patch.unitsPerPixel;setRasterCover(patch);lastCompositeX_=request.x;lastCompositeY_=request.y;lastCompositeW_=request.width;lastCompositeH_=request.height;lastCompositeUnits_=request.units;compositeDirty_=false;upload();}}}if(!context_)createDevice();preparePresentation();context_->BeginDraw();context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);context_->Clear(blackSurround_?D2D1::ColorF(0,0,0):D2D1::ColorF(.115f,.122f,.137f));if(raster_||movePreview_){const auto placed=viewMapping();float left=float(placed.origin.x),top=float(placed.origin.y);auto bounds=D2D1::RectF(left,top,left+float(documentWidth_*scale),top+float(documentHeight_*scale));auto renderBounds=bounds;if(cropOverlay_){const auto& crop=*cropOverlay_;renderBounds=D2D1::RectF(left+float(std::min(0.,crop.x)*scale),top+float(std::min(0.,crop.y)*scale),left+float(std::max(double(documentWidth_),crop.x+crop.width)*scale),top+float(std::max(double(documentHeight_),crop.y+crop.height)*scale));}const bool proofing=beginCmykProof();context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);if(!proofing){ensureChecker();context_->FillRectangle(D2D1::RectF(0,0,float(width()),float(height())),checkerBrush_.Get());}if(!movePreview_)drawDocumentStandIn(bounds,standIn);if(image_&&!movePreview_)context_->DrawBitmap(image_.Get(),bounds,1,D2D1_INTERPOLATION_MODE_LINEAR);else{const Raster* shown=movePreview_&&movePreview_->base?movePreview_->base.get():raster_.get();if(shown)drawRasterTiles(*shown,movePreview_?movePreview_->baseX:rasterX_,movePreview_?movePreview_->baseY:rasterY_,movePreview_?movePreview_->baseUnits:rasterUnits_,left,top,scale);}if(movePreview_){drawMoveSprite(scale);if(movePreview_->plate){const double dx=movePreview_->placed.x-movePreview_->anchorX,dy=movePreview_->placed.y-movePreview_->anchorY;drawRasterTiles(*movePreview_->plate,movePreview_->plateX+dx,movePreview_->plateY+dy,movePreview_->baseUnits,left,top,scale);}if(movePreview_->front)drawRasterTiles(*movePreview_->front,movePreview_->baseX,movePreview_->baseY,movePreview_->baseUnits,left,top,scale);}
 if(proofing){if(textOverlay_)drawTextOverlay(true);context_->PopAxisAlignedClip();finishCmykProof(bounds);context_->PushAxisAlignedClip(renderBounds,D2D1_ANTIALIAS_MODE_ALIASED);}
 if(showPixelGrid&&zoom>=8){
     const auto area=D2D1::RectF(std::max(0.f,left),std::max(0.f,top),std::min(float(width()),bounds.right),std::min(float(height()),bounds.bottom));
@@ -594,9 +619,11 @@ auto hr=context_->EndDraw();if(hr==D2DERR_RECREATE_TARGET){releaseDevice();updat
     if(hr==DXGI_ERROR_DEVICE_REMOVED||hr==DXGI_ERROR_DEVICE_RESET){releaseDevice();update();return;}
     check(hr,"Canvas present");
     if(hr==S_OK){
-        hasPresented_=true;
-        presentedViewport_=viewportState();
-        if(observePresentation)observePresentation({zoom,pan,!skipComposite||readyWheelFrame,std::move(pixels)});
+        if(!standIn){
+            hasPresented_=true;
+            presentedViewport_=viewportState();
+        }
+        if(observePresentation)observePresentation({zoom,pan,!standIn&&(!skipComposite||readyWheelFrame),std::move(pixels)});
     }
 }
 std::optional<int> NativeCanvas::cropResizeHandle(editing::Rect crop,Point point,const editing_transform::ViewMapping& mapping){
@@ -639,7 +666,7 @@ void NativeCanvas::drawSelection(){
     context_->DrawGeometry(selectionGeometry_.Get(),black.Get(),1,dashed.Get());
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
-void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(r);setDocumentSize(raster_?raster_->width:0,raster_?raster_->height:0);rasterX_=rasterY_=0;rasterUnits_=1;try{upload();}catch(const std::exception&e){error_=e.what();releaseDevice();}update();}
+void NativeCanvas::setRaster(std::shared_ptr<const Raster> r){raster_=std::move(r);setDocumentSize(raster_?raster_->width:0,raster_?raster_->height:0);rasterX_=rasterY_=0;rasterUnits_=1;rasterCoverWidth_=rasterCoverHeight_=0;try{upload();}catch(const std::exception&e){error_=e.what();releaseDevice();}update();}
 graphics::CanvasViewport NativeCanvas::viewportState()const{const auto frame=contentRect();return {{frame.width(),frame.height()},{pan.x(),pan.y()},backingScale_,zoom,followsFit_};}
 void NativeCanvas::installViewport(const graphics::CanvasViewport& state){
     const bool wasVisible=navigatorPlacement().visible;
@@ -754,10 +781,19 @@ bool NativeCanvas::sharpPatchCoversView()const{
     const double left=std::clamp(origin.x(),0.,double(documentWidth_)),top=std::clamp(origin.y(),0.,double(documentHeight_));
     const double right=std::clamp(origin.x()+frame.width()/scale,0.,double(documentWidth_)),bottom=std::clamp(origin.y()+frame.height()/scale,0.,double(documentHeight_));
     if(right<=left||bottom<=top)return true;
-    return rasterX_<=left+.51&&rasterY_<=top+.51&&rasterX_+raster_->width*rasterUnits_>=right-.51&&rasterY_+raster_->height*rasterUnits_>=bottom-.51;
+    // A patch composed only near its view holds pixels in its cover rectangle alone.
+    const bool covered=rasterCoverWidth_>0&&rasterCoverHeight_>0;
+    const double coverLeft=covered?std::max(rasterX_,rasterCoverX_):rasterX_,coverTop=covered?std::max(rasterY_,rasterCoverY_):rasterY_;
+    const double coverRight=covered?std::min(rasterX_+raster_->width*rasterUnits_,rasterCoverX_+rasterCoverWidth_):rasterX_+raster_->width*rasterUnits_;
+    const double coverBottom=covered?std::min(rasterY_+raster_->height*rasterUnits_,rasterCoverY_+rasterCoverHeight_):rasterY_+raster_->height*rasterUnits_;
+    return coverLeft<=left+.51&&coverTop<=top+.51&&coverRight>=right-.51&&coverBottom>=bottom-.51;
 }
-void NativeCanvas::drawDocumentStandIn(D2D1_RECT_F bounds){
-    if(!context_||wheelZoomFrame_||sharpPatchCoversView())return;
+bool NativeCanvas::canDrawZoomStandIn()const{
+    if(!context_||!hasPresented_||!raster_||rasterUnits_<=0||!presentedViewport_)return false;
+    return presentedViewport_->zoom!=zoom||presentedViewport_->pan.x!=pan.x()||presentedViewport_->pan.y!=pan.y();
+}
+void NativeCanvas::drawDocumentStandIn(D2D1_RECT_F bounds,bool zoomStandIn){
+    if(!context_||(wheelZoomFrame_&&!zoomStandIn)||sharpPatchCoversView())return;
     ensureNavigatorBitmap();
     if(!navigatorBitmap_||!navigatorRaster_||navigatorUnits_<=0||documentWidth_<=0)return;
     const auto& image=*navigatorRaster_;
@@ -886,17 +922,16 @@ void NativeCanvas::wheelEvent(QWheelEvent*e){
     if(modifiers.testFlag(Qt::AltModifier)){
         if(compositeHeld_||movePreview_)return;
         const double steps=std::abs(delta.y())>=std::abs(delta.x())?delta.y():delta.x();
-        const double target=std::clamp(zoom*std::exp(steps*(notch?std::log(1.25):.015)),.001,32.);
-        if(target!=zoom){
-            settleViewport();
-            zoomAt(target,e->position());
-            wheelZoomFrame_=true;
-            wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));
-            viewportPresented_=false;
-            wheelHover_=std::pair{e->position(),modifiers};
-            submitWheelZoom();
-            if(navigatorTimer_->isActive())navigatorTimer_->start();
+        const double base=queuedWheelZoom_?*queuedWheelZoom_:zoom;
+        const double target=std::clamp(base*std::exp(steps*(notch?std::log(1.25):.015)),.001,32.);
+        if(wheelZoomRequested_){
+            // Cancelling the running composite for every notch lets no frame finish while
+            // notches arrive faster than one composite takes. Fold the notch into one target
+            // and apply it when the running frame has been presented.
+            if(target!=base){queuedWheelZoom_=target;queuedWheelAnchor_=e->position();queuedWheelModifiers_=modifiers;}
+            return;
         }
+        if(target!=zoom)applyWheelZoom(target,e->position(),modifiers);
         return;
     }else{
         viewportGesture_=true;

@@ -42,7 +42,10 @@ private:
         int x{},y{};
         std::shared_ptr<const Raster::Tile> tile;
     };
-    std::array<Entry,8> entries_;
+    // Each layer of a deep stack reads its own tiles for every pixel, so the table must hold the
+    // tiles of many sources at once. Eight direct-mapped entries sent every sample to the shared mutex.
+    static constexpr size_t entryCount=512;
+    std::array<Entry,entryCount> entries_;
     ReducedTileReadScope* previous_{};
 };
 
@@ -56,6 +59,10 @@ public:
     // Unit coordinates remain in the original source, including any extended
     // ceil/aligned reduction coverage, so live and committed geometry agrees.
     Pixel sample(Point unit,Transform::Sampling)const;
+    // sample()'s position in reduced-grid units, for callers that read the grid directly.
+    Point mapped(Point unit)const;
+    // Reduced pixels x..x+count-1 of row y, all inside the grid, under one cache lock.
+    void readPixels(int x,int y,int count,Pixel* output)const;
     double sampleGray(Point unit,Transform::Sampling,uint8_t exterior=0)const;
 private:
     friend class ReducedSourceCache;
@@ -65,6 +72,8 @@ private:
     SamplingGrid grid_;
     int level_{};
     Pixel readReducedPixel(int x,int y)const;
+    // A reduced tile through the current ReducedTileReadScope; valid until its next lookup.
+    const Raster::Tile& scopedTile(int tx,int ty)const;
 };
 class ReducedSourceCache {
 public:

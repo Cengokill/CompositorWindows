@@ -45,10 +45,16 @@ int along(int pos,int length,bool clampLow,bool clampHigh){
     return pos;
 }
 template<class T> std::vector<T> gaussian(const std::vector<T>& source,int w,int h,double sigma,const Limits& limits,LayerSides clamp={}){
-    auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);std::vector<float> pass(std::size_t(w)*h);std::vector<T> output(source.size());
+    auto weights=gaussianWeights(sigma);int r=int(weights.size()/2);std::vector<float> pass(std::size_t(w)*h*4);std::vector<T> output(source.size());
     // Transparent exterior except on canvas-touching sides, which repeat the edge pixel.
-    for(int c=0;c<4;++c){for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=-r;k<=r;++k){const int xx=along(x+k,w,clamp.left,clamp.right);if(xx>=0)sum+=source[(std::size_t(y)*w+xx)*4+c]*weights[k+r];}pass[std::size_t(y)*w+x]=float(sum);}}
-        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){if((x&255)==0)cancel(limits);double sum=0;for(int k=-r;k<=r;++k){const int yy=along(y+k,h,clamp.top,clamp.bottom);if(yy>=0)sum+=pass[std::size_t(yy)*w+x]*weights[k+r];}output[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum);}}}
+    // Only the needed output: its columns, and the rows its vertical taps read. Those pixels
+    // are the same sums; the others stay zero. The four channels share each tap's position
+    // and keep their own sums, accumulated in the same order as one channel at a time.
+    const auto& needed=limits.needed;
+    const int left=needed?needed->left:0,right=needed?needed->right:w,top=needed?needed->top:0,bottom=needed?needed->bottom:h;
+    const int passTop=needed?std::max(0,top-r):0,passBottom=needed?std::min(h,bottom+r):h;
+    for(int y=passTop;y<passBottom;++y){cancel(limits);for(int x=left;x<right;++x){if((x&255)==0)cancel(limits);double sum[4]{};for(int k=-r;k<=r;++k){const int xx=along(x+k,w,clamp.left,clamp.right);if(xx<0)continue;const auto* p=&source[(std::size_t(y)*w+xx)*4];const double weight=weights[k+r];for(int c=0;c<4;++c)sum[c]+=p[c]*weight;}for(int c=0;c<4;++c)pass[(std::size_t(y)*w+x)*4+c]=float(sum[c]);}}
+    for(int y=top;y<bottom;++y){cancel(limits);for(int x=left;x<right;++x){if((x&255)==0)cancel(limits);double sum[4]{};for(int k=-r;k<=r;++k){const int yy=along(y+k,h,clamp.top,clamp.bottom);if(yy<0)continue;const float* p=&pass[(std::size_t(yy)*w+x)*4];const double weight=weights[k+r];for(int c=0;c<4;++c)sum[c]+=p[c]*weight;}for(int c=0;c<4;++c)output[(std::size_t(y)*w+x)*4+c]=blurValue<T>(sum[c]);}}
     return output;
 }
 template<class Sum=float> void boxPass(std::vector<float>& a,std::vector<float>& b,int w,int h,bool horizontal,int radius,LayerSides clamp,const Limits& limits){
@@ -162,22 +168,25 @@ double lensSample(const float* row,const float* next,int width,int x,int channel
 // Software implementation of the v1.5.8 optical behavior. Fixed quadrature
 // bounds work independently of radius; Core Image raster parity is unverified.
 std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const LensEffectSettings& raw,const Limits& limits){
+    // Every pixel loop below writes only its own row from inputs it does not change,
+    // so the rows run in parallel with the same arithmetic per pixel.
+    const auto rows=[&](const auto& row){graphics::runParallelBatch(std::size_t(h),0,[&](std::size_t y){cancel(limits);row(int(y));});};
     const auto s=raw.normalized();if(s.isIdentity())return input;
     count(w,h,limits,192);const double side=std::max(w,h);
     auto linear=[](double v){return v<=.04045?v/12.92:std::pow((v+.055)/1.055,2.4);};
     auto gamma=[](double v){v=std::max(0.,v);return v<=.0031308?v*12.92:1.055*std::pow(v,1/2.4)-.055;};
     std::vector<float> light(input.size()),high(input.size()),result;
-    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){
+    rows([&](int y){for(int x=0;x<w;++x){
         auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];
         double lum=a>0?(.2126*input[i]+.7152*input[i+1]+.0722*input[i+2])/a:0;
         double t=s.effect==LensEffect::Bokeh?.8:s.effect==LensEffect::Mist?.75:std::min(.95,s.threshold/100);
         double weight=std::clamp((lum-t)/(1-t),0.,1.);weight=weight*weight*(3-2*weight);
         for(int c=0;c<3;++c){light[i+c]=float(a>0?linear(input[i+c]/a)*a:0);high[i+c]=float(light[i+c]*weight);}light[i+3]=high[i+3]=1;
-    }}
+    }});
     if(s.threshold>95&&(s.effect==LensEffect::AnamorphicFlare||s.effect==LensEffect::Starburst)){
         auto density=fastGaussian(high,w,h,side*.03*(s.threshold-95)/5,limits,{true,true,true,true});double peak=0;
         for(std::size_t i=0;i<density.size();i+=4)peak=std::max(peak,.2126*density[i]+.7152*density[i+1]+.0722*density[i+2]);
-        if(peak>.001)for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double v=(.2126*density[i]+.7152*density[i+1]+.0722*density[i+2])/peak,cut=.25+.6*(s.threshold-95)/5;double weight=std::clamp((v-cut+.05)/.1,0.,1.);for(int c=0;c<3;++c)high[i+c]*=float(weight);}}
+        if(peak>.001)rows([&](int y){for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double v=(.2126*density[i]+.7152*density[i+1]+.0722*density[i+2])/peak,cut=.25+.6*(s.threshold-95)/5;double weight=std::clamp((v-cut+.05)/.1,0.,1.);for(int c=0;c<3;++c)high[i+c]*=float(weight);}});
     }
     result=light;
     if(s.effect==LensEffect::Prism){
@@ -185,16 +194,16 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
         for(int copy=int(s.prismCopies);copy>=1;--copy){
             std::vector<float> ghost(input.size());
             for(int way:{1,-1}){if(way==-1&&!s.prismBothWays)continue;
-                for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){double shift=way*side*(s.prismOffset*copy/100+(1-c)*.003);auto i=(std::size_t(y)*w+x)*4+c;ghost[i]=std::max(ghost[i],float(sample(light,w,h,x-dx*shift,y-dy*shift,c,{})));}}
+                rows([&](int y){for(int x=0;x<w;++x)for(int c=0;c<3;++c){double shift=way*side*(s.prismOffset*copy/100+(1-c)*.003);auto i=(std::size_t(y)*w+x)*4+c;ghost[i]=std::max(ghost[i],float(sample(light,w,h,x-dx*shift,y-dy*shift,c,{})));}});
             }
             if(s.prismBlur>0)ghost=fastGaussian(ghost,w,h,side*s.prismBlur/10000*copy,limits,{true,true,true,true});
             double fade=std::pow(.78,copy-1)*s.prismAmount/100;
-            for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=std::max(result[i],float(ghost[i]*fade));}}
+            rows([&](int y){for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=std::max(result[i],float(ghost[i]*fade));}});
         }
     }else if(s.effect==LensEffect::Mist){
         double size=side*(.2+s.mistSize/100*1.8)/100,strength=s.mistStrength/100,scatter=strength*.4;
         auto near=fastGaussian(light,w,h,size*.6,limits,{true,true,true,true});auto far=fastGaussian(light,w,h,size*4,limits,{true,true,true,true});auto glow=fastGaussian(high,w,h,size*1.5,limits,{true,true,true,true});
-        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=float(light[i]*(1-scatter)+near[i]*scatter*.6+far[i]*scatter*.4+glow[i]*strength*.35);}}
+        rows([&](int y){for(int x=0;x<w;++x)for(int c=0;c<3;++c){auto i=(std::size_t(y)*w+x)*4+c;result[i]=float(light[i]*(1-scatter)+near[i]*scatter*.6+far[i]*scatter*.4+glow[i]*strength*.35);}});
     }else if(s.effect==LensEffect::Bokeh){
         const double radius=side*s.bokehRadius/100,ring=s.bokehRing/100;
         struct BokehTap {double x,y,weight;};
@@ -207,7 +216,7 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
             taps[k]={std::cos(theta)*rad*(s.bokehShape==BokehShape::Oval?.5:1),std::sin(theta)*rad,1+ring*4*std::pow(rad,8)};
             total+=taps[k].weight;
         }
-        for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){double sum[3]{},bright[3]{};
+        rows([&](int y){for(int x=0;x<w;++x){double sum[3]{},bright[3]{};
             const double stretch=s.bokehShape==BokehShape::CatsEye?1-.65*std::min(1.,std::hypot((x+.5-w/2.)/(w/2.),(y+.5-h/2.)/(h/2.))):1.;
             for(const auto& tap:taps){
                 const auto sample=lensTap(x+tap.x*stretch*radius,y+tap.y*radius,tap.weight);
@@ -221,7 +230,7 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
                 for(int channel=0;channel<3;++channel){sum[channel]+=add(light,channel);bright[channel]+=add(high,channel);}
             }
             auto i=(std::size_t(y)*w+x)*4;for(int c=0;c<3;++c){double b=bright[c]/total*(12+s.bokehBrightness*.7);result[i+c]=float(sum[c]/total+.8*(1-std::exp(-b/.8)));}
-        }}
+        }});
     }else{
         bool flare=s.effect==LensEffect::AnamorphicFlare;int spokes=flare?1:s.starPoints/2;double amount=(flare?s.flareAmount:s.starAmount)/50;
         for(int spoke=0;spoke<spokes;++spoke){double theta=flare?0:(s.starAngle+spoke*180./spokes)*std::numbers::pi/180,reach=side*(flare?s.flareLength:s.starLength)/100;
@@ -234,8 +243,7 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
                     taps[c][k+32]=lensTap(t*reach*stretch*std::cos(theta),-t*reach*stretch*std::sin(theta),weight);
                 }
             }
-            for(int y=0;y<h;++y){
-                cancel(limits);
+            rows([&](int y){
                 const auto row=[&](int yy){return unsigned(yy)<unsigned(h)?high.data()+size_t(yy)*w*4:nullptr;};
                 for(int c=0;c<3;++c){
                     std::array<const float*,65> first{},second{};
@@ -247,10 +255,10 @@ std::vector<float> lensPixels(const std::vector<float>& input,int w,int h,const 
                         result[(size_t(y)*w+x)*4+c]+=float(sum/total*amount*4*coating);
                     }
                 }
-            }
+            });
         }
     }
-    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(a>0?std::clamp(gamma(result[i+c]/a),0.,1.)*a:0);result[i+3]=float(a);}}
+    rows([&](int y){for(int x=0;x<w;++x){auto i=(std::size_t(y)*w+x)*4;double a=input[i+3];for(int c=0;c<3;++c)result[i+c]=float(a>0?std::clamp(gamma(result[i+c]/a),0.,1.)*a:0);result[i+3]=float(a);}});
     return result;
 }
 bool finishingIdentity(Kind kind,const Settings& s){
@@ -275,7 +283,9 @@ template<class T> void sharpen(std::vector<T>& pixels,int w,int h,const Settings
     std::vector<float> input(pixels.begin(),pixels.end());
     auto blurred=gaussian(input,w,h,sigma,limits,sides);
     const double gain=s.sharpenAmount/100.;
-    for(int y=0;y<h;++y){cancel(limits);for(int x=0;x<w;++x){
+    // Outside the needed pixels the input stays as it is.
+    const auto& needed=limits.needed;
+    for(int y=needed?needed->top:0;y<(needed?needed->bottom:h);++y){cancel(limits);for(int x=needed?needed->left:0;x<(needed?needed->right:w);++x){
         const auto i=(std::size_t(y)*w+x)*4;const double a=input[i+3],ba=blurred[i+3];
         if(a<=0||ba<=0)continue;
         for(int c=0;c<3;++c){const double v=input[i+c]+gain*(input[i+c]-blurred[i+c]*a/ba);pixels[i+c]=blurValue<T>(std::clamp(v,hdr?-65504.:0.,hdr?65504.:a));}
@@ -358,7 +368,10 @@ void bloom(std::vector<std::uint8_t>& pixels,int w,int h,const Settings& s,doubl
     }
     auto blurred=gaussian(bright,w,h,radius,limits);
     const double mix=s.bloomGlow?amount/50:1;
-    for(std::size_t i=0;i<pixels.size();i+=4){unsigned a=std::min(255u,unsigned(pixels[i+3])+unsigned(std::clamp(blurred[i+3]*mix,0.,255.)));for(int c=0;c<3;++c)pixels[i+c]=byte(std::min(255.,double(pixels[i+c])+blurred[i+c]*mix));pixels[i+3]=std::uint8_t(a);}
+    // Outside the needed pixels the input stays as it is.
+    const auto& needed=limits.needed;
+    for(int y=needed?needed->top:0;y<(needed?needed->bottom:h);++y)for(int x=needed?needed->left:0;x<(needed?needed->right:w);++x){
+        const std::size_t i=(std::size_t(y)*w+x)*4;unsigned a=std::min(255u,unsigned(pixels[i+3])+unsigned(std::clamp(blurred[i+3]*mix,0.,255.)));for(int c=0;c<3;++c)pixels[i+c]=byte(std::min(255.,double(pixels[i+c])+blurred[i+c]*mix));pixels[i+3]=std::uint8_t(a);}
 }
 // Tone weighting follows MetalFinishing.swift at upstream 7b5ba975 (MIT).
 template<class T> void tonalLayerContrast(std::vector<T>& pixels,int w,int h,const TonalLayerSettings& s,double scale,const Limits& limits){
