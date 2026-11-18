@@ -86,13 +86,21 @@ int main(){
     });
     test("small_layer_centers_on_a_target_its_edge_would_take",[]{
         // A 20px layer near the canvas center: its top-left edges are closer to 500, but the center is also in reach.
-        t::SnapTargets canvas{{0,500,1000},{0,500,1000}};auto snap=t::snapOffset({497,497,20,20},canvas,10);
+        t::SnapTargets canvas{{0,500,1000},{0,500,1000},0,0,{500},{500}};auto snap=t::snapOffset({497,497,20,20},canvas,10);
         near(snap.offset,{-7,-7},"The center must take the target instead of the edge");require(snap.x==500&&snap.y==500,"Center guides");
         t::Drag drag{value(0,0,20,20,0),{0,0},{t::ModeKind::Move},{}};
         auto moved=t::previewDrag(drag,{497,497},false,{},canvas,1);
         near(moved.transform.x,490,"Dragged layer must be centered when both guides show the canvas center");near(moved.transform.y,490,"Dragged layer must be centered vertically");
         t::SnapTargets other{{9,55},{}};auto edge=t::snapOffset({10,0,80,80},other,10);
         near(edge.offset.x,-1,"An edge keeps a target its center cannot reach");require(edge.x==9,"Edge guide");
+    });
+    test("small_layer_edge_stays_on_an_edge_line_its_center_can_reach",[]{
+        // Only center lines pull the center; a small layer must still sit flush with an edge or a ruler guide.
+        t::SnapTargets canvas{{0,500,1000},{0,500,1000},0,0,{500},{500}};
+        auto flush=t::snapOffset({0,0,20,20},canvas,12);near(flush.offset,{0,0},"A layer flush with the canvas edge must not move");require(flush.x==0&&flush.y==0,"Canvas edge guides");
+        t::SnapTargets guide{{0,300,500,1000},{},0,0,{500},{}};
+        auto onGuide=t::snapOffset({300,0,20,20},guide,12);near(onGuide.offset.x,0,"An edge on a ruler guide must not move");require(onGuide.x==300,"Ruler guide");
+        auto nearGuide=t::snapOffset({303,0,20,20},guide,12);near(nearGuide.offset.x,-3,"An edge near a ruler guide must land on it");require(nearGuide.x==300,"Near ruler guide");
     });
     test("centered_canvas_size_layer_shows_the_center_cross",[]{
         // Every line of a centered canvas-size layer meets a target with no move; the guides must mark the center.
@@ -145,6 +153,7 @@ int main(){
         require(layers.size()==2&&layers[0].id=="nested"&&layers[1].id=="last","Visible hierarchy/source order");
         const std::array<std::string,1> excluded{"last"};auto targets=t::collectSnapTargets({400,300},layers,excluded,{},editing::SnapPolicy{},editing::LayoutGrid{});
         require(targets.xs==std::vector<double>{0,200,400,120,150,180},"Rotated snap upright xbounds");require(targets.ys==std::vector<double>{0,150,300,100,150,200},"Rotated snap upright ybounds");
+        require(targets.centerXs==std::vector<double>{200,150}&&targets.centerYs==std::vector<double>{150,150},"Center lines must list the canvas and layer centers");
         auto draft=t::visiblePlacements(doc,[](const Layer& layer){auto transformed=layer.transform;transformed.x+=20;return transformed;});near(draft[0].transform.x,120,"Displayed transform callback");
     });
     test("source_press_outside_active_moves_option_delays_duplicate",[]{

@@ -155,22 +155,25 @@ bool usableCorners(const Corners& c){
 SnapResult snapOffset(Rect box,const SnapTargets& targets,double tolerance){
     SnapResult result;if(!std::isfinite(tolerance)||tolerance<0)return result;
     // Windows choices: the center is listed first so it wins equal moves, and a centered layer marks the
-    // canvas center rather than its edge. When the center can also reach the matched line, it lands there,
-    // so a small layer's edge cannot take the canvas center. Grid-only lines move the layer without guides.
-    const auto axis=[tolerance](std::array<double,3> guides,const std::vector<double>& values,double step,double& offset,std::optional<double>& matched){
+    // canvas center rather than its edge. A canvas or layer center line the center can reach takes the
+    // center, so a small layer's edge cannot land there under a cross; edge lines and ruler guides keep
+    // the edge, even when the center is within reach. Grid-only lines move the layer without guides.
+    const auto axis=[tolerance](std::array<double,3> guides,const std::vector<double>& values,const std::vector<double>& centers,double step,double& offset,std::optional<double>& matched){
         for(double guide:guides){const auto target=editing::nearestSnapLine(guide,values,step,tolerance);if(!target)continue;const double move=*target-guide;if(matched&&std::abs(offset)<=std::abs(move))continue;offset=move;matched=target;}
-        if(matched&&std::abs(*matched-guides[0])<=tolerance)offset=*matched-guides[0];
-        if(matched&&std::find(values.begin(),values.end(),*matched)==values.end())matched.reset();
+        const auto listed=[&](const std::vector<double>& lines){return matched&&std::find(lines.begin(),lines.end(),*matched)!=lines.end();};
+        if(listed(centers)&&std::abs(*matched-guides[0])<=tolerance)offset=*matched-guides[0];
+        if(!listed(values))matched.reset(); // A grid line, not a listed target: no guide.
     };
-    axis({box.x+box.width/2,box.x,box.x+box.width},targets.xs,targets.gridX,result.offset.x,result.x);
-    axis({box.y+box.height/2,box.y,box.y+box.height},targets.ys,targets.gridY,result.offset.y,result.y);return result;
+    axis({box.x+box.width/2,box.x,box.x+box.width},targets.xs,targets.centerXs,targets.gridX,result.offset.x,result.x);
+    axis({box.y+box.height/2,box.y,box.y+box.height},targets.ys,targets.centerYs,targets.gridY,result.offset.y,result.y);return result;
 }
 Preview previewDrag(const Drag& drag,Point point,bool ratio,Modifiers flags,const SnapTargets& targets,double zoom){
     Preview out{drag.original,{}, {}};
     if(auto c=drag.movedCorners(point,flags.shift)){if(usableCorners(*c))out.distortion=c;else out.accepted=false;return out;}
     out.transform=roundedTransform(drag.updated(point,ratio,flags));
     if(drag.mode.kind==ModeKind::Move&&!flags.control){
-        // Screen points; Windows uses a slightly stronger pull than the source's 10.
+        // Screen points; Windows uses a slightly stronger pull than the source's 10 for layer moves.
+        // Selection moves keep their 8-point pull in SelectionActions.cpp.
         out.snap=snapOffset(bounds(out.transform),targets,12/std::max(safeZoom(zoom),.0001));
         // Shift keeps the move on its dominant axis; snapping must not reintroduce motion on the locked axis.
         if(flags.shift){const auto d=subtract(point,drag.start);if(std::abs(d.x)>=std::abs(d.y)){out.snap.offset.y=0;out.snap.y.reset();}else{out.snap.offset.x=0;out.snap.x.reset();}}

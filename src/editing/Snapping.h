@@ -37,6 +37,7 @@ struct LayoutGrid {
 struct SnapLines {
     std::vector<double> xs,ys;
     double gridX{},gridY{};
+    std::vector<double> centerXs,centerYs; // Document and layer centers, also listed in xs/ys.
 };
 struct PointSnap {
     Point point;
