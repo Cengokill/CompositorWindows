@@ -94,11 +94,30 @@ int main(){
         t::SnapTargets other{{9,55},{}};auto edge=t::snapOffset({10,0,80,80},other,10);
         near(edge.offset.x,-1,"An edge keeps a target its center cannot reach");require(edge.x==9,"Edge guide");
     });
-    test("move_snap_reaches_fifteen_screen_points",[]{
+    test("centered_canvas_size_layer_shows_the_center_cross",[]{
+        // Every line of a centered canvas-size layer meets a target with no move; the guides must mark the center.
+        t::SnapTargets canvas{{0,500,1000},{0,400,800}};
+        auto centered=t::snapOffset({0,0,1000,800},canvas,12);near(centered.offset,{0,0},"A centered layer must not move");
+        require(centered.x==500&&centered.y==400,"A centered layer must show the canvas-center cross");
+        t::Drag drag{value(40,30,1000,800,0),{500,400},{t::ModeKind::Move},{}};
+        auto back=t::previewDrag(drag,{463,372},false,{},canvas,1);
+        near(back.transform.x,0,"Dragged layer must snap back to the canvas");near(back.transform.y,0,"Dragged layer must snap back vertically");
+        require(back.snap.x==500&&back.snap.y==400,"Snapping a canvas-size layer back must show the center cross");
+        t::SnapTargets withGrid{{0,500,1000},{0,400,800},25,25};
+        auto gridded=t::snapOffset({0,0,1000,800},withGrid,12);require(gridded.x==500&&gridded.y==400,"A shown grid must keep the center cross");
+    });
+    test("grid_snap_moves_without_guides",[]{
+        // The shown grid already marks its lines; a cross is reserved for the canvas, layers and ruler guides.
         t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};
-        auto reached=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{114},{}},1);near(reached.transform.x,14,"A target 14 points away must snap");require(reached.snap.x==114,"Missing 14-point guide");
-        auto missed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{116},{}},1);near(missed.transform.x,0,"A target 16 points away must not snap");require(!missed.snap.x,"16-point guide shown");
-        auto zoomed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{114},{}},2);near(zoomed.transform.x,0,"Tolerance must stay in screen points");
+        auto snapped=t::previewDrag(drag,{24,3},false,{},t::SnapTargets{{},{},25,25},1);
+        near(snapped.transform.x,25,"Grid must still snap x");near(snapped.transform.y,0,"Grid must still snap y");
+        require(!snapped.snap.x&&!snapped.snap.y,"A grid-only snap showed guides");
+    });
+    test("move_snap_reaches_twelve_screen_points",[]{
+        t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};
+        auto reached=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{111},{}},1);near(reached.transform.x,11,"A target 11 points away must snap");require(reached.snap.x==111,"Missing 11-point guide");
+        auto missed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{113},{}},1);near(missed.transform.x,0,"A target 13 points away must not snap");require(!missed.snap.x,"13-point guide shown");
+        auto zoomed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{111},{}},2);near(zoomed.transform.x,0,"Tolerance must stay in screen points");
     });
     test("preview_rounds_before_snap_and_control_disables_only_snap",[]{
         t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};t::SnapTargets targets{{15},{}};

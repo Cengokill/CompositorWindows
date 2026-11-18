@@ -135,7 +135,8 @@ bool MainWindow::updateSelection(Point point,Qt::KeyboardModifiers modifiers,boo
                 const auto& box=*selectionMoveBox_;
                 auto snap=editing_transform::snapOffset({box.x+offset.x,box.y+offset.y,box.width,box.height},*lines,8/std::max(p->canvas->pointsPerPixel(),.0001));
                 if(modifiers.testFlag(Qt::ShiftModifier)){if(offset.y==0){snap.offset.y=0;snap.y.reset();}else{snap.offset.x=0;snap.x.reset();}}
-                if(snap.x||snap.y){offset.x=std::round(offset.x+snap.offset.x);offset.y=std::round(offset.y+snap.offset.y);}
+                // A grid-only snap moves without a guide.
+                if(snap.x||snap.y||snap.offset.x!=0||snap.offset.y!=0){offset.x=std::round(offset.x+snap.offset.x);offset.y=std::round(offset.y+snap.offset.y);}
                 p->canvas->setSnapGuides(snap.x,snap.y);
             }
             if(std::round(offset.x)==0&&std::round(offset.y)==0)p->document->selection=selectionBefore_;
