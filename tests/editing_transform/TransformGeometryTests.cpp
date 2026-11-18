@@ -84,9 +84,25 @@ int main(){
         t::SnapTargets ties{{8,12},{}};auto tie=t::snapOffset({10,0,80,80},ties,2);near(tie.offset.x,-2,"First equal-distance target must win");
         require(!t::snapOffset({10,0,80,80},ties,1.99).x,"Snap threshold relaxed");
     });
+    test("small_layer_centers_on_a_target_its_edge_would_take",[]{
+        // A 20px layer near the canvas center: its top-left edges are closer to 500, but the center is also in reach.
+        t::SnapTargets canvas{{0,500,1000},{0,500,1000}};auto snap=t::snapOffset({497,497,20,20},canvas,10);
+        near(snap.offset,{-7,-7},"The center must take the target instead of the edge");require(snap.x==500&&snap.y==500,"Center guides");
+        t::Drag drag{value(0,0,20,20,0),{0,0},{t::ModeKind::Move},{}};
+        auto moved=t::previewDrag(drag,{497,497},false,{},canvas,1);
+        near(moved.transform.x,490,"Dragged layer must be centered when both guides show the canvas center");near(moved.transform.y,490,"Dragged layer must be centered vertically");
+        t::SnapTargets other{{9,55},{}};auto edge=t::snapOffset({10,0,80,80},other,10);
+        near(edge.offset.x,-1,"An edge keeps a target its center cannot reach");require(edge.x==9,"Edge guide");
+    });
+    test("move_snap_reaches_fifteen_screen_points",[]{
+        t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};
+        auto reached=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{114},{}},1);near(reached.transform.x,14,"A target 14 points away must snap");require(reached.snap.x==114,"Missing 14-point guide");
+        auto missed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{116},{}},1);near(missed.transform.x,0,"A target 16 points away must not snap");require(!missed.snap.x,"16-point guide shown");
+        auto zoomed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{114},{}},2);near(zoomed.transform.x,0,"Tolerance must stay in screen points");
+    });
     test("preview_rounds_before_snap_and_control_disables_only_snap",[]{
         t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};t::SnapTargets targets{{15},{}};
-        auto snap=t::previewDrag(drag,{9.5,0},false,{},targets,2);near(snap.transform.x,15,"Round10 then snap15 at5pixel tolerance");require(snap.snap.x==15,"Missing snapped guide");
+        auto snap=t::previewDrag(drag,{9.5,0},false,{},targets,2);near(snap.transform.x,15,"Round10 then snap15 within the zoomed tolerance");require(snap.snap.x==15,"Missing snapped guide");
         auto free=t::previewDrag(drag,{9.5,0},false,{false,false,false,true},targets,2);near(free.transform.x,10,"Control must keep source rounding");require(!free.snap.x,"Control snapped");
         auto tooFar=t::previewDrag(drag,{9.5,0},false,{},targets,4);near(tooFar.transform.x,10,"Zoom must shrink document tolerance");
         drag.mode={t::ModeKind::Resize,4};drag.start={100,50};auto resized=t::previewDrag(drag,{109.5,50},false,{},targets,1);require(!resized.snap.x,"Resize should not move snap");
