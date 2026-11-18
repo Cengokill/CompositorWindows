@@ -59,7 +59,7 @@ struct Drag {
 };
 bool usableCorners(const Corners&);
 using SnapTargets=editing::SnapLines;
-struct SnapResult { Point offset; std::optional<double> x,y; };
+struct SnapResult { Point offset; std::optional<double> x,y; }; // x/y are guide lines; a grid-only snap has an offset and no guide.
 SnapResult snapOffset(Rect,const SnapTargets&,double documentTolerance);
 struct Preview {
     Transform transform;

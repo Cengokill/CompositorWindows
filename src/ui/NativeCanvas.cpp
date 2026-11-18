@@ -1,5 +1,6 @@
 #include "NativeCanvas.h"
 #include "CanvasAccessibility.h"
+#include "LayerPanelTokens.h"
 #include <QCursor>
 #include <QGuiApplication>
 #include <QMouseEvent>
@@ -22,6 +23,8 @@ namespace compositor {
 using Microsoft::WRL::ComPtr;
 static void check(HRESULT result,const char*message){if(FAILED(result))throw std::runtime_error(std::string(message)+" (HRESULT "+std::to_string(uint32_t(result))+")");}
 namespace {
+// The moved layer outline and snap guides share the Layers panel opacity slider blue.
+D2D1_COLOR_F canvasAccent(){const QColor color(ui::layer_panel::accent);return D2D1::ColorF(float(color.redF()),float(color.greenF()),float(color.blueF()));}
 double niceRulerStep(double raw){
     if(!(raw>0)||!std::isfinite(raw))return 1;
     const double magnitude=std::pow(10,std::floor(std::log10(raw)));
@@ -571,7 +574,7 @@ if(!cameraRawGuides_.empty()&&documentWidth_>0&&documentHeight_>0){
     }
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 }
-if((transformOverlay_||distortionOverlay_)&&documentWidth_>0&&documentHeight_>0){auto overlay=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());ComPtr<ID2D1SolidColorBrush> line,fill;check(context_->CreateSolidColorBrush(D2D1::ColorF(.3f,.7f,1),&line),"Transform outline");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&fill),"Transform handle");auto point=[](Point p){return D2D1::Point2F(float(p.x),float(p.y));};for(int i=0;i<4;++i)context_->DrawLine(point(overlay.outline[i]),point(overlay.outline[(i+1)%4]),line.Get(),1);for(auto h:overlay.handles){auto box=D2D1::RectF(float(h.x-3),float(h.y-3),float(h.x+3),float(h.y+3));context_->FillRectangle(box,fill.Get());context_->DrawRectangle(box,line.Get(),1);}if(overlay.showsRotation){context_->DrawLine(point(overlay.handles[1]),point(overlay.rotationHandle),line.Get(),1);context_->FillEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),fill.Get());context_->DrawEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),line.Get(),1);}}
+if((transformOverlay_||distortionOverlay_)&&documentWidth_>0&&documentHeight_>0){auto overlay=distortionOverlay_?editing_transform::OverlayGeometry::fromCorners(*distortionOverlay_,viewMapping()):editing_transform::OverlayGeometry::fromTransform(*transformOverlay_,viewMapping());ComPtr<ID2D1SolidColorBrush> line,fill;check(context_->CreateSolidColorBrush(canvasAccent(),&line),"Transform outline");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&fill),"Transform handle");auto point=[](Point p){return D2D1::Point2F(float(p.x),float(p.y));};for(int i=0;i<4;++i)context_->DrawLine(point(overlay.outline[i]),point(overlay.outline[(i+1)%4]),line.Get(),1);for(auto h:overlay.handles){auto box=D2D1::RectF(float(h.x-3),float(h.y-3),float(h.x+3),float(h.y+3));context_->FillRectangle(box,fill.Get());context_->DrawRectangle(box,line.Get(),1);}if(overlay.showsRotation){context_->DrawLine(point(overlay.handles[1]),point(overlay.rotationHandle),line.Get(),1);context_->FillEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),fill.Get());context_->DrawEllipse(D2D1::Ellipse(point(overlay.rotationHandle),4,4),line.Get(),1);}}
 if(brushCursor_){
     const auto& cursor=*brushCursor_;const auto center=D2D1::Point2F(float(cursor.center.x),float(cursor.center.y));const float radius=float(cursor.diameter/2);
     ComPtr<ID2D1SolidColorBrush> black,white;check(context_->CreateSolidColorBrush(D2D1::ColorF(0,0,0),&black),"Brush cursor black");check(context_->CreateSolidColorBrush(D2D1::ColorF(1,1,1),&white),"Brush cursor white");
@@ -602,8 +605,8 @@ if(brushCursor_){
 }
 if(sampleRing_){auto center=viewMapping().toView(sampleRing_->position);auto ring=D2D1::Ellipse(D2D1::Point2F(float(center.x),float(center.y)),43,43);ComPtr<ID2D1SolidColorBrush> brush;check(context_->CreateSolidColorBrush(D2D1::ColorF(.45f,.45f,.45f),&brush),"Sample ring");context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);context_->DrawEllipse(ring,brush.Get(),24);for(int half=0;half<2;++half){auto color=half?sampleRing_->original:sampleRing_->sampled;brush->SetColor(D2D1::ColorF(color.r/255.f,color.g/255.f,color.b/255.f));context_->PushAxisAlignedClip(D2D1::RectF(float(center.x-58),float(center.y+(half?0:-58)),float(center.x+58),float(center.y+(half?58:0))),D2D1_ANTIALIAS_MODE_ALIASED);context_->DrawEllipse(ring,brush.Get(),16);context_->PopAxisAlignedClip();}}
 if((snapGuideX_||snapGuideY_)&&documentWidth_>0&&documentHeight_>0){
-    const auto color=palette().color(QPalette::Highlight);ComPtr<ID2D1SolidColorBrush> accent;
-    check(context_->CreateSolidColorBrush(D2D1::ColorF(float(color.redF()),float(color.greenF()),float(color.blueF())),&accent),"Snap guide");
+    ComPtr<ID2D1SolidColorBrush> accent;
+    check(context_->CreateSolidColorBrush(canvasAccent(),&accent),"Snap guide");
     const auto mapping=viewMapping();const auto point=[&](Point p){auto view=mapping.toView(p);return D2D1::Point2F(float(view.x),float(view.y));};
     context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     if(snapGuideX_)context_->DrawLine(point({*snapGuideX_,0}),point({*snapGuideX_,double(documentHeight_)}),accent.Get(),1);

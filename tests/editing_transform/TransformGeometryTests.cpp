@@ -84,9 +84,52 @@ int main(){
         t::SnapTargets ties{{8,12},{}};auto tie=t::snapOffset({10,0,80,80},ties,2);near(tie.offset.x,-2,"First equal-distance target must win");
         require(!t::snapOffset({10,0,80,80},ties,1.99).x,"Snap threshold relaxed");
     });
+    test("small_layer_centers_on_a_target_its_edge_would_take",[]{
+        // A 20px layer near the canvas center: its top-left edges are closer to 500, but the center is also in reach.
+        t::SnapTargets canvas{{0,500,1000},{0,500,1000},0,0,{500},{500}};auto snap=t::snapOffset({497,497,20,20},canvas,10);
+        near(snap.offset,{-7,-7},"The center must take the target instead of the edge");require(snap.x==500&&snap.y==500,"Center guides");
+        t::Drag drag{value(0,0,20,20,0),{0,0},{t::ModeKind::Move},{}};
+        auto moved=t::previewDrag(drag,{497,497},false,{},canvas,1);
+        near(moved.transform.x,490,"Dragged layer must be centered when both guides show the canvas center");near(moved.transform.y,490,"Dragged layer must be centered vertically");
+        t::SnapTargets other{{9,55},{}};auto edge=t::snapOffset({10,0,80,80},other,10);
+        near(edge.offset.x,-1,"An edge keeps a target its center cannot reach");require(edge.x==9,"Edge guide");
+    });
+    test("small_layer_edge_stays_on_an_edge_line_its_center_can_reach",[]{
+        // Only center lines pull the center; a small layer must still sit flush with an edge or a ruler guide.
+        t::SnapTargets canvas{{0,500,1000},{0,500,1000},0,0,{500},{500}};
+        auto flush=t::snapOffset({0,0,20,20},canvas,12);near(flush.offset,{0,0},"A layer flush with the canvas edge must not move");require(flush.x==0&&flush.y==0,"Canvas edge guides");
+        t::SnapTargets guide{{0,300,500,1000},{},0,0,{500},{}};
+        auto onGuide=t::snapOffset({300,0,20,20},guide,12);near(onGuide.offset.x,0,"An edge on a ruler guide must not move");require(onGuide.x==300,"Ruler guide");
+        auto nearGuide=t::snapOffset({303,0,20,20},guide,12);near(nearGuide.offset.x,-3,"An edge near a ruler guide must land on it");require(nearGuide.x==300,"Near ruler guide");
+    });
+    test("centered_canvas_size_layer_shows_the_center_cross",[]{
+        // Every line of a centered canvas-size layer meets a target with no move; the guides must mark the center.
+        t::SnapTargets canvas{{0,500,1000},{0,400,800}};
+        auto centered=t::snapOffset({0,0,1000,800},canvas,12);near(centered.offset,{0,0},"A centered layer must not move");
+        require(centered.x==500&&centered.y==400,"A centered layer must show the canvas-center cross");
+        t::Drag drag{value(40,30,1000,800,0),{500,400},{t::ModeKind::Move},{}};
+        auto back=t::previewDrag(drag,{463,372},false,{},canvas,1);
+        near(back.transform.x,0,"Dragged layer must snap back to the canvas");near(back.transform.y,0,"Dragged layer must snap back vertically");
+        require(back.snap.x==500&&back.snap.y==400,"Snapping a canvas-size layer back must show the center cross");
+        t::SnapTargets withGrid{{0,500,1000},{0,400,800},25,25};
+        auto gridded=t::snapOffset({0,0,1000,800},withGrid,12);require(gridded.x==500&&gridded.y==400,"A shown grid must keep the center cross");
+    });
+    test("grid_snap_moves_without_guides",[]{
+        // The shown grid already marks its lines; a cross is reserved for the canvas, layers and ruler guides.
+        t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};
+        auto snapped=t::previewDrag(drag,{24,3},false,{},t::SnapTargets{{},{},25,25},1);
+        near(snapped.transform.x,25,"Grid must still snap x");near(snapped.transform.y,0,"Grid must still snap y");
+        require(!snapped.snap.x&&!snapped.snap.y,"A grid-only snap showed guides");
+    });
+    test("move_snap_reaches_twelve_screen_points",[]{
+        t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};
+        auto reached=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{111},{}},1);near(reached.transform.x,11,"A target 11 points away must snap");require(reached.snap.x==111,"Missing 11-point guide");
+        auto missed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{113},{}},1);near(missed.transform.x,0,"A target 13 points away must not snap");require(!missed.snap.x,"13-point guide shown");
+        auto zoomed=t::previewDrag(drag,{0,0},false,{},t::SnapTargets{{111},{}},2);near(zoomed.transform.x,0,"Tolerance must stay in screen points");
+    });
     test("preview_rounds_before_snap_and_control_disables_only_snap",[]{
         t::Drag drag{value(0,0,100,50,0),{0,0},{t::ModeKind::Move},{}};t::SnapTargets targets{{15},{}};
-        auto snap=t::previewDrag(drag,{9.5,0},false,{},targets,2);near(snap.transform.x,15,"Round10 then snap15 at5pixel tolerance");require(snap.snap.x==15,"Missing snapped guide");
+        auto snap=t::previewDrag(drag,{9.5,0},false,{},targets,2);near(snap.transform.x,15,"Round10 then snap15 within the zoomed tolerance");require(snap.snap.x==15,"Missing snapped guide");
         auto free=t::previewDrag(drag,{9.5,0},false,{false,false,false,true},targets,2);near(free.transform.x,10,"Control must keep source rounding");require(!free.snap.x,"Control snapped");
         auto tooFar=t::previewDrag(drag,{9.5,0},false,{},targets,4);near(tooFar.transform.x,10,"Zoom must shrink document tolerance");
         drag.mode={t::ModeKind::Resize,4};drag.start={100,50};auto resized=t::previewDrag(drag,{109.5,50},false,{},targets,1);require(!resized.snap.x,"Resize should not move snap");
@@ -110,6 +153,7 @@ int main(){
         require(layers.size()==2&&layers[0].id=="nested"&&layers[1].id=="last","Visible hierarchy/source order");
         const std::array<std::string,1> excluded{"last"};auto targets=t::collectSnapTargets({400,300},layers,excluded,{},editing::SnapPolicy{},editing::LayoutGrid{});
         require(targets.xs==std::vector<double>{0,200,400,120,150,180},"Rotated snap upright xbounds");require(targets.ys==std::vector<double>{0,150,300,100,150,200},"Rotated snap upright ybounds");
+        require(targets.centerXs==std::vector<double>{200,150}&&targets.centerYs==std::vector<double>{150,150},"Center lines must list the canvas and layer centers");
         auto draft=t::visiblePlacements(doc,[](const Layer& layer){auto transformed=layer.transform;transformed.x+=20;return transformed;});near(draft[0].transform.x,120,"Displayed transform callback");
     });
     test("source_press_outside_active_moves_option_delays_duplicate",[]{

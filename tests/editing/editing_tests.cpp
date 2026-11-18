@@ -273,7 +273,8 @@ void snap_policy_grid(){
     REQUIRE(snapPoint({52,24},SnapLines{{},{},25,25},4).point==Point{50,25});
     auto disabled=documentSnapLines({400,300},{},SnapPolicy{.enabled=false},grid);REQUIRE(disabled.xs.empty()&&disabled.ys.empty()&&disabled.gridX==0);
     auto gridOff=documentSnapLines({400,300},{},SnapPolicy{.grid=false},grid);REQUIRE(gridOff.gridX==0&&gridOff.xs.size()==3);
-    auto gridOn=documentSnapLines({400,300},{},SnapPolicy{.grid=true},grid);REQUIRE(gridOn.gridX==25&&gridOn.gridY==25);
+    auto gridHidden=documentSnapLines({400,300},{},SnapPolicy{.grid=true},grid);REQUIRE(gridHidden.gridX==0&&gridHidden.gridY==0);
+    grid.visible=true;auto gridOn=documentSnapLines({400,300},{},SnapPolicy{.grid=true},grid);REQUIRE(gridOn.gridX==25&&gridOn.gridY==25);
 }
 void canvas_creation(){
     REQUIRE(creationPixels(8.5,PrintUnit::Inches,300)==2550&&creationPixels(11,PrintUnit::Inches,300)==3300);

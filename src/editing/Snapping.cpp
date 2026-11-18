@@ -10,14 +10,14 @@ SnapLines documentSnapLines(Point size, std::span<const Guide> guides, const Sna
     SnapLines lines;
     if (!policy.enabled) return lines;
     if (policy.documentEdges) lines.xs.push_back(0);
-    if (policy.documentCenter) lines.xs.push_back(size.x / 2);
+    if (policy.documentCenter) { lines.xs.push_back(size.x / 2); lines.centerXs.push_back(size.x / 2); }
     if (policy.documentEdges) lines.xs.push_back(size.x);
     if (policy.documentEdges) lines.ys.push_back(0);
-    if (policy.documentCenter) lines.ys.push_back(size.y / 2);
+    if (policy.documentCenter) { lines.ys.push_back(size.y / 2); lines.centerYs.push_back(size.y / 2); }
     if (policy.documentEdges) lines.ys.push_back(size.y);
     if (policy.guides)
         for (const auto& guide : guides) (guide.horizontal ? lines.ys : lines.xs).push_back(guide.position);
-    if (policy.grid && grid.valid()) {
+    if (policy.grid && grid.visible && grid.valid()) {
         lines.gridX = grid.step();
         lines.gridY = grid.step();
     }
@@ -26,13 +26,13 @@ SnapLines documentSnapLines(Point size, std::span<const Guide> guides, const Sna
 
 void addBoxSnapLines(SnapLines& lines, double x, double y, double width, double height, const SnapPolicy& policy) {
     if (!policy.enabled) return;
-    const auto add = [&](std::vector<double>& target, double start, double length) {
+    const auto add = [&](std::vector<double>& target, std::vector<double>& centers, double start, double length) {
         if (policy.layerEdges) target.push_back(std::round(start));
-        if (policy.layerCenters) target.push_back(std::round(start + length / 2));
+        if (policy.layerCenters) { target.push_back(std::round(start + length / 2)); centers.push_back(target.back()); }
         if (policy.layerEdges) target.push_back(std::round(start + length));
     };
-    add(lines.xs, x, width);
-    add(lines.ys, y, height);
+    add(lines.xs, lines.centerXs, x, width);
+    add(lines.ys, lines.centerYs, y, height);
 }
 
 std::optional<double> nearestSnapLine(double value, std::span<const double> lines, double gridStep, double tolerance) {

@@ -247,5 +247,22 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         require(project.active==imageId&&project.selected==std::vector<std::string>{imageId},"Auto-select off changed the selection");
         require(project.history.undoCount()==undo,"A click without movement added history");
     });
+    test("ui_move_ignores_grid_snap_while_the_grid_is_hidden",[]{
+        // A remembered Snap To Grid choice must not pull a layer onto lines the canvas does not show.
+        MainWindow window(true);Document d;d.id=newId();d.width=1000;d.height=1000;
+        Layer back;back.id=newId();back.name="Back";back.transform={0,0,1000,1000};back.raster=Raster::filled(1000,1000,{255,255,255,255});d.layers.push_back(back);
+        Layer square;square.id=newId();square.name="Square";square.transform={103,207,200,200};square.raster=Raster::filled(200,200,{220,40,40,255});d.layers.push_back(square);
+        auto& project=window.addProject(d);showCanvas(window);project.canvas->zoom=1;project.active=square.id;project.selected={square.id};
+        auto* gridSnap=control<QAction>(window,"snapGrid");auto* gridShown=control<QAction>(window,"viewLayoutGrid");
+        if(!gridSnap->isChecked())gridSnap->trigger();
+        require(gridSnap->isChecked()&&!gridShown->isChecked(),"Expected Snap To Grid with a hidden grid");
+        const auto& moved=[&]()->const Transform&{return project.document->layers.back().transform;};
+        down(project,{203,307});move(project,{207,310});require(!project.canvas->hasSnapGuides(),"A hidden grid showed snap guides");up(project,{207,310});
+        require(moved().x==107&&moved().y==210,"A hidden grid pulled the moved layer");
+        gridShown->trigger();require(gridShown->isChecked(),"Layout grid did not show");
+        drag(project,{207,310},{211,311});require(moved().x==100&&moved().y==200,"A shown grid must still snap the moved layer");
+        require(project.history.undoCount()==2,"Each move must be one undo step");
+        gridSnap->trigger();
+    });
     std::cout<<"{\"suite\":\"transform_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";return failed?1:0;
 }
