@@ -90,11 +90,11 @@ void MainWindow::refreshLayerVisibility(EditorProject& project, const Layer& lay
     const auto transform=selectedTransform();
     if(transform){
         const double values[]{transform->x,transform->y,transform->width,transform->height,transform->rotation};
-        for(int i=0;i<5;++i)ui::synchronizeNumber(geometry_[i],values[i]);
+        showGeometry(values);
     }
-    for(auto* field:geometry_)
-        field->setEnabled(state.activeLayer&&ui::commandEnabled(ui::CommandGate::TransformDraft,state)&&
-                          !project.importing&&!project.projectBusy&&(!transformSession_||!transformSession_->corners));
+    const bool geometryEditable=state.activeLayer&&ui::commandEnabled(ui::CommandGate::TransformDraft,state)&&
+                          !project.importing&&!project.projectBusy&&(!transformSession_||!transformSession_->corners);
+    enableGeometry(geometryEditable);
     updateTransformActions();
     if(brushPointer_)refreshBrushPointer();
     if(commands_)commands_->refresh();

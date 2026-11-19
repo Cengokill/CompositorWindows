@@ -85,16 +85,18 @@ public:
             if(!(option->state&State_On))painter->drawLine(r.topLeft(),r.bottomRight());
             painter->restore();return;
         }
-        if(element==PE_IndicatorCheckBox||element==PE_IndicatorRadioButton) {
+        if(element==PE_IndicatorCheckBox) {
+            paintCheckBoxIndicator(painter,QRectF(option->rect),option->state&(State_On|State_NoChange),option->state&State_Enabled,option->state&State_MouseOver);
+            return;
+        }
+        if(element==PE_IndicatorRadioButton) {
             painter->save();painter->setRenderHint(QPainter::Antialiasing);
             auto r=QRectF(option->rect).adjusted(1.5,1.5,-1.5,-1.5);
             const bool on=option->state&(State_On|State_NoChange);
             painter->setOpacity(option->state&State_Enabled?1:.35);
-            painter->setPen(QPen(on?QColor(accent):QColor("#54565c"),1));painter->setBrush(on?QColor(accent):QColor("#303136"));
-            if(element==PE_IndicatorRadioButton)painter->drawEllipse(r);else painter->drawRoundedRect(r,4,4);
-            if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
-                if(element==PE_IndicatorRadioButton){painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
-                else{QPainterPath check;check.moveTo(r.left()+3,r.center().y());check.lineTo(r.center().x()-1,r.bottom()-3);check.lineTo(r.right()-2.5,r.top()+3);painter->drawPath(check);}}
+            painter->setPen(QPen(on?QColor(accentBlue):QColor("#54565c"),1));painter->setBrush(on?QColor(accentBlue):QColor("#303136"));
+            painter->drawEllipse(r);
+            if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
             painter->restore();return;
         }
         if(element==PE_IndicatorArrowDown||element==PE_IndicatorArrowUp||element==PE_IndicatorArrowLeft||element==PE_IndicatorArrowRight) {

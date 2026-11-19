@@ -21,38 +21,28 @@ QAction* toolbarActionFor(QToolBar* bar, QWidget* widget) {
     }
     return nullptr;
 }
-// QCheckBox draws its box through the style; the options bar draws its own so the checked box is the application blue.
-class OptionCheckBox final : public QCheckBox {
-public:
-    using QCheckBox::QCheckBox;
-    QSize sizeHint() const override { return {t::checkBoxSize + t::checkBoxGap + fontMetrics().horizontalAdvance(text()), t::controlHeight}; }
-    QSize minimumSizeHint() const override { return sizeHint(); }
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        const QRectF box(0.5, (height() - t::checkBoxSize) / 2. + .5, t::checkBoxSize - 1, t::checkBoxSize - 1);
-        const bool on = isEnabled();
-        if (isChecked()) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(on ? QColor(t::accent) : QColor(t::controlDisabled));
-            painter.drawRoundedRect(box, t::checkBoxRadius, t::checkBoxRadius);
-            QPainterPath mark;
-            mark.moveTo(box.left() + box.width() * .26, box.top() + box.height() * .54);
-            mark.lineTo(box.left() + box.width() * .43, box.top() + box.height() * .70);
-            mark.lineTo(box.left() + box.width() * .75, box.top() + box.height() * .30);
-            painter.setPen(QPen(on ? QColor(Qt::white) : QColor(t::controlTextDisabled), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawPath(mark);
-        } else {
-            painter.setPen(QPen(QColor(underMouse() && on ? t::disabled : t::separator), 1));
-            painter.setBrush(on ? QColor(t::field) : QColor(t::fieldDisabled));
-            painter.drawRoundedRect(box, t::checkBoxRadius, t::checkBoxRadius);
-        }
-        painter.setPen(on ? QColor(t::primary) : QColor(t::controlTextDisabled));
-        painter.drawText(QRect(t::checkBoxSize + t::checkBoxGap, 0, width() - t::checkBoxSize - t::checkBoxGap, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
+}
+void paintCheckBoxIndicator(QPainter* painter, const QRectF& rect, bool checked, bool enabled, bool hovered) {
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    const QRectF box = rect.adjusted(.5, .5, -.5, -.5);
+    if (checked) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(enabled ? QColor(t::accent) : QColor(t::controlDisabled));
+        painter->drawRoundedRect(box, t::checkBoxRadius, t::checkBoxRadius);
+        QPainterPath mark;
+        mark.moveTo(box.left() + box.width() * .26, box.top() + box.height() * .54);
+        mark.lineTo(box.left() + box.width() * .43, box.top() + box.height() * .70);
+        mark.lineTo(box.left() + box.width() * .75, box.top() + box.height() * .30);
+        painter->setPen(QPen(enabled ? QColor(Qt::white) : QColor(t::controlTextDisabled), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawPath(mark);
+    } else {
+        painter->setPen(QPen(QColor(hovered && enabled ? t::disabled : t::separator), 1));
+        painter->setBrush(enabled ? QColor(t::field) : QColor(t::fieldDisabled));
+        painter->drawRoundedRect(box, t::checkBoxRadius, t::checkBoxRadius);
     }
-};
+    painter->restore();
 }
 void setToolbarControlVisible(QToolBar* bar, QWidget* widget, bool visible) {
     if (!widget) return;
@@ -112,7 +102,7 @@ QLabel* makeCaption(const QString& text) {
     label->setProperty("optionCaption", true);
     return label;
 }
-QCheckBox* makeOptionCheck(const QString& text) { return new OptionCheckBox(text); }
+QCheckBox* makeOptionCheck(const QString& text) { return new QCheckBox(text); }
 void markPill(QWidget* button) { button->setProperty("pill", true); }
 ColorWell::ColorWell(QWidget* parent) : QAbstractButton(parent) { setCursor(Qt::PointingHandCursor); setFocusPolicy(Qt::StrongFocus); }
 void ColorWell::setColor(const QColor& color) { if (color == color_) return; color_ = color; update(); }
@@ -155,7 +145,7 @@ QComboBox* addDropdown(QToolBar* bar, const char* objectName, const QString& acc
     return dropdown;
 }
 QCheckBox* addOptionCheck(QToolBar* bar, const QString& text, const char* objectName, bool checked) {
-    auto* check = new OptionCheckBox(text);
+    auto* check = makeOptionCheck(text);
     check->setObjectName(objectName);
     check->setChecked(checked);
     bar->addWidget(check);

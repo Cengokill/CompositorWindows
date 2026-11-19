@@ -102,9 +102,9 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     segmented(this,"wandScope",wandAllLayers_?1:0);
     check(this,"paintMaskWhite","brushOptions","Paint mask white",maskPaintWhite_);
     check(this,"transformLockRatio","transformOptions","Lock aspect ratio",lockRatio_);
-    check(this,"transformAutoSelect","transformOptions","Auto-select layer",autoSelectLayers_);
-    check(this,"transformShowControls","transformOptions","Show controls",transformControls_);
-    check(this,"transformSnapping","transformOptions","Snap to edges and centers",snapPolicy_.enabled);
+    check(this,"transformAutoSelect","transformOptions","Auto Select",autoSelectLayers_);
+    check(this,"transformShowControls","transformOptions","Show Controls",transformControls_);
+    check(this,"transformSnapping","transformOptions","Snap",snapPolicy_.enabled);
     for(auto* item:findChildren<QAction*>())if(item->objectName()=="pixelGrid"||item->text()=="Pixel Grid"){const QSignalBlocker blocker(item);item->setChecked(state.showPixelGrid);}
     // These existing refreshers block signals and read the newly selected project
     // for clone source/alignment and layer eligibility.

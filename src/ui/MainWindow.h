@@ -109,6 +109,10 @@ private:
     ui::LayerOpacityField* opacityPercent_{};
     QComboBox* target_{};
     std::array<QDoubleSpinBox*,5> geometry_{};
+    std::array<QDoubleSpinBox*,5> barGeometry_{};
+    // Shows the transform values in the dock and in the options bar, which repeats the same five fields.
+    void showGeometry(const double (&values)[5]);
+    void enableGeometry(bool enabled);
     QAction *undo_{},*redo_{};
     std::vector<std::unique_ptr<EditorProject>> projects_;
     EditorProject* activeProject_{};

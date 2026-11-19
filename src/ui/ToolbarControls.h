@@ -1,6 +1,7 @@
 #pragma once
 #include <QAbstractButton>
 #include <QColor>
+#include <QRectF>
 #include <QString>
 #include <QStringList>
 
@@ -9,6 +10,7 @@ class QAction;
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QPainter;
 class QSpinBox;
 class QToolBar;
 class QWidget;
@@ -28,8 +30,11 @@ void markPillButton(QToolBar* bar, QAction* action);
 QSpinBox* addNumberField(QToolBar* bar, const char* objectName, const QString& accessibleName, int minimum, int maximum, int value, const QString& unit = {});
 // A capsule dropdown, the same control as the blend-mode selector of the Layers panel.
 QComboBox* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items = {});
-// A check box with an accent-blue box.
+// A check box. Every check box in the application is drawn by the application style with paintCheckBoxIndicator.
 QCheckBox* addOptionCheck(QToolBar* bar, const QString& text, const char* objectName, bool checked = false);
+// The one check box box: a field-colored rounded square, filled with the accent blue and a white tick when checked.
+// The application style calls it for every QCheckBox, so no check box needs its own painting.
+void paintCheckBoxIndicator(QPainter* painter, const QRectF& rect, bool checked, bool enabled, bool hovered);
 // Pieces for bars that lay their controls out themselves (the Brush bar) instead of adding them to the toolbar.
 void styleAsNumberField(QAbstractSpinBox* field);
 QLabel* makeCaption(const QString& text);
