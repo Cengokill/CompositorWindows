@@ -1,6 +1,8 @@
 #include "VisualStyle.h"
 #include "CommandRegistry.h"
 #include "EditorIcons.h"
+#include "AccentColor.h"
+#include "ToolbarControls.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QDialog>
@@ -83,16 +85,18 @@ public:
             if(!(option->state&State_On))painter->drawLine(r.topLeft(),r.bottomRight());
             painter->restore();return;
         }
-        if(element==PE_IndicatorCheckBox||element==PE_IndicatorRadioButton) {
+        if(element==PE_IndicatorCheckBox) {
+            paintCheckBoxIndicator(painter,QRectF(option->rect),option->state&(State_On|State_NoChange),option->state&State_Enabled,option->state&State_MouseOver);
+            return;
+        }
+        if(element==PE_IndicatorRadioButton) {
             painter->save();painter->setRenderHint(QPainter::Antialiasing);
             auto r=QRectF(option->rect).adjusted(1.5,1.5,-1.5,-1.5);
             const bool on=option->state&(State_On|State_NoChange);
             painter->setOpacity(option->state&State_Enabled?1:.35);
-            painter->setPen(QPen(on?QColor(accent):QColor("#54565c"),1));painter->setBrush(on?QColor(accent):QColor("#303136"));
-            if(element==PE_IndicatorRadioButton)painter->drawEllipse(r);else painter->drawRoundedRect(r,4,4);
-            if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
-                if(element==PE_IndicatorRadioButton){painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
-                else{QPainterPath check;check.moveTo(r.left()+3,r.center().y());check.lineTo(r.center().x()-1,r.bottom()-3);check.lineTo(r.right()-2.5,r.top()+3);painter->drawPath(check);}}
+            painter->setPen(QPen(on?QColor(accentBlue):QColor("#54565c"),1));painter->setBrush(on?QColor(accentBlue):QColor("#303136"));
+            painter->drawEllipse(r);
+            if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
             painter->restore();return;
         }
         if(element==PE_IndicatorArrowDown||element==PE_IndicatorArrowUp||element==PE_IndicatorArrowLeft||element==PE_IndicatorArrowRight) {
@@ -252,7 +256,7 @@ void installVisualStyle() {
         QPushButton, QToolButton { background: #33353b; border: 1px solid #41434b; border-radius: 7px; padding: 5px 12px; min-height: 18px; }
         QPushButton:hover, QToolButton:hover { background: #3d4047; border-color: #565a64; }
         QPushButton:pressed, QToolButton:pressed { background: #27292e; }
-        QPushButton:default, QPushButton[primary="true"], QToolButton:checked { background: #428bea; border-color: #589df4; color: white; }
+        /* The default, primary and checked blue is appended below from AccentColor.h. */
         QPushButton:disabled, QToolButton:disabled { color: #676a73; border-color: #303237; background: #292b30; }
         QPushButton:focus, QToolButton:focus { border-color: #78b0f7; }
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #2b2d32; border: 1px solid #393c43; border-radius: 6px; padding: 4px 7px; min-height: 18px; }
@@ -303,7 +307,7 @@ void installVisualStyle() {
         QStatusBar::item { border: 0; }
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
-    )");
+    )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n").arg(accentBlue)+optionsBarStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 

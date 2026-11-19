@@ -12,6 +12,7 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <initializer_list>
 #include <map>
 #include <stdexcept>
 using namespace compositor;
@@ -30,6 +31,9 @@ void customDialog(MainWindow&w,const std::function<void(QDialog&)>& interact){
 QLineEdit* customInput(QDialog& dialog){auto* input=dialog.findChild<QLineEdit*>("customCropRatioInput");REQUIRE(input);return input;}
 QPushButton* customButton(QDialog& dialog,QDialogButtonBox::StandardButton button){auto* box=dialog.findChild<QDialogButtonBox*>();REQUIRE(box);auto* result=box->button(button);REQUIRE(result);return result;}
 void crop_fresh_entry_fullframe_free(){
+    {MainWindow empty(true);command(empty,"tool.crop")->trigger();
+        REQUIRE(empty.findChild<QToolBar*>("drawingOptions")->isHidden());
+        REQUIRE(empty.findChild<QLabel*>("cropTitle")->isHidden());}
     MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);w.resize(3840,800);w.show();QApplication::processEvents();cropTool(w,p);
     auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");auto* dimensions=w.findChild<QLabel*>("cropDimensions");
     REQUIRE(ratio&&ratio->currentText()=="Free");REQUIRE(dimensions&&!dimensions->isHidden()&&dimensions->text()==QString::fromUtf8("100 × 80 px"));
@@ -43,13 +47,43 @@ void crop_fresh_entry_fullframe_free(){
     auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool())REQUIRE(!item->isVisible());
     auto* gradient=w.findChild<QComboBox*>("gradientShape");auto* shape=w.findChild<QComboBox*>("shapeKind");REQUIRE(gradient&&shape&&!gradient->isVisible()&&!shape->isVisible());
     REQUIRE(ratio->isVisibleTo(bar)&&command(w,"crop.cancel")->isVisible()&&command(w,"crop.apply")->isVisible());
+    auto* title=w.findChild<QLabel*>("cropTitle");auto* ratioLabel=w.findChild<QLabel*>("cropRatioLabel");
+    auto* cancel=w.findChild<QPushButton*>("cropCancelButton");auto* accept=w.findChild<QPushButton*>("cropApplyButton");
+    REQUIRE(title&&title->text()=="Crop"&&title->font().bold());
+    REQUIRE(ratioLabel&&ratioLabel->text()=="Ratio"&&ratioLabel->buddy()==ratio);
+    REQUIRE(cancel&&accept&&cancel->text()=="Cancel"&&accept->text()=="Apply Crop");
+    REQUIRE(command(w,"crop.cancel")->text()=="Cancel Crop");
+    QApplication::processEvents();
+    REQUIRE(title->x()<ratioLabel->x()&&ratioLabel->x()<ratio->x()&&ratio->x()<dimensions->x());
+    REQUIRE(dimensions->geometry().right()<cancel->x()&&cancel->geometry().right()<accept->x());
+    REQUIRE(bar->rect().right()-accept->geometry().right()<40);
+    for(const int width:{1280,w.minimumSizeHint().width()}){
+        w.resize(width,800);QApplication::processEvents();
+        for(QWidget* control:std::initializer_list<QWidget*>{title,ratioLabel,ratio,dimensions,cancel,accept})
+            REQUIRE(control->isVisible()&&control->visibleRegion().contains(control->rect()));
+    }
+    w.resize(3840,800);QApplication::processEvents();
+    drag(p,{20,20},{60,50},Qt::ControlModifier);cancel->click();
+    REQUIRE(p.document==d&&p.history.undoCount()==0&&!cancel->isEnabled()&&!accept->isEnabled());
+    cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);accept->click();
+    REQUIRE(p.document->width==40&&p.document->height==30&&p.history.undoCount()==1);
+    command(w,"edit.undo")->trigger();REQUIRE(p.document==d);
+    command(w,"edit.redo")->trigger();REQUIRE(p.document->width==40&&p.document->height==30);
     const auto selectVisibleTool=[&](const char* id){for(auto* item:w.findChildren<QAction*>())if(item->property("commandId").toString()==id&&item->isVisible()&&item->isEnabled()){item->trigger();return;}throw std::runtime_error("Visible tool action not found");};
     selectVisibleTool("tool.gradient");QApplication::processEvents();REQUIRE(!gradient->isHidden());
+    REQUIRE(title->isHidden()&&ratioLabel->isHidden()&&cancel->isHidden()&&accept->isHidden());
     selectVisibleTool("tool.shape");QApplication::processEvents();REQUIRE(!shape->isHidden());
     cropTool(w,p);for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool())REQUIRE(!item->isVisible());
 }
 void crop_cancel_retains_document(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);auto*a=command(w,"crop.cancel");REQUIRE(a&&a->isEnabled());a->trigger();REQUIRE(p.document==d&&p.history.undoCount()==0);REQUIRE(!a->isEnabled()&&!command(w,"crop.apply")->isEnabled());}
-void crop_pending_dimensions(){MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);auto* label=w.findChild<QLabel*>("cropDimensions");REQUIRE(label&&label->text()==QString::fromUtf8("40 × 30 px"));REQUIRE(!label->isHidden());}
+void crop_pending_dimensions(){
+    MainWindow w(true);auto&p=w.addProject(fixture(2240,3360));cropTool(w,p);
+    auto* label=w.findChild<QLabel*>("cropDimensions");
+    REQUIRE(label&&label->text()==QString::fromUtf8("2\u202f240 × 3\u202f360 px"));
+    drag(p,{20,20},{1260,1380},Qt::ControlModifier);
+    REQUIRE(label->text()==QString::fromUtf8("1\u202f240 × 1\u202f360 px"));
+    REQUIRE(!label->isHidden());
+}
 void crop_square_corner_hit(){MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);drag(p,{-9,-9},{-20,-20},Qt::ControlModifier);apply(w);REQUIRE(p.document->width==111&&p.document->height==91);REQUIRE(p.document->layers.front().transform==Transform{11,11,100,80});}
 void crop_control_disables_snap(){MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);drag(p,{20,20},{96,65},Qt::ControlModifier);apply(w);REQUIRE(p.document->width==76&&p.document->height==45);REQUIRE(p.document->layers.front().transform==Transform{-20,-20,100,80});}
 void crop_move_snaps_ratio_frame_to_document_edge(){
@@ -65,9 +99,8 @@ void crop_entire_edge_hit(){MainWindow w(true);auto&p=w.addProject(fixture());cr
 void crop_apply_once(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);REQUIRE(p.document==d&&p.history.undoCount()==0);apply(w);REQUIRE(p.document->width==40&&p.document->height==30);REQUIRE(p.document->layers.front().raster==d.layers.front().raster);REQUIRE(p.history.undoCount()==1&&p.history.undoName()=="Crop");REQUIRE(!command(w,"crop.apply")->isEnabled());auto snapshot=p.history.undo();REQUIRE(snapshot&&snapshot->document==d);}
 void crop_ratio_menu_and_presets(){
     MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="Free");
-    REQUIRE(ratio->count()==13&&ratio->itemText(0)=="Free"&&ratio->itemText(1)=="Canvas"&&ratio->itemText(3)=="1:1");
-    REQUIRE(ratio->itemText(5)=="4:3"&&ratio->itemText(6)=="16:9"&&ratio->itemText(7)=="2.39:1"&&ratio->itemText(9)=="3:4"&&ratio->itemText(10)=="9:16"&&ratio->itemText(12)=="Custom…");
-    REQUIRE(ratio->itemText(2).isEmpty()&&ratio->itemText(4).isEmpty()&&ratio->itemText(8).isEmpty()&&ratio->itemText(11).isEmpty());
+    REQUIRE(ratio->count()==9&&ratio->itemText(0)=="Free"&&ratio->itemText(1)=="Canvas"&&ratio->itemText(2)=="1:1"&&ratio->itemText(8)=="Custom…");for(int i=0;i<ratio->count();++i)REQUIRE(!ratio->itemText(i).isEmpty());for(int i=0;i<ratio->count();++i)REQUIRE(ratio->itemData(i,Qt::UserRole+1).toBool()==(i==2||i==3||i==6||i==8));
+    REQUIRE(ratio->itemText(3)=="4:3"&&ratio->itemText(4)=="16:9"&&ratio->itemText(5)=="2.39:1"&&ratio->itemText(6)=="3:4"&&ratio->itemText(7)=="9:16");
     ratio->setCurrentText("2.39:1");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,19,100,42});
     ratio->setCurrentText("Canvas");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
     ratio->setCurrentText("Free");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
@@ -89,7 +122,7 @@ void crop_custom_ratio_apply_undo_redo(){
     MainWindow w(true);auto d=fixture(40,20);auto&p=w.addProject(d);cropTool(w,p);
     customDialog(w,[&](QDialog& dialog){auto* input=customInput(dialog);input->setText("4:5");customButton(dialog,QDialogButtonBox::Ok)->click();});
     auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="4:5");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,-15,40,50});REQUIRE(p.document==d&&p.history.undoCount()==0);
-    REQUIRE(ratio->count()==14&&ratio->itemText(11)=="4:5");apply(w);REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
+    REQUIRE(ratio->count()==10&&ratio->itemText(8)=="4:5"&&ratio->itemData(8,Qt::UserRole+1).toBool()&&!ratio->itemData(9,Qt::UserRole+1).toBool());apply(w);REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
     REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,40,50});auto* undo=command(w,"edit.undo");auto* redo=command(w,"edit.redo");REQUIRE(undo&&redo);
     undo->trigger();REQUIRE(p.document==d&&redo->isEnabled()&&p.canvas->cropOverlay()==editing::Rect{0,0,40,20});
     redo->trigger();REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&undo->isEnabled()&&p.canvas->cropOverlay()==editing::Rect{0,0,40,50});

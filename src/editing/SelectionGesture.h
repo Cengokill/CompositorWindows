@@ -33,8 +33,11 @@ public:
     void moveCursor(std::optional<Point>);
     void modifiersChanged(bool shift);
     // Use VIEW-space distance from the mapped first point, in logical points.
+    // A click within 8 points of the first corner closes only when the polygon has
+    // three corners and an earlier corner lay outside that radius, so dense corners
+    // near the start do not close it. A double click is an ordinary corner here.
     // A closing click is not appended; call finish() for FinishRequested.
-    PolygonPressResult polygonPress(Point, double viewDistanceFromFirst, int clickCount);
+    PolygonPressResult polygonPress(Point, double viewDistanceFromFirst);
     bool extend(Point);
     // Direct session operation preserves the source's programmatic centered box.
     // Canvas code calls move() instead because Option means Subtract there.
@@ -51,6 +54,8 @@ public:
 private:
     std::optional<LassoDraft> draft_;
     std::optional<Point> marqueeDragPoint_;
+    // View distance from the first corner at which each polygon corner was placed.
+    std::vector<double> viewDistances_;
     bool constrainArmed_{};
 };
 // Source dragSelection: Shift chooses the largest axis, choosing X on ties.

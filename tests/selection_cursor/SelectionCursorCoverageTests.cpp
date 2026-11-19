@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QComboBox>
 #include <QCursor>
@@ -20,8 +21,8 @@ QAction* command(MainWindow& w,const char* id){for(auto* a:w.findChildren<QActio
 struct Fixture {
  MainWindow window{true};EditorProject& project;
  Fixture():project(window.addProject([]{Document d;d.id=newId();d.width=d.height=100;Layer l;l.id=newId();l.transform={0,0,100,100};d.layers={l};return d;}())){window.show();QApplication::processEvents();}
- void icon(int k){command(window,k<2?"tool.lasso":"tool.marquee")->trigger();if(k<2){auto* c=window.findChild<QComboBox*>("lassoKind");require(c,"Lasso kind");c->setCurrentIndex(k);}else{bool found=false;for(auto* c:window.findChildren<QComboBox*>())if(c->accessibleName()=="Marquee shape"){c->setCurrentIndex(k-2);found=true;break;}require(found,"Marquee shape");}hover();}
- void mode(int m){auto* c=window.findChild<QComboBox*>("selectionMode");require(c,"Selection mode");c->setCurrentIndex(m);hover();}
+ void icon(int k){command(window,k<2?"tool.lasso":"tool.marquee")->trigger();if(k<2){auto* c=ui::findSegmentedControl(&window,"lassoKind");require(c,"Lasso kind");c->segment(k)->click();}else{auto* c=ui::findSegmentedControl(&window,"marqueeShape");require(c,"Marquee shape");c->choose(k-2);}hover();}
+ void mode(int m){auto* c=ui::findSegmentedControl(&window,"selectionMode");require(c,"Selection mode");c->segment(m)->click();hover();}
  void hover(Qt::KeyboardModifiers m={}){require(bool(project.canvas->pointerHover),"Native hover callback");project.canvas->pointerHover(QPointF(12,12),m);}
  QCursor cursor(){return project.canvas->cursor();}
  QImage image(){return cursor().pixmap().toImage().convertToFormat(QImage::Format_ARGB32);}
@@ -45,7 +46,7 @@ bool sourceStrokeArea(double observed,qreal dpr,bool present){
 }
 void artwork(int k,int m){Fixture f;f.icon(k);f.mode(m);auto c=f.cursor();auto p=c.pixmap();const qreal dpr=f.project.canvas->devicePixelRatioF();check("bitmap_cursor",c.shape()==Qt::BitmapCursor&&!p.isNull());if(p.isNull())return;check("logical44x36",p.size()/p.devicePixelRatio()==QSize(44,36));check("device_scale",p.devicePixelRatio()==dpr);const auto hot=c.hotSpot();check("bounded_hotspot",hot.x()>=0&&hot.y()>=0&&hot.x()<20&&hot.y()<16);const auto image=f.image();require(image.save(capturePath+".png"),"Retain actual assigned cursor pixels");const QRectF icon(hot.x()+6,hot.y()+6,14,14);check("icon_black",count(image,icon,dpr,true)>3);check("icon_white",count(image,icon,dpr,false)>3);const QPointF center(hot.x()+24,hot.y()+13);check("badge_horizontal",sourceStrokeArea(blackCoverage(image,{center.x()+1,center.y()-1,1,2},dpr),dpr,m!=0));check("badge_vertical",sourceStrokeArea(blackCoverage(image,{center.x()-1,center.y()-2,2,1},dpr),dpr,m==1));}
 void icon_distinct(){Fixture f;std::array<QImage,4> a;for(int k=0;k<4;++k){f.icon(k);f.mode(0);a[k]=f.image();require(!a[k].isNull(),"All four cursor images");}for(int k=0;k<4;++k)for(int j=0;j<k;++j)check("four_distinct_icons",a[k]!=a[j]);}
-void modifier_modes(){Fixture f;f.icon(0);f.mode(0);auto original=f.image();f.hover(Qt::ShiftModifier);auto add=f.image();f.hover(Qt::AltModifier|Qt::ShiftModifier);auto subtract=f.image();f.hover();check("modifier_artwork",!original.isNull()&&original!=add&&add!=subtract&&subtract!=original);check("modifier_release_restores",f.image()==original);check("choice_unmodified",f.window.findChild<QComboBox*>("selectionMode")->currentIndex()==0);}
+void modifier_modes(){Fixture f;f.icon(0);f.mode(0);auto original=f.image();f.hover(Qt::ShiftModifier);auto add=f.image();f.hover(Qt::AltModifier|Qt::ShiftModifier);auto subtract=f.image();f.hover();check("modifier_artwork",!original.isNull()&&original!=add&&add!=subtract&&subtract!=original);check("modifier_release_restores",f.image()==original);check("choice_unmodified",ui::findSegmentedControl(&f.window,"selectionMode")->currentIndex()==0);}
 void remembered_choice(){Fixture f;f.icon(3);f.mode(1);auto add=f.image();f.hover(Qt::AltModifier);auto subtract=f.image();f.hover();check("remembered_add",!add.isNull()&&subtract!=add&&f.image()==add);}
 void draft_locks_mode(){Fixture f;f.icon(0);f.mode(2);auto subtract=f.image();f.project.canvas->pointerDown({20,20},Qt::AltModifier);f.project.canvas->pointerMove({40,20},{});f.hover(Qt::ShiftModifier);check("draft_start_mode_locked",!subtract.isNull()&&f.image()==subtract);f.project.canvas->pointerCancel();f.hover();check("cancel_restores_choice",f.image()==subtract);}
 void cache_reuse(){Fixture f;f.icon(0);f.mode(0);const auto first=f.cursor().pixmap().cacheKey();f.icon(1);f.icon(0);check("same_cursor_pixmap_cached",first!=0&&f.cursor().pixmap().cacheKey()==first);}

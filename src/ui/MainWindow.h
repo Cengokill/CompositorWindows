@@ -109,6 +109,10 @@ private:
     ui::LayerOpacityField* opacityPercent_{};
     QComboBox* target_{};
     std::array<QDoubleSpinBox*,5> geometry_{};
+    std::array<QDoubleSpinBox*,5> barGeometry_{};
+    // Shows the transform values in the dock and in the options bar, which repeats the same five fields.
+    void showGeometry(const double (&values)[5]);
+    void enableGeometry(bool enabled);
     QAction *undo_{},*redo_{};
     std::vector<std::unique_ptr<EditorProject>> projects_;
     EditorProject* activeProject_{};
@@ -209,7 +213,7 @@ private:
     std::optional<editing::Rect> cropDraft_;
     QString cropRatioChoice_{"Free"};
     editing::LassoKind lassoKind_{editing::LassoKind::Freehand};
-    int selectionExpandAmount_{1},selectionContractAmount_{1};
+    int selectionExpandAmount_{1},selectionContractAmount_{1},selectionFeatherAmount_{2};
     std::optional<editing::CropDrag> cropDrag_;
     std::optional<editing::CropSnap> cropSnap_;
     bool ellipse_{},selectionAntialias_{true},movingSelection_{};
@@ -336,6 +340,7 @@ private:
     void cancelCrop();
     void refreshCropControls();
     void resizeSelection(bool expand,double amount);
+    void featherSelectionBy(double radius);
     bool handleEditingKey(QKeyEvent*);
     bool beginTemporaryHand(Point);
     bool updateTemporaryHand(Point,bool finish);

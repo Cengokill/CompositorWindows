@@ -1,8 +1,11 @@
 #include "MainWindow.h"
 #include "LayerPanel.h"
 #include "PropertyControls.h"
+#include "LayerPanelTokens.h"
+#include "ToolbarControls.h"
 #include "editing/DocumentGeometry.h"
 #include "editing/Shapes.h"
+#include <QSignalBlocker>
 #include <QToolBar>
 #include <QCheckBox>
 #include <QMenuBar>
@@ -21,6 +24,22 @@
 
 namespace compositor {
 namespace {
+// The aspect-ratio lock: a square toggle button with a chain link, filled with the accent blue while the ratio is locked.
+class LinkToggle final:public QCheckBox{
+public:
+    LinkToggle(){setFixedSize(ui::layer_panel::controlHeight,ui::layer_panel::controlHeight);setCursor(Qt::PointingHandCursor);}
+    QSize sizeHint() const override{return size();}
+    QSize minimumSizeHint() const override{return size();}
+protected:
+    void paintEvent(QPaintEvent*) override{
+        namespace t=ui::layer_panel;
+        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setPen(Qt::NoPen);
+        p.setBrush(!isEnabled()?QColor(t::controlDisabled):isChecked()?QColor(t::accent):underMouse()?QColor(t::pressed):QColor(t::control));
+        p.drawRoundedRect(QRectF(rect()),t::fieldRadius,t::fieldRadius);
+        p.setPen(QPen(!isEnabled()?QColor(t::controlTextDisabled):isChecked()?QColor(Qt::white):QColor(t::primary),1.5,Qt::SolidLine,Qt::RoundCap));p.setBrush(Qt::NoBrush);
+        p.translate(width()/2.,height()/2.);p.rotate(-35);p.drawRoundedRect(QRectF(-3.5,-8,7,10),3.5,3.5);p.drawRoundedRect(QRectF(-3.5,-2,7,10),3.5,3.5);
+    }
+};
 QIcon arrangeIcon(int command){
     QIcon icon;for(auto mode:{QIcon::Normal,QIcon::Disabled}){QPixmap image(24,24);image.fill(Qt::transparent);QPainter p(&image);p.setRenderHint(QPainter::Antialiasing);auto color=QApplication::palette().color(mode==QIcon::Disabled?QPalette::Disabled:QPalette::Active,QPalette::ButtonText);p.setPen(QPen(color,1.5,Qt::SolidLine,Qt::RoundCap));p.setBrush(color);
         const bool vertical=command==3||command==4||command==5||command==7||command==9;if(vertical){p.translate(24,0);p.rotate(90);}
@@ -153,7 +172,7 @@ void MainWindow::updateTransform(Point point,Qt::KeyboardModifiers modifiers,boo
                     movePreviewJob_->submit(std::move(request));
                 }
                 refreshing_=true;canvas()->setNavigatorDeferred(true);canvas()->setTransformOverlay(transformControls_||transformSession_?std::optional(state.draft):std::nullopt);
-                const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};for(int i=0;i<5;++i)if(geometry_[i])ui::synchronizeNumber(geometry_[i],values[i]);refreshing_=false;
+                const double values[]{state.draft.x,state.draft.y,state.draft.width,state.draft.height,state.draft.rotation};showGeometry(values);refreshing_=false;
                 // The sprite path returns before the shared publish. A persistent
                 // session still has to expose the draft without closing history.
                 if(state.persistent)publishTransformSession(false);
@@ -187,15 +206,41 @@ void MainWindow::arrangeLayers(editing_transform::Arrange command){
     try{applyLayerEdit(editing_transform::arrange(*project->document,layerSelection(),command));}
     catch(const std::exception& error){statusBar()->showMessage(error.what());}
 }
+void MainWindow::showGeometry(const double (&values)[5]){
+    for(int i=0;i<5;++i){
+        ui::synchronizeNumber(geometry_[i],values[i]);
+        // The bar's fields follow the model quietly: only the user's edit reaches editTransformGeometry.
+        if(barGeometry_[i]){const QSignalBlocker quiet(barGeometry_[i]);ui::synchronizeNumber(barGeometry_[i],values[i]);}
+    }
+}
+void MainWindow::enableGeometry(bool enabled){
+    for(auto* field:geometry_)field->setEnabled(enabled);
+    for(auto* field:barGeometry_)if(field)field->setEnabled(enabled);
+}
 void MainWindow::setupTransformActions(){
     auto*bar=addToolBar("Transform Options");bar->setObjectName("transformOptions");
-    auto*autoSelect=new QCheckBox("Auto-select layer");autoSelect->setObjectName("transformAutoSelect");autoSelect->setChecked(true);bar->addWidget(autoSelect);connect(autoSelect,&QCheckBox::toggled,this,[this](bool value){autoSelectLayers_=value;});
-    auto*controls=new QCheckBox("Show controls");controls->setObjectName("transformShowControls");controls->setChecked(true);bar->addWidget(controls);connect(controls,&QCheckBox::toggled,this,[this](bool value){transformControls_=value;refresh(false,false);});
-    auto*ratio=new QCheckBox("Lock aspect ratio");ratio->setObjectName("transformLockRatio");bar->addWidget(ratio);connect(ratio,&QCheckBox::toggled,this,[this](bool v){lockRatio_=v;});
-    auto*snap=new QCheckBox("Snap to edges and centers");snap->setObjectName("transformSnapping");snap->setChecked(true);bar->addWidget(snap);connect(snap,&QCheckBox::toggled,this,[this](bool v){auto policy=snapPolicy_;policy.enabled=v;setSnapPolicy(policy);});
-    auto*scale=new ui::PropertyNumber;scale->releaseFocus=[this]{if(canvas())canvas()->setFocus();};scale->setObjectName("transformScale");scale->setAccessibleName("Transform scale percent");scale->setRange(.01,100000);scale->setDecimals(2);scale->setSuffix(" %");scale->setValue(100);bar->addWidget(scale);connect(scale,&QDoubleSpinBox::valueChanged,this,[this](double value){changeTransformDraft([&](Transform& draft){draft=editing_transform::scaledPercent(draft,value,transformScalePixelSize());});});
-    auto*sampling=new QComboBox;sampling->setObjectName("transformSampling");sampling->addItems({"Nearest","Smooth","High quality"});sampling->setCurrentIndex(2);sampling->setAccessibleName("Transform sampling");bar->addWidget(sampling);connect(sampling,&QComboBox::currentIndexChanged,this,[this](int i){if(i>=0&&i<=2)changeTransformDraft([&](Transform& draft){draft.sampling=Transform::Sampling(i);});});
-    for(bool horizontal:{true,false}){auto*flip=bar->addAction(horizontal?"Flip H":"Flip V");flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",horizontal?"Flip H":"Flip V",[this,horizontal]{changeTransformDraft([&](Transform& draft){draft=editing_transform::flippedLocal(draft,horizontal);});});}
+    ui::addToolbarTitle(bar,"Transform","transformTitle");
+    auto*autoSelect=ui::addOptionCheck(bar,"Auto Select","transformAutoSelect",true);connect(autoSelect,&QCheckBox::toggled,this,[this](bool value){autoSelectLayers_=value;});
+    auto*controls=ui::addOptionCheck(bar,"Show Controls","transformShowControls",true);connect(controls,&QCheckBox::toggled,this,[this](bool value){transformControls_=value;refresh(false,false);});
+    auto gap=[bar]{auto*space=new QWidget;space->setFixedWidth(8);bar->addWidget(space);};
+    // The bar repeats the geometry fields of the Transform dock; both edit the same transform and follow it through refresh().
+    const char* geometryCaptions[]{"X","Y","W","H"};const char* geometryNames[]{"X","Y","Width","Height"};const char* geometryLabels[]{"X position","Y position","Layer width","Layer height"};
+    auto geometryField=[&](int i,const char* name,const char* label){auto*spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};spin->setCompactDisplay(true);spin->setDecimals(geometry_[i]->decimals());spin->setRange(geometry_[i]->minimum(),geometry_[i]->maximum());spin->setObjectName(name);spin->setAccessibleName(label);ui::styleAsNumberField(spin);spin->setFixedWidth(ui::layer_panel::numberFieldWidth+6);barGeometry_[size_t(i)]=spin;bar->addWidget(spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){if(!refreshing_)editTransformGeometry(i,value);});return spin;};
+    gap();
+    for(int i=0;i<4;++i){ui::addToolbarCaption(bar,geometryCaptions[i],QString("transformCaption%1").arg(geometryCaptions[i]).toUtf8().constData());geometryField(i,QString("transformGeometry%1").arg(geometryNames[i]).toUtf8().constData(),geometryLabels[i]);}
+    auto*ratio=new LinkToggle;ratio->setObjectName("transformLockRatio");ratio->setAccessibleName("Lock aspect ratio");ratio->setToolTip("Lock aspect ratio");bar->addWidget(ratio);connect(ratio,&QCheckBox::toggled,this,[this](bool v){lockRatio_=v;});
+    gap();
+    ui::addToolbarCaption(bar,"Scale","transformScaleCaption");
+    auto*scale=new ui::PropertyNumber;scale->releaseFocus=[this]{if(canvas())canvas()->setFocus();};scale->setCompactDisplay(true);scale->setObjectName("transformScale");scale->setAccessibleName("Transform scale percent");scale->setRange(.01,100000);scale->setDecimals(2);scale->setValue(100);ui::styleAsNumberField(scale);bar->addWidget(scale);connect(scale,&QDoubleSpinBox::valueChanged,this,[this](double value){changeTransformDraft([&](Transform& draft){draft=editing_transform::scaledPercent(draft,value,transformScalePixelSize());});});
+    ui::addToolbarCaption(bar,"%","transformScaleUnit");
+    geometryField(4,"transformGeometryAngle","Rotation angle");ui::addToolbarCaption(bar,"°","transformAngleUnit");
+    gap();
+    ui::addToolbarCaption(bar,"Sampling","transformSamplingCaption");
+    auto*sampling=ui::addDropdown(bar,"transformSampling","Transform sampling",{"Nearest","Smooth","High quality"});sampling->setCurrentIndex(2);connect(sampling,&QComboBox::currentIndexChanged,this,[this](int i){if(i>=0&&i<=2)changeTransformDraft([&](Transform& draft){draft.sampling=Transform::Sampling(i);});});
+    for(bool horizontal:{true,false}){auto*flip=bar->addAction(horizontal?"Flip H":"Flip V");flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",horizontal?"Flip H":"Flip V",[this,horizontal]{changeTransformDraft([&](Transform& draft){draft=editing_transform::flippedLocal(draft,horizontal);});});ui::markPillButton(bar,flip);}
+    // Windows keeps snapping, alignment and the Apply/Cancel pair of a persistent session in this bar as well.
+    bar->addSeparator();
+    auto*snap=ui::addOptionCheck(bar,"Snap","transformSnapping",true);snap->setToolTip("Snap to edges and centers");connect(snap,&QCheckBox::toggled,this,[this](bool v){auto policy=snapPolicy_;policy.enabled=v;setSnapPolicy(policy);});
     QMenu* layerMenu=nullptr;for(auto* entry:menuBar()->actions())if(entry->text()=="&Layer")layerMenu=entry->menu();
     auto* alignMenu=layerMenu->addMenu("Align");auto* distributeMenu=layerMenu->addMenu("Distribute");
     auto* popup=new QMenu(bar);auto* button=new QToolButton(bar);button->setText("Align");button->setAccessibleName("Align and distribute layers");button->setPopupMode(QToolButton::InstantPopup);button->setMenu(popup);button->setObjectName("arrangeLayersButton");bar->addWidget(button);

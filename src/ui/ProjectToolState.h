@@ -43,7 +43,7 @@ struct ProjectToolState {
     editing::SelectionMode selectionMode{editing::SelectionMode::Replace};
     QString cropRatioChoice{"Free"};
     editing::LassoKind lassoKind{editing::LassoKind::Freehand};
-    int selectionExpandAmount{1},selectionContractAmount{1};
+    int selectionExpandAmount{1},selectionContractAmount{1},selectionFeatherAmount{2};
     ProjectFilterSettings filterSettings;
     std::optional<filters::Kind> lastFilterKind;
     bool ellipse{},selectionAntialias{true};
