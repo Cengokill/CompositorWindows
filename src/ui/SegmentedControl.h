@@ -14,6 +14,8 @@ public:
     explicit SegmentedControl(const QStringList& items, QWidget* parent = nullptr);
     int currentIndex() const;
     void setCurrentIndex(int index);
+    // Same effect as the user picking the choice, including when the control is disabled or hidden.
+    void choose(int index);
     QToolButton* segment(int index) const;
     std::function<void(int)> changed;
 private:

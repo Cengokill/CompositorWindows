@@ -18,6 +18,7 @@ SegmentedControl::SegmentedControl(const QStringList& items, QWidget* parent):QW
 }
 int SegmentedControl::currentIndex() const{return group_->checkedId();}
 void SegmentedControl::setCurrentIndex(int index){if(auto* button=group_->button(index)){button->setChecked(true);shown_=index;}}
+void SegmentedControl::choose(int index){if(!group_->button(index)||index==shown_)return;setCurrentIndex(index);if(changed)changed(index);}
 QToolButton* SegmentedControl::segment(int index) const{return qobject_cast<QToolButton*>(group_->button(index));}
 SegmentedControl* findSegmentedControl(const QObject* root,const char* objectName){return dynamic_cast<SegmentedControl*>(root->findChild<QWidget*>(objectName));}
 }

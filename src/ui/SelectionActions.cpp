@@ -98,7 +98,7 @@ void MainWindow::resizeSelection(bool expand,double amount){
     if(!ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()))return;
     edit(expand?"Expand Selection":"Contract Selection",[&](Document& document){auto outline=outlineOf(document.selection);if(outline)document.selection=editing::rasterSelection(outline->resized(expand?amount:-amount,document.width,document.height),document.width,document.height);});
 }
-bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int clickCount){
+bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int){
     const bool selectionTool=tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand;
     if(!selectionTool)return false;
     auto* p=current();if(!p||!p->document||!canEditLayers())return true;
@@ -108,7 +108,7 @@ bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int 
         point=snapGesturePoint(point,modifiers);
         const auto first=p->canvas->viewMapping().toView(selectionGesture_.draft()->points.front());
         const auto here=p->canvas->viewMapping().toView(point);
-        if(selectionGesture_.polygonPress(point,std::hypot(here.x-first.x,here.y-first.y),clickCount)==editing::PolygonPressResult::FinishRequested)finishSelectionGesture();
+        if(selectionGesture_.polygonPress(point,std::hypot(here.x-first.x,here.y-first.y))==editing::PolygonPressResult::FinishRequested)finishSelectionGesture();
         else refreshSelectionGesture();
         return true;
     }
