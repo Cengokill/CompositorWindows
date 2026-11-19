@@ -99,9 +99,8 @@ void crop_entire_edge_hit(){MainWindow w(true);auto&p=w.addProject(fixture());cr
 void crop_apply_once(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);REQUIRE(p.document==d&&p.history.undoCount()==0);apply(w);REQUIRE(p.document->width==40&&p.document->height==30);REQUIRE(p.document->layers.front().raster==d.layers.front().raster);REQUIRE(p.history.undoCount()==1&&p.history.undoName()=="Crop");REQUIRE(!command(w,"crop.apply")->isEnabled());auto snapshot=p.history.undo();REQUIRE(snapshot&&snapshot->document==d);}
 void crop_ratio_menu_and_presets(){
     MainWindow w(true);auto&p=w.addProject(fixture());cropTool(w,p);auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="Free");
-    REQUIRE(ratio->count()==13&&ratio->itemText(0)=="Free"&&ratio->itemText(1)=="Canvas"&&ratio->itemText(3)=="1:1");
-    REQUIRE(ratio->itemText(5)=="4:3"&&ratio->itemText(6)=="16:9"&&ratio->itemText(7)=="2.39:1"&&ratio->itemText(9)=="3:4"&&ratio->itemText(10)=="9:16"&&ratio->itemText(12)=="Custom…");
-    REQUIRE(ratio->itemText(2).isEmpty()&&ratio->itemText(4).isEmpty()&&ratio->itemText(8).isEmpty()&&ratio->itemText(11).isEmpty());
+    REQUIRE(ratio->count()==9&&ratio->itemText(0)=="Free"&&ratio->itemText(1)=="Canvas"&&ratio->itemText(2)=="1:1"&&ratio->itemText(8)=="Custom…");for(int i=0;i<ratio->count();++i)REQUIRE(!ratio->itemText(i).isEmpty());for(int i=0;i<ratio->count();++i)REQUIRE(ratio->itemData(i,Qt::UserRole+1).toBool()==(i==2||i==3||i==6||i==8));
+    REQUIRE(ratio->itemText(3)=="4:3"&&ratio->itemText(4)=="16:9"&&ratio->itemText(5)=="2.39:1"&&ratio->itemText(6)=="3:4"&&ratio->itemText(7)=="9:16");
     ratio->setCurrentText("2.39:1");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,19,100,42});
     ratio->setCurrentText("Canvas");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
     ratio->setCurrentText("Free");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,100,80});
@@ -123,7 +122,7 @@ void crop_custom_ratio_apply_undo_redo(){
     MainWindow w(true);auto d=fixture(40,20);auto&p=w.addProject(d);cropTool(w,p);
     customDialog(w,[&](QDialog& dialog){auto* input=customInput(dialog);input->setText("4:5");customButton(dialog,QDialogButtonBox::Ok)->click();});
     auto* ratio=w.findChild<QComboBox*>("cropRatioChoice");REQUIRE(ratio&&ratio->currentText()=="4:5");REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,-15,40,50});REQUIRE(p.document==d&&p.history.undoCount()==0);
-    REQUIRE(ratio->count()==14&&ratio->itemText(11)=="4:5");apply(w);REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
+    REQUIRE(ratio->count()==10&&ratio->itemText(8)=="4:5"&&ratio->itemData(8,Qt::UserRole+1).toBool()&&!ratio->itemData(9,Qt::UserRole+1).toBool());apply(w);REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&p.history.undoName()=="Crop");
     REQUIRE(p.canvas->cropOverlay()==editing::Rect{0,0,40,50});auto* undo=command(w,"edit.undo");auto* redo=command(w,"edit.redo");REQUIRE(undo&&redo);
     undo->trigger();REQUIRE(p.document==d&&redo->isEnabled()&&p.canvas->cropOverlay()==editing::Rect{0,0,40,20});
     redo->trigger();REQUIRE(p.document->width==40&&p.document->height==50&&p.history.undoCount()==1&&undo->isEnabled()&&p.canvas->cropOverlay()==editing::Rect{0,0,40,50});

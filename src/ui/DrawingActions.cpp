@@ -125,8 +125,10 @@ void MainWindow::setupDrawingActions(){
     auto* ratioLabel=ui::addToolbarCaption(bar,"Ratio","cropRatioLabel");
     auto*cropRatioControl=ui::addDropdown(bar,"cropRatioChoice","Crop ratio");
     ratioLabel->setBuddy(cropRatioControl);
-    cropRatioControl->addItems({"Free","Canvas"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItem("1:1");cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"4:3","16:9","2.39:1"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"3:4","9:16"});cropRatioControl->insertSeparator(cropRatioControl->count());
-    const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);
+    // Groups are drawn by the capsule dropdown's own delegate: a flagged item starts a new group under a thin line, not a separator row.
+    cropRatioControl->addItems({"Free","Canvas","1:1","4:3","16:9","2.39:1","3:4","9:16"});
+    for(const char* groupStart:{"1:1","4:3","3:4"})cropRatioControl->setItemData(cropRatioControl->findText(groupStart),true,Qt::UserRole+1);
+    const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);cropRatioControl->setItemData(customActionIndex,true,Qt::UserRole+1);
     connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){
         if(refreshing_)return;
         if(value=="Custom…"){
@@ -345,7 +347,9 @@ void MainWindow::refreshCropControls(){
     if(auto* ratio=findChild<QComboBox*>("cropRatioChoice")){
         QSignalBlocker block(ratio);const int marker=ratio->findData("crop-custom-choice",Qt::UserRole);const auto custom=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString{};
         if(marker>=0&&ratio->itemText(marker)!=custom)ratio->removeItem(marker);
-        if(!custom.isEmpty()&&ratio->findData("crop-custom-choice",Qt::UserRole)<0){const int action=ratio->findData("crop-custom-action",Qt::UserRole);const int insertAt=action>0&&ratio->itemText(action-1).isEmpty()?action-1:action;ratio->insertItem(insertAt,custom);ratio->setItemData(insertAt,"crop-custom-choice",Qt::UserRole);}
+        if(!custom.isEmpty()&&ratio->findData("crop-custom-choice",Qt::UserRole)<0){const int action=ratio->findData("crop-custom-action",Qt::UserRole);ratio->insertItem(action,custom);ratio->setItemData(action,"crop-custom-choice",Qt::UserRole);ratio->setItemData(action,true,Qt::UserRole+1);}
+        // Exactly one group break sits before the custom ratio, or before Custom… when there is none.
+        if(const int action=ratio->findData("crop-custom-action",Qt::UserRole);action>=0)ratio->setItemData(action,ratio->findData("crop-custom-choice",Qt::UserRole)<0,Qt::UserRole+1);
         ratio->setCurrentText(cropRatioChoice_);setToolbarControlVisible(findChild<QToolBar*>("drawingOptions"),ratio,visible);ratio->setEnabled(enabled);
     }
     if(auto* label=findChild<QLabel*>("cropDimensions")){setToolbarControlVisible(findChild<QToolBar*>("drawingOptions"),label,visible&&cropDraft_.has_value());label->setText(cropDraft_?cropDimensionsText(*cropDraft_):QString{});}
