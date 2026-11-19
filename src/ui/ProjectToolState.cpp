@@ -98,8 +98,8 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     check(this,"selectionAntialias","selectionOptions","Anti-alias",selectionAntialias_);
     if(auto* item=control<QSpinBox>(this,"wandTolerance","Wand tolerance")){const QSignalBlocker blocker(item);item->setValue(wandTolerance_);}
     combo(this,"wandSampleSize","Wand sample size",wandSampleRadius_);
-    check(this,"wandContiguous","wandOptions","Contiguous",wandContiguous_);
-    check(this,"wandAllLayers","wandOptions","Sample All Layers",wandAllLayers_);
+    check(this,"wandContiguous","selectionOptions","Contiguous",wandContiguous_);
+    segmented(this,"wandScope",wandAllLayers_?1:0);
     check(this,"paintMaskWhite","brushOptions","Paint mask white",maskPaintWhite_);
     check(this,"transformLockRatio","transformOptions","Lock aspect ratio",lockRatio_);
     check(this,"transformAutoSelect","transformOptions","Auto-select layer",autoSelectLayers_);

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "CropViewport.h"
+#include "LayerPanelTokens.h"
 #include "PropertyControls.h"
 #include "ToolbarControls.h"
 #include <QComboBox>
@@ -121,13 +122,11 @@ void MainWindow::setupDrawingActions(){
     });
     for(auto* item:bar->actions())item->setProperty("hideDuringCrop",true);
     ui::addToolbarTitle(bar,"Crop","cropTitle");
-    auto* ratioLabel=new QLabel("Ratio");
-    ratioLabel->setObjectName("cropRatioLabel");
-    bar->addWidget(ratioLabel);
-    auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");
+    auto* ratioLabel=ui::addToolbarCaption(bar,"Ratio","cropRatioLabel");
+    auto*cropRatioControl=ui::addDropdown(bar,"cropRatioChoice","Crop ratio");
     ratioLabel->setBuddy(cropRatioControl);
     cropRatioControl->addItems({"Free","Canvas"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItem("1:1");cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"4:3","16:9","2.39:1"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"3:4","9:16"});cropRatioControl->insertSeparator(cropRatioControl->count());
-    const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);bar->addWidget(cropRatioControl);
+    const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);
     connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){
         if(refreshing_)return;
         if(value=="Custom…"){
@@ -137,13 +136,14 @@ void MainWindow::setupDrawingActions(){
         }
         cropRatioChoice_=value;changeCropRatio();
     });
-    auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);
+    ui::addToolbarCaption(bar,{},"cropDimensions");
     auto* cropSpacer=new QWidget;
     cropSpacer->setObjectName("cropSpacer");
     cropSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
     bar->addWidget(cropSpacer);
-    const auto addCropButton=[bar](const char* text,const char* name,QAction* command){
+    const auto addCropButton=[bar](const char* text,const char* name,QAction* command,bool primary){
         auto* button=new QPushButton(text);
+        button->setProperty("pill",true);button->setProperty("primary",primary);button->setFixedHeight(ui::layer_panel::controlHeight);
         button->setObjectName(name);
         button->setAccessibleName(command->text());
         connect(button,&QPushButton::clicked,command,&QAction::trigger);
@@ -151,8 +151,8 @@ void MainWindow::setupDrawingActions(){
         button->setEnabled(command->isEnabled());
         bar->addWidget(button);
     };
-    addCropButton("Cancel","cropCancelButton",cropCancel);
-    addCropButton("Apply Crop","cropApplyButton",cropApply);
+    addCropButton("Cancel","cropCancelButton",cropCancel,false);
+    addCropButton("Apply Crop","cropApplyButton",cropApply,true);
     auto*background=bar->addAction("Background Color");background->setProperty("hideDuringCrop",true);bindCommand(background,"Tools","Background",[this]{
         QColor initial=background_;
         if(tool_==Tool::Shape)if(const auto* layer=active();layer&&!layer->shapeJson.empty()){const auto stored=editing::decodeShapeStyle(layer->shapeJson);initial=QColor::fromRgbF(stored.red,stored.green,stored.blue);}

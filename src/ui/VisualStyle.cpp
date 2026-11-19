@@ -1,6 +1,7 @@
 #include "VisualStyle.h"
 #include "CommandRegistry.h"
 #include "EditorIcons.h"
+#include "ToolbarControls.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QDialog>
@@ -255,13 +256,6 @@ void installVisualStyle() {
         QPushButton:default, QPushButton[primary="true"], QToolButton:checked { background: #428bea; border-color: #589df4; color: white; }
         QPushButton:disabled, QToolButton:disabled { color: #676a73; border-color: #303237; background: #292b30; }
         QPushButton:focus, QToolButton:focus { border-color: #78b0f7; }
-        QWidget[segmentedControl="true"] { background: #2b2d32; border: 1px solid #393c43; border-radius: 8px; }
-        QToolButton[segment="true"] { background: transparent; border: 0; border-radius: 6px; padding: 3px 11px; min-height: 18px; }
-        QToolButton[segment="true"]:hover { background: #3d4047; }
-        QToolButton[segment="true"]:pressed { background: #27292e; }
-        QToolButton[segment="true"]:checked { background: #428bea; color: white; }
-        QToolButton[segment="true"]:disabled { background: transparent; color: #676a73; }
-        QToolButton[segment="true"]:checked:disabled { background: #3a4a62; color: #9aa3b2; }
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #2b2d32; border: 1px solid #393c43; border-radius: 6px; padding: 4px 7px; min-height: 18px; }
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #579cf5; background: #30333a; }
         QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled { color: #656870; border-color: #303237; background: #26282c; }
@@ -310,7 +304,7 @@ void installVisualStyle() {
         QStatusBar::item { border: 0; }
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
-    )");
+    )"+optionsBarStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 
