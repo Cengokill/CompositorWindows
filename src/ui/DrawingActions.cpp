@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "CropViewport.h"
 #include "PropertyControls.h"
+#include "ToolbarControls.h"
 #include <QComboBox>
 #include <QDialog>
 #include <QMenuBar>
@@ -13,14 +14,20 @@
 #include <QLineEdit>
 #include <QSignalBlocker>
 #include <QLabel>
+#include <QLocale>
+#include <QSizePolicy>
 #include <QPushButton>
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 
 namespace {
+using compositor::ui::setToolbarControlVisible;
 constexpr double maxCropSide=30000.;
-QString cropDimensionsText(compositor::editing::Rect crop){return QString("%1 × %2 px").arg(int(crop.width)).arg(int(crop.height));}
+QString cropDimensionsText(compositor::editing::Rect crop){
+    const QLocale locale(QLocale::French,QLocale::France);
+    return QString("%1 × %2 px").arg(locale.toString(int(crop.width)),locale.toString(int(crop.height)));
+}
 std::optional<double> parseCropRatio(const QString& value,QString* normalized=nullptr){
     const auto parts=value.split(QLatin1Char(':'),Qt::KeepEmptyParts);if(parts.size()!=2)return {};
     auto widthText=parts[0].trimmed().replace(QLatin1Char(','),QLatin1Char('.'));
@@ -30,19 +37,6 @@ std::optional<double> parseCropRatio(const QString& value,QString* normalized=nu
     const double ratio=width/height;if(!std::isfinite(ratio)||ratio<1./maxCropSide||ratio>maxCropSide)return {};
     if(normalized)*normalized=widthText+QLatin1Char(':')+heightText;
     return ratio;
-}
-QAction* toolbarActionFor(QToolBar* bar,QWidget* widget){
-    if(!bar||!widget)return nullptr;
-    for(auto* action:bar->actions()){
-        if(bar->widgetForAction(action)==widget)return action;
-        if(auto* hosted=qobject_cast<QWidgetAction*>(action);hosted&&hosted->defaultWidget()==widget)return action;
-    }
-    return nullptr;
-}
-void setToolbarControlVisible(QToolBar* bar,QWidget* widget,bool visible){
-    if(!widget)return;
-    if(auto* action=toolbarActionFor(bar,widget))action->setVisible(visible);
-    widget->setVisible(visible);
 }
 bool customCropRatioChoice(const QString& value){
     static const QStringList presets{"Free","Canvas","1:1","4:3","3:4","16:9","9:16","2.39:1"};
@@ -126,7 +120,12 @@ void MainWindow::setupDrawingActions(){
         });
     });
     for(auto* item:bar->actions())item->setProperty("hideDuringCrop",true);
+    ui::addToolbarTitle(bar,"Crop","cropTitle");
+    auto* ratioLabel=new QLabel("Ratio");
+    ratioLabel->setObjectName("cropRatioLabel");
+    bar->addWidget(ratioLabel);
     auto*cropRatioControl=new QComboBox;cropRatioControl->setObjectName("cropRatioChoice");cropRatioControl->setAccessibleName("Crop ratio");
+    ratioLabel->setBuddy(cropRatioControl);
     cropRatioControl->addItems({"Free","Canvas"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItem("1:1");cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"4:3","16:9","2.39:1"});cropRatioControl->insertSeparator(cropRatioControl->count());cropRatioControl->addItems({"3:4","9:16"});cropRatioControl->insertSeparator(cropRatioControl->count());
     const int customActionIndex=cropRatioControl->count();cropRatioControl->addItem("Custom…");cropRatioControl->setItemData(customActionIndex,"crop-custom-action",Qt::UserRole);bar->addWidget(cropRatioControl);
     connect(cropRatioControl,&QComboBox::currentTextChanged,this,[this](const QString& value){
@@ -138,7 +137,22 @@ void MainWindow::setupDrawingActions(){
         }
         cropRatioChoice_=value;changeCropRatio();
     });
-    auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);bar->addAction(cropCancel);bar->addAction(cropApply);
+    auto* dimensions=new QLabel;dimensions->setObjectName("cropDimensions");bar->addWidget(dimensions);
+    auto* cropSpacer=new QWidget;
+    cropSpacer->setObjectName("cropSpacer");
+    cropSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+    bar->addWidget(cropSpacer);
+    const auto addCropButton=[bar](const char* text,const char* name,QAction* command){
+        auto* button=new QPushButton(text);
+        button->setObjectName(name);
+        button->setAccessibleName(command->text());
+        connect(button,&QPushButton::clicked,command,&QAction::trigger);
+        connect(command,&QAction::changed,button,[button,command]{button->setEnabled(command->isEnabled());});
+        button->setEnabled(command->isEnabled());
+        bar->addWidget(button);
+    };
+    addCropButton("Cancel","cropCancelButton",cropCancel);
+    addCropButton("Apply Crop","cropApplyButton",cropApply);
     auto*background=bar->addAction("Background Color");background->setProperty("hideDuringCrop",true);bindCommand(background,"Tools","Background",[this]{
         QColor initial=background_;
         if(tool_==Tool::Shape)if(const auto* layer=active();layer&&!layer->shapeJson.empty()){const auto stored=editing::decodeShapeStyle(layer->shapeJson);initial=QColor::fromRgbF(stored.red,stored.green,stored.blue);}
@@ -318,7 +332,10 @@ void MainWindow::changeCropRatio(){
 }
 void MainWindow::cancelCrop(){cropDraft_.reset();cropDrag_.reset();cropSnap_.reset();refresh(false,false);}
 void MainWindow::refreshCropControls(){
-    auto* project=current();const bool visible=tool_==Tool::Crop;const bool enabled=project&&project->document&&!project->projectBusy&&!project->importing;
+    auto* project=current();const bool visible=tool_==Tool::Crop&&project&&project->document;const bool enabled=project&&project->document&&!project->projectBusy&&!project->importing;
+    auto* cropBar=findChild<QToolBar*>("drawingOptions");
+    for(const char* name:{"cropTitle","cropRatioLabel","cropSpacer","cropCancelButton","cropApplyButton"})
+        setToolbarControlVisible(cropBar,findChild<QWidget*>(name),visible);
     bool restored=false;
     if(auto* bar=findChild<QToolBar*>("drawingOptions"))for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool()){
         if(visible){item->setProperty("hiddenForCrop",true);item->setVisible(false);}

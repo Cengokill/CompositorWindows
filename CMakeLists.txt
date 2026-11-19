@@ -158,7 +158,7 @@ qt_add_resources(compositor_ui layer_panel_icons PREFIX "/" FILES
   assets/icons/lucide/folder-plus.svg assets/icons/lucide/panel-top.svg
   assets/icons/lucide/circle.svg assets/icons/lucide/sparkles.svg
   assets/icons/lucide/trash.svg assets/icons/lucide/chevron-down.svg)
-target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp src/ui/SegmentedControl.cpp)
+target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp src/ui/SegmentedControl.cpp src/ui/ToolbarControls.cpp)
 qt_add_resources(compositor_ui visual_assets PREFIX "/" FILES assets/fonts/InterVariable.ttf assets/icons/chevron-down.png assets/icons/chevron-up.png)
 qt_add_resources(compositor_ui release_notes PREFIX "/" FILES docs/release-notes.md)
 target_sources(compositor_ui PRIVATE src/ui/CanvasPresentation.cpp)

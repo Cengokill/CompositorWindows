@@ -262,7 +262,6 @@ void installVisualStyle() {
         QToolButton[segment="true"]:checked { background: #428bea; color: white; }
         QToolButton[segment="true"]:disabled { background: transparent; color: #676a73; }
         QToolButton[segment="true"]:checked:disabled { background: #3a4a62; color: #9aa3b2; }
-        QLabel#selectionToolTitle { font-weight: 600; padding: 0 4px; background: transparent; }
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #2b2d32; border: 1px solid #393c43; border-radius: 6px; padding: 4px 7px; min-height: 18px; }
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #579cf5; background: #30333a; }
         QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled { color: #656870; border-color: #303237; background: #26282c; }
