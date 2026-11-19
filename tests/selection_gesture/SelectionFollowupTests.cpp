@@ -36,6 +36,10 @@ void segmented_slide(){Fixture f;auto* kind=ui::findSegmentedControl(&f.window,"
  bool arrived=false;for(int i=0;i<100&&!arrived;++i){QTest::qWait(10);arrived=kind->pillRect()==QRectF(last);}
  require(arrived,"pill reaches the clicked choice");
  kind->setCurrentIndex(0);require(kind->pillRect()==QRectF(first),"setCurrentIndex moves the pill at once");}
+void lasso_kind_slide(){Fixture f;command(f.window,"tool.lasso")->trigger();QApplication::processEvents();auto* kind=ui::findSegmentedControl(&f.window,"lassoKind");require(kind&&kind->isVisible(),"lasso kind control");
+ const auto polygonal=kind->segment(1)->geometry();QTest::mouseClick(kind->segment(1),Qt::LeftButton);
+ require(kind->currentIndex()==1&&kind->pillRect().left()<polygonal.left(),"pill slides after the lasso kind click although the tool refreshes");
+ bool arrived=false;for(int i=0;i<100&&!arrived;++i){QTest::qWait(10);arrived=kind->pillRect()==QRectF(polygonal);}require(arrived,"pill reaches Polygonal");}
 void wand_bar(){Fixture f;command(f.window,"tool.wand")->trigger();QApplication::processEvents();
  auto* bar=f.window.findChild<QToolBar*>("selectionOptions");require(bar&&bar->isVisible(),"selection bar shows for the Wand");require(!f.window.findChild<QToolBar*>("wandOptions"),"Wand has no bar of its own");
  auto* title=f.window.findChild<QLabel*>("selectionToolTitle");require(title&&title->text()=="Magic","title is Magic");
@@ -46,4 +50,4 @@ void wand_bar(){Fixture f;command(f.window,"tool.wand")->trigger();QApplication:
  scope->segment(1)->click();kind->segment(1)->click();command(f.window,"tool.lasso")->trigger();QApplication::processEvents();
  require(!kind->isVisible()&&!scope->isVisible()&&!tolerance->isVisible(),"Wand controls hide for another tool");}
 }
-int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="undo_redo_draft")undo_redo_draft();else if(c=="escape_mode_reset")escape_mode_reset();else if(c=="expand_range")expand_range();else if(c=="wand_replace")wand_replace();else if(c=="feather_bar")feather_bar();else if(c=="segmented_slide")segmented_slide();else if(c=="wand_bar")wand_bar();else if(c=="feather_dialog_default")feather_dialog_default();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="undo_redo_draft")undo_redo_draft();else if(c=="escape_mode_reset")escape_mode_reset();else if(c=="expand_range")expand_range();else if(c=="wand_replace")wand_replace();else if(c=="feather_bar")feather_bar();else if(c=="segmented_slide")segmented_slide();else if(c=="wand_bar")wand_bar();else if(c=="lasso_kind_slide")lasso_kind_slide();else if(c=="feather_dialog_default")feather_dialog_default();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

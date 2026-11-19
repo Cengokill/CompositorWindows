@@ -33,6 +33,8 @@ SegmentedControl::SegmentedControl(const QStringList& items, QWidget* parent):QW
 }
 int SegmentedControl::currentIndex() const{return group_->checkedId();}
 void SegmentedControl::setCurrentIndex(int index){
+    // A refresh that re-applies the choice just made must not cut the slide short.
+    if(index==shown_&&group_->checkedId()==index)return;
     if(auto* button=group_->button(index)){slide_->stop();button->setChecked(true);shown_=index;update();}
 }
 void SegmentedControl::choose(int index){if(!group_->button(index)||index==shown_)return;setCurrentIndex(index);if(changed)changed(index);}
