@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "SegmentedControl.h"
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -42,6 +43,9 @@ template<class T> T* control(QObject* root,const char* objectName,const char* ac
 void combo(QObject* root,const char* objectName,const char* accessibleName,int value) {
     if(auto* item=control<QComboBox>(root,objectName,accessibleName)){const QSignalBlocker blocker(item);item->setCurrentIndex(value);}
 }
+void segmented(QObject* root,const char* objectName,int value) {
+    if(auto* item=ui::findSegmentedControl(root,objectName))item->setCurrentIndex(value);
+}
 void number(QObject* root,const char* objectName,const char* accessibleName,double value) {
     if(auto* item=control<QDoubleSpinBox>(root,objectName,accessibleName)){const QSignalBlocker blocker(item);item->setValue(value);}
 }
@@ -59,7 +63,7 @@ void MainWindow::captureToolState(EditorProject& project) const {
     state.gradientSettings=gradientSettings_;state.shapeStyle=shapeStyle_;
     state.ellipse=ellipse_;state.selectionAntialias=selectionAntialias_;state.selectionMode=selectionMode_;
     state.cropRatioChoice=cropRatioChoice_;state.lassoKind=lassoKind_;
-    state.selectionExpandAmount=selectionExpandAmount_;state.selectionContractAmount=selectionContractAmount_;
+    state.selectionExpandAmount=selectionExpandAmount_;state.selectionContractAmount=selectionContractAmount_;state.selectionFeatherAmount=selectionFeatherAmount_;
     state.wandTolerance=wandTolerance_;state.wandSampleRadius=wandSampleRadius_;state.wandContiguous=wandContiguous_;state.wandAllLayers=wandAllLayers_;
     state.maskPaintWhite=maskPaintWhite_;state.showSampleRing=showSampleRing_;
     if(project.canvas){state.showPixelGrid=project.canvas->showPixelGrid;state.layoutGrid=project.canvas->layoutGrid();}
@@ -74,7 +78,7 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     gradientSettings_=state.gradientSettings;shapeStyle_=state.shapeStyle;
     ellipse_=state.ellipse;selectionAntialias_=state.selectionAntialias;selectionMode_=state.selectionMode;
     cropRatioChoice_=state.cropRatioChoice;lassoKind_=state.lassoKind;
-    selectionExpandAmount_=state.selectionExpandAmount;selectionContractAmount_=state.selectionContractAmount;
+    selectionExpandAmount_=state.selectionExpandAmount;selectionContractAmount_=state.selectionContractAmount;selectionFeatherAmount_=state.selectionFeatherAmount;
     wandTolerance_=state.wandTolerance;wandSampleRadius_=state.wandSampleRadius;wandContiguous_=state.wandContiguous;wandAllLayers_=state.wandAllLayers;
     maskPaintWhite_=state.maskPaintWhite;showSampleRing_=state.showSampleRing;
     if(project.canvas){project.canvas->showPixelGrid=state.showPixelGrid;project.canvas->setLayoutGrid(state.layoutGrid);}
@@ -87,11 +91,11 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     number(this,"","Gradient opacity",gradientSettings_.opacity*100);
     combo(this,"shapeKind","",int(shapeStyle_.kind));number(this,"","Corner radius",shapeStyle_.cornerRadius);
     combo(this,"marqueeShape","Marquee shape",ellipse_?1:0);
-    combo(this,"lassoKind","",lassoKind_==editing::LassoKind::Polygonal?1:0);
+    segmented(this,"lassoKind",lassoKind_==editing::LassoKind::Polygonal?1:0);
     if(auto* item=control<QComboBox>(this,"cropRatioChoice")){const QSignalBlocker blocker(item);item->setCurrentText(cropRatioChoice_);}
-    for(const auto entry:{std::pair{"selectionExpandAmount",selectionExpandAmount_},std::pair{"selectionContractAmount",selectionContractAmount_}})if(auto* item=control<QSpinBox>(this,entry.first)){const QSignalBlocker blocker(item);item->setValue(entry.second);}
-    combo(this,"selectionMode","Selection mode",int(selectionMode_));
-    check(this,"selectionAntialias","selectionOptions","Antialias",selectionAntialias_);
+    for(const auto entry:{std::pair{"selectionExpandAmount",selectionExpandAmount_},std::pair{"selectionContractAmount",selectionContractAmount_},std::pair{"selectionFeatherAmount",selectionFeatherAmount_}})if(auto* item=control<QSpinBox>(this,entry.first)){const QSignalBlocker blocker(item);item->setValue(entry.second);}
+    segmented(this,"selectionMode",int(selectionMode_));
+    check(this,"selectionAntialias","selectionOptions","Anti-alias",selectionAntialias_);
     if(auto* item=control<QSpinBox>(this,"wandTolerance","Wand tolerance")){const QSignalBlocker blocker(item);item->setValue(wandTolerance_);}
     combo(this,"wandSampleSize","Wand sample size",wandSampleRadius_);
     check(this,"wandContiguous","wandOptions","Contiguous",wandContiguous_);

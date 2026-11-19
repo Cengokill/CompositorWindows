@@ -158,7 +158,7 @@ qt_add_resources(compositor_ui layer_panel_icons PREFIX "/" FILES
   assets/icons/lucide/folder-plus.svg assets/icons/lucide/panel-top.svg
   assets/icons/lucide/circle.svg assets/icons/lucide/sparkles.svg
   assets/icons/lucide/trash.svg assets/icons/lucide/chevron-down.svg)
-target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp)
+target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp src/ui/SegmentedControl.cpp)
 qt_add_resources(compositor_ui visual_assets PREFIX "/" FILES assets/fonts/InterVariable.ttf assets/icons/chevron-down.png assets/icons/chevron-up.png)
 qt_add_resources(compositor_ui release_notes PREFIX "/" FILES docs/release-notes.md)
 target_sources(compositor_ui PRIVATE src/ui/CanvasPresentation.cpp)
@@ -648,7 +648,7 @@ foreach(case option_marquee fresh_shift_marquee polygon_click_close canonical_dr
 endforeach()
 add_executable(selection_followup_tests tests/selection_gesture/SelectionFollowupTests.cpp)
 target_link_libraries(selection_followup_tests PRIVATE compositor_ui)
-foreach(case undo_redo_draft escape_mode_reset expand_range wand_replace)
+foreach(case undo_redo_draft escape_mode_reset expand_range wand_replace feather_bar feather_dialog_default)
   add_test(NAME selection_followup.${case} COMMAND selection_followup_tests ${case})
   set_tests_properties(selection_followup.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

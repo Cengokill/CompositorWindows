@@ -209,7 +209,7 @@ private:
     std::optional<editing::Rect> cropDraft_;
     QString cropRatioChoice_{"Free"};
     editing::LassoKind lassoKind_{editing::LassoKind::Freehand};
-    int selectionExpandAmount_{1},selectionContractAmount_{1};
+    int selectionExpandAmount_{1},selectionContractAmount_{1},selectionFeatherAmount_{2};
     std::optional<editing::CropDrag> cropDrag_;
     std::optional<editing::CropSnap> cropSnap_;
     bool ellipse_{},selectionAntialias_{true},movingSelection_{};
@@ -336,6 +336,7 @@ private:
     void cancelCrop();
     void refreshCropControls();
     void resizeSelection(bool expand,double amount);
+    void featherSelectionBy(double radius);
     bool handleEditingKey(QKeyEvent*);
     bool beginTemporaryHand(Point);
     bool updateTemporaryHand(Point,bool finish);

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "LastFilterJob.h"
 #include "LayerPanel.h"
+#include "SegmentedControl.h"
 #include "PreviewComboBox.h"
 #include "PropertyControls.h"
 #include "ProjectChrome.h"
@@ -240,7 +241,7 @@ void MainWindow::selectTool(Tool value){
     if(value==Tool::Polygon)lassoKind_=editing::LassoKind::Polygonal;
     if(value!=tool_){applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();const bool leftHand=tool_==Tool::Hand;tool_=value;if(canvas()&&tool_==Tool::Hand)canvas()->setCursor(Qt::OpenHandCursor);else if(canvas()&&leftHand)canvas()->unsetCursor();if(canvas())canvas()->updateHoverCursorAtPointer();}
     if(value==Tool::Crop&&!cropDraft_)if(auto* p=current();p&&p->document){cropRatioChoice_="Free";cropDraft_=editing::Rect{0,0,double(p->document->width),double(p->document->height)};if(p->document->selection&&p->document->selection->coverage){auto bounds=editing::coverageBounds(*p->document->selection->coverage);if(!bounds.empty())cropDraft_=bounds;}}
-    if(auto* box=findChild<QComboBox*>("lassoKind")){const QSignalBlocker block(box);box->setCurrentIndex(lassoKind_==editing::LassoKind::Polygonal?1:0);}
+    if(auto* box=ui::findSegmentedControl(this,"lassoKind"))box->setCurrentIndex(lassoKind_==editing::LassoKind::Polygonal?1:0);
     if(auto* box=findChild<QComboBox*>("cropRatioChoice")){const QSignalBlocker block(box);box->setCurrentText(cropRatioChoice_);}
     refresh(false,false);
 }
@@ -292,9 +293,15 @@ for(auto*a:findChildren<QAction*>())if(a->property("editorTool").isValid()){
     a->setChecked(actionTool==tool_||(actionTool==Tool::Brush&&tool_==Tool::Eraser)||(actionTool==Tool::Lasso&&tool_==Tool::Polygon));
 }
 refreshCmykActions();refreshing_=false;refreshSelectionGesture();if(commands_)commands_->refresh();refreshPaletteControls();
-    for(const char* name:{"selectionExpandAmount","selectionContractAmount"})if(auto* control=findChild<QSpinBox*>(name))control->setEnabled(ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()));
+    for(const char* name:{"selectionExpandAmount","selectionContractAmount","selectionFeatherAmount"})if(auto* control=findChild<QSpinBox*>(name))control->setEnabled(ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()));
     if(auto* control=findChild<QComboBox*>("cropRatioChoice")){control->setVisible(tool_==Tool::Crop);control->setEnabled(p&&p->document&&!p->projectBusy&&!p->importing);}
-    if(auto* control=findChild<QComboBox*>("lassoKind"))control->setVisible(tool_==Tool::Lasso||tool_==Tool::Polygon);
+    // A toolbar re-shows a hidden widget on layout, so visibility goes through the widget's action.
+    if(auto* options=findChild<QToolBar*>("selectionOptions")){
+        const auto showOption=[options](QWidget* widget,bool visible){if(widget)for(auto* item:options->actions())if(options->widgetForAction(item)==widget)item->setVisible(visible);};
+        showOption(ui::findSegmentedControl(this,"lassoKind"),tool_==Tool::Lasso||tool_==Tool::Polygon);
+        showOption(findChild<QComboBox*>("marqueeShape"),tool_==Tool::Marquee);
+    }
+    if(auto* title=findChild<QLabel*>("selectionToolTitle"))title->setText(tool_==Tool::Marquee?"Marquee":tool_==Tool::Wand?"Magic Wand":"Lasso");
     QStringList titles;for(const auto& project:projects_)titles.push_back(project->path.isEmpty()?project->defaultTitle:QFileInfo(project->path).fileName());ui::refreshProjectTabs(tabs_,canSwitchProjects(),titles);
     refreshShapeControls();refreshCropControls();refreshTypeControls();refreshGifTimeline();
 }
