@@ -446,7 +446,7 @@ set_tests_properties(imaging.subject_dialog_compatibility PROPERTIES ENVIRONMENT
 target_link_libraries(brush_appearance_tests PRIVATE compositor_ui Qt6::Test)
 target_compile_options(brush_appearance_tests PRIVATE /W4 /WX /utf-8)
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/brush-appearance-results")
-foreach(case brush_sliders heal_sliders clone_sliders smear_sliders slider_project_isolation tip_family_retention layer_percent_commit layer_percent_escape layer_percent_focus_loss layer_percent_invalid layer_percent_clamp layer_percent_arrows layer_percent_target_guard layer_percent_text_keys brush_mode_selector brush_rail_remembers brush_shortcuts_explicit brush_mode_project_isolation)
+foreach(case brush_sliders heal_sliders clone_sliders smear_sliders slider_project_isolation tip_family_retention layer_percent_commit layer_percent_escape layer_percent_focus_loss layer_percent_invalid layer_percent_clamp layer_percent_arrows layer_percent_target_guard layer_percent_text_keys brush_mode_selector brush_rail_remembers brush_shortcuts_explicit brush_mode_project_isolation brush_shared_controls)
   add_test(NAME brush_appearance.${case} COMMAND brush_appearance_tests ${case} "${CMAKE_BINARY_DIR}/brush-appearance-results/${case}.json")
   set_tests_properties(brush_appearance.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

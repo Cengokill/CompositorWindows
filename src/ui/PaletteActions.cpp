@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "PaletteSwatches.h"
+#include "ToolbarControls.h"
 #include <QGuiApplication>
 #include <QLabel>
 #include <QPushButton>
@@ -32,6 +33,8 @@ void MainWindow::refreshPaletteControls(){
     if(targetChanged&&maskPalettePopup_)maskPalettePopup_->close();
     if(masked&&colorPicker_)colorPicker_->reject();
     paletteSwatches_->setColors(masked?QColor(maskPaintWhite_?Qt::white:Qt::black):foreground_,masked?QColor(maskPaintWhite_?Qt::black:Qt::white):background_);
+    // The Brush bar shows the foreground color; a mask paints only black or white, which the swatches already show.
+    if(auto* well=dynamic_cast<ui::ColorWell*>(findChild<QAbstractButton*>("brushColor"))){well->setColor(foreground_);well->setEnabled(!masked&&!stroke_&&!retouch_);}
 }
 void MainWindow::openPalette(bool background){
     if(stroke_||retouch_)return;

@@ -81,6 +81,7 @@ QString optionsBarStyleSheet() {
         QToolButton[pill="true"]:hover, QPushButton[pill="true"]:hover { background: %6; }
         QToolButton[pill="true"]:pressed, QPushButton[pill="true"]:pressed { background: %7; }
         QToolButton[pill="true"]:disabled, QPushButton[pill="true"]:disabled { background: %8; color: %9; }
+        QToolButton[pill="true"]:checked { background: %16; color: white; }
         QPushButton[pill="true"][primary="true"] { background: %16; color: white; }
         QPushButton[pill="true"][primary="true"]:hover { background: %16; }
         QPushButton[pill="true"][primary="true"]:disabled { background: %8; color: %9; }
@@ -89,9 +90,9 @@ QString optionsBarStyleSheet() {
         QToolButton[segment="true"]:checked { background: transparent; color: white; }
         QToolButton[segment="true"]:disabled { background: transparent; color: %9; }
         QToolButton[segment="true"]:checked:disabled { color: %2; }
-        QSpinBox[numberField="true"] { background: %13; color: %2; border: 1px solid %14; border-radius: %15px; padding: 0 6px; min-height: %5px; max-height: %5px; }
-        QSpinBox[numberField="true"]:focus { border-color: %16; background: %13; }
-        QSpinBox[numberField="true"]:disabled { background: %17; color: %9; border-color: %14; }
+        QAbstractSpinBox[numberField="true"] { background: %13; color: %2; border: 1px solid %14; border-radius: %15px; padding: 0 6px; min-height: %5px; max-height: %5px; }
+        QAbstractSpinBox[numberField="true"]:focus { border-color: %16; background: %13; }
+        QAbstractSpinBox[numberField="true"]:disabled { background: %17; color: %9; border-color: %14; }
         QLabel[optionCaption="true"] { color: %18; background: transparent; }
         QToolBar::separator { background: %14; width: 1px; margin: 4px 6px; }
         )")
@@ -99,6 +100,30 @@ QString optionsBarStyleSheet() {
         .arg(t::pressed, t::controlPressed, t::controlDisabled, t::controlTextDisabled)
         .arg((t::controlHeight - 2 * t::segmentInset) / 2).arg(t::segmentPadding).arg(t::controlHeight - 2 * t::segmentInset)
         .arg(t::field, t::separator).arg(t::fieldRadius).arg(t::accent, t::fieldDisabled, t::secondary);
+}
+void styleAsNumberField(QAbstractSpinBox* field) {
+    field->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    field->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    field->setProperty("numberField", true);
+    field->setFixedSize(t::numberFieldWidth, t::controlHeight);
+}
+QLabel* makeCaption(const QString& text) {
+    auto* label = new QLabel(text);
+    label->setProperty("optionCaption", true);
+    return label;
+}
+QCheckBox* makeOptionCheck(const QString& text) { return new OptionCheckBox(text); }
+void markPill(QWidget* button) { button->setProperty("pill", true); }
+ColorWell::ColorWell(QWidget* parent) : QAbstractButton(parent) { setCursor(Qt::PointingHandCursor); setFocusPolicy(Qt::StrongFocus); }
+void ColorWell::setColor(const QColor& color) { if (color == color_) return; color_ = color; update(); }
+QSize ColorWell::sizeHint() const { return {t::colorWellWidth, t::colorWellHeight}; }
+void ColorWell::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF box = QRectF(rect()).adjusted(.75, .75, -.75, -.75);
+    painter.setPen(QPen(isEnabled() ? QColor(t::primary) : QColor(t::controlTextDisabled), 1.5));
+    painter.setBrush(isEnabled() ? color_ : color_.darker(160));
+    painter.drawRoundedRect(box, t::colorWellRadius, t::colorWellRadius);
 }
 void markPillButton(QToolBar* bar, QAction* action) {
     if (auto* button = bar ? bar->widgetForAction(action) : nullptr) button->setProperty("pill", true);
@@ -113,15 +138,10 @@ QSpinBox* addNumberField(QToolBar* bar, const char* objectName, const QString& a
     field->setAccessibleName(accessibleName);
     field->setRange(minimum, maximum);
     field->setValue(value);
-    field->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    field->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    field->setProperty("numberField", true);
-    field->setFixedSize(t::numberFieldWidth, t::controlHeight);
+    styleAsNumberField(field);
     row->addWidget(field);
     if (!unit.isEmpty()) {
-        auto* caption = new QLabel(unit);
-        caption->setProperty("optionCaption", true);
-        row->addWidget(caption);
+        row->addWidget(makeCaption(unit));
     }
     bar->addWidget(host);
     return field;

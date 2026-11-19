@@ -1,5 +1,12 @@
 #include "ui/MainWindow.h"
 #include <QAbstractButton>
+#include <QColorDialog>
+#include <QDoubleSpinBox>
+#include <QLabel>
+#include <QSlider>
+#include <QStyleOptionSlider>
+#include <QTimer>
+#include "ui/ToolbarControls.h"
 #include <QApplication>
 #include <QFile>
 #include <QJsonDocument>
@@ -65,12 +72,20 @@ void percentTargetGuard(){Fixture f;const auto original=f.project.active;const a
 void percentTextKeys(){Fixture f;auto* field=percentage(f);type(field,"be");require(field->text()=="be","Brush shortcuts cannot steal percentage text");require(rail(f.window,ProjectTool::Move)->isChecked(),"Text key leaves selected tool unchanged");QTest::keyClick(field,Qt::Key_Return);events();unchanged(f);}
 void modeSelector(){Fixture f;invoke(f.window,"tool.brush");auto* paint=control<QAbstractButton>(f.window,"brushModePaint");auto* erase=control<QAbstractButton>(f.window,"brushModeErase");require(paint->isVisible()&&erase->isVisible()&&paint->isChecked()&&!erase->isChecked(),"Source segmented Brush mode defaults to Paint");QTest::mouseClick(erase,Qt::LeftButton);events();require(erase->isChecked()&&!paint->isChecked()&&erasing(f.window),"Erase mode targets eraser");QTest::mouseClick(paint,Qt::LeftButton);events();require(paint->isChecked()&&!erase->isChecked()&&!erasing(f.window),"Paint mode targets brush");unchanged(f);}
 void railRemembers(){Fixture f;key(f,Qt::Key_E);require(erasing(f.window),"E selects Erase");invoke(f.window,"tool.move");clickRail(f.window,ProjectTool::Brush);require(erasing(f.window),"Returning through Brush rail retains Erase mode");unchanged(f);}
+void sharedControls(){Fixture f;invoke(f.window,"tool.brush");events();
+ auto* title=f.window.findChild<QLabel*>("brushTitle");require(title&&title->isVisible()&&title->text()=="Brush","Brush bar names its tool");
+ auto* size=control<QDoubleSpinBox>(f.window,"Brush diameter");require(size->buttonSymbols()==QAbstractSpinBox::NoButtons&&size->suffix().isEmpty()&&(size->alignment()&Qt::AlignRight),"Size is a plain right-aligned number field");
+ auto* slider=control<QSlider>(f.window,"brushHardnessSlider");QStyleOptionSlider option;option.initFrom(slider);option.orientation=Qt::Horizontal;option.minimum=slider->minimum();option.maximum=slider->maximum();option.sliderPosition=slider->value();option.rect=slider->rect();
+ const auto knob=slider->style()->subControlRect(QStyle::CC_Slider,&option,QStyle::SC_SliderHandle,slider);require(knob.width()>knob.height()&&knob.width()-knob.height()<=4,"Slider knob is wide and almost round");
+ auto* well=control<QAbstractButton>(f.window,"brushColor");auto* swatch=dynamic_cast<ui::ColorWell*>(well);require(swatch&&well->isVisible()&&well->isEnabled()&&swatch->color()==QColor(Qt::black),"Color well shows the black foreground");
+ QTimer::singleShot(0,&f.window,[]{if(auto* dialog=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){dialog->setCurrentColor(QColor(10,200,30));dialog->accept();}});
+ QTest::mouseClick(well,Qt::LeftButton);events();require(swatch->color()==QColor(10,200,30),"Choosing a color in the Windows color dialog sets the foreground and the well");}
 void explicitShortcuts(){Fixture f;key(f,Qt::Key_E);require(erasing(f.window),"E selects Erase explicitly");key(f,Qt::Key_B);require(!erasing(f.window)&&rail(f.window,ProjectTool::Brush)->isChecked(),"B selects Paint explicitly");key(f,Qt::Key_E);require(erasing(f.window),"E restores Erase explicitly");unchanged(f);}
 void modeProjectIsolation(){Fixture f;key(f,Qt::Key_E);invoke(f.window,"tool.move");auto& other=f.window.addProject(document(),"Brush mode B");clickRail(f.window,ProjectTool::Brush);require(!erasing(f.window),"Other project's Brush mode defaults to Paint");f.select(f.project);clickRail(f.window,ProjectTool::Brush);require(erasing(f.window),"Project restores remembered Erase while another tool was selected");unchanged(f);require(other.history.undoCount()==0,"Mode choices preserve other history");}
 }
 int main(int argc,char** argv){
     QApplication app(argc,argv);QTemporaryDir preferences;require(preferences.isValid(),"Fixture settings directory");QCoreApplication::setOrganizationName("CompositorFixture");QCoreApplication::setApplicationName("BrushAppearance");QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,preferences.path());QSettings::setPath(QSettings::IniFormat,QSettings::SystemScope,preferences.path());
-    const std::map<std::string,void(*)()> cases{{"brush_sliders",[]{sliders("tool.brush",false);}},{"heal_sliders",[]{sliders("tool.heal",true);}},{"clone_sliders",[]{sliders("tool.clone",true);}},{"smear_sliders",[]{sliders("tool.retouch",true);}},{"slider_project_isolation",sliderProjectIsolation},{"tip_family_retention",tipFamilies},{"layer_percent_commit",[]{percentCommit(Qt::Key_Return);}},{"layer_percent_escape",[]{percentCommit(Qt::Key_Escape);}},{"layer_percent_focus_loss",percentFocusLoss},{"layer_percent_invalid",percentInvalid},{"layer_percent_clamp",percentClamp},{"layer_percent_arrows",percentArrows},{"layer_percent_target_guard",percentTargetGuard},{"layer_percent_text_keys",percentTextKeys},{"brush_mode_selector",modeSelector},{"brush_rail_remembers",railRemembers},{"brush_shortcuts_explicit",explicitShortcuts},{"brush_mode_project_isolation",modeProjectIsolation}};
+    const std::map<std::string,void(*)()> cases{{"brush_sliders",[]{sliders("tool.brush",false);}},{"heal_sliders",[]{sliders("tool.heal",true);}},{"clone_sliders",[]{sliders("tool.clone",true);}},{"smear_sliders",[]{sliders("tool.retouch",true);}},{"slider_project_isolation",sliderProjectIsolation},{"tip_family_retention",tipFamilies},{"layer_percent_commit",[]{percentCommit(Qt::Key_Return);}},{"layer_percent_escape",[]{percentCommit(Qt::Key_Escape);}},{"layer_percent_focus_loss",percentFocusLoss},{"layer_percent_invalid",percentInvalid},{"layer_percent_clamp",percentClamp},{"layer_percent_arrows",percentArrows},{"layer_percent_target_guard",percentTargetGuard},{"layer_percent_text_keys",percentTextKeys},{"brush_mode_selector",modeSelector},{"brush_rail_remembers",railRemembers},{"brush_shortcuts_explicit",explicitShortcuts},{"brush_mode_project_isolation",modeProjectIsolation},{"brush_shared_controls",sharedControls}};
     const std::string name=argc>1?argv[1]:"";QJsonObject report{{"case",QString::fromStdString(name)}};int result=1;
     try{require(argc==3&&cases.contains(name),"Provide named case and report path");cases.at(name)();report["status"]="passed";result=0;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception& error){report["status"]="failed";report["error"]=error.what();std::cerr<<"FAIL "<<name<<": "<<error.what()<<'\n';}
     if(argc==3){QFile file(QString::fromLocal8Bit(argv[2]));if(!file.open(QIODevice::WriteOnly)||file.write(QJsonDocument(report).toJson())<0)return 2;}return result;

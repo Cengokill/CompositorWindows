@@ -76,7 +76,8 @@ private:
 
 class SliderStyle final : public QProxyStyle {
 public:
-    SliderStyle() : QProxyStyle(QStyleFactory::create("Fusion")) {}
+    struct Metrics { int track, knobWidth, knobHeight; qreal knobRadius; const char* trackColor; const char* knobColor; };
+    explicit SliderStyle(Metrics metrics = {t::sliderTrack, t::sliderKnobWidth, t::sliderKnobHeight, t::sliderKnobRadius, t::track, t::knob}) : QProxyStyle(QStyleFactory::create("Fusion")), m(metrics) {}
     QRect subControlRect(ComplexControl control, const QStyleOptionComplex* option,
                          SubControl part, const QWidget* widget) const override {
         if (control != CC_Slider) return QProxyStyle::subControlRect(control, option, part, widget);
@@ -85,13 +86,13 @@ public:
             return QProxyStyle::subControlRect(control, option, part, widget);
         const auto area = option->rect;
         if (part == SC_SliderGroove)
-            return {area.x(), area.y() + (area.height() - t::sliderTrack) / 2, area.width(), t::sliderTrack};
+            return {area.x(), area.y() + (area.height() - m.track) / 2, area.width(), m.track};
         if (part == SC_SliderHandle) {
-            const int travel = qMax(0, area.width() - t::sliderKnobWidth);
+            const int travel = qMax(0, area.width() - m.knobWidth);
             const int position = QStyle::sliderPositionFromValue(slider->minimum, slider->maximum,
                                                                   slider->sliderPosition, travel, slider->upsideDown);
-            return {area.x() + position, area.y() + (area.height() - t::sliderKnobHeight) / 2,
-                    t::sliderKnobWidth, t::sliderKnobHeight};
+            return {area.x() + position, area.y() + (area.height() - m.knobHeight) / 2,
+                    m.knobWidth, m.knobHeight};
         }
         return QProxyStyle::subControlRect(control, option, part, widget);
     }
@@ -109,26 +110,28 @@ public:
         const auto groove = subControlRect(control, option, SC_SliderGroove, widget);
         const auto knob = subControlRect(control, option, SC_SliderHandle, widget);
         painter->setPen(Qt::NoPen);
-        painter->setBrush(QColor(t::track));
-        painter->drawRoundedRect(QRectF(groove), t::sliderTrack / 2.0, t::sliderTrack / 2.0);
+        painter->setBrush(QColor(m.trackColor));
+        painter->drawRoundedRect(QRectF(groove), m.track / 2.0, m.track / 2.0);
         const qreal fraction = slider->maximum > slider->minimum
             ? qreal(slider->sliderPosition - slider->minimum) / (slider->maximum - slider->minimum) : 0;
-        const qreal travel = qMax(0, groove.width() - t::sliderKnobWidth);
+        const qreal travel = qMax(0, groove.width() - m.knobWidth);
         const qreal position = fraction * travel;
-        const qreal ramp = qMin(qreal(t::sliderKnobWidth / 2 + 1), travel / 2);
-        qreal fill = position + t::sliderKnobWidth / 2.0;
-        if (ramp > 0 && position < ramp) fill = position / ramp * (ramp + t::sliderKnobWidth / 2.0);
+        const qreal ramp = qMin(qreal(m.knobWidth / 2 + 1), travel / 2);
+        qreal fill = position + m.knobWidth / 2.0;
+        if (ramp > 0 && position < ramp) fill = position / ramp * (ramp + m.knobWidth / 2.0);
         else if (ramp > 0 && travel - position < ramp)
-            fill = groove.width() - (travel - position) / ramp * (ramp + t::sliderKnobWidth / 2.0);
+            fill = groove.width() - (travel - position) / ramp * (ramp + m.knobWidth / 2.0);
         painter->setBrush(QColor(t::accent));
         painter->drawRoundedRect(QRectF(groove.x(), groove.y(), fill, groove.height()),
-                                 t::sliderTrack / 2.0, t::sliderTrack / 2.0);
+                                 m.track / 2.0, m.track / 2.0);
         painter->setBrush(QColor(0, 0, 0, 90));
-        painter->drawRoundedRect(QRectF(knob).translated(0, 1), t::sliderKnobRadius, t::sliderKnobRadius);
-        painter->setBrush(option->state & State_Sunken ? QColor(Qt::white) : QColor(t::knob));
-        painter->drawRoundedRect(QRectF(knob), t::sliderKnobRadius, t::sliderKnobRadius);
+        painter->drawRoundedRect(QRectF(knob).translated(0, 1), m.knobRadius, m.knobRadius);
+        painter->setBrush(option->state & State_Sunken ? QColor(Qt::white) : QColor(m.knobColor));
+        painter->drawRoundedRect(QRectF(knob), m.knobRadius, m.knobRadius);
         painter->restore();
     }
+private:
+    Metrics m;
 };
 
 // An icon's primitives, parsed once from its bundled SVG on the UI thread.
@@ -329,6 +332,15 @@ Slider::Slider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orien
     setMinimumWidth(t::sliderMinimumWidth);
     // QWidget::setStyle does not take ownership.
     auto* style = new SliderStyle;
+    style->setParent(this);
+    setStyle(style);
+    setStyleSheet(QString("QSlider::sub-page:horizontal { background: %1; }").arg(t::accent));
+}
+
+OptionSlider::OptionSlider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orientation, parent) {
+    setFixedHeight(t::optionSliderHeight);
+    setMinimumWidth(t::sliderMinimumWidth);
+    auto* style = new SliderStyle({t::optionSliderTrack, t::optionKnobWidth, t::optionKnobHeight, t::optionKnobHeight / 2.0, t::optionTrack, t::primary});
     style->setParent(this);
     setStyle(style);
     setStyleSheet(QString("QSlider::sub-page:horizontal { background: %1; }").arg(t::accent));

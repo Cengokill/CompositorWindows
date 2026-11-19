@@ -1,7 +1,10 @@
 #pragma once
+#include <QAbstractButton>
+#include <QColor>
 #include <QString>
 #include <QStringList>
 
+class QAbstractSpinBox;
 class QAction;
 class QCheckBox;
 class QComboBox;
@@ -27,4 +30,22 @@ QSpinBox* addNumberField(QToolBar* bar, const char* objectName, const QString& a
 QComboBox* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items = {});
 // A check box with an accent-blue box.
 QCheckBox* addOptionCheck(QToolBar* bar, const QString& text, const char* objectName, bool checked = false);
+// Pieces for bars that lay their controls out themselves (the Brush bar) instead of adding them to the toolbar.
+void styleAsNumberField(QAbstractSpinBox* field);
+QLabel* makeCaption(const QString& text);
+QCheckBox* makeOptionCheck(const QString& text);
+// A capsule button; a checkable one fills with the accent blue while checked.
+void markPill(QWidget* button);
+// The current color as a rounded well with a light border; clicking it is up to the owner.
+class ColorWell final : public QAbstractButton {
+public:
+    explicit ColorWell(QWidget* parent = nullptr);
+    void setColor(const QColor& color);
+    QColor color() const { return color_; }
+    QSize sizeHint() const override;
+protected:
+    void paintEvent(QPaintEvent*) override;
+private:
+    QColor color_{Qt::black};
+};
 }

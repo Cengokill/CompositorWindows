@@ -66,6 +66,12 @@ public:
     explicit Slider(Qt::Orientation orientation, QWidget* parent = nullptr);
 };
 
+// Options-bar slider: a 4-pixel track and a wide, almost round 18 x 15 knob.
+class OptionSlider final : public TrackSlider {
+public:
+    explicit OptionSlider(Qt::Orientation orientation, QWidget* parent = nullptr);
+};
+
 // Fixed-width, rounded numeric field. Editing behavior belongs to its owner.
 class PercentField : public QLineEdit {
 public:
