@@ -1,6 +1,7 @@
 #include "VisualStyle.h"
 #include "CommandRegistry.h"
 #include "EditorIcons.h"
+#include "AccentColor.h"
 #include "ToolbarControls.h"
 #include <QApplication>
 #include <QAbstractButton>
@@ -253,7 +254,7 @@ void installVisualStyle() {
         QPushButton, QToolButton { background: #33353b; border: 1px solid #41434b; border-radius: 7px; padding: 5px 12px; min-height: 18px; }
         QPushButton:hover, QToolButton:hover { background: #3d4047; border-color: #565a64; }
         QPushButton:pressed, QToolButton:pressed { background: #27292e; }
-        QPushButton:default, QPushButton[primary="true"], QToolButton:checked { background: #428bea; border-color: #589df4; color: white; }
+        /* The default, primary and checked blue is appended below from AccentColor.h. */
         QPushButton:disabled, QToolButton:disabled { color: #676a73; border-color: #303237; background: #292b30; }
         QPushButton:focus, QToolButton:focus { border-color: #78b0f7; }
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #2b2d32; border: 1px solid #393c43; border-radius: 6px; padding: 4px 7px; min-height: 18px; }
@@ -304,7 +305,7 @@ void installVisualStyle() {
         QStatusBar::item { border: 0; }
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
-    )"+optionsBarStyleSheet());
+    )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n").arg(accentBlue)+optionsBarStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 
