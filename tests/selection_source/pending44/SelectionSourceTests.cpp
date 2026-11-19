@@ -97,7 +97,7 @@ struct Session {
     void selectTool(ProjectTool value){(window.*member(SelectTool{}))(value);}
     void trigger(const char* id){auto* action=command(window,id);guard(action->isEnabled(),"Source command precondition enabled");action->trigger();}
     void setKind(LassoKind value){auto* control=ui::findSegmentedControl(&window,"lassoKind");guard(control,"Lasso control exists");control->choose(value==LassoKind::Polygonal?1:0);}
-    void setEllipse(bool value){for(auto* combo:window.findChildren<QComboBox*>())if(combo->accessibleName()=="Marquee shape"){combo->setCurrentIndex(value?1:0);return;}throw std::runtime_error("Marquee control missing");}
+    void setEllipse(bool value){if(auto* shape=ui::findSegmentedControl(&window,"marqueeShape")){shape->choose(value?1:0);return;}throw std::runtime_error("Marquee control missing");}
     void setChoice(SelectionMode value){ui::findSegmentedControl(&window,"selectionMode")->choose(int(value));}
     void setAA(bool value){for(auto* box:window.findChildren<QCheckBox*>())if(box->text()=="Anti-alias"){box->setChecked(value);return;}throw std::runtime_error("Anti-alias control missing");}
     std::shared_ptr<const SelectionOutline> outline(){return selection()?selection()->outline:nullptr;}

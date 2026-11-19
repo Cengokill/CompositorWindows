@@ -90,7 +90,7 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     check(this,"gradientReverse","drawingOptions","Reverse",gradientSettings_.reversed);
     number(this,"","Gradient opacity",gradientSettings_.opacity*100);
     combo(this,"shapeKind","",int(shapeStyle_.kind));number(this,"","Corner radius",shapeStyle_.cornerRadius);
-    combo(this,"marqueeShape","Marquee shape",ellipse_?1:0);
+    segmented(this,"marqueeShape",ellipse_?1:0);
     segmented(this,"lassoKind",lassoKind_==editing::LassoKind::Polygonal?1:0);
     if(auto* item=control<QComboBox>(this,"cropRatioChoice")){const QSignalBlocker blocker(item);item->setCurrentText(cropRatioChoice_);}
     for(const auto entry:{std::pair{"selectionExpandAmount",selectionExpandAmount_},std::pair{"selectionContractAmount",selectionContractAmount_},std::pair{"selectionFeatherAmount",selectionFeatherAmount_}})if(auto* item=control<QSpinBox>(this,entry.first)){const QSignalBlocker blocker(item);item->setValue(entry.second);}

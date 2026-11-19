@@ -297,7 +297,8 @@ refreshCmykActions();refreshing_=false;refreshSelectionGesture();if(commands_)co
     for(const char* name:{"selectionExpandAmount","selectionContractAmount","selectionFeatherAmount"})if(auto* control=findChild<QSpinBox*>(name))control->setEnabled(ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()));
     auto* selectionBar=findChild<QToolBar*>("selectionOptions");
     ui::setToolbarControlVisible(selectionBar,ui::findSegmentedControl(this,"lassoKind"),tool_==Tool::Lasso||tool_==Tool::Polygon);
-    ui::setToolbarControlVisible(selectionBar,findChild<QComboBox*>("marqueeShape"),tool_==Tool::Marquee);
+    ui::setToolbarControlVisible(selectionBar,ui::findSegmentedControl(this,"marqueeShape"),tool_==Tool::Marquee);
+    ui::setToolbarControlVisible(selectionBar,findChild<QCheckBox*>("selectionAntialias"),tool_!=Tool::Marquee);
     const bool wand=tool_==Tool::Wand;
     for(const char* name:{"wandKind","wandScope"})ui::setToolbarControlVisible(selectionBar,ui::findSegmentedControl(this,name),wand);
     for(const char* name:{"wandToleranceCaption","wandSampleSize","wandContiguous"})ui::setToolbarControlVisible(selectionBar,findChild<QWidget*>(name),wand);

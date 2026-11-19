@@ -2,6 +2,7 @@
 #include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QInputDialog>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QLabel>
 #include <QMouseEvent>
@@ -40,14 +41,21 @@ void lasso_kind_slide(){Fixture f;command(f.window,"tool.lasso")->trigger();QApp
  const auto polygonal=kind->segment(1)->geometry();QTest::mouseClick(kind->segment(1),Qt::LeftButton);
  require(kind->currentIndex()==1&&kind->pillRect().left()<polygonal.left(),"pill slides after the lasso kind click although the tool refreshes");
  bool arrived=false;for(int i=0;i<100&&!arrived;++i){QTest::qWait(10);arrived=kind->pillRect()==QRectF(polygonal);}require(arrived,"pill reaches Polygonal");}
+void marquee_bar(){Fixture f;command(f.window,"tool.marquee")->trigger();QApplication::processEvents();
+ auto* shape=ui::findSegmentedControl(&f.window,"marqueeShape");auto* mode=ui::findSegmentedControl(&f.window,"selectionMode");auto* aa=f.window.findChild<QCheckBox*>("selectionAntialias");
+ require(shape&&shape->isVisible()&&mode&&mode->isVisible()&&aa,"Marquee shows its shape and mode choices");
+ require(shape->segment(0)->text()=="Rectangle"&&shape->segment(1)->text()=="Ellipse"&&shape->currentIndex()==0,"Rectangle and Ellipse, Rectangle first");
+ require(!aa->isVisible()&&!ui::findSegmentedControl(&f.window,"lassoKind")->isVisible(),"Marquee has no Anti-alias or lasso kind");
+ QTest::mouseClick(shape->segment(1),Qt::LeftButton);QApplication::processEvents();require(shape->currentIndex()==1,"Ellipse chosen");
+ command(f.window,"tool.lasso")->trigger();QApplication::processEvents();require(aa->isVisible()&&!shape->isVisible(),"Lasso shows Anti-alias and hides the shape");}
 void wand_bar(){Fixture f;command(f.window,"tool.wand")->trigger();QApplication::processEvents();
  auto* bar=f.window.findChild<QToolBar*>("selectionOptions");require(bar&&bar->isVisible(),"selection bar shows for the Wand");require(!f.window.findChild<QToolBar*>("wandOptions"),"Wand has no bar of its own");
  auto* title=f.window.findChild<QLabel*>("selectionToolTitle");require(title&&title->text()=="Magic","title is Magic");
  auto* kind=ui::findSegmentedControl(&f.window,"wandKind");auto* scope=ui::findSegmentedControl(&f.window,"wandScope");auto* tolerance=f.window.findChild<QSpinBox*>("wandTolerance");auto* sample=f.window.findChild<QComboBox*>("wandSampleSize");
  require(kind&&kind->isVisible()&&scope&&scope->isVisible()&&tolerance&&tolerance->isVisible()&&sample&&sample->isVisible(),"Wand controls are visible");
  require(tolerance->value()==32&&tolerance->buttonSymbols()==QAbstractSpinBox::NoButtons&&tolerance->suffix().isEmpty(),"tolerance is a plain 32 field");
- require(!ui::findSegmentedControl(&f.window,"lassoKind")->isVisible()&&!f.window.findChild<QComboBox*>("marqueeShape")->isVisible(),"Lasso and Marquee controls are hidden");
+ require(!ui::findSegmentedControl(&f.window,"lassoKind")->isVisible()&&!ui::findSegmentedControl(&f.window,"marqueeShape")->isVisible(),"Lasso and Marquee controls are hidden");
  scope->segment(1)->click();kind->segment(1)->click();command(f.window,"tool.lasso")->trigger();QApplication::processEvents();
  require(!kind->isVisible()&&!scope->isVisible()&&!tolerance->isVisible(),"Wand controls hide for another tool");}
 }
-int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="undo_redo_draft")undo_redo_draft();else if(c=="escape_mode_reset")escape_mode_reset();else if(c=="expand_range")expand_range();else if(c=="wand_replace")wand_replace();else if(c=="feather_bar")feather_bar();else if(c=="segmented_slide")segmented_slide();else if(c=="wand_bar")wand_bar();else if(c=="lasso_kind_slide")lasso_kind_slide();else if(c=="feather_dialog_default")feather_dialog_default();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="undo_redo_draft")undo_redo_draft();else if(c=="escape_mode_reset")escape_mode_reset();else if(c=="expand_range")expand_range();else if(c=="wand_replace")wand_replace();else if(c=="feather_bar")feather_bar();else if(c=="segmented_slide")segmented_slide();else if(c=="wand_bar")wand_bar();else if(c=="marquee_bar")marquee_bar();else if(c=="lasso_kind_slide")lasso_kind_slide();else if(c=="feather_dialog_default")feather_dialog_default();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

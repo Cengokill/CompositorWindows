@@ -74,7 +74,7 @@ void MainWindow::setupSelectionActions(){
     auto*lasso=bar->addAction("Lasso (L)");bindCommand(lasso,"Tools","Lasso (L)",[this]{selectTool(Tool::Lasso);});commands_->releaseShortcut(lasso);lasso->setVisible(false);
     auto*polygon=bar->addAction("Polygonal Lasso");bindCommand(polygon,"Tools","Polygon",[this]{selectTool(Tool::Polygon);});commands_->releaseShortcut(polygon);polygon->setVisible(false);
     ui::addToolbarTitle(bar,"Lasso","selectionToolTitle");
-    auto*shape=ui::addDropdown(bar,"marqueeShape","Marquee shape",{"Rectangle","Ellipse"});connect(shape,&QComboBox::currentIndexChanged,this,[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);});
+    auto*shape=new ui::SegmentedControl({"Rectangle","Ellipse"});shape->setObjectName("marqueeShape");shape->setAccessibleName("Marquee shape");bar->addWidget(shape);shape->changed=[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);};
     auto*lassoKind=new ui::SegmentedControl({"Freehand","Polygonal"});lassoKind->setObjectName("lassoKind");lassoKind->setAccessibleName("Lasso kind");bar->addWidget(lassoKind);
     lassoKind->changed=[this](int index){if(selectionGesture_.active())pointerCancel();lassoKind_=index?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;selectTool(Tool::Lasso);};
     auto*wandKind=new ui::SegmentedControl({"Wand","Object"});wandKind->setObjectName("wandKind");wandKind->setAccessibleName("Wand mode");bar->addWidget(wandKind);wandKind->changed=[this](int index){wandObjectMode_=index==1;};

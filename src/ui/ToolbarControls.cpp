@@ -93,6 +93,7 @@ QString optionsBarStyleSheet() {
         QSpinBox[numberField="true"]:focus { border-color: %16; background: %13; }
         QSpinBox[numberField="true"]:disabled { background: %17; color: %9; border-color: %14; }
         QLabel[optionCaption="true"] { color: %18; background: transparent; }
+        QToolBar::separator { background: %14; width: 1px; margin: 4px 6px; }
         )")
         .arg(t::control, t::primary).arg(t::controlHeight / 2).arg(t::pillPadding).arg(t::controlHeight)
         .arg(t::pressed, t::controlPressed, t::controlDisabled, t::controlTextDisabled)

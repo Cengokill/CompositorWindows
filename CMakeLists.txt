@@ -648,7 +648,7 @@ foreach(case option_marquee fresh_shift_marquee polygon_click_close canonical_dr
 endforeach()
 add_executable(selection_followup_tests tests/selection_gesture/SelectionFollowupTests.cpp)
 target_link_libraries(selection_followup_tests PRIVATE compositor_ui)
-foreach(case undo_redo_draft escape_mode_reset expand_range wand_replace feather_bar feather_dialog_default segmented_slide lasso_kind_slide wand_bar)
+foreach(case undo_redo_draft escape_mode_reset expand_range wand_replace feather_bar feather_dialog_default segmented_slide lasso_kind_slide wand_bar marquee_bar)
   add_test(NAME selection_followup.${case} COMMAND selection_followup_tests ${case})
   set_tests_properties(selection_followup.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

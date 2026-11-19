@@ -21,7 +21,7 @@ QAction* command(MainWindow& w,const char* id){for(auto* a:w.findChildren<QActio
 struct Fixture {
  MainWindow window{true};EditorProject& project;
  Fixture():project(window.addProject([]{Document d;d.id=newId();d.width=d.height=100;Layer l;l.id=newId();l.transform={0,0,100,100};d.layers={l};return d;}())){window.show();QApplication::processEvents();}
- void icon(int k){command(window,k<2?"tool.lasso":"tool.marquee")->trigger();if(k<2){auto* c=ui::findSegmentedControl(&window,"lassoKind");require(c,"Lasso kind");c->segment(k)->click();}else{bool found=false;for(auto* c:window.findChildren<QComboBox*>())if(c->accessibleName()=="Marquee shape"){c->setCurrentIndex(k-2);found=true;break;}require(found,"Marquee shape");}hover();}
+ void icon(int k){command(window,k<2?"tool.lasso":"tool.marquee")->trigger();if(k<2){auto* c=ui::findSegmentedControl(&window,"lassoKind");require(c,"Lasso kind");c->segment(k)->click();}else{auto* c=ui::findSegmentedControl(&window,"marqueeShape");require(c,"Marquee shape");c->choose(k-2);}hover();}
  void mode(int m){auto* c=ui::findSegmentedControl(&window,"selectionMode");require(c,"Selection mode");c->segment(m)->click();hover();}
  void hover(Qt::KeyboardModifiers m={}){require(bool(project.canvas->pointerHover),"Native hover callback");project.canvas->pointerHover(QPointF(12,12),m);}
  QCursor cursor(){return project.canvas->cursor();}
