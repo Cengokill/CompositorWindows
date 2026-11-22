@@ -2,6 +2,8 @@
 #include "ui/SegmentedControl.h"
 #include "ui/PaletteDialog.h"
 #include "ui/ToolbarControls.h"
+#include "ui/LayerPanelWidgets.h"
+#include <QComboBox>
 #include <QApplication>
 #include <QColorDialog>
 #include <QElapsedTimer>
@@ -262,6 +264,13 @@ void tool_bars_show_their_own_controls(){
     REQUIRE(w.findChild<QToolButton*>("textFont")->isVisibleTo(w.findChild<QToolBar*>("typeOptions")));
     REQUIRE(title("typeTitle")=="Type");
     REQUIRE(!shown("typeOptions","textDoneButton"));
+    // Without a text being edited, the color well still opens the color dialog and sets the color of the next text.
+    {auto* well=dynamic_cast<ui::ColorWell*>(w.findChild<QAbstractButton*>("textColor"));REQUIRE(well&&well->isEnabled());bool opened=false;
+     QTimer::singleShot(0,&w,[&]{if(auto* dialog=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;dialog->setCurrentColor(QColor(10,200,30));dialog->accept();}});
+     well->click();QApplication::processEvents();REQUIRE(opened&&well->color()==QColor(10,200,30));}
+    // The font and style selectors are capsules like the other drop-downs, and the alignment is drawn with icons.
+    REQUIRE(dynamic_cast<ui::CapsuleButton*>(w.findChild<QToolButton*>("textFont"))&&dynamic_cast<ui::CapsuleDropdown*>(w.findChild<QComboBox*>("textStyle")));
+    REQUIRE(!w.findChild<QToolButton*>("textAlignLeft")->icon().isNull());
     tool("tool.eyedropper");
     REQUIRE(shown("eyedropperOptions","eyedropperSampleRing")&&title("eyedropperTitle")=="Eyedropper"&&w.findChild<QCheckBox*>("eyedropperSampleRing")->isChecked());
     tool("tool.move");

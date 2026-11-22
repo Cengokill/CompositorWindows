@@ -60,6 +60,14 @@ private:
     bool open_{};
 };
 
+// A button that looks like CapsuleDropdown (left-aligned text, up and down chevrons) but opens its own popup.
+class CapsuleButton final : public QToolButton {
+public:
+    explicit CapsuleButton(QWidget* parent = nullptr);
+protected:
+    void paintEvent(QPaintEvent*) override;
+};
+
 // Thin 3-pixel opacity track with a 10 x 18-pixel upright knob.
 class Slider final : public TrackSlider {
 public:

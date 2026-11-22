@@ -327,6 +327,34 @@ void CapsuleDropdown::paintEvent(QPaintEvent* event) {
     paintSymbol(painter, "chevron-down", QRectF(x - size / 2, t::blendChevronBottom, size, size), color);
 }
 
+CapsuleButton::CapsuleButton(QWidget* parent) : QToolButton(parent) {
+    setMinimumWidth(t::blendMinimumWidth);
+    setFixedHeight(t::blendHeight);
+    setFont(panelFont(t::searchFont));
+    setToolButtonStyle(Qt::ToolButtonTextOnly);
+}
+void CapsuleButton::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool hot = isEnabled() && (underMouse() || isDown());
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(hot ? t::pressed : t::control));
+    painter.drawRoundedRect(QRectF(rect()), t::blendHeight / 2.0, t::blendHeight / 2.0);
+    const auto color = isEnabled() ? QColor(t::primary) : QColor(t::disabled);
+    painter.setPen(color);
+    painter.setFont(font());
+    const QRect textArea(t::blendLeading, 0, width() - t::blendLeading - t::blendTrailing, height());
+    painter.drawText(textArea, Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(text(), Qt::ElideRight, textArea.width()));
+    const qreal x = width() - t::blendChevronTrailing;
+    const qreal size = t::blendChevronSize;
+    painter.save();
+    painter.translate(x, t::blendChevronTop + size / 2);
+    painter.rotate(180);
+    paintSymbol(painter, "chevron-down", QRectF(-size / 2, -size / 2, size, size), color);
+    painter.restore();
+    paintSymbol(painter, "chevron-down", QRectF(x - size / 2, t::blendChevronBottom, size, size), color);
+}
+
 Slider::Slider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orientation, parent) {
     setFixedHeight(t::sliderHeight);
     setMinimumWidth(t::sliderMinimumWidth);
