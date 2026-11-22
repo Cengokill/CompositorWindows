@@ -48,7 +48,7 @@ void MainWindow::refreshZoomControl(){
 }
 // The status bar reads like the Mac one: zoom, canvas size and color mode on the left, and a hint for the active tool on the right.
 void MainWindow::setupStatusInfo(){
-    auto* bar=statusBar();bar->setSizeGripEnabled(false);
+    auto* bar=statusBar();
     auto* host=new QWidget;host->setObjectName("statusInfo");
     auto* row=new QHBoxLayout(host);row->setContentsMargins(18,0,18,0);row->setSpacing(16);
     const auto add=[&](const char* name){auto* label=new QLabel;label->setObjectName(name);row->addWidget(label);return label;};
