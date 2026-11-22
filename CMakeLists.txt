@@ -158,7 +158,7 @@ qt_add_resources(compositor_ui layer_panel_icons PREFIX "/" FILES
   assets/icons/lucide/folder-plus.svg assets/icons/lucide/panel-top.svg
   assets/icons/lucide/circle.svg assets/icons/lucide/sparkles.svg
   assets/icons/lucide/trash.svg assets/icons/lucide/chevron-down.svg)
-target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp src/ui/SegmentedControl.cpp src/ui/ToolbarControls.cpp src/ui/ToolFlyoutButton.cpp)
+target_sources(compositor_ui PRIVATE src/ui/VisualStyle.cpp src/ui/SegmentedControl.cpp src/ui/ToolbarControls.cpp src/ui/ToolFlyoutButton.cpp src/ui/NumberScrub.cpp)
 qt_add_resources(compositor_ui visual_assets PREFIX "/" FILES assets/fonts/InterVariable.ttf assets/icons/chevron-down.png assets/icons/chevron-up.png)
 qt_add_resources(compositor_ui release_notes PREFIX "/" FILES docs/release-notes.md)
 target_sources(compositor_ui PRIVATE src/ui/CanvasPresentation.cpp)
@@ -347,7 +347,7 @@ foreach(case transform_typing opacity_track_history opacity_double_click_history
 endforeach()
 add_executable(shape_ui_tests tests/shape_ui/ShapeUiTests.cpp)
 target_link_libraries(shape_ui_tests PRIVATE compositor_ui)
-foreach(case tool_bars_show_their_own_controls fill_well_opens_color_dialog shape_insert_sibling shape_insert_folder shape_insert_nested_child shape_fractional_anchor shape_center_square shape_kind_change_cancels shape_radius_limit shape_radius_frozen shape_draft_immutable shape_click_noop shape_history_selection shape_stroke_draw shape_line_controls shape_style_loads_from_selected_layer shape_controls_edit_selected_layer shape_undo_resyncs_bar shape_width_steps_coalesce shape_smoothing_draft shape_smoothing_history shape_bar_limits_selected_shape shape_background_fill_selected shape_background_fill_ellipse_and_line shape_background_fill_cancel shape_background_fill_same_color shape_background_fill_other_tool shape_background_fill_pixel_layer shape_background_fill_draft)
+foreach(case scrub_drag_is_one_undo_step scrub_escape_and_click scrub_zoom_title tool_bars_show_their_own_controls fill_well_opens_color_dialog shape_insert_sibling shape_insert_folder shape_insert_nested_child shape_fractional_anchor shape_center_square shape_kind_change_cancels shape_radius_limit shape_radius_frozen shape_draft_immutable shape_click_noop shape_history_selection shape_stroke_draw shape_line_controls shape_style_loads_from_selected_layer shape_controls_edit_selected_layer shape_undo_resyncs_bar shape_width_steps_coalesce shape_smoothing_draft shape_smoothing_history shape_bar_limits_selected_shape shape_background_fill_selected shape_background_fill_ellipse_and_line shape_background_fill_cancel shape_background_fill_same_color shape_background_fill_other_tool shape_background_fill_pixel_layer shape_background_fill_draft)
   add_test(NAME shape.ui.${case} COMMAND shape_ui_tests ${case})
   set_tests_properties(shape.ui.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endforeach()

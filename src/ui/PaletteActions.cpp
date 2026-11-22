@@ -35,9 +35,9 @@ void MainWindow::setupPaletteControls(QWidget* tools){
     // The Zoom bar shows the view as a percentage of actual pixels (100 is one display pixel per document pixel) and edits it around the view center.
     auto* zoomBar=addToolBar("Zoom Options");zoomBar->setObjectName("zoomOptions");
     ui::addToolbarTitle(zoomBar,"Zoom","zoomTitle");
-    auto* zoomField=ui::makeNumberField(1,3200,100,"Zoom percentage",0);zoomField->setObjectName("zoomPercent");zoomField->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
+    auto* zoomField=ui::makeNumberField(1,3200,100,"Zoom percentage",0);zoomField->setObjectName("zoomPercent");zoomField->releaseFocus=[this]{if(canvas())canvas()->setFocus();};zoomField->setKeyboardTracking(false);
     ui::addToolbarGroup(zoomBar,{zoomField,ui::makeCaption("%")},"zoomPercentGroup");
-    connect(zoomField,&QDoubleSpinBox::editingFinished,this,[this,zoomField]{if(canvas()&&!refreshing_)canvas()->zoomAt(zoomField->value()/100,canvas()->contentRect().center());});
+    connect(zoomField,&QDoubleSpinBox::valueChanged,this,[this,zoomField]{if(canvas()&&!refreshing_)canvas()->zoomAt(zoomField->value()/100,canvas()->contentRect().center());});
 }
 void MainWindow::refreshZoomControl(){
     auto* field=findChild<QDoubleSpinBox*>("zoomPercent");

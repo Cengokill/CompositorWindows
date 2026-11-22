@@ -84,6 +84,7 @@ QString optionsBarStyleSheet() {
         QAbstractSpinBox[numberField="true"]:focus, QLineEdit[numberField="true"]:focus { border-color: %16; background: %13; }
         QAbstractSpinBox[numberField="true"]:disabled, QLineEdit[numberField="true"]:disabled { background: %17; color: %9; border-color: %14; }
         QLabel[optionCaption="true"] { color: %18; background: transparent; }
+        QLabel[scrubHover="true"] { color: %2; }
         QToolBar::separator { background: %14; width: 1px; margin: 4px 6px; }
         )")
         .arg(t::control, t::primary).arg(t::controlHeight / 2).arg(t::pillPadding).arg(t::controlHeight)

@@ -8,6 +8,8 @@
 #include <QApplication>
 #include <QColorDialog>
 #include <QElapsedTimer>
+#include <QMouseEvent>
+#include <QTest>
 #include <QPushButton>
 #include <QToolButton>
 #include <QLabel>
@@ -282,4 +284,50 @@ void tool_bars_show_their_own_controls(){
     tool("tool.move");
     REQUIRE(w.findChild<QToolBar*>("eyedropperOptions")->isHidden()&&w.findChild<QToolBar*>("zoomOptions")->isHidden()&&w.findChild<QToolBar*>("typeOptions")->isHidden());
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+// Dragging a caption scrubs the value of its field; the helper sends press, move and release the way the mouse does.
+void sendMouse(QWidget* label,QEvent::Type type,double globalX,Qt::KeyboardModifiers modifiers={}){
+    const QPointF local(label->width()/2.,label->height()/2.);const QPointF global=label->mapToGlobal(local)+QPointF(globalX,0);
+    QMouseEvent event(type,local,global,Qt::LeftButton,type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,modifiers);QApplication::sendEvent(label,&event);
+}
+QLabel* captionOf(MainWindow& w,const char* group){auto* host=w.findChild<QWidget*>(group);REQUIRE(host);auto* label=host->findChild<QLabel*>();REQUIRE(label);return label;}
+void scrub_drag_is_one_undo_step(){
+    MainWindow w(true);auto& p=w.addProject(fixture());w.resize(3200,900);w.show();shapeTool(w);draw(p,{10,12},{90,72});
+    w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);QApplication::processEvents();
+    auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");auto* label=captionOf(w,"shapeStrokeGroup");REQUIRE(width&&label->cursor().shape()==Qt::SplitHCursor);
+    const double start=width->value();const auto base=p.history.undoCount();
+    sendMouse(label,QEvent::MouseButtonPress,0);sendMouse(label,QEvent::MouseMove,10);
+    REQUIRE(std::abs(width->value()-(start+10))<1e-9);
+    sendMouse(label,QEvent::MouseMove,20,Qt::ShiftModifier);sendMouse(label,QEvent::MouseMove,30,Qt::ShiftModifier);REQUIRE(std::abs(width->value()-(start+11))<1e-9);
+    sendMouse(label,QEvent::MouseMove,30);sendMouse(label,QEvent::MouseMove,20);REQUIRE(std::abs(width->value()-(start+1))<1e-9);
+    sendMouse(label,QEvent::MouseButtonRelease,20);
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeWidth==width->value());
+    REQUIRE(p.history.undoCount()==base+1&&p.history.undoName()=="Shape Style");
+    command(w,"edit.undo")->trigger();REQUIRE(p.history.undoCount()==base&&std::abs(width->value()-start)<1e-9);
+}
+void scrub_escape_and_click(){
+    MainWindow w(true);auto& p=w.addProject(fixture());w.resize(3200,900);w.show();shapeTool(w);draw(p,{10,12},{90,72});
+    w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);QApplication::processEvents();
+    auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");auto* label=captionOf(w,"shapeStrokeGroup");
+    const double start=width->value();const auto base=p.history.undoCount();const auto before=added(p);
+    sendMouse(label,QEvent::MouseButtonPress,0);sendMouse(label,QEvent::MouseMove,25);REQUIRE(width->value()!=start);
+    QTest::keyClick(&w,Qt::Key_Escape);QApplication::processEvents();
+    sendMouse(label,QEvent::MouseButtonRelease,25);
+    REQUIRE(width->value()==start&&added(p)==before&&p.history.undoCount()==base);
+    // A click without movement leaves the value alone and puts the cursor in the field.
+    sendMouse(label,QEvent::MouseButtonPress,0);sendMouse(label,QEvent::MouseButtonRelease,0);QApplication::processEvents();
+    REQUIRE(width->value()==start&&p.history.undoCount()==base);
+}
+void scrub_zoom_title(){
+    MainWindow w(true);auto& p=w.addProject(fixture());w.resize(3200,900);w.show();command(w,"tool.zoom")->trigger();QApplication::processEvents();
+    auto* title=w.findChild<QLabel*>("zoomTitle");auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");REQUIRE(title&&field&&title->cursor().shape()==Qt::SplitHCursor);
+    p.canvas->zoomAt(1,p.canvas->contentRect().center());QApplication::processEvents();REQUIRE(field->value()==100);
+    sendMouse(title,QEvent::MouseButtonPress,0);sendMouse(title,QEvent::MouseMove,50);
+    REQUIRE(field->value()==150&&std::abs(p.canvas->zoom-1.5)<1e-9);
+    sendMouse(title,QEvent::MouseMove,50,Qt::ControlModifier);sendMouse(title,QEvent::MouseMove,60,Qt::ControlModifier);
+    REQUIRE(field->value()==250&&std::abs(p.canvas->zoom-2.5)<1e-9);
+    sendMouse(title,QEvent::MouseButtonRelease,60);REQUIRE(std::abs(p.canvas->zoom-2.5)<1e-9);
+    // The Brush size and the Tracking captions scrub their fields too.
+    for(const char* name:{"brushSize","textTracking"}){auto* field=w.findChild<QWidget*>(name);if(!field){auto any=w.findChildren<QDoubleSpinBox*>();for(auto* box:any)if(box->accessibleName()==(QString(name)=="brushSize"?"Brush diameter":"Tracking"))field=box;}
+        REQUIRE(field);auto* label=field->parentWidget()->findChild<QLabel*>();REQUIRE(label&&label->cursor().shape()==Qt::SplitHCursor);}
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
