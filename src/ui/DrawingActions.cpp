@@ -109,14 +109,26 @@ void MainWindow::setupDrawingActions(){
     // The fill well edits the selected shape; with none selected it sets the color of the next shape, like the Brush color.
     auto*fill=new ui::ColorWell;fill->setObjectName("shapeFillColor");fill->setAccessibleName("Shape color");
     ui::addToolbarGroup(bar,{ui::makeCaption("Fill"),fill},"shapeFillGroup");
-    auto*radius=shapeNumber("shapeCornerRadius","Corner radius",0,5000,0);connect(radius,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.cornerRadius=v;applyShapeStyleToSelection();});
-    ui::addToolbarGroup(bar,{ui::makeCaption("Radius"),radius,ui::makeCaption("px")},"shapeCornerRadiusGroup");
-    auto*lineWidth=shapeNumber("shapeLineWidth","Line width",.1,500,1);connect(lineWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.lineWidth=v;applyShapeStyleToSelection();});
-    ui::addToolbarGroup(bar,{ui::makeCaption("Width"),lineWidth,ui::makeCaption("px")},"shapeLineWidthGroup");
+    auto*stroke=ui::addOptionCheck(bar,"Stroke","shapeStroke");connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
+    auto*strokeColor=new ui::ColorWell;strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");connect(strokeColor,&QAbstractButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();finishShapeStyleEdit();}});
+    bar->addWidget(strokeColor);
+    // A caption, a slider and a number field that edit one value; the slider covers the usual range, the field the whole one.
+    const auto shapeSliderField=[&](const char* caption,const char* groupName,const char* numberName,const char* accessibleName,double minimum,double maximum,int decimals,int sliderMaximum,std::function<void(double)> apply){
+        auto*field=shapeNumber(numberName,accessibleName,minimum,maximum,decimals);
+        auto*slider=ui::makeOptionSlider((std::string(numberName)+"Slider").c_str(),QString(accessibleName)+" slider",0,sliderMaximum);
+        connect(field,&QDoubleSpinBox::valueChanged,this,[slider,sliderMaximum,apply](double v){{const QSignalBlocker block(slider);slider->setValue(int(std::lround(std::min<double>(v,sliderMaximum))));}apply(v);});
+        connect(slider,&QSlider::valueChanged,field,[field,minimum](int v){field->setValue(std::max<double>(v,minimum));});
+        connect(slider,&QSlider::sliderReleased,this,[this]{finishShapeStyleEdit();});
+        ui::addToolbarGroup(bar,{ui::makeCaption(caption),slider,field},groupName);
+    };
+    // Order of the bar: Fill, Stroke, Width, Radius, Smooth Corners; a line shows Width, Style and Cap instead.
+    shapeSliderField("Width","shapeStrokeGroup","shapeStrokeWidth","Stroke width",.1,500,1,50,[this](double v){shapeStyle_.strokeWidth=v;applyShapeStyleToSelection();});
+    shapeSliderField("Width","shapeLineWidthGroup","shapeLineWidth","Line width",.1,500,1,50,[this](double v){shapeStyle_.lineWidth=v;applyShapeStyleToSelection();});
     auto*lineStyle=new ui::CapsuleDropdown;lineStyle->setObjectName("shapeLineStyle");lineStyle->setAccessibleName("Line style");lineStyle->addItems({"Solid","Dashed","Long Dash","Dash Dot","Long Dash Dot","Dotted"});connect(lineStyle,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineStyle=editing::ShapeLineStyle(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
     ui::addToolbarGroup(bar,{ui::makeCaption("Style"),lineStyle},"shapeLineStyleGroup");
     auto*lineCap=new ui::CapsuleDropdown;lineCap->setObjectName("shapeLineCap");lineCap->setAccessibleName("Line cap");lineCap->addItems({"Round","Square"});connect(lineCap,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineCap=editing::ShapeLineCap(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
     ui::addToolbarGroup(bar,{ui::makeCaption("Cap"),lineCap},"shapeLineCapGroup");
+    shapeSliderField("Radius","shapeCornerRadiusGroup","shapeCornerRadius","Corner radius",0,5000,0,200,[this](double v){shapeStyle_.cornerRadius=v;applyShapeStyleToSelection();refreshShapeControls();});
     auto*smoothing=ui::addOptionCheck(bar,"Smooth Corners","shapeSmoothing");
     smoothing->setToolTip("Smooth the transitions into rounded corners. Requires a corner radius above zero.");
     connect(smoothing,&QCheckBox::toggled,this,[this](bool enabled){
@@ -126,10 +138,6 @@ void MainWindow::setupDrawingActions(){
         applyShapeStyleToSelection(enabled);
         finishShapeStyleEdit();
     });
-    auto*stroke=ui::addOptionCheck(bar,"Stroke","shapeStroke");connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
-    auto*strokeWidth=shapeNumber("shapeStrokeWidth","Stroke width",.1,500,1);connect(strokeWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.strokeWidth=v;applyShapeStyleToSelection();});
-    auto*strokeColor=new ui::ColorWell;strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");connect(strokeColor,&QAbstractButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();finishShapeStyleEdit();}});
-    ui::addToolbarGroup(bar,{ui::makeCaption("Width"),strokeWidth,ui::makeCaption("px"),strokeColor},"shapeStrokeGroup");
     auto*restyle=commandInBar("Update Shape Style","Drawing Options","Update Shape Style",[this]{
         finishShapeStyleEdit();
         if(!active()||active()->shapeJson.empty())return;
@@ -297,25 +305,31 @@ void MainWindow::refreshShapeControls(){
     if(auto* kind=ui::findSegmentedControl(this,"shapeKind")){kind->setCurrentIndex(int(shapeStyle_.kind));setToolbarControlVisible(bar,kind,controls);}
     const bool rectangleControls=controls&&shapeStyle_.kind==editing::ShapeKind::Rectangle;
     const bool lineControls=controls&&shapeStyle_.kind==editing::ShapeKind::Line;
+    const auto syncSlider=[this](const char* name,double value){if(auto* slider=findChild<QSlider*>(name)){const QSignalBlocker block(slider);slider->setValue(int(std::lround(std::min<double>(value,slider->maximum()))));}};
     if(auto* width=findChild<QDoubleSpinBox*>("shapeLineWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.lineWidth);}
+    syncSlider("shapeLineWidthSlider",shapeStyle_.lineWidth);
     if(auto* group=findChild<QWidget*>("shapeLineWidthGroup"))setToolbarControlVisible(bar,group,lineControls);
     if(auto* style=findChild<QComboBox*>("shapeLineStyle")){const QSignalBlocker block(style);style->setCurrentIndex(int(shapeStyle_.lineStyle));}
     if(auto* group=findChild<QWidget*>("shapeLineStyleGroup"))setToolbarControlVisible(bar,group,lineControls);
     if(auto* cap=findChild<QComboBox*>("shapeLineCap")){const QSignalBlocker block(cap);cap->setCurrentIndex(int(shapeStyle_.lineCap));}
     if(auto* group=findChild<QWidget*>("shapeLineCapGroup"))setToolbarControlVisible(bar,group,lineControls);
     if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);}
+    syncSlider("shapeCornerRadiusSlider",shapeStyle_.cornerRadius);
     if(auto* group=findChild<QWidget*>("shapeCornerRadiusGroup"))setToolbarControlVisible(bar,group,rectangleControls);
     if(auto* smoothing=findChild<QCheckBox*>("shapeSmoothing")){
         const QSignalBlocker block(smoothing);
         const bool selectedRectangle=shapeLayer&&shapeStyleSynced_.kind==editing::ShapeKind::Rectangle&&shapeDraftId_.empty();
         smoothing->setChecked(selectedRectangle?shapeStyleSynced_.smoothing:shapeStyle_.smoothing);
+        smoothing->setEnabled(shapeStyle_.cornerRadius>0);
         setToolbarControlVisible(bar,smoothing,rectangleControls);
     }
     const bool strokable=controls&&shapeStyle_.kind!=editing::ShapeKind::Line;
     if(auto* stroke=findChild<QCheckBox*>("shapeStroke")){const QSignalBlocker block(stroke);stroke->setChecked(shapeStyle_.strokeEnabled);setToolbarControlVisible(bar,stroke,strokable);}
     if(auto* width=findChild<QDoubleSpinBox*>("shapeStrokeWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.strokeWidth);}
+    syncSlider("shapeStrokeWidthSlider",shapeStyle_.strokeWidth);
     if(auto* color=dynamic_cast<ui::ColorWell*>(findChild<QAbstractButton*>("shapeStrokeColor")))color->setColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue));
     if(auto* group=findChild<QWidget*>("shapeStrokeGroup"))setToolbarControlVisible(bar,group,strokable&&shapeStyle_.strokeEnabled);
+    if(auto* well=findChild<QAbstractButton*>("shapeStrokeColor"))setToolbarControlVisible(bar,well,strokable&&shapeStyle_.strokeEnabled);
     if(!canvas())return;std::optional<NativeCanvas::ShapeDraftOverlay> overlay;
     if(tool_==Tool::Shape&&!shapeDraftId_.empty()&&shapeDraftRect_&&(shapeDraftStyle_.kind==editing::ShapeKind::Line?(shapeDraftRect_->width>0||shapeDraftRect_->height>0):(shapeDraftRect_->width>0&&shapeDraftRect_->height>0)))
         overlay=NativeCanvas::ShapeDraftOverlay{*shapeDraftRect_,shapeDraftStyle_,{uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue()),255}};

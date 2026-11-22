@@ -235,6 +235,12 @@ void tool_bars_show_their_own_controls(){
     REQUIRE(!w.findChild<QPushButton*>("gradientApplyButton")->isEnabled());
     tool("tool.shape");
     REQUIRE(shown("drawingOptions","shapeKind")&&!shown("drawingOptions","gradientShape")&&title("shapeTitle")=="Shape");
+    // Rectangle order: Fill, Stroke, Width, Radius, Smooth Corners.
+    {auto* bar=w.findChild<QToolBar*>("drawingOptions");const auto x=[&](const char* name){auto* widget=w.findChild<QWidget*>(name);REQUIRE(widget);return widget->mapTo(bar,QPoint(0,0)).x();};
+     w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);QApplication::processEvents();
+     REQUIRE(x("shapeFillColor")<x("shapeStroke")&&x("shapeStroke")<x("shapeStrokeColor")&&x("shapeStrokeColor")<x("shapeStrokeWidth")&&x("shapeStrokeWidth")<x("shapeCornerRadius")&&x("shapeCornerRadius")<x("shapeSmoothing"));
+     REQUIRE(!w.findChild<QCheckBox*>("shapeSmoothing")->isEnabled());
+     w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->setValue(10);REQUIRE(w.findChild<QSlider*>("shapeCornerRadiusSlider")->value()==10&&w.findChild<QCheckBox*>("shapeSmoothing")->isEnabled());}
     tool("tool.type");
     REQUIRE(!w.findChild<QToolBar*>("typeOptions")->isHidden());
     REQUIRE(w.findChild<QToolButton*>("textFont")->isVisibleTo(w.findChild<QToolBar*>("typeOptions")));
