@@ -64,6 +64,13 @@ void tool_flyout(){Fixture f;
  pick("Wand (W)","Magic Wand");require(ui::findSegmentedControl(&f.window,"wandKind")->currentIndex()==0,"Wand chosen again");
  pick("Brush (B)","Eraser");require(ui::findSegmentedControl(&f.window,"brushMode")->currentIndex()==1,"Erase chosen");
  pick("Brush (B)","Brush");require(ui::findSegmentedControl(&f.window,"brushMode")->currentIndex()==0&&button("Brush (B)")->isChecked(),"Paint chosen again");
+ // Shape offers the two kinds it is not drawing.
+ {const auto kinds=[&]{auto* menu=button("Shape (U)")->showFlyout();require(menu&&menu->isVisible(),"Shape flyout opens");QStringList names;for(auto* action:menu->actions())names<<action->text();return std::pair{menu,names};};
+  auto [menu,names]=kinds();require(names==QStringList({"Ellipse","Line"}),"Rectangle is current, so Ellipse and Line are offered");menu->actions()[0]->trigger();QApplication::processEvents();
+  require(ui::findSegmentedControl(&f.window,"shapeKind")->currentIndex()==1&&button("Shape (U)")->isChecked(),"Ellipse chosen and the Shape tool active");
+  auto [again,namesAgain]=kinds();require(namesAgain==QStringList({"Rectangle","Line"}),"Ellipse is current, so Rectangle and Line are offered");again->actions()[1]->trigger();QApplication::processEvents();
+  require(ui::findSegmentedControl(&f.window,"shapeKind")->currentIndex()==2,"Line chosen");
+  auto [last,namesLast]=kinds();last->actions()[0]->trigger();QApplication::processEvents();require(ui::findSegmentedControl(&f.window,"shapeKind")->currentIndex()==0,"Rectangle chosen again");}
  command(f.window,"tool.move")->trigger();QApplication::processEvents();
  auto* marquee=button("Marquee (M)");QTest::mousePress(marquee,Qt::LeftButton);QTest::qWait(700);
  require(marquee->findChild<QMenu*>()&&marquee->findChild<QMenu*>()->isVisible(),"holding the button opens the popup");

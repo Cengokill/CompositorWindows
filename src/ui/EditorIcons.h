@@ -5,7 +5,8 @@ namespace compositor::ui {
 enum class EditorIcon {
     Move, Marquee, EllipseMarquee, Lasso, Polygon, Wand, Crop, Brush, Eraser,
     Heal, Clone, Retouch, Gradient, Shape, Eyedropper, Hand, Zoom, Type, Group, Mask, Delete,
-    Close, Minus, Maximize, Plus, Folder, File, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Link, Object
+    Close, Minus, Maximize, Plus, Folder, File, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Link, Object,
+    Rectangle, Ellipse, Line
 };
 QIcon editorIcon(EditorIcon icon);
 }

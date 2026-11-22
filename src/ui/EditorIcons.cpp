@@ -92,6 +92,9 @@ public:
         case EditorIcon::Shape:
             p->drawEllipse(QRectF(3,3,13,13)); p->setBrush(QApplication::palette().color(QPalette::Window));
             p->drawRoundedRect(QRectF(9,9,12,12),1.5,1.5); break;
+        case EditorIcon::Rectangle: p->drawRoundedRect(QRectF(3,5,18,14),1.5,1.5); break;
+        case EditorIcon::Ellipse: p->drawEllipse(QRectF(3,5,18,14)); break;
+        case EditorIcon::Line: line(5,19,19,5); break;
         case EditorIcon::Eyedropper:
             path({{15,5},{19,9},{9,19},{5,19},{5,15},{15,5}});
             line(4,20,6,18); line(13,4,20,11); p->setBrush(color);

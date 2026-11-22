@@ -201,6 +201,13 @@ for (const auto& entry : entries) {
         if(entry.tool==Tool::Lasso)button->setFlyout([this]{const bool polygonal=lassoKind_==editing::LassoKind::Polygonal;return ui::ToolFlyoutButton::Entry{ui::editorIcon(polygonal?ui::EditorIcon::Lasso:ui::EditorIcon::Polygon),polygonal?"Freehand Lasso":"Polygonal Lasso"};},[this,choose]{choose("lassoKind",lassoKind_==editing::LassoKind::Polygonal?0:1);});
         if(entry.tool==Tool::Wand)button->setFlyout([this]{return ui::ToolFlyoutButton::Entry{ui::editorIcon(wandObjectMode_?ui::EditorIcon::Wand:ui::EditorIcon::Object),wandObjectMode_?"Magic Wand":"Object Selection"};},[this,choose]{choose("wandKind",wandObjectMode_?0:1);selectTool(Tool::Wand);});
         if(entry.tool==Tool::Brush)button->setFlyout([this]{const bool erasing=brushMode_==ProjectBrushMode::Erase;return ui::ToolFlyoutButton::Entry{ui::editorIcon(erasing?ui::EditorIcon::Brush:ui::EditorIcon::Eraser),erasing?"Brush":"Eraser"};},[this,choose]{choose("brushMode",brushMode_==ProjectBrushMode::Erase?0:1);});
+        // Shape offers the two kinds it is not drawing, through the same choice as the Shape bar; the tool is selected first so the bar's choice applies to it.
+        if(entry.tool==Tool::Shape)button->setFlyouts([this]{
+            std::vector<ui::ToolFlyoutButton::Entry> offered;
+            const struct{editing::ShapeKind kind;ui::EditorIcon icon;const char* text;}kinds[]{{editing::ShapeKind::Rectangle,ui::EditorIcon::Rectangle,"Rectangle"},{editing::ShapeKind::Ellipse,ui::EditorIcon::Ellipse,"Ellipse"},{editing::ShapeKind::Line,ui::EditorIcon::Line,"Line"}};
+            for(const auto& kind:kinds)if(kind.kind!=shapeStyle_.kind)offered.push_back({ui::editorIcon(kind.icon),kind.text,[this,index=int(kind.kind)]{selectTool(Tool::Shape);if(auto* choice=ui::findSegmentedControl(this,"shapeKind"))choice->choose(index);}});
+            return offered;
+        });
         button->setDefaultAction(a);
         button->setIconSize({22,22});
         button->setProperty("editorToolButton",true);

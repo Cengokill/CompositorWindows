@@ -16,20 +16,26 @@ ToolFlyoutButton::ToolFlyoutButton() {
     connect(&hold_, &QTimer::timeout, this, [this] { if (isDown()) showFlyout(); });
 }
 void ToolFlyoutButton::setFlyout(std::function<Entry()> describe, std::function<void()> activate) {
+    setFlyouts([describe = std::move(describe), activate = std::move(activate)] {
+        auto entry = describe();
+        entry.activate = activate;
+        return std::vector<Entry>{entry};
+    });
+}
+void ToolFlyoutButton::setFlyouts(std::function<std::vector<Entry>()> describe) {
     describe_ = std::move(describe);
-    activate_ = std::move(activate);
     if (menu_) return;
     menu_ = new QMenu(this);
     // The icon gets room on its left so it is not clipped by the popup edge, and the hovered entry takes the application blue.
     menu_->setStyleSheet(QString("QMenu::item:selected { background: %1; } QMenu::icon { padding-left: 18px; }").arg(layer_panel::accent));
-    entry_ = menu_->addAction(QString());
-    connect(entry_, &QAction::triggered, this, [this] { if (activate_) activate_(); });
 }
 QMenu* ToolFlyoutButton::showFlyout() {
     if (!describe_ || !menu_) return nullptr;
-    const auto entry = describe_();
-    entry_->setIcon(entry.icon);
-    entry_->setText(entry.text);
+    menu_->clear();
+    for (const auto& entry : describe_()) {
+        auto* action = menu_->addAction(entry.icon, entry.text);
+        connect(action, &QAction::triggered, this, [activate = entry.activate] { if (activate) activate(); });
+    }
     // The press that opened the popup must not also click the tool.
     hold_.stop();
     setDown(false);
