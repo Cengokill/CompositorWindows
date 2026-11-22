@@ -109,7 +109,7 @@ public:
             else{arrow.moveTo(-1.5,-3);arrow.lineTo(1.5,0);arrow.lineTo(-1.5,3);}
             painter->drawPath(arrow);painter->restore();return;
         }
-        if(element==PE_FrameFocusRect)return;
+        if(element==PE_FrameFocusRect||element==PE_FrameTabBarBase)return;
         QProxyStyle::drawPrimitive(element,option,painter,widget);
     }
 };
@@ -248,7 +248,7 @@ void installVisualStyle() {
         QMenu::item:disabled { color: #686b73; }
         QMenu::separator { height: 1px; background: #3d3f46; margin: 5px 8px; }
         QToolTip { background: #34363b; border: 1px solid #4b4e56; border-radius: 5px; padding: 6px 9px; }
-        QToolBar { background: #242529; border: 0; padding: 5px 10px; spacing: 7px; }
+        QToolBar { background: #242529; border: 0; border-bottom: 1px solid #303237; padding: 5px 10px; spacing: 7px; }
         QToolBar::handle { width: 0; height: 0; }
         QToolBar QToolButton { padding: 5px 9px; border: 1px solid transparent; border-radius: 6px; }
         QToolButton#qt_toolbar_ext_button { padding: 2px; min-width: 18px; }
