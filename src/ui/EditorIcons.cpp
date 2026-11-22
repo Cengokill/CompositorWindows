@@ -49,10 +49,16 @@ public:
             for (const auto& point : {QPointF(5,5),QPointF(20,8),QPointF(15,20),QPointF(4,16)}) {
                 p->setBrush(QApplication::palette().color(QPalette::Window)); p->drawRect(QRectF(point-QPointF(1.5,1.5),QSizeF(3,3)));
             } break;
-        case EditorIcon::Wand:
-            path({{5,10},{8,7},{21,20},{18,23},{5,10}}); line(10,9,7,12);
-            line(5,2,5,6); line(3,4,7,4); line(16,2,16,6); line(14,4,18,4);
-            line(3,15,3,19); line(1,17,5,17); break;
+        case EditorIcon::Wand: {
+            // A wand with sparkles, in the spirit of the Mac Compositor's wand.and.stars symbol (drawn here, not copied from it).
+            p->save(); p->translate(4.5,19.5); p->rotate(-45); p->drawRoundedRect(QRectF(0,-1.9,13.5,3.8),1.9,1.9); p->restore();
+            auto sparkle = [&](double cx, double cy, double r) {
+                QPainterPath star; star.moveTo(cx,cy-r); star.quadTo(cx,cy,cx+r,cy); star.quadTo(cx,cy,cx,cy+r); star.quadTo(cx,cy,cx-r,cy); star.quadTo(cx,cy,cx,cy-r);
+                p->setPen(Qt::NoPen); p->setBrush(color); p->drawPath(star);
+            };
+            sparkle(18,6.2,4.4); sparkle(20.6,13.4,2.4); sparkle(10.6,4.4,2.4);
+            break;
+        }
         case EditorIcon::Crop:
             path({{6,2},{6,18},{22,18}}); path({{2,6},{18,6},{18,22}}); line(9,15,21,3); break;
         case EditorIcon::Brush: {
