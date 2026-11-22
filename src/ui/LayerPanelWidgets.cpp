@@ -51,7 +51,30 @@ public:
             painter->restore();
             item.rect.adjust(0, t::blendGroupGap, 0, 0);
         }
-        if (owner_ && index.row() == owner_->currentIndex()) {
+        if (owner_ && owner_->property("glassPopup").toBool()) {
+            // Glass list: the highlighted row is a full capsule in the application blue, and the current choice carries a check mark.
+            const bool enabled = index.flags().testFlag(Qt::ItemIsEnabled);
+            const bool hot = enabled && (item.state & (QStyle::State_Selected | QStyle::State_MouseOver));
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            if (hot) {
+                const QRectF pill = QRectF(item.rect).adjusted(0, 1, 0, -1);
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(QColor(t::accent));
+                painter->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+            }
+            if (enabled && index.row() == owner_->currentIndex()) {
+                painter->setPen(QPen(Qt::white, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                const auto x = item.rect.left() + t::blendMenuCheckInset + 4;
+                const auto y = item.rect.center().y();
+                painter->drawLine(QPoint(x, y), QPoint(x + 3, y + 3));
+                painter->drawLine(QPoint(x + 3, y + 3), QPoint(x + 8, y - 4));
+            }
+            painter->restore();
+            if (enabled) item.rect.adjust(t::blendMenuTextInset + 8, 0, 0, 0);
+            item.state &= ~(QStyle::State_Selected | QStyle::State_MouseOver);
+            if (hot) item.palette.setColor(QPalette::Text, Qt::white);
+        } else if (owner_ && index.row() == owner_->currentIndex()) {
             painter->save();
             painter->setBrush(QColor(t::accent));
             painter->setPen(Qt::NoPen);
@@ -307,14 +330,16 @@ CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
     connect(this, &QComboBox::highlighted, this, [this](int index) { if (open_ && preview) preview(index); });
 }
 void CapsuleDropdown::useGlassPopup() {
+    setProperty("glassPopup", true);
     auto* container = view()->window();
     container->setWindowFlags(container->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
     container->setAttribute(Qt::WA_TranslucentBackground);
     view()->viewport()->setAutoFillBackground(false);
     setStyleSheet(styleSheet() +
         "QComboBoxPrivateContainer { border: 1px solid rgba(255,255,255,46); border-radius: 18px;"
-        " background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(64,64,68,228), stop:0.45 rgba(34,34,37,228), stop:1 rgba(30,30,33,228)); }"
-        "QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }");
+        " background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(86,86,92,196), stop:0.4 rgba(44,44,48,186), stop:1 rgba(34,34,38,196)); }"
+        "QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }"
+        "QComboBox QAbstractItemView::item { min-height: 28px; padding: 3px 8px; }");
 }
 void CapsuleDropdown::dismiss() { if (!open_) return; open_ = false; if (dismissed) dismissed(); }
 bool CapsuleDropdown::eventFilter(QObject* watched, QEvent* event) {
