@@ -207,12 +207,12 @@ public:
     TextFontPopup(QWidget* parent,QToolButton* anchor)
         :QWidget(parent,Qt::Popup),anchor_(anchor){
         setObjectName("textFontPopup");
-        setStyleSheet(R"(
+        setStyleSheet(QString(R"(
             QWidget#textFontPopup { background:#26282d; border:1px solid #454850; }
             QListWidget#textFontResults { background:#26282d; border:0; outline:0; }
             QListWidget#textFontResults::item { padding:4px 8px; min-height:20px; }
-            QListWidget#textFontResults::item:selected { background:#376dac; color:white; }
-        )");
+            QListWidget#textFontResults::item:selected { background:%1; color:white; }
+        )").arg(ui::layer_panel::accent));
         auto* layout=new QVBoxLayout(this);
         layout->setContentsMargins(8,8,8,8);
         search_=new QLineEdit(this);

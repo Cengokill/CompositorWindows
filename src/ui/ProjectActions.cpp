@@ -281,7 +281,7 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     initializeProject(*raw);applyRememberedBrushPressure(raw->toolState.brushSettings);applyRememberedSnapAndGrid(raw->toolState.snapPolicy,raw->toolState.layoutGrid);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
     raw->welcome=new QWidget;raw->welcome->setObjectName("newCanvasWelcome");auto*outer=new QVBoxLayout(raw->welcome);outer->addStretch();
     auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setObjectName("newCanvasCard");panel->setMaximumWidth(440);
-    panel->setStyleSheet("QWidget#newCanvasCard { background: #27292e; border: 1px solid #3b3e46; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
+    panel->setStyleSheet("QWidget#newCanvasCard { background: #1f1f1f; border: 1px solid #363636; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
     auto*form=new QFormLayout(panel);form->setContentsMargins(28,28,28,26);form->setVerticalSpacing(14);form->setHorizontalSpacing(18);
     auto*heading=new QLabel("New canvas");heading->setObjectName("newCanvasHeading");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
     auto draft=std::make_shared<NewCanvasDraft>();
@@ -304,7 +304,7 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     auto*summary=new QLabel;summary->setObjectName("newCanvasSummary");
     if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){draft->width=image.width();draft->height=image.height();preset->setCurrentIndex(0);}}
     form->addRow("Preset",preset);form->addRow("Units",unit);form->addRow("Width",width);form->addRow("Height",height);form->addRow("Resolution",resolution);form->addRow("Background",background);form->addRow(summary);
-    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);form->addRow(buttons);
+    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);for(auto*button:{open,import,create})button->setProperty("pill",true);create->setProperty("primary",true);form->addRow(buttons);
     connect(open,&QPushButton::clicked,this,[this]{openProjectDialog();});connect(import,&QPushButton::clicked,this,[this]{importWelcomeImage();});
     // Shows the draft in every control. Typed spin text is rewritten only when requested, so a value being typed is not moved under the caret.
     auto syncNewCanvas=[draft,width,height,summary,background,create](bool rewriteSizes){

@@ -244,7 +244,6 @@ void installVisualStyle() {
         QMenuBar::item:selected { background: #35373c; }
         QMenu { background: #292b30; border: 1px solid #45474e; border-radius: 9px; padding: 6px; }
         QMenu::item { padding: 7px 24px 7px 12px; border-radius: 5px; }
-        QMenu::item:selected { background: #376dac; }
         QMenu::item:disabled { color: #686b73; }
         QMenu::separator { height: 1px; background: #3d3f46; margin: 5px 8px; }
         QToolTip { background: #34363b; border: 1px solid #4b4e56; border-radius: 5px; padding: 6px 9px; }
@@ -268,7 +267,7 @@ void installVisualStyle() {
         QComboBox { padding-right: 22px; }
         QComboBox::drop-down { width: 20px; border: 0; }
         QComboBox::down-arrow { image: url(:/assets/icons/chevron-down.png); width: 12px; height: 12px; }
-        QComboBox QAbstractItemView { background: #2b2d32; border: 1px solid #454850; padding: 4px; outline: 0; selection-background-color: #376dac; }
+        QComboBox QAbstractItemView { background: #2b2d32; border: 1px solid #454850; padding: 4px; outline: 0; }
         QCheckBox, QRadioButton { spacing: 7px; background: transparent; }
         QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
         QSlider::groove:horizontal { height: 4px; background: #494c53; border-radius: 2px; }
@@ -308,7 +307,8 @@ void installVisualStyle() {
         QStatusBar::item { border: 0; }
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
-    )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n").arg(accentBlue)+optionsBarStyleSheet());
+    )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n"
+        "QMenu::item:selected { background: %1; }\nQComboBox QAbstractItemView { selection-background-color: %1; }\nQComboBox:focus { border-color: %1; }\n").arg(accentBlue)+optionsBarStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 
