@@ -2,10 +2,12 @@
 #include "MainWindow.h"
 #include "ImportActions.h"
 #include "WorkspaceDropQueue.h"
+#include "LayerPanelTokens.h"
 #include <QApplication>
 #include <QDialog>
 #include <QDir>
 #include <QFile>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -24,6 +26,12 @@
 #include <exception>
 #include <optional>
 #include <utility>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dwmapi.h>
 
 static void initializeReleaseNotesResource(){Q_INIT_RESOURCE(release_notes);}
 
@@ -97,17 +105,20 @@ QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const Release
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowFlag(Qt::WindowContextHelpButtonHint,false);
     dialog->setWindowFlag(Qt::WindowCloseButtonHint,true);
-    dialog->setStyleSheet(R"(
-        QDialog#whatsNewDialog { background:#222326; border:1px solid #3a3d44; border-radius:12px; }
-        QLabel#whatsNewHeading { color:#f2f4f8; font-size:26px; font-weight:600; }
-        QLabel#whatsNewVersion { color:#aab0ba; font-size:13px; }
-        QTextBrowser#whatsNewContent { background:#1c1d20; border:1px solid #37393f; border-radius:8px; padding:12px; color:#e4e5e7; }
-        QPushButton#whatsNewContinue { min-width:110px; padding:8px 18px; }
-    )");
+    // Liquid Glass: a dark tint with a soft highlight along the top edge, over the system backdrop applied below, and a translucent rounded card for the notes.
+    dialog->setStyleSheet(QString(R"(
+        QDialog#whatsNewDialog { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(78,80,90,168),stop:0.22 rgba(40,41,46,156),stop:1 rgba(24,24,27,176)); border:0; }
+        QWidget#dialogContent { background:transparent; }
+        QLabel#whatsNewHeading { color:%1; font-size:28px; font-weight:600; }
+        QLabel#whatsNewVersion { color:%2; font-size:13px; }
+        QFrame#whatsNewRule { background:%3; border:0; }
+        QTextBrowser#whatsNewContent { background:rgba(255,255,255,12); border:1px solid rgba(255,255,255,34); border-radius:16px; padding:14px; color:%1; }
+    )").arg(layer_panel::primary,layer_panel::secondary,layer_panel::separator));
     auto* layout=new QVBoxLayout(dialog);layout->setContentsMargins(24,22,24,20);layout->setSpacing(12);
     auto* heading=new QLabel("What's New");heading->setObjectName("whatsNewHeading");
     auto* subtitle=new QLabel(QString("Compositor Windows %1").arg(version));subtitle->setObjectName("whatsNewVersion");
-    layout->addWidget(heading);layout->addWidget(subtitle);
+    auto* rule=new QFrame;rule->setObjectName("whatsNewRule");rule->setFixedHeight(1);
+    layout->addWidget(heading);layout->addWidget(subtitle);layout->addWidget(rule);
     auto* content=new QTextBrowser;content->setObjectName("whatsNewContent");
     content->setAccessibleName("Release notes");content->setOpenExternalLinks(true);
     content->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -118,11 +129,18 @@ QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const Release
     append("New features",notes.features);append("Improvements",notes.improvements);append("Fixes",notes.fixes);
     content->setMarkdown(markdown);layout->addWidget(content,1);
     auto* buttons=new QHBoxLayout;buttons->addStretch();
-    auto* proceed=new QPushButton("Continue");proceed->setObjectName("whatsNewContinue");proceed->setDefault(true);
+    auto* proceed=new QPushButton("Continue");proceed->setObjectName("whatsNewContinue");proceed->setDefault(true);proceed->setProperty("pill",true);proceed->setProperty("primary",true);
     buttons->addWidget(proceed);layout->addLayout(buttons);
     QObject::connect(proceed,&QPushButton::clicked,dialog,&QDialog::accept);
 
     dialog->ensurePolished();
+    // The native frame stays. The Windows 11 transient (acrylic) backdrop is applied to this window and extended under the client area, which the translucent surface above lets through.
+    dialog->setAttribute(Qt::WA_TranslucentBackground);
+    if(const auto handle=reinterpret_cast<HWND>(dialog->winId())){
+        constexpr DWORD systemBackdropType=38;constexpr int transientWindow=3;
+        DwmSetWindowAttribute(handle,systemBackdropType,&transientWindow,sizeof(transientWindow));
+        const MARGINS wholeWindow{-1,-1,-1,-1};DwmExtendFrameIntoClientArea(handle,&wholeWindow);
+    }
     const QRect parentBounds=parent?QRect(parent->mapToGlobal(QPoint(0,0)),parent->size()):QRect();
     auto* screen=QGuiApplication::screenAt(parentBounds.center());
     if(!screen)screen=QGuiApplication::primaryScreen();
