@@ -306,6 +306,16 @@ CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
         .arg(panelFont(t::searchFont).family()).arg(t::searchFont));
     connect(this, &QComboBox::highlighted, this, [this](int index) { if (open_ && preview) preview(index); });
 }
+void CapsuleDropdown::useGlassPopup() {
+    auto* container = view()->window();
+    container->setWindowFlags(container->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    container->setAttribute(Qt::WA_TranslucentBackground);
+    view()->viewport()->setAutoFillBackground(false);
+    setStyleSheet(styleSheet() +
+        "QComboBoxPrivateContainer { border: 1px solid rgba(255,255,255,46); border-radius: 12px;"
+        " background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(64,64,68,228), stop:0.45 rgba(34,34,37,228), stop:1 rgba(30,30,33,228)); }"
+        "QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }");
+}
 void CapsuleDropdown::dismiss() { if (!open_) return; open_ = false; if (dismissed) dismissed(); }
 bool CapsuleDropdown::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::Hide && watched == view()->window()) dismiss();

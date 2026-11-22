@@ -52,6 +52,8 @@ public:
     std::function<void()> dismissed;
     void showPopup() override;
     void hidePopup() override;
+    // Shows the list as a rounded, lightly translucent panel instead of an opaque rectangle.
+    void useGlassPopup();
 protected:
     bool eventFilter(QObject*, QEvent*) override;
     void paintEvent(QPaintEvent*) override;
