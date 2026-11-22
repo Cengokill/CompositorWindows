@@ -295,13 +295,13 @@ CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
     setFont(panelFont(t::searchFont));
     view()->setItemDelegate(new BlendGroupDelegate(this, view()));
     setStyleSheet(QString(
-        "QComboBox { background: %1; border: 0; border-radius: %2px; padding-left: %8px; padding-right: %9px; color: %3;"
-        "font-family: '%11'; font-size: %12px; }"
+        "QComboBox { background: %1; border: 0; border-radius: %2px; padding-left: %6px; padding-right: %7px; color: %3;"
+        "font-family: '%9'; font-size: %10px; }"
         "QComboBox:hover { background: %4; } QComboBox:disabled { color: %5; }"
-        "QComboBox::drop-down { border: 0; width: %10px; } QComboBox::down-arrow { image: none; }"
-        "QComboBox QAbstractItemView { background: %6; color: %3; border: 1px solid %7; padding: 4px; }"
+        "QComboBox::drop-down { border: 0; width: %8px; } QComboBox::down-arrow { image: none; }"
+        "QComboBox QAbstractItemView { background: transparent; color: %3; border: 0; padding: 6px; }"
         "QComboBox QAbstractItemView::item { min-height: 24px; padding: 3px 8px; }")
-        .arg(t::control).arg(t::blendHeight / 2).arg(t::primary).arg(t::pressed).arg(t::disabled).arg(t::popup).arg(t::separator)
+        .arg(t::control).arg(t::blendHeight / 2).arg(t::primary).arg(t::pressed).arg(t::disabled)
         .arg(t::blendLeading).arg(t::blendTrailing).arg(t::blendArrowWidth)
         .arg(panelFont(t::searchFont).family()).arg(t::searchFont));
     connect(this, &QComboBox::highlighted, this, [this](int index) { if (open_ && preview) preview(index); });

@@ -206,11 +206,11 @@ class TextFontPopup final:public QWidget{
 public:
     TextFontPopup(QWidget* parent,QToolButton* anchor)
         :QWidget(parent,Qt::Popup),anchor_(anchor){
-        setObjectName("textFontPopup");
+        setObjectName("textFontPopup");setProperty("glassPopup",true);
         setStyleSheet(QString(R"(
-            QWidget#textFontPopup { background:#26282d; border:1px solid #454850; }
-            QListWidget#textFontResults { background:#26282d; border:0; outline:0; }
-            QListWidget#textFontResults::item { padding:4px 8px; min-height:20px; }
+            QWidget#textFontPopup { background:rgba(34,34,37,238); border:1px solid rgba(255,255,255,46); border-radius:14px; }
+            QListWidget#textFontResults { background:transparent; border:0; outline:0; }
+            QListWidget#textFontResults::item { padding:4px 10px; min-height:22px; border-radius:9px; }
             QListWidget#textFontResults::item:selected { background:%1; color:white; }
         )").arg(ui::layer_panel::accent));
         auto* layout=new QVBoxLayout(this);

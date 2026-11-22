@@ -173,6 +173,12 @@ public:
     bool eventFilter(QObject* object,QEvent* event) override {
         auto* widget=qobject_cast<QWidget*>(object);if(!widget)return false;
         if(event->type()==QEvent::Polish) {
+            // Menus and drop-down lists are rounded, translucent panels, so their window must be frameless and able to show what is behind the corners.
+            if(widget->isWindow()&&!widget->property("glassApplied").toBool()&&(qobject_cast<QMenu*>(widget)||widget->inherits("QComboBoxPrivateContainer")||widget->property("glassPopup").toBool())) {
+                widget->setProperty("glassApplied",true);
+                widget->setWindowFlags(widget->windowFlags()|Qt::FramelessWindowHint|Qt::NoDropShadowWindowHint);
+                widget->setAttribute(Qt::WA_TranslucentBackground);
+            }
             if(auto* picker=qobject_cast<QFileDialog*>(widget)){static FileIcons icons;picker->setOption(QFileDialog::DontUseNativeDialog);picker->setIconProvider(&icons);}
             if(auto* dialog=qobject_cast<QDialog*>(widget);dialog&&dialog->isWindow()&&!dialog->property("studioChrome").toBool()) {
                 dialog->setProperty("studioChrome",true);
@@ -242,10 +248,10 @@ void installVisualStyle() {
         QMenuBar { background: #222326; padding: 3px 8px; spacing: 3px; border-bottom: 1px solid #303237; }
         QMenuBar::item { padding: 6px 9px; background: transparent; border-radius: 5px; }
         QMenuBar::item:selected { background: #35373c; }
-        QMenu { background: #292b30; border: 1px solid #45474e; border-radius: 9px; padding: 6px; }
-        QMenu::item { padding: 7px 24px 7px 12px; border-radius: 5px; }
+        QMenu { background: rgba(34,34,37,238); border: 1px solid rgba(255,255,255,46); border-radius: 14px; padding: 7px; }
+        QMenu::item { padding: 8px 30px 8px 14px; margin: 1px 0; border-radius: 9px; }
         QMenu::item:disabled { color: #686b73; }
-        QMenu::separator { height: 1px; background: #3d3f46; margin: 5px 8px; }
+        QMenu::separator { height: 1px; background: rgba(255,255,255,28); margin: 6px 10px; }
         QToolTip { background: #34363b; border: 1px solid #4b4e56; border-radius: 5px; padding: 6px 9px; }
         QToolBar { background: #1f1f1f; border: 0; padding: 5px 10px; spacing: 7px; }
         QToolBar::handle { width: 0; height: 0; }
@@ -267,7 +273,9 @@ void installVisualStyle() {
         QComboBox { padding-right: 22px; }
         QComboBox::drop-down { width: 20px; border: 0; }
         QComboBox::down-arrow { image: url(:/assets/icons/chevron-down.png); width: 12px; height: 12px; }
-        QComboBox QAbstractItemView { background: #2b2d32; border: 1px solid #454850; padding: 4px; outline: 0; }
+        QComboBoxPrivateContainer { background: rgba(34,34,37,238); border: 1px solid rgba(255,255,255,46); border-radius: 14px; }
+        QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }
+        QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 12px; border-radius: 9px; }
         QCheckBox, QRadioButton { spacing: 7px; background: transparent; }
         QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
         QSlider::groove:horizontal { height: 4px; background: #494c53; border-radius: 2px; }
@@ -308,7 +316,7 @@ void installVisualStyle() {
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
     )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n"
-        "QMenu::item:selected { background: %1; }\nQComboBox QAbstractItemView { selection-background-color: %1; }\nQComboBox:focus { border-color: %1; }\n").arg(accentBlue)+optionsBarStyleSheet());
+        "QMenu::item:selected { background: %1; }\nQComboBox QAbstractItemView { selection-background-color: %1; }\nQComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover { background: %1; color: white; }\nQComboBox:focus { border-color: %1; }\n").arg(accentBlue)+optionsBarStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 
