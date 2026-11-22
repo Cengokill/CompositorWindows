@@ -10,6 +10,7 @@
 #include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QTest>
+#include <QStatusBar>
 #include <QPushButton>
 #include <QToolButton>
 #include <QLabel>
@@ -277,6 +278,12 @@ void tool_bars_show_their_own_controls(){
     tool("tool.eyedropper");
     REQUIRE(shown("eyedropperOptions","eyedropperSampleRing")&&title("eyedropperTitle")=="Eyedropper"&&w.findChild<QCheckBox*>("eyedropperSampleRing")->isChecked());
     tool("tool.zoom");
+    // The status bar shows the view and canvas on the left and a hint for the tool on the right.
+    {auto text=[&](const char* name){auto* label=w.findChild<QLabel*>(name);REQUIRE(label);return label->text();};
+     REQUIRE(text("statusZoom").endsWith(" %")&&text("statusDimensions").contains(QString::fromUtf8(" × "))&&text("statusProfile")=="sRGB · Transparent");
+     REQUIRE(text("statusHint").startsWith("Click to zoom in"));
+     tool("tool.marquee");REQUIRE(text("statusHint").startsWith("Drag a rectangle")&&text("statusHint").contains("Alt subtract"));
+     tool("tool.zoom");}
     REQUIRE(shown("zoomOptions","zoomPercent")&&title("zoomTitle")=="Zoom"&&w.findChild<QToolBar*>("eyedropperOptions")->isHidden());
     {auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");auto* canvas=mainProject.canvas;REQUIRE(field&&canvas);
      field->setValue(200);emit field->editingFinished();QApplication::processEvents();REQUIRE(std::abs(canvas->zoom-2)<1e-9);

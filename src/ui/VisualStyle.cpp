@@ -283,7 +283,7 @@ void installVisualStyle() {
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
         QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
         QTabWidget::pane { border: 0; }
-        QTabBar, QWidget#tabCorner { background: #1f1f1f; }
+        QTabBar, QWidget#newProjectCorner { background: #1f1f1f; }
         QTabBar::tab { background: transparent; color: #a0a0a0; padding: 4px 12px; margin: 4px 3px; border: 1px solid transparent; border-radius: 15px; font-weight: 600; }
         QTabBar::tab:selected { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,58),stop:0.55 rgba(255,255,255,22),stop:1 rgba(255,255,255,30)); color: #f2f2f2; border: 1px solid rgba(255,255,255,92); }
         QTabBar::tab:hover:!selected { color: white; background: rgba(255,255,255,20); border-color: rgba(255,255,255,38); }
@@ -303,7 +303,8 @@ void installVisualStyle() {
         QHeaderView::section { background: #27292e; color: #a8acb5; border: 0; border-bottom: 1px solid #383b42; padding: 7px; }
         QGroupBox { border: 1px solid #3b3e45; border-radius: 8px; margin-top: 14px; padding: 12px; }
         QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #b8bdc7; }
-        QStatusBar { background: #202125; border-top: 1px solid #303237; color: #959aa4; font-size: 11px; }
+        QStatusBar { background: #1f1f1f; border-top: 1px solid #2f2f2f; color: #9a9a9a; font-size: 11px; min-height: 30px; }
+        QStatusBar QLabel { color: #9a9a9a; background: transparent; }
         QStatusBar::item { border: 0; }
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }

@@ -70,7 +70,7 @@ constexpr uint64_t solidCanvasPixelBudget=100000000;
 // The new-project button: a glass disc whose highlight follows the pointer, with the plus drawn on the exact center.
 class GlassPlusButton final : public QToolButton {
 public:
-    explicit GlassPlusButton(QWidget* parent):QToolButton(parent){setMouseTracking(true);setAttribute(Qt::WA_Hover);}
+    explicit GlassPlusButton(QWidget* parent):QToolButton(parent){setMouseTracking(true);setAttribute(Qt::WA_Hover);setStyleSheet("QToolButton{padding:0;min-width:0;min-height:0;border:0;background:transparent;}");}
 protected:
     void mouseMoveEvent(QMouseEvent* event) override {pointer_=event->position();update();QToolButton::mouseMoveEvent(event);}
     void enterEvent(QEnterEvent* event) override {pointer_=event->position();update();QToolButton::enterEvent(event);}
@@ -110,7 +110,7 @@ public:
         layout->setSpacing(0);
         button_=new GlassPlusButton(this);
         button_->setObjectName("newProjectDropTarget");
-        button_->setFixedSize(30,30);
+        button_->setFixedSize(26,26);
         layout->addWidget(button_,0,Qt::AlignVCenter);
         line_=new QWidget(tabs_);
         line_->setObjectName("workspaceSeparator");
@@ -198,7 +198,7 @@ void MainWindow::initializeProject(EditorProject&project){
         if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
         button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));
         if(button->defaultAction())connect(button->defaultAction(),&QAction::changed,button,[button]{button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));});
-        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");corner->setAcceptDrops(true);button->setAcceptDrops(true);corner->setObjectName("tabCorner");tabs_->setCornerWidget(corner,Qt::TopRightCorner);
+        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");corner->setAcceptDrops(true);button->setAcceptDrops(true);tabs_->setCornerWidget(corner,Qt::TopRightCorner);
     }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;
@@ -206,7 +206,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->pointerDoubleClick=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerBegin(p,m,2);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerMove=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerUpdate(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerUp=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerEnd(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
-    project.canvas->viewChanged=[this]{refreshZoomControl();};
+    project.canvas->viewChanged=[this]{refreshZoomControl();refreshStatusInfo();};
     project.canvas->pointerCancel=[this]{pointerCancel();};project.canvas->pointerInterrupted=[this]{interruptPointer();};
     project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);if(tool_==Tool::Hand&&!spaceHeld_&&!spaceDragging_)if(auto* view=canvas())view->setCursor(pointerOwner_==current()?Qt::ClosedHandCursor:Qt::OpenHandCursor);};
     project.canvas->pointerLeave=[this]{clearBrushPointer();if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal){selectionGesture_.moveCursor({});refreshSelectionGesture();}};

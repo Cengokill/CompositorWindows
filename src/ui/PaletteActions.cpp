@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QStatusBar>
+#include <QHBoxLayout>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -44,6 +45,55 @@ void MainWindow::refreshZoomControl(){
     if(!field||!canvas()||field->hasFocus())return;
     const QSignalBlocker block(field);
     field->setValue(std::round(canvas()->zoom*100));
+}
+// The status bar reads like the Mac one: zoom, canvas size and color mode on the left, and a hint for the active tool on the right.
+void MainWindow::setupStatusInfo(){
+    auto* bar=statusBar();bar->setSizeGripEnabled(false);
+    auto* host=new QWidget;host->setObjectName("statusInfo");
+    auto* row=new QHBoxLayout(host);row->setContentsMargins(18,0,18,0);row->setSpacing(16);
+    const auto add=[&](const char* name){auto* label=new QLabel;label->setObjectName(name);row->addWidget(label);return label;};
+    add("statusZoom")->setFixedWidth(62);add("statusDimensions");add("statusProfile");
+    row->addStretch();add("statusHint");
+    host->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+    bar->addPermanentWidget(host,1);
+    // A transient message takes the place of the hint until it clears.
+    connect(bar,&QStatusBar::messageChanged,this,[this]{refreshStatusInfo();});
+    refreshStatusInfo();
+}
+void MainWindow::refreshStatusInfo(){
+    const auto text=[this](const char* name)->QLabel*{return findChild<QLabel*>(name);};
+    auto* zoom=text("statusZoom");auto* dimensions=text("statusDimensions");auto* profile=text("statusProfile");auto* hint=text("statusHint");
+    if(!zoom||!dimensions||!profile||!hint)return;
+    auto* p=current();const bool document=p&&p->document&&canvas();
+    zoom->setVisible(document);dimensions->setVisible(document);
+    zoom->setText(document?QString("%1 %").arg(std::lround(canvas()->zoom*100)):QString());
+    dimensions->setText(document?QString::fromUtf8("%1 × %2 px").arg(p->document->width).arg(p->document->height):QString());
+    profile->setText(document?"sRGB · Transparent":"Ready when you are");
+    const auto message=statusBar()->currentMessage();
+    hint->setText(!message.isEmpty()?message:document?toolHint():QString());
+}
+QString MainWindow::toolHint() const {
+    const QString select=QString::fromUtf8("Shift add · Alt subtract · Drag inside to move · Delete clears · Ctrl+D deselect");
+    switch(tool_){
+    case Tool::Marquee:return (ellipse_?"Drag an ellipse · ":"Drag a rectangle · ")+select;
+    case Tool::Lasso:return QString::fromUtf8("Drag to select · ")+select;
+    case Tool::Polygon:return QString::fromUtf8("Click corners · Click the start point or press Enter to close · Backspace removes a corner");
+    case Tool::Wand:return (wandObjectMode_?"Click an object to select its outline · Tab for Wand · ":"Click to select similar colors · Tab for Object · ")+select;
+    case Tool::Brush:return QString::fromUtf8("Drag to paint · Space to pan");
+    case Tool::Eraser:return QString::fromUtf8("Drag to erase · Space to pan");
+    case Tool::SpotHealing:return QString::fromUtf8("Drag over blemishes to heal · Space to pan");
+    case Tool::CloneStamp:return QString::fromUtf8("Alt-click to set the source · Drag to clone · Space to pan");
+    case Tool::Blur:return QString::fromUtf8(retouchMode_==retouch::Mode::Blur?"Drag to soften · Space to pan":retouchMode_==retouch::Mode::Smudge?"Drag to smudge · Space to pan":"Drag to push pixels · Space to pan");
+    case Tool::Text:return QString::fromUtf8("Drag a text box · Click text to edit");
+    case Tool::Shape:return QString::fromUtf8("Drag to draw a shape on a new layer · Escape cancel · Space to pan");
+    case Tool::Gradient:return QString::fromUtf8("Drag to draw · Drag ends to adjust · Escape cancel");
+    case Tool::Crop:return QString::fromUtf8("Drag to crop · Space to pan");
+    case Tool::Move:return QString::fromUtf8("Drag to move · Handles to resize · Space to pan");
+    case Tool::Hand:return QString::fromUtf8("Drag to pan");
+    case Tool::Eyedropper:return QString::fromUtf8("Click to sample a color");
+    case Tool::Zoom:return QString::fromUtf8("Click to zoom in · Space to pan");
+    }
+    return {};
 }
 void MainWindow::refreshPaletteControls(){
     if(!paletteSwatches_)return;
