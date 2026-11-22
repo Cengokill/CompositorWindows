@@ -250,6 +250,7 @@ void installVisualStyle() {
         QToolTip { background: #34363b; border: 1px solid #4b4e56; border-radius: 5px; padding: 6px 9px; }
         QToolBar { background: #242529; border: 0; border-bottom: 1px solid #303237; padding: 5px 10px; spacing: 7px; }
         QToolBar::handle { width: 0; height: 0; }
+        QWidget#newCanvasWelcome { background: #141414; }
         QToolBar QToolButton { padding: 5px 9px; border: 1px solid transparent; border-radius: 6px; }
         QToolButton#qt_toolbar_ext_button { padding: 2px; min-width: 18px; }
         QToolButton#newProjectDropTarget { padding: 4px; }

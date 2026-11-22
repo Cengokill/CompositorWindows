@@ -151,7 +151,7 @@ tools->setFixedWidth(56);
 tools->setIconSize({22,22});
 tools->setToolButtonStyle(Qt::ToolButtonIconOnly);
 tools->setStyleSheet(R"(
-    QToolBar#tools { border: 0; border-right: 1px solid palette(mid); padding: 8px 7px; spacing: 2px; }
+    QToolBar#tools { background: #1f1f1f; border: 0; border-right: 1px solid #363636; padding: 8px 7px; spacing: 2px; }
     QToolBar#tools QToolButton[editorToolButton="true"] {
         background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0;
         min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
