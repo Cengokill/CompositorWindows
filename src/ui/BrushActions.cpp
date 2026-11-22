@@ -42,12 +42,12 @@ void MainWindow::applyRememberedBrushPressure(graphics::BrushSessionSettings& se
 void MainWindow::setupBrushControls(){
     auto*bar=addToolBar("Brush Options");bar->setObjectName("brushOptions");
     auto* options=new ui::WrappingToolOptions;options->setObjectName("brushOptionsContents");bar->addWidget(options);
-    auto* title=new QLabel("Brush");title->setObjectName("brushTitle");{auto font=title->font();font.setBold(true);title->setFont(font);}options->addControl(title);
+    options->addControl(ui::makeTitle("Brush","brushTitle"));
     auto* mode=new ui::SegmentedControl({"Paint","Erase"});mode->setObjectName("brushMode");mode->setAccessibleName("Brush mode");
     mode->segment(0)->setObjectName("brushModePaint");mode->segment(1)->setObjectName("brushModeErase");
     mode->changed=[this](int index){selectTool(index?Tool::Eraser:Tool::Brush);refreshBrushControls();};
     options->addControl(mode);
-    auto slider=[&](int index){auto* value=new ui::OptionSlider(Qt::Horizontal);value->setObjectName(index?"brushOpacitySlider":"brushHardnessSlider");value->setAccessibleName(index?"Brush opacity slider":"Brush hardness slider");value->setRange(index?100:0,10000);value->setDefaultValue(10000);value->setFixedWidth(ui::layer_panel::optionSliderWidth);brushSliders_[size_t(index)]=value;return value;};
+    auto slider=[&](int index){auto* value=ui::makeOptionSlider(index?"brushOpacitySlider":"brushHardnessSlider",index?"Brush opacity slider":"Brush hardness slider",index?100:0,10000);brushSliders_[size_t(index)]=value;return value;};
     auto pressureToggle=[&](const char* name,const char* label,const char* key,bool graphics::BrushSessionSettings::*setting){
         auto* button=new QToolButton;
         button->setObjectName(name);
@@ -69,10 +69,9 @@ void MainWindow::setupBrushControls(){
     };
     auto* sizePressure=pressureToggle(pressureSizeControl,"Pen pressure for brush size",pressureSizeKey,&graphics::BrushSessionSettings::pressureSize);
     auto* opacityPressure=pressureToggle(pressureOpacityControl,"Pen pressure for brush opacity",pressureOpacityKey,&graphics::BrushSessionSettings::pressureOpacity);
-    auto numberField=[](double minimum,double maximum,double value,const char* accessibleName){auto* field=new ui::PropertyNumber;field->setDecimals(0);field->setRange(minimum,maximum);field->setValue(value);ui::styleAsNumberField(field);if(*accessibleName)field->setAccessibleName(accessibleName);return field;};
-    auto*size=numberField(1,2000,40,"Brush diameter");options->addGroup({ui::makeCaption("Size"),size,ui::makeCaption("px"),sizePressure});
-    auto*hardness=numberField(0,100,100,"Brush hardness");options->addGroup({ui::makeCaption("Hardness"),slider(0),hardness,ui::makeCaption("%")});
-    auto*opacity=numberField(1,100,100,"Brush opacity");options->addGroup({ui::makeCaption("Opacity"),slider(1),opacity,ui::makeCaption("%"),opacityPressure});
+    auto*size=ui::makeNumberField(1,2000,40,"Brush diameter");options->addGroup({ui::makeCaption("Size"),size,ui::makeCaption("px"),sizePressure});
+    auto*hardness=ui::makeNumberField(0,100,100,"Brush hardness");options->addGroup({ui::makeCaption("Hardness"),slider(0),hardness,ui::makeCaption("%")});
+    auto*opacity=ui::makeNumberField(1,100,100,"Brush opacity");options->addGroup({ui::makeCaption("Opacity"),slider(1),opacity,ui::makeCaption("%"),opacityPressure});
     auto* colorWell=new ui::ColorWell;colorWell->setObjectName("brushColor");colorWell->setAccessibleName("Brush color");options->addGroup({ui::makeCaption("Color"),colorWell});
     connect(colorWell,&QAbstractButton::clicked,this,[this]{
         if(stroke_||retouch_||(current()&&current()->maskSelected))return;

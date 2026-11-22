@@ -85,11 +85,12 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     lockRatio_=state.lockRatio;autoSelectLayers_=state.autoSelectLayers;transformControls_=state.transformControls;snapPolicy_=state.snapPolicy;
     lastBrushPoint_=state.lastBrushPoint;lastBrushLayer_=state.lastBrushLayer;lastBrushMask_=state.lastBrushMask;
 
-    combo(this,"gradientShape","",int(gradientSettings_.shape));
+    segmented(this,"gradientShape",int(gradientSettings_.shape));
     combo(this,"gradientStyle","",int(gradientSettings_.style));
     check(this,"gradientReverse","drawingOptions","Reverse",gradientSettings_.reversed);
     number(this,"","Gradient opacity",gradientSettings_.opacity*100);
-    combo(this,"shapeKind","",int(shapeStyle_.kind));number(this,"","Corner radius",shapeStyle_.cornerRadius);
+    if(auto* item=control<QSlider>(this,"gradientOpacitySlider")){const QSignalBlocker blocker(item);item->setValue(int(std::lround(gradientSettings_.opacity*100)));}
+    segmented(this,"shapeKind",int(shapeStyle_.kind));number(this,"","Corner radius",shapeStyle_.cornerRadius);
     segmented(this,"marqueeShape",ellipse_?1:0);
     segmented(this,"lassoKind",lassoKind_==editing::LassoKind::Polygonal?1:0);
     if(auto* item=control<QComboBox>(this,"cropRatioChoice")){const QSignalBlocker blocker(item);item->setCurrentText(cropRatioChoice_);}
@@ -101,6 +102,7 @@ void MainWindow::restoreToolState(const EditorProject& project) {
     check(this,"wandContiguous","selectionOptions","Contiguous",wandContiguous_);
     segmented(this,"wandScope",wandAllLayers_?1:0);
     check(this,"paintMaskWhite","brushOptions","Paint mask white",maskPaintWhite_);
+    check(this,"eyedropperSampleRing","eyedropperOptions","Sample Ring",showSampleRing_);
     check(this,"transformLockRatio","transformOptions","Lock aspect ratio",lockRatio_);
     check(this,"transformAutoSelect","transformOptions","Auto Select",autoSelectLayers_);
     check(this,"transformShowControls","transformOptions","Show Controls",transformControls_);

@@ -1,6 +1,9 @@
 #include "MainWindow.h"
 #include "PropertyControls.h"
 #include "WrappingToolOptions.h"
+#include "LayerPanelWidgets.h"
+#include "SegmentedControl.h"
+#include "ToolbarControls.h"
 #include <QApplication>
 #include <QCheckBox>
 #include <QDir>
@@ -62,22 +65,18 @@ void MainWindow::setupRetouchActions() {
     addTool("Spot Healing (J)","retouchHeal",QKeySequence(Qt::Key_J),Tool::SpotHealing);
     addTool("Smear (R)","retouchSmear",QKeySequence(Qt::Key_R),Tool::Blur);
     auto* options=new ui::WrappingToolOptions;options->setObjectName("retouchOptionsContents");retouchBar_->addWidget(options);
-    auto* family=new QLabel;family->setObjectName("retouchFamily");options->addControl(family);
-    healingModes_=new QComboBox;
-    healingModes_->setObjectName("retouchHealingMode");healingModes_->setAccessibleName("Healing mode");
-    healingModes_->addItems({"Content-Aware","Create Texture","Proximity Match"});options->addControl(healingModes_);
-    blurModes_=new QComboBox;
-    blurModes_->setObjectName("retouchSmearMode");blurModes_->setAccessibleName("Smear mode");
-    blurModes_->addItems({"Liquify","Blur","Smudge"});options->addControl(blurModes_);
-    cloneAligned_=new QCheckBox("Aligned");cloneAligned_->setObjectName("retouchAligned");cloneAligned_->setChecked(true);options->addControl(cloneAligned_);
-    cloneAllLayers_=new QCheckBox("Sample All Layers");cloneAllLayers_->setObjectName("retouchAllLayers");options->addControl(cloneAllLayers_);
-    const char* labels[]{" Size "," Hardness "," Opacity "};
+    options->addControl(ui::makeTitle("Spot Healing","retouchFamily"));
+    healingModes_=new ui::SegmentedControl({"Content-Aware","Create Texture","Proximity Match"});
+    healingModes_->setObjectName("retouchHealingMode");healingModes_->setAccessibleName("Healing mode");options->addControl(healingModes_);
+    blurModes_=new ui::SegmentedControl({"Liquify","Blur","Smudge"});
+    blurModes_->setObjectName("retouchSmearMode");blurModes_->setAccessibleName("Smear mode");options->addControl(blurModes_);
+    const char* labels[]{"Size","Hardness","Opacity"};
     const char* names[]{"Retouch diameter","Retouch hardness","Retouch opacity"};
     const char* objects[]{"retouchDiameter","retouchHardness","retouchOpacity"};
     for(size_t i=0;i<retouchTip_.size();++i) {
-        auto* label=new QLabel(QString::fromUtf8(labels[i]).trimmed());if(i==2)label->setObjectName("retouchOpacityLabel");
+        auto* label=ui::makeCaption(labels[i]);if(i==2)label->setObjectName("retouchOpacityLabel");
         if(i){
-            auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setObjectName(i==1?"retouchHardnessSlider":"retouchOpacitySlider");slider->setAccessibleName(i==1?"Retouch hardness slider":"Retouch opacity slider");slider->setRange(i==1?0:100,10000);slider->setDefaultValue(10000);slider->setFixedWidth(100);retouchSliders_[i-1]=slider;
+            auto* slider=ui::makeOptionSlider(i==1?"retouchHardnessSlider":"retouchOpacitySlider",i==1?"Retouch hardness slider":"Retouch opacity slider",i==1?0:100,10000);retouchSliders_[i-1]=slider;
             connect(slider,&QSlider::valueChanged,this,[this,i](int value){
                 if(refreshing_||retouch_||stroke_)return;
                 double* field=nullptr;
@@ -87,10 +86,10 @@ void MainWindow::setupRetouchActions() {
                 if(field){*field=value/10000.;refreshRetouchControls();}
             });
         }
-        auto* spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};retouchTip_[i]=spin;
-        spin->setObjectName(objects[i]);spin->setAccessibleName(names[i]);spin->setDecimals(i==0?1:0);
-        spin->setRange(i==1?0:1,i==0?2000:100);if(i!=0)spin->setSuffix("%");
-        if(i)options->addGroup({label,retouchSliders_[i-1],spin});else options->addGroup({label,spin});
+        auto* spin=ui::makeNumberField(i==1?0:1,i==0?2000:100,i==0?40:100,names[i],i==0?1:0);spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};retouchTip_[i]=spin;
+        spin->setObjectName(objects[i]);
+        auto* unit=ui::makeCaption(i==0?"px":"%");
+        if(i)options->addGroup({label,retouchSliders_[i-1],spin,unit});else options->addGroup({label,spin,unit});
         connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value) {
             if(refreshing_||retouch_||stroke_)return;
             double* field=nullptr;
@@ -100,16 +99,19 @@ void MainWindow::setupRetouchActions() {
             if(field){*field=value/(i==0?2:100);refreshRetouchControls();}
         });
     }
-    connect(healingModes_,&QComboBox::currentIndexChanged,this,[this](int index) {
-        if(refreshing_||retouch_)return;
+    cloneAligned_=ui::makeOptionCheck("Aligned");cloneAligned_->setObjectName("retouchAligned");cloneAligned_->setChecked(true);options->addControl(cloneAligned_);
+    cloneAllLayers_=ui::makeOptionCheck("Sample All Layers");cloneAllLayers_->setObjectName("retouchAllLayers");options->addControl(cloneAllLayers_);
+    // A pick during a stroke is refused, so the pill returns to the active mode.
+    healingModes_->changed=[this](int index) {
+        if(refreshing_||retouch_){refreshRetouchControls();return;}
         constexpr retouch::Mode modes[]{retouch::Mode::HealContentAware,retouch::Mode::HealCreateTexture,retouch::Mode::HealProximity};
         if(index>=0&&index<3)healingMode_=modes[index];
-    });
-    connect(blurModes_,&QComboBox::currentIndexChanged,this,[this](int index) {
-        if(refreshing_||retouch_)return;
+    };
+    blurModes_->changed=[this](int index) {
+        if(refreshing_||retouch_){refreshRetouchControls();return;}
         constexpr retouch::Mode modes[]{retouch::Mode::Liquify,retouch::Mode::Blur,retouch::Mode::Smudge};
         if(index>=0&&index<3)blurSettings_.mode=modes[index];
-    });
+    };
     connect(cloneAligned_,&QCheckBox::toggled,this,[this](bool value){if(!refreshing_&&!retouch_&&current())current()->cloneAlignment.aligned=value;});
     connect(cloneAllLayers_,&QCheckBox::toggled,this,[this](bool value){if(!refreshing_&&!retouch_&&current())current()->cloneSampleAllLayers=value;});
     refreshRetouchControls();
@@ -132,7 +134,7 @@ void MainWindow::refreshRetouchControls() {
     showOption(blurModes_,smear);blurModes_->setEnabled(enabled);
     showOption(cloneAligned_,clone);cloneAligned_->setEnabled(enabled);
     showOption(cloneAllLayers_,clone);cloneAllLayers_->setEnabled(enabled);
-    const QSignalBlocker healingBlock(healingModes_),blurBlock(blurModes_),alignedBlock(cloneAligned_),allBlock(cloneAllLayers_);
+    const QSignalBlocker alignedBlock(cloneAligned_),allBlock(cloneAllLayers_);
     healingModes_->setCurrentIndex(healingMode_==retouch::Mode::HealCreateTexture?1:healingMode_==retouch::Mode::HealProximity?2:0);
     blurModes_->setCurrentIndex(blurSettings_.mode==retouch::Mode::Blur?1:blurSettings_.mode==retouch::Mode::Smudge?2:0);
     cloneAligned_->setChecked(current()?current()->cloneAlignment.aligned:true);

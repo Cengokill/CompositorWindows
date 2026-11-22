@@ -4,18 +4,23 @@
 #include <QRectF>
 #include <QString>
 #include <QStringList>
+#include <initializer_list>
 
 class QAbstractSpinBox;
 class QAction;
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
+class QPushButton;
 class QPainter;
 class QSpinBox;
 class QToolBar;
 class QWidget;
 
 namespace compositor::ui {
+class OptionSlider;
+class PropertyNumber;
 // A toolbar re-shows a hidden widget when it lays out, so visibility goes through the widget's action.
 void setToolbarControlVisible(QToolBar* bar, QWidget* widget, bool visible);
 // A bold tool name at the start of an options bar.
@@ -37,8 +42,19 @@ QCheckBox* addOptionCheck(QToolBar* bar, const QString& text, const char* object
 void paintCheckBoxIndicator(QPainter* painter, const QRectF& rect, bool checked, bool enabled, bool hovered);
 // Pieces for bars that lay their controls out themselves (the Brush bar) instead of adding them to the toolbar.
 void styleAsNumberField(QAbstractSpinBox* field);
+void styleAsNumberField(QLineEdit* field);
 QLabel* makeCaption(const QString& text);
 QCheckBox* makeOptionCheck(const QString& text);
+// A bold tool name for a bar laid out by a WrappingToolOptions.
+QLabel* makeTitle(const QString& text, const char* objectName);
+// A right-aligned number field without spin arrows, ready for makeCaption("px") or makeCaption("%") after it.
+PropertyNumber* makeNumberField(double minimum, double maximum, double value, const QString& accessibleName, int decimals = 0);
+// The options-bar slider at the shared width, in the hundredths of a percent the brush and retouch bars use.
+OptionSlider* makeOptionSlider(const char* objectName, const QString& accessibleName, int minimum, int maximum);
+// Controls laid out in one row that the toolbar shows or hides as a whole.
+QWidget* addToolbarGroup(QToolBar* bar, std::initializer_list<QWidget*> widgets, const char* objectName);
+// A capsule button that runs a command and follows its enabled state; primary fills it with the accent blue.
+QPushButton* addCommandPill(QToolBar* bar, const QString& text, const char* objectName, QAction* command, bool primary);
 // A capsule button; a checkable one fills with the accent blue while checked.
 void markPill(QWidget* button);
 // The current color as a rounded well with a light border; clicking it is up to the owner.

@@ -1,6 +1,7 @@
 // Source-derived UI contracts: Crop.swift, CropControls.swift and
 // EditorCanvas.beginCropDrag/dragCrop at pinned a19db901.
 #include "ui/MainWindow.h"
+#include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QDialogButtonBox>
 #include <QKeyEvent>
@@ -44,8 +45,8 @@ void crop_fresh_entry_fullframe_free(){
     REQUIRE(dimensions->isHidden()&&p.document==d&&p.history.undoCount()==0);
     command(w,"tool.crop")->trigger();REQUIRE(ratio->currentText()=="Free"&&command(w,"crop.apply")->isEnabled()&&!dimensions->isHidden());
     REQUIRE(dimensions->text()==QString::fromUtf8("100 × 80 px")&&p.document==d&&p.history.undoCount()==0);
-    auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool())REQUIRE(!item->isVisible());
-    auto* gradient=w.findChild<QComboBox*>("gradientShape");auto* shape=w.findChild<QComboBox*>("shapeKind");REQUIRE(gradient&&shape&&!gradient->isVisible()&&!shape->isVisible());
+    auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);
+    auto* gradient=ui::findSegmentedControl(&w,"gradientShape");auto* shape=ui::findSegmentedControl(&w,"shapeKind");REQUIRE(gradient&&shape&&!gradient->isVisible()&&!shape->isVisible());
     REQUIRE(ratio->isVisibleTo(bar)&&command(w,"crop.cancel")->isVisible()&&command(w,"crop.apply")->isVisible());
     auto* title=w.findChild<QLabel*>("cropTitle");auto* ratioLabel=w.findChild<QLabel*>("cropRatioLabel");
     auto* cancel=w.findChild<QPushButton*>("cropCancelButton");auto* accept=w.findChild<QPushButton*>("cropApplyButton");
@@ -73,7 +74,7 @@ void crop_fresh_entry_fullframe_free(){
     selectVisibleTool("tool.gradient");QApplication::processEvents();REQUIRE(!gradient->isHidden());
     REQUIRE(title->isHidden()&&ratioLabel->isHidden()&&cancel->isHidden()&&accept->isHidden());
     selectVisibleTool("tool.shape");QApplication::processEvents();REQUIRE(!shape->isHidden());
-    cropTool(w,p);for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool())REQUIRE(!item->isVisible());
+    cropTool(w,p);REQUIRE(!gradient->isVisibleTo(bar)&&!shape->isVisibleTo(bar));
 }
 void crop_cancel_retains_document(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);cropTool(w,p);drag(p,{20,20},{60,50},Qt::ControlModifier);auto*a=command(w,"crop.cancel");REQUIRE(a&&a->isEnabled());a->trigger();REQUIRE(p.document==d&&p.history.undoCount()==0);REQUIRE(!a->isEnabled()&&!command(w,"crop.apply")->isEnabled());}
 void crop_pending_dimensions(){

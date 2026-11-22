@@ -2,6 +2,8 @@
 #include "EditorIcons.h"
 #include "PaletteDialog.h"
 #include "PropertyControls.h"
+#include "SegmentedControl.h"
+#include "ToolbarControls.h"
 #include "text/TextStyle.h"
 #include <QApplication>
 #include <QComboBox>
@@ -368,24 +370,32 @@ void MainWindow::setupTypeControls(){
     auto* bar=addToolBar("Type Options");bar->setObjectName("typeOptions");
     auto* fonts=new QToolButton;fonts->setObjectName("textFont");fonts->setAccessibleName("Text font");fonts->setFixedWidth(180);
     fonts->setFocusPolicy(Qt::StrongFocus);fonts->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    fonts->setIcon(ui::editorIcon(ui::EditorIcon::ChevronDown));fonts->setIconSize({12,12});
+    fonts->setIcon(ui::editorIcon(ui::EditorIcon::ChevronDown));fonts->setIconSize({12,12});ui::markPill(fonts);
     auto* styles=new QComboBox;styles->setObjectName("textStyle");styles->setAccessibleName("Text style");styles->setFixedWidth(120);
     styles->setEditable(true);styles->lineEdit()->setReadOnly(true);styles->lineEdit()->setPlaceholderText("Multiple");
     openComboOnFieldClick(styles);
     textStyleBox_=styles;
-    auto* size=new ui::PropertyNumber;size->setObjectName("textSize");size->setAccessibleName("Text size");size->setRange(1,1000);size->setDecimals(0);size->setValue(textDefaults_.fontSize);size->setSuffix(" px");
+    auto* size=ui::makeNumberField(1,1000,textDefaults_.fontSize,"Text size");size->setObjectName("textSize");
     size->releaseFocus=[this]{focusTextCanvas();};
-    auto* color=new QToolButton;color->setObjectName("textColor");color->setAccessibleName("Text color");color->setFixedSize(36,22);
-    auto* align=new QButtonGroup(bar);align->setObjectName("textAlign");align->setExclusive(true);
-    auto addAlign=[&](const char* name,const QString& label,TextAlignment value){auto* button=new QToolButton;button->setObjectName(name);button->setAccessibleName(label);button->setText(label);button->setCheckable(true);button->setAutoRaise(true);align->addButton(button,int(value));bar->addWidget(button);return button;};
-    auto* tracking=new ui::PropertyNumber;tracking->setObjectName("textTracking");tracking->setAccessibleName("Tracking");tracking->setRange(-100,1000);tracking->setDecimals(0);tracking->setValue(0);tracking->releaseFocus=[this]{focusTextCanvas();};
-    auto* leading=new QLineEdit;leading->setObjectName("textLeading");leading->setAccessibleName("Leading");leading->setPlaceholderText("Auto");leading->setFixedWidth(64);
+    auto* color=new ui::ColorWell;color->setObjectName("textColor");color->setAccessibleName("Text color");
+    auto* align=new ui::SegmentedControl({"Left","Center","Right"});align->setObjectName("textAlign");align->setAccessibleName("Text alignment");
+    for(int i=0;i<3;++i)align->segment(i)->setObjectName(i==0?"textAlignLeft":i==1?"textAlignCenter":"textAlignRight");
+    align->changed=[this](int index){if(!refreshing_)applyTextAlignment(TextAlignment(index));};
+    auto* tracking=ui::makeNumberField(-100,1000,0,"Tracking");tracking->setObjectName("textTracking");tracking->releaseFocus=[this]{focusTextCanvas();};
+    auto* leading=new QLineEdit;leading->setObjectName("textLeading");leading->setAccessibleName("Leading");leading->setPlaceholderText("Auto");ui::styleAsNumberField(leading);
     auto* applyForeground=new QAction("Apply Text Color",this);applyForeground->setObjectName("textApplyForeground");
-    auto* cancel=bar->addAction("Cancel");cancel->setObjectName("textCancel");
-    auto* done=bar->addAction("Done");done->setObjectName("textDone");
-    bar->addWidget(fonts);bar->addWidget(styles);bar->addWidget(size);bar->addWidget(color);
-    addAlign("textAlignLeft","Align left",TextAlignment::Left);addAlign("textAlignCenter","Align center",TextAlignment::Center);addAlign("textAlignRight","Align right",TextAlignment::Right);
-    bar->addWidget(tracking);bar->addWidget(leading);bar->addAction(cancel);bar->addAction(done);
+    // The commands stay in the bar for their object names; the pills below are what shows.
+    auto* cancel=bar->addAction("Cancel");cancel->setObjectName("textCancel");cancel->setVisible(false);
+    auto* done=bar->addAction("Done");done->setObjectName("textDone");done->setVisible(false);
+    ui::addToolbarTitle(bar,"Type","typeTitle");
+    bar->addWidget(fonts);bar->addWidget(styles);
+    ui::addToolbarGroup(bar,{ui::makeCaption("Size"),size,ui::makeCaption("px")},"textSizeGroup");
+    ui::addToolbarGroup(bar,{ui::makeCaption("Color"),color},"textColorGroup");
+    bar->addWidget(align);
+    ui::addToolbarGroup(bar,{ui::makeCaption("Tracking"),tracking},"textTrackingGroup");
+    ui::addToolbarGroup(bar,{ui::makeCaption("Leading"),leading},"textLeadingGroup");
+    auto* typeSpacer=new QWidget;typeSpacer->setObjectName("typeSpacer");typeSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);bar->addWidget(typeSpacer);
+    ui::addCommandPill(bar,"Cancel","textCancelButton",cancel,false);ui::addCommandPill(bar,"Done","textDoneButton",done,true);
     connect(fonts,&QToolButton::clicked,this,[this,fonts]{
         auto* popup=static_cast<TextFontPopup*>(textFontPopup_.data());
         if(!popup){
@@ -419,10 +429,9 @@ void MainWindow::setupTypeControls(){
         QTimer::singleShot(0,this,[this]{focusTextCanvas();});
     });
     connect(size,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this](double value){if(!refreshing_)applyTextSize(value);});
-    connect(align,&QButtonGroup::idClicked,this,[this](int id){if(!refreshing_)applyTextAlignment(TextAlignment(id));});
     connect(tracking,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this](double value){if(!refreshing_)applyTextTracking(value);});
     connect(leading,&QLineEdit::editingFinished,this,[this,leading]{if(refreshing_)return;auto typed=leading->text().trimmed();applyTextLeading(typed.isEmpty()?0:typed.toDouble());focusTextCanvas();});
-    connect(color,&QToolButton::clicked,this,[this]{
+    connect(color,&QAbstractButton::clicked,this,[this]{
         if(!textSession_)return;
         endTextFontPreview();
         const int start=std::min(textSession_->caret,textSession_->anchor),length=std::abs(textSession_->caret-textSession_->anchor);
@@ -447,7 +456,7 @@ void MainWindow::setupTypeControls(){
     addAction(applyForeground);
 }
 void MainWindow::refreshTypeControls(){
-    auto* fonts=findChild<QToolButton*>("textFont");auto* styles=textStyleBox_.data();auto* size=findChild<QDoubleSpinBox*>("textSize");auto* color=findChild<QToolButton*>("textColor");
+    auto* fonts=findChild<QToolButton*>("textFont");auto* styles=textStyleBox_.data();auto* size=findChild<QDoubleSpinBox*>("textSize");auto* color=dynamic_cast<ui::ColorWell*>(findChild<QAbstractButton*>("textColor"));
     auto* tracking=findChild<QDoubleSpinBox*>("textTracking");auto* leading=findChild<QLineEdit*>("textLeading");
     auto* previousFocus=QApplication::focusWidget();
     const bool editingTypeField=previousFocus&&(previousFocus==fonts||(textFontPopup_&&textFontPopup_->isAncestorOf(previousFocus))||(styles&&(previousFocus==styles||styles->isAncestorOf(previousFocus)))||(size&&(previousFocus==size||size->isAncestorOf(previousFocus)))||(tracking&&(previousFocus==tracking||tracking->isAncestorOf(previousFocus)))||leading==previousFocus);
@@ -489,11 +498,12 @@ void MainWindow::refreshTypeControls(){
         styles->setEnabled(available&&styles->count()>0);
     }
     if(size){const QSignalBlocker block(size);size->setValue(style.fontSize);size->setEnabled(tool_==Tool::Text||editing);}
-    if(color){double red=style.red,green=style.green,blue=style.blue;if(editing)text::colorAt(style,length>0?start:std::max(0,start-1),red,green,blue);color->setEnabled(editing);color->setStyleSheet(QString("background:%1;border:1px solid palette(mid);").arg(QColor::fromRgbF(red,green,blue).name()));}
-    if(auto* group=findChild<QButtonGroup*>("textAlign")){const QSignalBlocker block(group);if(auto* button=group->button(int(style.alignment)))button->setChecked(true);for(auto* button:group->buttons())button->setEnabled(editing);}
+    if(color){double red=style.red,green=style.green,blue=style.blue;if(editing)text::colorAt(style,length>0?start:std::max(0,start-1),red,green,blue);color->setEnabled(editing);color->setColor(QColor::fromRgbF(red,green,blue));}
+    if(auto* align=ui::findSegmentedControl(this,"textAlign")){align->setCurrentIndex(int(style.alignment));align->setEnabled(editing);}
     if(tracking){const QSignalBlocker block(tracking);tracking->setValue(style.tracking);tracking->setEnabled(editing);}
     if(leading&&previousFocus!=leading){const QSignalBlocker block(leading);leading->setText(style.leading>0?QString::number(style.leading):QString());leading->setEnabled(editing);}
-    for(const char* name:{"textCancel","textDone"})if(auto* action=findChild<QAction*>(name)){action->setVisible(editing);action->setEnabled(editing);}
+    for(const char* name:{"textCancel","textDone"})if(auto* action=findChild<QAction*>(name))action->setEnabled(editing);
+    for(const char* name:{"textCancelButton","textDoneButton"})ui::setToolbarControlVisible(findChild<QToolBar*>("typeOptions"),findChild<QWidget*>(name),editing);
     if(previousFocus&&!editingTypeField&&previousFocus!=QApplication::focusWidget())previousFocus->setFocus(Qt::OtherFocusReason);
     if(auto* view=canvas();view&&tool_==Tool::Text&&!spaceHeld_)view->setCursor(Qt::IBeamCursor);
 }

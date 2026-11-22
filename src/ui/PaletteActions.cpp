@@ -1,11 +1,13 @@
 #include "MainWindow.h"
 #include "PaletteSwatches.h"
 #include "ToolbarControls.h"
+#include <QCheckBox>
 #include <QGuiApplication>
 #include <QLabel>
 #include <QPushButton>
 #include <QScreen>
 #include <QStatusBar>
+#include <QToolBar>
 #include <QVBoxLayout>
 #include <algorithm>
 namespace compositor {
@@ -22,6 +24,11 @@ void MainWindow::setupPaletteControls(QWidget* tools){
         bindCommand(item,"Tools",labels[index],[this,index]{if(index<2)openPalette(index==1);else if(index==2)swapPalette();else resetPalette();});addAction(item);
     }
     paletteSwatches_=new ui::PaletteSwatches(actions,tools);
+    // The Eyedropper has one option: whether the sampling ring follows the pointer.
+    auto* eyedropperBar=addToolBar("Eyedropper Options");eyedropperBar->setObjectName("eyedropperOptions");
+    ui::addToolbarTitle(eyedropperBar,"Eyedropper","eyedropperTitle");
+    auto* sampleRing=ui::addOptionCheck(eyedropperBar,"Sample Ring","eyedropperSampleRing",showSampleRing_);
+    connect(sampleRing,&QCheckBox::toggled,this,[this](bool on){showSampleRing_=on;});
 }
 void MainWindow::refreshPaletteControls(){
     if(!paletteSwatches_)return;

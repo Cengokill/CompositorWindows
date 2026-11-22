@@ -4,6 +4,7 @@
 #include "BrushAppearanceTests.cpp"
 #undef main
 #include <QCheckBox>
+#include "ui/SegmentedControl.h"
 #include <QJsonArray>
 
 namespace {
@@ -26,7 +27,7 @@ void toolbarLayout(const char* commandId,int requestedWidth){
         required.push_back(control<QAbstractButton>(f.window,"brushPressureOpacity"));
         required.push_back(control<QAbstractButton>(f.window,"brushModePaint"));required.push_back(control<QAbstractButton>(f.window,"brushModeErase"));required.push_back(control<QComboBox>(f.window,"Editing target"));QCheckBox* maskWhite=nullptr;for(auto* box:f.window.findChildren<QCheckBox*>())if(box->text()=="Paint mask white")maskWhite=box;require(maskWhite,"Mask paint option exists");required.push_back(maskWhite);}
     else if(clone){required.push_back(control<QCheckBox>(f.window,"retouchAligned"));required.push_back(control<QCheckBox>(f.window,"retouchAllLayers"));}
-    else required.push_back(control<QComboBox>(f.window,heal?"retouchHealingMode":"retouchSmearMode"));
+    else{auto* mode=ui::findSegmentedControl(&f.window,heal?"retouchHealingMode":"retouchSmearMode");require(mode,"Mode control exists");required.push_back(mode);}
     QJsonArray states;bool visible=true;for(auto* value:required){const bool shown=entirelyVisible(value);visible=visible&&shown;states.append(QJsonObject{{"name",value->objectName().isEmpty()?value->accessibleName():value->objectName()},{"fully_visible",shown},{"width",value->width()},{"height",value->height()}});}observations["controls"]=states;
     require(visible,"Every family option, numeric field and slider is fully visible at the supported window width");
     QTest::mouseClick(hardness,Qt::LeftButton,{},QPoint(hardness->width()/4,hardness->height()/2));events();require(hardNumber->value()>10&&hardNumber->value()<40,"Actual pointer press reaches the visible hardness track");

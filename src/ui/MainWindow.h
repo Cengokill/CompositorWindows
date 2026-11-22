@@ -52,7 +52,7 @@ class QSpinBox;
 class QToolButton;
 
 namespace compositor {
-namespace ui {class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
+namespace ui {class SegmentedControl;class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
 struct EditorProject {
     std::optional<Document> document;
     std::string active;
@@ -161,7 +161,7 @@ private:
     std::optional<bool> retouchAxisHorizontal_;
     std::array<QDoubleSpinBox*,3> retouchTip_{};
     std::array<ui::TrackSlider*,2> retouchSliders_{};
-    QComboBox *healingModes_{}, *blurModes_{};
+    ui::SegmentedControl *healingModes_{}, *blurModes_{};
     QToolBar* retouchBar_{};
     QCheckBox *cloneAligned_{}, *cloneAllLayers_{};
     QColor background_{Qt::white};

@@ -1,11 +1,13 @@
 #include "ToolbarControls.h"
 #include "LayerPanelTokens.h"
 #include "LayerPanelWidgets.h"
+#include "PropertyControls.h"
 #include <QCheckBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QToolBar>
 #include <QWidgetAction>
@@ -48,13 +50,11 @@ void setToolbarControlVisible(QToolBar* bar, QWidget* widget, bool visible) {
     if (!widget) return;
     if (auto* action = toolbarActionFor(bar, widget)) action->setVisible(visible);
     widget->setVisible(visible);
+    // The toolbar re-applies its own enabled state when it shows a widget, so a command pill is brought back in line.
+    if (auto* command = qobject_cast<QAction*>(widget->property("commandAction").value<QObject*>())) widget->setEnabled(command->isEnabled());
 }
 QLabel* addToolbarTitle(QToolBar* bar, const QString& text, const char* objectName) {
-    auto* label = new QLabel(text);
-    label->setObjectName(objectName);
-    auto font = label->font();
-    font.setBold(true);
-    label->setFont(font);
+    auto* label = makeTitle(text, objectName);
     bar->addWidget(label);
     return label;
 }
@@ -80,9 +80,9 @@ QString optionsBarStyleSheet() {
         QToolButton[segment="true"]:checked { background: transparent; color: white; }
         QToolButton[segment="true"]:disabled { background: transparent; color: %9; }
         QToolButton[segment="true"]:checked:disabled { color: %2; }
-        QAbstractSpinBox[numberField="true"] { background: %13; color: %2; border: 1px solid %14; border-radius: %15px; padding: 0 6px; min-height: %5px; max-height: %5px; }
-        QAbstractSpinBox[numberField="true"]:focus { border-color: %16; background: %13; }
-        QAbstractSpinBox[numberField="true"]:disabled { background: %17; color: %9; border-color: %14; }
+        QAbstractSpinBox[numberField="true"], QLineEdit[numberField="true"] { background: %13; color: %2; border: 1px solid %14; border-radius: %15px; padding: 0 6px; min-height: %5px; max-height: %5px; }
+        QAbstractSpinBox[numberField="true"]:focus, QLineEdit[numberField="true"]:focus { border-color: %16; background: %13; }
+        QAbstractSpinBox[numberField="true"]:disabled, QLineEdit[numberField="true"]:disabled { background: %17; color: %9; border-color: %14; }
         QLabel[optionCaption="true"] { color: %18; background: transparent; }
         QToolBar::separator { background: %14; width: 1px; margin: 4px 6px; }
         )")
@@ -97,12 +97,43 @@ void styleAsNumberField(QAbstractSpinBox* field) {
     field->setProperty("numberField", true);
     field->setFixedSize(t::numberFieldWidth, t::controlHeight);
 }
+void styleAsNumberField(QLineEdit* field) {
+    field->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    field->setProperty("numberField", true);
+    field->setFixedSize(t::numberFieldWidth, t::controlHeight);
+}
 QLabel* makeCaption(const QString& text) {
     auto* label = new QLabel(text);
     label->setProperty("optionCaption", true);
     return label;
 }
 QCheckBox* makeOptionCheck(const QString& text) { return new QCheckBox(text); }
+QLabel* makeTitle(const QString& text, const char* objectName) {
+    auto* label = new QLabel(text);
+    label->setObjectName(objectName);
+    auto font = label->font();
+    font.setBold(true);
+    label->setFont(font);
+    return label;
+}
+PropertyNumber* makeNumberField(double minimum, double maximum, double value, const QString& accessibleName, int decimals) {
+    auto* field = new PropertyNumber;
+    field->setDecimals(decimals);
+    field->setRange(minimum, maximum);
+    field->setValue(value);
+    styleAsNumberField(field);
+    if (!accessibleName.isEmpty()) field->setAccessibleName(accessibleName);
+    return field;
+}
+OptionSlider* makeOptionSlider(const char* objectName, const QString& accessibleName, int minimum, int maximum) {
+    auto* slider = new OptionSlider(Qt::Horizontal);
+    slider->setObjectName(objectName);
+    slider->setAccessibleName(accessibleName);
+    slider->setRange(minimum, maximum);
+    slider->setDefaultValue(maximum);
+    slider->setFixedWidth(t::optionSliderWidth);
+    return slider;
+}
 void markPill(QWidget* button) { button->setProperty("pill", true); }
 ColorWell::ColorWell(QWidget* parent) : QAbstractButton(parent) { setCursor(Qt::PointingHandCursor); setFocusPolicy(Qt::StrongFocus); }
 void ColorWell::setColor(const QColor& color) { if (color == color_) return; color_ = color; update(); }
@@ -135,6 +166,30 @@ QSpinBox* addNumberField(QToolBar* bar, const char* objectName, const QString& a
     }
     bar->addWidget(host);
     return field;
+}
+QWidget* addToolbarGroup(QToolBar* bar, std::initializer_list<QWidget*> widgets, const char* objectName) {
+    auto* host = new QWidget;
+    host->setObjectName(objectName);
+    auto* row = new QHBoxLayout(host);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(t::checkBoxGap);
+    for (auto* widget : widgets) row->addWidget(widget);
+    bar->addWidget(host);
+    return host;
+}
+QPushButton* addCommandPill(QToolBar* bar, const QString& text, const char* objectName, QAction* command, bool primary) {
+    auto* button = new QPushButton(text);
+    button->setProperty("pill", true);
+    button->setProperty("primary", primary);
+    button->setFixedHeight(t::controlHeight);
+    button->setObjectName(objectName);
+    button->setAccessibleName(command->text());
+    button->setProperty("commandAction", QVariant::fromValue<QObject*>(command));
+    QObject::connect(button, &QPushButton::clicked, command, &QAction::trigger);
+    QObject::connect(command, &QAction::changed, button, [button, command] { button->setEnabled(command->isEnabled()); });
+    button->setEnabled(command->isEnabled());
+    bar->addWidget(button);
+    return button;
 }
 QComboBox* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items) {
     auto* dropdown = new CapsuleDropdown;

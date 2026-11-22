@@ -3,6 +3,8 @@
 #include "LayerPanelTokens.h"
 #include "PropertyControls.h"
 #include "ToolbarControls.h"
+#include "LayerPanelWidgets.h"
+#include "SegmentedControl.h"
 #include <QComboBox>
 #include <QDialog>
 #include <QMenuBar>
@@ -82,20 +84,40 @@ void MainWindow::setupDrawingActions(){
     auto*menu=menuBar()->addMenu("&Canvas");action(menu,"Canvas Size…",{},[this]{documentSizeDialog(false);});action(menu,"Image Size…",{},[this]{documentSizeDialog(true);});
     action(menu,"Flip Canvas Horizontally",{},[this]{edit("Flip Canvas Horizontal",[](Document&d){d=editing::flipCanvas(d,true);});});action(menu,"Flip Canvas Vertically",{},[this]{edit("Flip Canvas Vertical",[](Document&d){d=editing::flipCanvas(d,false);});});
     action(menu,"Crop Tool",{},[this]{selectTool(Tool::Crop);refresh(false);});auto*cropApply=action(menu,"Apply Crop",{},[this]{applyCrop();});auto*cropCancel=action(menu,"Cancel Crop",{},[this]{cancelCrop();});
-    auto*bar=addToolBar("Drawing Options");bar->setObjectName("drawingOptions");auto*gradient=bar->addAction("Gradient (G)");bindCommand(gradient,"Tools","Gradient (G)",[this]{selectTool(Tool::Gradient);refresh(false);});commands_->releaseShortcut(gradient);
-    auto*gradientShape=new QComboBox;gradientShape->setObjectName("gradientShape");gradientShape->addItems({"Linear","Radial"});bar->addWidget(gradientShape);connect(gradientShape,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.shape=editing::GradientShape(i);refreshGradient();});
-    auto*style=new QComboBox;style->setObjectName("gradientStyle");style->addItems({"Foreground to Background","Foreground to Transparent"});style->setCurrentIndex(1);bar->addWidget(style);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();});
-    auto*reverse=new QCheckBox("Reverse");reverse->setObjectName("gradientReverse");bar->addWidget(reverse);connect(reverse,&QCheckBox::toggled,this,[this](bool v){gradientSettings_.reversed=v;refreshGradient();});auto*opacity=new ui::PropertyNumber;opacity->releaseFocus=[this]{if(canvas())canvas()->setFocus();};opacity->setRange(1,100);opacity->setValue(100);opacity->setSuffix("%");opacity->setObjectName("gradientOpacity");opacity->setAccessibleName("Gradient opacity");bar->addWidget(opacity);connect(opacity,&QDoubleSpinBox::valueChanged,this,[this](double v){gradientSettings_.opacity=v/100;refreshGradient();});
-    auto*cancel=bar->addAction("Cancel Gradient");cancel->setObjectName("cancelGradient");bindCommand(cancel,"Drawing Options","Cancel Gradient",[this]{cancelGradient();});commands_->releaseShortcut(cancel);auto*apply=bar->addAction("Apply Gradient");apply->setObjectName("applyGradient");bindCommand(apply,"Drawing Options","Apply Gradient",[this]{applyGradient();});commands_->releaseShortcut(apply);
-    auto*shape=bar->addAction("Shape (U)");bindCommand(shape,"Tools","Shape (U)",[this]{selectTool(Tool::Shape);refresh(false);});commands_->releaseShortcut(shape);auto*kind=new QComboBox;kind->setObjectName("shapeKind");kind->addItems({"Rectangle","Ellipse","Line"});bar->addWidget(kind);connect(kind,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;cancelShape();shapeStyle_.kind=editing::ShapeKind(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
-    auto*radius=new ui::PropertyNumber;radius->releaseFocus=[this]{if(canvas())canvas()->setFocus();};radius->setObjectName("shapeCornerRadius");radius->setRange(0,5000);radius->setDecimals(0);radius->setAccessibleName("Corner radius");radius->setSuffix(" px radius");bar->addWidget(radius);connect(radius,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.cornerRadius=v;applyShapeStyleToSelection();});connect(radius,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});
-    auto* lineWidth=new ui::PropertyNumber;lineWidth->releaseFocus=[this]{if(canvas())canvas()->setFocus();};lineWidth->setObjectName("shapeLineWidth");lineWidth->setRange(.1,500);lineWidth->setDecimals(1);lineWidth->setAccessibleName("Line width");lineWidth->setSuffix(" px");bar->addWidget(lineWidth);connect(lineWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.lineWidth=v;applyShapeStyleToSelection();});connect(lineWidth,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});
-    auto* lineStyle=new QComboBox;lineStyle->setObjectName("shapeLineStyle");lineStyle->setAccessibleName("Line style");lineStyle->addItems({"Solid","Dashed","Long Dash","Dash Dot","Long Dash Dot","Dotted"});bar->addWidget(lineStyle);connect(lineStyle,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineStyle=editing::ShapeLineStyle(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
-    auto* lineCap=new QComboBox;lineCap->setObjectName("shapeLineCap");lineCap->setAccessibleName("Line cap");lineCap->addItems({"Round","Square"});bar->addWidget(lineCap);connect(lineCap,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineCap=editing::ShapeLineCap(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
-    auto* smoothing=new QCheckBox("Smooth Corners");
-    smoothing->setObjectName("shapeSmoothing");
+    auto*bar=addToolBar("Drawing Options");bar->setObjectName("drawingOptions");
+    // The tool, apply and cancel commands stay in the bar for their command ids and shortcuts; the titles and options below are what the bar shows.
+    const auto commandInBar=[&](const char* text,const char* group,const char* commandName,std::function<void()> run){auto*item=bar->addAction(text);bindCommand(item,group,commandName,std::move(run));commands_->releaseShortcut(item);item->setVisible(false);return item;};
+    commandInBar("Gradient (G)","Tools","Gradient (G)",[this]{selectTool(Tool::Gradient);refresh(false);});
+    ui::addToolbarTitle(bar,"Gradient","gradientTitle");
+    auto*gradientShape=new ui::SegmentedControl({"Linear","Radial"});gradientShape->setObjectName("gradientShape");gradientShape->setAccessibleName("Gradient shape");gradientShape->setToolTip("Linear runs along the line; Radial spreads out from the start point");bar->addWidget(gradientShape);gradientShape->changed=[this](int i){gradientSettings_.shape=editing::GradientShape(i);refreshGradient();};
+    auto*style=ui::addDropdown(bar,"gradientStyle","Gradient colors",{"Foreground to Background","Foreground to Transparent"});style->setCurrentIndex(1);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();});
+    auto*reverse=ui::addOptionCheck(bar,"Reverse","gradientReverse");connect(reverse,&QCheckBox::toggled,this,[this](bool v){gradientSettings_.reversed=v;refreshGradient();});
+    auto*opacitySlider=ui::makeOptionSlider("gradientOpacitySlider","Gradient opacity slider",1,100);
+    auto*opacity=ui::makeNumberField(1,100,100,"Gradient opacity");opacity->setObjectName("gradientOpacity");opacity->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
+    ui::addToolbarGroup(bar,{ui::makeCaption("Opacity"),opacitySlider,opacity,ui::makeCaption("%")},"gradientOpacityGroup");
+    connect(opacity,&QDoubleSpinBox::valueChanged,this,[this,opacitySlider](double v){{const QSignalBlocker block(opacitySlider);opacitySlider->setValue(int(std::lround(v)));}gradientSettings_.opacity=v/100;refreshGradient();});
+    connect(opacitySlider,&QSlider::valueChanged,opacity,[opacity](int v){opacity->setValue(v);});
+    auto*gradientSpacer=new QWidget;gradientSpacer->setObjectName("gradientSpacer");gradientSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);bar->addWidget(gradientSpacer);
+    auto*cancel=commandInBar("Cancel Gradient","Drawing Options","Cancel Gradient",[this]{cancelGradient();});cancel->setObjectName("cancelGradient");
+    auto*apply=commandInBar("Apply Gradient","Drawing Options","Apply Gradient",[this]{applyGradient();});apply->setObjectName("applyGradient");
+    ui::addCommandPill(bar,"Cancel","gradientCancelButton",cancel,false);ui::addCommandPill(bar,"Apply","gradientApplyButton",apply,true);
+    commandInBar("Shape (U)","Tools","Shape (U)",[this]{selectTool(Tool::Shape);refresh(false);});
+    ui::addToolbarTitle(bar,"Shape","shapeTitle");
+    auto*kind=new ui::SegmentedControl({"Rectangle","Ellipse","Line"});kind->setObjectName("shapeKind");kind->setAccessibleName("Shape kind");bar->addWidget(kind);kind->changed=[this](int i){if(refreshing_)return;cancelShape();shapeStyle_.kind=editing::ShapeKind(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);};
+    const auto shapeNumber=[this](const char* objectName,const char* accessibleName,double minimum,double maximum,int decimals){auto*field=ui::makeNumberField(minimum,maximum,minimum,accessibleName,decimals);field->setObjectName(objectName);field->releaseFocus=[this]{if(canvas())canvas()->setFocus();};connect(field,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});return field;};
+    // The fill well edits the selected shape; with none selected it sets the color of the next shape, like the Brush color.
+    auto*fill=new ui::ColorWell;fill->setObjectName("shapeFillColor");fill->setAccessibleName("Shape color");
+    ui::addToolbarGroup(bar,{ui::makeCaption("Fill"),fill},"shapeFillGroup");
+    auto*radius=shapeNumber("shapeCornerRadius","Corner radius",0,5000,0);connect(radius,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.cornerRadius=v;applyShapeStyleToSelection();});
+    ui::addToolbarGroup(bar,{ui::makeCaption("Radius"),radius,ui::makeCaption("px")},"shapeCornerRadiusGroup");
+    auto*lineWidth=shapeNumber("shapeLineWidth","Line width",.1,500,1);connect(lineWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.lineWidth=v;applyShapeStyleToSelection();});
+    ui::addToolbarGroup(bar,{ui::makeCaption("Width"),lineWidth,ui::makeCaption("px")},"shapeLineWidthGroup");
+    auto*lineStyle=new ui::CapsuleDropdown;lineStyle->setObjectName("shapeLineStyle");lineStyle->setAccessibleName("Line style");lineStyle->addItems({"Solid","Dashed","Long Dash","Dash Dot","Long Dash Dot","Dotted"});connect(lineStyle,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineStyle=editing::ShapeLineStyle(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
+    ui::addToolbarGroup(bar,{ui::makeCaption("Style"),lineStyle},"shapeLineStyleGroup");
+    auto*lineCap=new ui::CapsuleDropdown;lineCap->setObjectName("shapeLineCap");lineCap->setAccessibleName("Line cap");lineCap->addItems({"Round","Square"});connect(lineCap,&QComboBox::currentIndexChanged,this,[this](int i){if(refreshing_)return;finishShapeStyleEdit();shapeStyle_.lineCap=editing::ShapeLineCap(i);applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
+    ui::addToolbarGroup(bar,{ui::makeCaption("Cap"),lineCap},"shapeLineCapGroup");
+    auto*smoothing=ui::addOptionCheck(bar,"Smooth Corners","shapeSmoothing");
     smoothing->setToolTip("Smooth the transitions into rounded corners. Requires a corner radius above zero.");
-    bar->addWidget(smoothing);
     connect(smoothing,&QCheckBox::toggled,this,[this](bool enabled){
         if(refreshing_)return;
         finishShapeStyleEdit();
@@ -103,10 +125,11 @@ void MainWindow::setupDrawingActions(){
         applyShapeStyleToSelection(enabled);
         finishShapeStyleEdit();
     });
-    auto*stroke=new QCheckBox("Stroke");stroke->setObjectName("shapeStroke");bar->addWidget(stroke);connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
-    auto*strokeWidth=new ui::PropertyNumber;strokeWidth->releaseFocus=[this]{if(canvas())canvas()->setFocus();};strokeWidth->setObjectName("shapeStrokeWidth");strokeWidth->setRange(.1,500);strokeWidth->setDecimals(1);strokeWidth->setAccessibleName("Stroke width");strokeWidth->setSuffix(" px");bar->addWidget(strokeWidth);connect(strokeWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.strokeWidth=v;applyShapeStyleToSelection();});connect(strokeWidth,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});
-    auto*strokeColor=new QPushButton("Stroke Color…");strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");bar->addWidget(strokeColor);connect(strokeColor,&QPushButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();finishShapeStyleEdit();}});
-    auto*restyle=bar->addAction("Update Shape Style");bindCommand(restyle,"Drawing Options","Update Shape Style",[this]{
+    auto*stroke=ui::addOptionCheck(bar,"Stroke","shapeStroke");connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
+    auto*strokeWidth=shapeNumber("shapeStrokeWidth","Stroke width",.1,500,1);connect(strokeWidth,&QDoubleSpinBox::valueChanged,this,[this](double v){shapeStyle_.strokeWidth=v;applyShapeStyleToSelection();});
+    auto*strokeColor=new ui::ColorWell;strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");connect(strokeColor,&QAbstractButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();finishShapeStyleEdit();}});
+    ui::addToolbarGroup(bar,{ui::makeCaption("Width"),strokeWidth,ui::makeCaption("px"),strokeColor},"shapeStrokeGroup");
+    auto*restyle=commandInBar("Update Shape Style","Drawing Options","Update Shape Style",[this]{
         finishShapeStyleEdit();
         if(!active()||active()->shapeJson.empty())return;
         edit("Shape Style",[&](Document&){
@@ -120,7 +143,7 @@ void MainWindow::setupDrawingActions(){
             *active()=editing::restyleShape(*active(),style);
         });
     });
-    for(auto* item:bar->actions())item->setProperty("hideDuringCrop",true);
+    ui::addCommandPill(bar,"Update Shape Style","shapeRestyleButton",restyle,false);
     ui::addToolbarTitle(bar,"Crop","cropTitle");
     auto* ratioLabel=ui::addToolbarCaption(bar,"Ratio","cropRatioLabel");
     auto*cropRatioControl=ui::addDropdown(bar,"cropRatioChoice","Crop ratio");
@@ -143,19 +166,9 @@ void MainWindow::setupDrawingActions(){
     cropSpacer->setObjectName("cropSpacer");
     cropSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
     bar->addWidget(cropSpacer);
-    const auto addCropButton=[bar](const char* text,const char* name,QAction* command,bool primary){
-        auto* button=new QPushButton(text);
-        button->setProperty("pill",true);button->setProperty("primary",primary);button->setFixedHeight(ui::layer_panel::controlHeight);
-        button->setObjectName(name);
-        button->setAccessibleName(command->text());
-        connect(button,&QPushButton::clicked,command,&QAction::trigger);
-        connect(command,&QAction::changed,button,[button,command]{button->setEnabled(command->isEnabled());});
-        button->setEnabled(command->isEnabled());
-        bar->addWidget(button);
-    };
-    addCropButton("Cancel","cropCancelButton",cropCancel,false);
-    addCropButton("Apply Crop","cropApplyButton",cropApply,true);
-    auto*background=bar->addAction("Background Color");background->setProperty("hideDuringCrop",true);bindCommand(background,"Tools","Background",[this]{
+    ui::addCommandPill(bar,"Cancel","cropCancelButton",cropCancel,false);
+    ui::addCommandPill(bar,"Apply Crop","cropApplyButton",cropApply,true);
+    auto*background=bar->addAction("Background Color");background->setVisible(false);bindCommand(background,"Tools","Background",[this]{
         QColor initial=background_;
         if(tool_==Tool::Shape)if(const auto* layer=active();layer&&!layer->shapeJson.empty()){const auto stored=editing::decodeShapeStyle(layer->shapeJson);initial=QColor::fromRgbF(stored.red,stored.green,stored.blue);}
         const auto color=QColorDialog::getColor(initial,this,"Background color");
@@ -267,17 +280,23 @@ void MainWindow::refreshShapeControls(){
     if(shapeLayer){const auto stored=editing::decodeShapeStyle(layer->shapeJson);if(layer->id!=shapeStyleLayer_||stored!=shapeStyleSynced_){shapeStyle_=stored;shapeStyleLayer_=layer->id;shapeStyleSynced_=stored;}}
     else shapeStyleLayer_.clear();
     auto* bar=findChild<QToolBar*>("drawingOptions");
-    const bool shapeEditing=tool_==Tool::Shape&&shapeLayer;
-    if(bar)for(auto* action:bar->actions())if(action->property("commandId").toString()=="tool.gradient")action->setVisible(!shapeEditing);
-    for(const char* name:{"gradientShape","gradientStyle","gradientReverse","gradientOpacity"})if(auto* control=findChild<QWidget*>(name))setToolbarControlVisible(bar,control,!shapeEditing);
-    const bool controls=tool_==Tool::Shape||shapeLayer;
-    if(auto* kind=findChild<QComboBox*>("shapeKind")){const QSignalBlocker block(kind);kind->setCurrentIndex(int(shapeStyle_.kind));setToolbarControlVisible(bar,kind,controls);}
+    // One group of the bar per tool: the Gradient tool owns the gradient options, Crop its own, and a shape owns the rest.
+    const bool gradientTool=tool_==Tool::Gradient;
+    for(const char* name:{"gradientTitle","gradientShape","gradientStyle","gradientReverse","gradientOpacityGroup","gradientSpacer","gradientCancelButton","gradientApplyButton"})if(auto* control=findChild<QWidget*>(name))setToolbarControlVisible(bar,control,gradientTool);
+    const bool controls=tool_==Tool::Shape||(shapeLayer&&!gradientTool&&tool_!=Tool::Crop);
+    for(const char* name:{"shapeTitle","shapeFillGroup","shapeRestyleButton"})if(auto* control=findChild<QWidget*>(name))setToolbarControlVisible(bar,control,controls);
+    if(auto* fill=dynamic_cast<ui::ColorWell*>(findChild<QAbstractButton*>("shapeFillColor")))fill->setColor(shapeLayer?QColor::fromRgbF(shapeStyle_.red,shapeStyle_.green,shapeStyle_.blue):foreground_);
+    if(auto* kind=ui::findSegmentedControl(this,"shapeKind")){kind->setCurrentIndex(int(shapeStyle_.kind));setToolbarControlVisible(bar,kind,controls);}
     const bool rectangleControls=controls&&shapeStyle_.kind==editing::ShapeKind::Rectangle;
     const bool lineControls=controls&&shapeStyle_.kind==editing::ShapeKind::Line;
-    if(auto* width=findChild<QDoubleSpinBox*>("shapeLineWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.lineWidth);setToolbarControlVisible(bar,width,lineControls);}
-    if(auto* style=findChild<QComboBox*>("shapeLineStyle")){const QSignalBlocker block(style);style->setCurrentIndex(int(shapeStyle_.lineStyle));setToolbarControlVisible(bar,style,lineControls);}
-    if(auto* cap=findChild<QComboBox*>("shapeLineCap")){const QSignalBlocker block(cap);cap->setCurrentIndex(int(shapeStyle_.lineCap));setToolbarControlVisible(bar,cap,lineControls);}
-    if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);setToolbarControlVisible(bar,radius,rectangleControls);}
+    if(auto* width=findChild<QDoubleSpinBox*>("shapeLineWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.lineWidth);}
+    if(auto* group=findChild<QWidget*>("shapeLineWidthGroup"))setToolbarControlVisible(bar,group,lineControls);
+    if(auto* style=findChild<QComboBox*>("shapeLineStyle")){const QSignalBlocker block(style);style->setCurrentIndex(int(shapeStyle_.lineStyle));}
+    if(auto* group=findChild<QWidget*>("shapeLineStyleGroup"))setToolbarControlVisible(bar,group,lineControls);
+    if(auto* cap=findChild<QComboBox*>("shapeLineCap")){const QSignalBlocker block(cap);cap->setCurrentIndex(int(shapeStyle_.lineCap));}
+    if(auto* group=findChild<QWidget*>("shapeLineCapGroup"))setToolbarControlVisible(bar,group,lineControls);
+    if(auto* radius=findChild<QDoubleSpinBox*>("shapeCornerRadius")){const QSignalBlocker block(radius);ui::synchronizeNumber(radius,shapeStyle_.cornerRadius);}
+    if(auto* group=findChild<QWidget*>("shapeCornerRadiusGroup"))setToolbarControlVisible(bar,group,rectangleControls);
     if(auto* smoothing=findChild<QCheckBox*>("shapeSmoothing")){
         const QSignalBlocker block(smoothing);
         const bool selectedRectangle=shapeLayer&&shapeStyleSynced_.kind==editing::ShapeKind::Rectangle&&shapeDraftId_.empty();
@@ -286,8 +305,9 @@ void MainWindow::refreshShapeControls(){
     }
     const bool strokable=controls&&shapeStyle_.kind!=editing::ShapeKind::Line;
     if(auto* stroke=findChild<QCheckBox*>("shapeStroke")){const QSignalBlocker block(stroke);stroke->setChecked(shapeStyle_.strokeEnabled);setToolbarControlVisible(bar,stroke,strokable);}
-    if(auto* width=findChild<QDoubleSpinBox*>("shapeStrokeWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.strokeWidth);setToolbarControlVisible(bar,width,strokable&&shapeStyle_.strokeEnabled);}
-    if(auto* color=findChild<QPushButton*>("shapeStrokeColor"))setToolbarControlVisible(bar,color,strokable&&shapeStyle_.strokeEnabled);
+    if(auto* width=findChild<QDoubleSpinBox*>("shapeStrokeWidth")){const QSignalBlocker block(width);ui::synchronizeNumber(width,shapeStyle_.strokeWidth);}
+    if(auto* color=dynamic_cast<ui::ColorWell*>(findChild<QAbstractButton*>("shapeStrokeColor")))color->setColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue));
+    if(auto* group=findChild<QWidget*>("shapeStrokeGroup"))setToolbarControlVisible(bar,group,strokable&&shapeStyle_.strokeEnabled);
     if(!canvas())return;std::optional<NativeCanvas::ShapeDraftOverlay> overlay;
     if(tool_==Tool::Shape&&!shapeDraftId_.empty()&&shapeDraftRect_&&(shapeDraftStyle_.kind==editing::ShapeKind::Line?(shapeDraftRect_->width>0||shapeDraftRect_->height>0):(shapeDraftRect_->width>0&&shapeDraftRect_->height>0)))
         overlay=NativeCanvas::ShapeDraftOverlay{*shapeDraftRect_,shapeDraftStyle_,{uint8_t(foreground_.red()),uint8_t(foreground_.green()),uint8_t(foreground_.blue()),255}};
@@ -338,12 +358,6 @@ void MainWindow::refreshCropControls(){
     auto* cropBar=findChild<QToolBar*>("drawingOptions");
     for(const char* name:{"cropTitle","cropRatioLabel","cropSpacer","cropCancelButton","cropApplyButton"})
         setToolbarControlVisible(cropBar,findChild<QWidget*>(name),visible);
-    bool restored=false;
-    if(auto* bar=findChild<QToolBar*>("drawingOptions"))for(auto* item:bar->actions())if(item->property("hideDuringCrop").toBool()){
-        if(visible){item->setProperty("hiddenForCrop",true);item->setVisible(false);}
-        else if(item->property("hiddenForCrop").toBool()){const bool gradientDraft=item->objectName()=="cancelGradient"||item->objectName()=="applyGradient";item->setVisible(!gradientDraft||drawingOriginal_.has_value());item->setProperty("hiddenForCrop",false);restored=true;}
-    }
-    if(restored)refreshShapeControls();
     if(auto* ratio=findChild<QComboBox*>("cropRatioChoice")){
         QSignalBlocker block(ratio);const int marker=ratio->findData("crop-custom-choice",Qt::UserRole);const auto custom=customCropRatioChoice(cropRatioChoice_)?cropRatioChoice_:QString{};
         if(marker>=0&&ratio->itemText(marker)!=custom)ratio->removeItem(marker);
