@@ -1,4 +1,5 @@
 #include "ToolFlyoutButton.h"
+#include "LayerPanelTokens.h"
 #include <QAction>
 #include <QMenu>
 #include <QMouseEvent>
@@ -19,6 +20,8 @@ void ToolFlyoutButton::setFlyout(std::function<Entry()> describe, std::function<
     activate_ = std::move(activate);
     if (menu_) return;
     menu_ = new QMenu(this);
+    // The icon gets room on its left so it is not clipped by the popup edge, and the hovered entry takes the application blue.
+    menu_->setStyleSheet(QString("QMenu::item:selected { background: %1; } QMenu::icon { padding-left: 18px; }").arg(layer_panel::accent));
     entry_ = menu_->addAction(QString());
     connect(entry_, &QAction::triggered, this, [this] { if (activate_) activate_(); });
 }
