@@ -163,7 +163,7 @@ private:
     std::array<ui::TrackSlider*,2> retouchSliders_{};
     ui::SegmentedControl *healingModes_{}, *blurModes_{};
     QToolBar* retouchBar_{};
-    QCheckBox *cloneAligned_{}, *cloneAllLayers_{};
+    QCheckBox* cloneAligned_{};ui::SegmentedControl* cloneAllLayers_{};
     QColor background_{Qt::white};
     editing::GradientSettings gradientSettings_;
     editing::ShapeStyle shapeStyle_;

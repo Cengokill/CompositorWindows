@@ -60,11 +60,11 @@ int main(int argc,char** argv){
     });
     test("ui_clone_all_layers_selection_and_frozen_sample",[]{
         MainWindow window(true);auto document=example();Layer upper;upper.id=newId();upper.transform={0,0,80,40};upper.opacity=.5;upper.raster=Raster::filled(80,40,{255,0,0,255});document.layers.push_back(upper);auto& project=window.addProject(document);project.active=document.layers.front().id;project.selected={project.active};
-        tool(window,"retouchClone");tip(window);control<QCheckBox>(window,"retouchAllLayers")->setChecked(true);click(project,{15,20},Qt::AltModifier);down(project,{60,20});
+        tool(window,"retouchClone");tip(window);ui::findSegmentedControl(&window,"retouchAllLayers")->choose((true)?1:0);click(project,{15,20},Qt::AltModifier);down(project,{60,20});
         const auto sampled=previewPixels(project)->pixel(60,20);require(sampled==Pixel{128,127,0,255},"All-layer composite was not captured");require(project.document==document,"Live clone changed the canonical document");
         const auto preview=project.retouchPreview;move(project,{61,20});require(previewPixels(project,preview)->pixel(60,20)==sampled,"Published UI preview mutated");up(project,{61,20});require(project.history.undoCount()==1,"Move/up produced multiple history entries");
         project.document->selection=Selection{gray(80,40,[](int,int){return uint8_t{0};})};const auto original=project.document;click(project,{40,20});require(project.document==original&&project.history.undoCount()==1,"Explicit empty selection retouched");
-        project.document->selection=Selection{gray(80,40,[](int,int){return uint8_t{128};})};control<QCheckBox>(window,"retouchAllLayers")->setChecked(false);click(project,{15,20},Qt::AltModifier);click(project,{40,20});require(target(project).raster->pixel(40,20)==Pixel{0,128,127,255},"UI selection applied twice or omitted");
+        project.document->selection=Selection{gray(80,40,[](int,int){return uint8_t{128};})};ui::findSegmentedControl(&window,"retouchAllLayers")->choose((false)?1:0);click(project,{15,20},Qt::AltModifier);click(project,{40,20});require(target(project).raster->pixel(40,20)==Pixel{0,128,127,255},"UI selection applied twice or omitted");
     });
     test("ui_mask_and_hidden_parent_eligibility",[]{
         MainWindow window(true);auto document=example();document.layers.front().mask=Mask{gray(80,40,[](int x,int){return uint8_t(x<40?0:255);})};auto& project=window.addProject(document);project.maskSelected=true;

@@ -221,7 +221,7 @@ void tool_bars_show_their_own_controls(){
     tool("tool.heal");
     REQUIRE(shown("retouchOptions","retouchHealingMode")&&!shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&title("retouchFamily")=="Spot Healing");
     tool("tool.clone");
-    REQUIRE(shown("retouchOptions","retouchAligned")&&shown("retouchOptions","retouchAllLayers")&&!shown("retouchOptions","retouchHealingMode")&&title("retouchFamily")=="Clone Stamp");
+    REQUIRE(shown("retouchOptions","retouchAligned")&&shown("retouchOptions","retouchAllLayers")&&shown("retouchOptions","retouchCloneHint")&&!shown("retouchOptions","retouchHealingMode")&&title("retouchFamily")=="Clone Stamp");
     tool("tool.retouch");
     REQUIRE(shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&title("retouchFamily")=="Smear"&&w.findChild<QLabel*>("retouchOpacityLabel")->text()=="Strength");
     tool("tool.gradient");

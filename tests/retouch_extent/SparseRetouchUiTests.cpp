@@ -22,7 +22,7 @@ void exercise(int mode){
     if(mode>=1&&mode<=3)ui::findSegmentedControl(&window,"retouchSmearMode")->choose(mode==1?1:mode==2?2:0);
     if(mode>=4&&mode<=6)ui::findSegmentedControl(&window,"retouchHealingMode")->choose(mode-4);
     control<QDoubleSpinBox>(window,"retouchDiameter")->setValue(12);control<QDoubleSpinBox>(window,"retouchHardness")->setValue(50);control<QDoubleSpinBox>(window,"retouchOpacity")->setValue(60);
-    if(mode==0||mode==7){control<QCheckBox>(window,"retouchAllLayers")->setChecked(mode==7);p.canvas->pointerDown({15014,12025},Qt::AltModifier);p.canvas->pointerUp({15014,12025},Qt::AltModifier);}
+    if(mode==0||mode==7){ui::findSegmentedControl(&window,"retouchAllLayers")->choose((mode==7)?1:0);p.canvas->pointerDown({15014,12025},Qt::AltModifier);p.canvas->pointerUp({15014,12025},Qt::AltModifier);}
     const auto before=p.document;
     const auto stroke=[&]{p.canvas->pointerDown({15028,12025},{});p.canvas->pointerMove({15034,12028},{});};
     stroke();require(bool(p.retouchPreview),"large canvas did not publish retouch preview");require(p.document==before&&p.history.undoCount()==0,"retouch preview mutated canonical document");
