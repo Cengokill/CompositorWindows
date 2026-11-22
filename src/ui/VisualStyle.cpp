@@ -189,7 +189,8 @@ public:
         if((event->type()==QEvent::Show||event->type()==QEvent::WinIdChange)&&widget->isWindow()&&widget->property("studioChrome").toBool())nativeTitleColor(widget);
         if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick) {
             auto* mouse=static_cast<QMouseEvent*>(event);if(mouse->button()!=Qt::LeftButton)return false;
-            auto* top=widget->window();if(!top->windowFlags().testFlag(Qt::FramelessWindowHint)||!top->windowHandle())return false;
+            // A frameless popup list is not a window to resize: a click outside it must reach the popup so that it closes.
+            auto* top=widget->window();if(top->windowType()==Qt::Popup||!top->windowFlags().testFlag(Qt::FramelessWindowHint)||!top->windowHandle())return false;
             const auto point=top->mapFromGlobal(mouse->globalPosition().toPoint());
             Qt::Edges edges;if(point.x()<5)edges|=Qt::LeftEdge;if(point.x()>top->width()-5)edges|=Qt::RightEdge;
             if(point.y()<5)edges|=Qt::TopEdge;if(point.y()>top->height()-5)edges|=Qt::BottomEdge;

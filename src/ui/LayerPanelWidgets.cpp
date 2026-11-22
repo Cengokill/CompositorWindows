@@ -312,7 +312,7 @@ void CapsuleDropdown::useGlassPopup() {
     container->setAttribute(Qt::WA_TranslucentBackground);
     view()->viewport()->setAutoFillBackground(false);
     setStyleSheet(styleSheet() +
-        "QComboBoxPrivateContainer { border: 1px solid rgba(255,255,255,46); border-radius: 12px;"
+        "QComboBoxPrivateContainer { border: 1px solid rgba(255,255,255,46); border-radius: 18px;"
         " background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(64,64,68,228), stop:0.45 rgba(34,34,37,228), stop:1 rgba(30,30,33,228)); }"
         "QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }");
 }

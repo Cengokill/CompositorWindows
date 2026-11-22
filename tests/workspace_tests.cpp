@@ -131,5 +131,19 @@ test("new_canvas_background_saves_reopens_and_exports",[]{
  check(image.pixelColor(0,0)==QColor(255,255,255,255)&&image.pixelColor(1275,1650)==QColor(255,255,255,255)&&image.pixelColor(2549,3299)==QColor(255,255,255,255),"PNG corners and center are opaque white");
  check(image.dotsPerMeterX()==qRound(300/0.0254)&&image.dotsPerMeterY()==qRound(300/0.0254),"PNG records 300 DPI");
 });
+test("new_canvas_dropdown_closes_on_outside_click",[]{
+ MainWindow w(true);w.resize(1100,760);auto&p=w.addEmptyProject();w.show();check(QTest::qWaitForWindowExposed(&w),"Window not exposed");
+ for(auto*name:{"newCanvasPreset","newCanvasUnit","newCanvasBackground"}){
+  auto*box=control<QComboBox>(p.welcome,name);box->showPopup();QApplication::processEvents();
+  auto*popup=box->view()->window();check(popup->isVisible(),"Dropdown list did not open");
+  // Press just outside the list, left of it and then below it, as a click beside the menu does.
+  const QPoint outside[]{{popup->geometry().left()-3,popup->geometry().center().y()},{popup->geometry().center().x(),popup->geometry().bottom()+3}};
+  for(const auto point:outside){
+   if(!popup->isVisible()){box->showPopup();QApplication::processEvents();}
+   QMouseEvent press(QEvent::MouseButtonPress,QPointF(popup->mapFromGlobal(point)),QPointF(point),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(popup,&press);QApplication::processEvents();
+   check(!popup->isVisible(),"A click outside did not close the dropdown list");
+  }
+ }
+});
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"native_window\":false}\n";return failed?1:0;
 }
