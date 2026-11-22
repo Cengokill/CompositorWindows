@@ -284,7 +284,7 @@ void installVisualStyle() {
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
         QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
         QTabWidget::pane { border: 0; }
-        QTabBar { background: #202125; }
+        QTabBar, QWidget#tabCorner { background: #1f1f1f; }
         QTabBar::tab { background: transparent; color: #969aa4; padding: 8px 13px; margin: 4px 2px; border: 1px solid transparent; border-radius: 7px; }
         QTabBar::tab:selected { background: #303239; color: #eff0f2; border-color: #41444c; }
         QTabBar::tab:hover { color: white; background: #292c31; }
