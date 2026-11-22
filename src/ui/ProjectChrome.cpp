@@ -7,6 +7,8 @@
 #include <QFormLayout>
 #include <QMainWindow>
 #include <QPainter>
+#include <QIcon>
+#include <QPixmap>
 #include <QPointer>
 #include <QSettings>
 #include <QTabBar>
@@ -308,7 +310,21 @@ void installProjectChrome(QMainWindow* window, QTabWidget* tabs, QDockWidget* do
 void refreshProjectTabs(QTabWidget* tabs, bool canClose, const QStringList& titles) {
     if (!tabs) return;
     tabs->setProperty(closeProperty, canClose);
+    // A small dot before the name marks the active project, as on the Mac tab strip.
+    static const QIcon dot = [] {
+        QPixmap pixmap(16, 16);
+        pixmap.setDevicePixelRatio(2);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(layer_panel::primary));
+        painter.drawEllipse(QRectF(1, 1, 6, 6));
+        return QIcon(pixmap);
+    }();
+    tabs->tabBar()->setIconSize({8, 8});
     for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setTabIcon(i, i == tabs->currentIndex() ? dot : QIcon());
         const auto title = i < titles.size() ? titles[i] : tabs->tabText(i);
         tabs->widget(i)->setProperty(titleProperty, title);
         if (auto* button = closeButton(tabs, i)) {

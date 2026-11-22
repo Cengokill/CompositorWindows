@@ -79,7 +79,7 @@ public:
         layout->setSpacing(0);
         button_=new QToolButton(this);
         button_->setObjectName("newProjectDropTarget");
-        button_->setFixedSize(32,30);
+        button_->setFixedSize(30,30);
         layout->addWidget(button_,0,Qt::AlignVCenter);
         line_=new QWidget(tabs_);
         line_->setObjectName("workspaceSeparator");
