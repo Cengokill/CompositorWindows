@@ -253,9 +253,6 @@ void installVisualStyle() {
         QWidget#newCanvasWelcome { background: #141414; }
         QToolBar QToolButton { padding: 5px 9px; border: 1px solid transparent; border-radius: 6px; }
         QToolButton#qt_toolbar_ext_button { padding: 2px; min-width: 18px; }
-        QToolButton#newProjectDropTarget { padding: 4px; background: #262626; border: 1px solid #444444; border-radius: 15px; }
-        QToolButton#newProjectDropTarget:hover { background: #303030; }
-        QToolButton#newProjectDropTarget:pressed { background: #202020; }
         QPushButton, QToolButton { background: #33353b; border: 1px solid #41434b; border-radius: 7px; padding: 5px 12px; min-height: 18px; }
         QPushButton:hover, QToolButton:hover { background: #3d4047; border-color: #565a64; }
         QPushButton:pressed, QToolButton:pressed { background: #27292e; }
@@ -288,8 +285,8 @@ void installVisualStyle() {
         QTabWidget::pane { border: 0; }
         QTabBar, QWidget#tabCorner { background: #1f1f1f; }
         QTabBar::tab { background: transparent; color: #a0a0a0; padding: 4px 12px; margin: 4px 3px; border: 1px solid transparent; border-radius: 15px; font-weight: 600; }
-        QTabBar::tab:selected { background: #3a3a3a; color: #ececec; border-color: #666666; }
-        QTabBar::tab:hover:!selected { color: white; background: #2a2a2a; }
+        QTabBar::tab:selected { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,58),stop:0.55 rgba(255,255,255,22),stop:1 rgba(255,255,255,30)); color: #f2f2f2; border: 1px solid rgba(255,255,255,92); }
+        QTabBar::tab:hover:!selected { color: white; background: rgba(255,255,255,20); border-color: rgba(255,255,255,38); }
         QTabBar::close-button { subcontrol-position: right; width: 13px; height: 13px; }
         QDockWidget { border: 0; }
         QWidget#sectionTitle { border-bottom: 1px solid #303237; background: #222326; }

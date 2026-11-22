@@ -23,7 +23,9 @@
 #include <QLabel>
 #include <QMoveEvent>
 #include <QPaintEvent>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalBlocker>
@@ -65,6 +67,35 @@ constexpr NewCanvasPreset newCanvasPresets[]{
 struct NewCanvasDraft { int width{1920},height{1080}; editing::PrintUnit unit{editing::PrintUnit::Pixels}; double dpi{72}; int preset{-1}; };
 // Raster::filled enforces this budget for an opaque background; a transparent canvas allocates no pixels.
 constexpr uint64_t solidCanvasPixelBudget=100000000;
+// The new-project button: a glass disc whose highlight follows the pointer, with the plus drawn on the exact center.
+class GlassPlusButton final : public QToolButton {
+public:
+    explicit GlassPlusButton(QWidget* parent):QToolButton(parent){setMouseTracking(true);setAttribute(Qt::WA_Hover);}
+protected:
+    void mouseMoveEvent(QMouseEvent* event) override {pointer_=event->position();update();QToolButton::mouseMoveEvent(event);}
+    void enterEvent(QEnterEvent* event) override {pointer_=event->position();update();QToolButton::enterEvent(event);}
+    void leaveEvent(QEvent* event) override {update();QToolButton::leaveEvent(event);}
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF disc=QRectF(rect()).adjusted(.5,.5,-.5,-.5);
+        const bool hot=isEnabled()&&underMouse(),down=isDown();
+        QPainterPath shape;shape.addEllipse(disc);
+        painter.setPen(Qt::NoPen);painter.setBrush(QColor(255,255,255,down?8:hot?26:16));painter.drawPath(shape);
+        painter.save();painter.setClipPath(shape);
+        // A soft sheen along the top edge, and a light that follows the pointer.
+        QLinearGradient sheen(disc.topLeft(),disc.bottomLeft());sheen.setColorAt(0,QColor(255,255,255,hot?58:38));sheen.setColorAt(.55,QColor(255,255,255,0));
+        painter.fillRect(disc,sheen);
+        if(hot){QRadialGradient glow(pointer_,disc.width()*.8);glow.setColorAt(0,QColor(255,255,255,down?40:78));glow.setColorAt(1,QColor(255,255,255,0));painter.fillRect(disc,glow);}
+        painter.restore();
+        painter.setBrush(Qt::NoBrush);painter.setPen(QPen(QColor(255,255,255,hot?120:78),1));painter.drawEllipse(disc);
+        const QPointF center=disc.center();const double arm=5;
+        painter.setPen(QPen(QColor(isEnabled()?"#ececec":"#6a6a6a"),1.7,Qt::SolidLine,Qt::RoundCap));
+        painter.drawLine(QPointF(center.x()-arm,center.y()),QPointF(center.x()+arm,center.y()));
+        painter.drawLine(QPointF(center.x(),center.y()-arm),QPointF(center.x(),center.y()+arm));
+    }
+private:
+    QPointF pointer_;
+};
 // Qt shortens the tab bar for the corner widget, so its bottom edge stops at the
 // button while the Layers title border sits on a lower pixel behind it. The
 // corner matches the tab-bar height and one separator runs from the strip's left
@@ -77,7 +108,7 @@ public:
         auto* layout=new QHBoxLayout(this);
         layout->setContentsMargins(0,0,6,0);
         layout->setSpacing(0);
-        button_=new QToolButton(this);
+        button_=new GlassPlusButton(this);
         button_->setObjectName("newProjectDropTarget");
         button_->setFixedSize(30,30);
         layout->addWidget(button_,0,Qt::AlignVCenter);
