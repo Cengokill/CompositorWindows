@@ -134,6 +134,7 @@ void MainWindow::refreshRetouchControls() {
     showOption(blurModes_,smear);blurModes_->setEnabled(enabled);
     showOption(cloneAligned_,clone);cloneAligned_->setEnabled(enabled);
     showOption(cloneAllLayers_,clone);cloneAllLayers_->setEnabled(enabled);
+    if(auto* hint=retouchBar_->findChild<QLabel*>("retouchCloneHint"))showOption(hint,clone);
     const QSignalBlocker alignedBlock(cloneAligned_);
     healingModes_->setCurrentIndex(healingMode_==retouch::Mode::HealCreateTexture?1:healingMode_==retouch::Mode::HealProximity?2:0);
     blurModes_->setCurrentIndex(blurSettings_.mode==retouch::Mode::Blur?1:blurSettings_.mode==retouch::Mode::Smudge?2:0);

@@ -219,11 +219,11 @@ void tool_bars_show_their_own_controls(){
     const auto shown=[&](const char* barName,const char* child){auto* bar=w.findChild<QToolBar*>(barName);auto* widget=w.findChild<QWidget*>(child);REQUIRE(bar&&widget);return !bar->isHidden()&&widget->isVisibleTo(bar);};
     const auto title=[&](const char* name){auto* label=w.findChild<QLabel*>(name);REQUIRE(label&&label->font().bold());return label->text();};
     tool("tool.heal");
-    REQUIRE(shown("retouchOptions","retouchHealingMode")&&!shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&title("retouchFamily")=="Spot Healing");
+    REQUIRE(shown("retouchOptions","retouchHealingMode")&&!shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&!shown("retouchOptions","retouchCloneHint")&&title("retouchFamily")=="Spot Healing");
     tool("tool.clone");
     REQUIRE(shown("retouchOptions","retouchAligned")&&shown("retouchOptions","retouchAllLayers")&&shown("retouchOptions","retouchCloneHint")&&!shown("retouchOptions","retouchHealingMode")&&title("retouchFamily")=="Clone Stamp");
     tool("tool.retouch");
-    REQUIRE(shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&title("retouchFamily")=="Smear"&&w.findChild<QLabel*>("retouchOpacityLabel")->text()=="Strength");
+    REQUIRE(shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&!shown("retouchOptions","retouchCloneHint")&&title("retouchFamily")=="Smear"&&w.findChild<QLabel*>("retouchOpacityLabel")->text()=="Strength");
     tool("tool.gradient");
     REQUIRE(shown("drawingOptions","gradientShape")&&shown("drawingOptions","gradientOpacityGroup")&&!shown("drawingOptions","shapeKind")&&title("gradientTitle")=="Gradient");
     auto* slider=w.findChild<QSlider*>("gradientOpacitySlider");auto* number=w.findChild<QDoubleSpinBox*>("gradientOpacity");REQUIRE(slider&&number);
