@@ -1,6 +1,7 @@
 #include "ui/MainWindow.h"
 #include "ui/SegmentedControl.h"
 #include "ui/PaletteDialog.h"
+#include "ui/ToolbarControls.h"
 #include <QApplication>
 #include <QColorDialog>
 #include <QElapsedTimer>
@@ -160,6 +161,21 @@ void shape_bar_limits_selected_shape(){
     p.active=shapeId;p.selected={shapeId};command(w,"tool.gradient")->trigger();
     REQUIRE(!hidden("gradientShape")&&hidden("shapeKind"));
 }
+// The Fill well opens the color dialog; with a shape selected it repaints it in one undo step, with none it sets the next shape's color.
+void fill_well_opens_color_dialog(){
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);
+    const auto pick=[&](QColor color){auto* well=w.findChild<QAbstractButton*>("shapeFillColor");REQUIRE(well&&well->isEnabled());bool opened=false;
+        QTimer::singleShot(0,&w,[&]{if(auto* dialog=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;dialog->setCurrentColor(color);dialog->accept();}});
+        well->click();QApplication::processEvents();REQUIRE(opened);};
+    pick(QColor(10,200,30));
+    REQUIRE(dynamic_cast<ui::ColorWell*>(w.findChild<QAbstractButton*>("shapeFillColor"))->color()==QColor(10,200,30));
+    draw(p,{10,12},{90,72});const auto base=p.history.undoCount();
+    pick(QColor(255,0,0));
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).red==1&&p.history.undoCount()==base+1);
+    kind(w)->choose(2);draw(p,{10,12},{90,72});const auto lineBase=p.history.undoCount();
+    pick(QColor(0,0,255));
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).blue==1&&p.history.undoCount()==lineBase+1);
+}
 void shape_background_fill_selected(){
     MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});const auto id=p.active;
     auto* stroke=w.findChild<QCheckBox*>("shapeStroke");auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");REQUIRE(stroke&&width);
@@ -251,4 +267,4 @@ void tool_bars_show_their_own_controls(){
     tool("tool.move");
     REQUIRE(w.findChild<QToolBar*>("eyedropperOptions")->isHidden()&&w.findChild<QToolBar*>("typeOptions")->isHidden());
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

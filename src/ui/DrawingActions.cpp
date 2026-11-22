@@ -108,6 +108,17 @@ void MainWindow::setupDrawingActions(){
     const auto shapeNumber=[this](const char* objectName,const char* accessibleName,double minimum,double maximum,int decimals){auto*field=ui::makeNumberField(minimum,maximum,minimum,accessibleName,decimals);field->setObjectName(objectName);field->releaseFocus=[this]{if(canvas())canvas()->setFocus();};connect(field,&QDoubleSpinBox::editingFinished,this,[this]{finishShapeStyleEdit();});return field;};
     // The fill well edits the selected shape; with none selected it sets the color of the next shape, like the Brush color.
     auto*fill=new ui::ColorWell;fill->setObjectName("shapeFillColor");fill->setAccessibleName("Shape color");
+    connect(fill,&QAbstractButton::clicked,this,[this]{
+        const auto* layer=active();
+        const bool shapeLayer=layer&&!layer->shapeJson.empty();
+        QColor initial=foreground_;
+        if(shapeLayer){const auto stored=editing::decodeShapeStyle(layer->shapeJson);initial=QColor::fromRgbF(stored.red,stored.green,stored.blue);}
+        const auto color=QColorDialog::getColor(initial,this,"Fill color");
+        if(!color.isValid())return;
+        if(shapeLayer){background_=color;finishShapeStyleEdit();applyShapeStyleToSelection(std::nullopt,color);finishShapeStyleEdit();}
+        else foreground_=color;
+        refreshGradient();refresh(false,false);
+    });
     ui::addToolbarGroup(bar,{ui::makeCaption("Fill"),fill},"shapeFillGroup");
     auto*stroke=ui::addOptionCheck(bar,"Stroke","shapeStroke");connect(stroke,&QCheckBox::toggled,this,[this](bool v){shapeStyle_.strokeEnabled=v;applyShapeStyleToSelection();finishShapeStyleEdit();refresh(false,false);});
     auto*strokeColor=new ui::ColorWell;strokeColor->setObjectName("shapeStrokeColor");strokeColor->setAccessibleName("Stroke color");connect(strokeColor,&QAbstractButton::clicked,this,[this]{const auto color=QColorDialog::getColor(QColor::fromRgbF(shapeStyle_.strokeRed,shapeStyle_.strokeGreen,shapeStyle_.strokeBlue),this,"Stroke color");if(color.isValid()){shapeStyle_.strokeRed=color.redF();shapeStyle_.strokeGreen=color.greenF();shapeStyle_.strokeBlue=color.blueF();applyShapeStyleToSelection();finishShapeStyleEdit();}});
