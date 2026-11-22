@@ -226,6 +226,9 @@ void tool_bars_show_their_own_controls(){
     REQUIRE(shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&!shown("retouchOptions","retouchCloneHint")&&title("retouchFamily")=="Smear"&&w.findChild<QLabel*>("retouchOpacityLabel")->text()=="Strength");
     tool("tool.gradient");
     REQUIRE(shown("drawingOptions","gradientShape")&&shown("drawingOptions","gradientOpacityGroup")&&!shown("drawingOptions","shapeKind")&&title("gradientTitle")=="Gradient");
+    REQUIRE(shown("drawingOptions","gradientSwatch"));
+    // The Opacity caption sits right against its slider: the group does not stretch.
+    {auto* group=w.findChild<QWidget*>("gradientOpacityGroup");auto* caption=group->findChild<QLabel*>();auto* track=w.findChild<QSlider*>("gradientOpacitySlider");REQUIRE(caption&&track);const int gap=track->mapTo(group,QPoint(0,0)).x()-(caption->mapTo(group,QPoint(0,0)).x()+caption->width());REQUIRE(gap>=0&&gap<=10);}
     auto* slider=w.findChild<QSlider*>("gradientOpacitySlider");auto* number=w.findChild<QDoubleSpinBox*>("gradientOpacity");REQUIRE(slider&&number);
     slider->setValue(40);REQUIRE(number->value()==40);number->setValue(65);REQUIRE(slider->value()==65);
     REQUIRE(!command(w,"gradient.apply")->isEnabled());

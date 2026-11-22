@@ -90,8 +90,9 @@ void MainWindow::setupDrawingActions(){
     commandInBar("Gradient (G)","Tools","Gradient (G)",[this]{selectTool(Tool::Gradient);refresh(false);});
     ui::addToolbarTitle(bar,"Gradient","gradientTitle");
     auto*gradientShape=new ui::SegmentedControl({"Linear","Radial"});gradientShape->setObjectName("gradientShape");gradientShape->setAccessibleName("Gradient shape");gradientShape->setToolTip("Linear runs along the line; Radial spreads out from the start point");bar->addWidget(gradientShape);gradientShape->changed=[this](int i){gradientSettings_.shape=editing::GradientShape(i);refreshGradient();};
-    auto*style=ui::addDropdown(bar,"gradientStyle","Gradient colors",{"Foreground to Background","Foreground to Transparent"});style->setCurrentIndex(1);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();});
-    auto*reverse=ui::addOptionCheck(bar,"Reverse","gradientReverse");connect(reverse,&QCheckBox::toggled,this,[this](bool v){gradientSettings_.reversed=v;refreshGradient();});
+    auto*swatch=new ui::GradientSwatch;swatch->setObjectName("gradientSwatch");swatch->setAccessibleName("Gradient preview");bar->addWidget(swatch);
+    auto*style=ui::addDropdown(bar,"gradientStyle","Gradient colors",{"Foreground to Background","Foreground to Transparent"});style->setCurrentIndex(1);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();refreshShapeControls();});
+    auto*reverse=ui::addOptionCheck(bar,"Reverse","gradientReverse");connect(reverse,&QCheckBox::toggled,this,[this](bool v){gradientSettings_.reversed=v;refreshGradient();refreshShapeControls();});
     auto*opacitySlider=ui::makeOptionSlider("gradientOpacitySlider","Gradient opacity slider",1,100);
     auto*opacity=ui::makeNumberField(1,100,100,"Gradient opacity");opacity->setObjectName("gradientOpacity");opacity->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
     ui::addToolbarGroup(bar,{ui::makeCaption("Opacity"),opacitySlider,opacity,ui::makeCaption("%")},"gradientOpacityGroup");
@@ -282,7 +283,14 @@ void MainWindow::refreshShapeControls(){
     auto* bar=findChild<QToolBar*>("drawingOptions");
     // One group of the bar per tool: the Gradient tool owns the gradient options, Crop its own, and a shape owns the rest.
     const bool gradientTool=tool_==Tool::Gradient;
-    for(const char* name:{"gradientTitle","gradientShape","gradientStyle","gradientReverse","gradientOpacityGroup","gradientSpacer","gradientCancelButton","gradientApplyButton"})if(auto* control=findChild<QWidget*>(name))setToolbarControlVisible(bar,control,gradientTool);
+    for(const char* name:{"gradientTitle","gradientShape","gradientSwatch","gradientStyle","gradientReverse","gradientOpacityGroup","gradientSpacer","gradientCancelButton","gradientApplyButton"})if(auto* control=findChild<QWidget*>(name))setToolbarControlVisible(bar,control,gradientTool);
+    if(auto* swatch=dynamic_cast<ui::GradientSwatch*>(findChild<QWidget*>("gradientSwatch"))){
+        const bool maskTarget=current()&&current()->maskSelected;
+        QColor from=maskTarget?(maskPaintWhite_?Qt::white:Qt::black):foreground_,to=maskTarget?(maskPaintWhite_?Qt::black:Qt::white):background_;
+        if(gradientSettings_.style==editing::GradientStyle::ForegroundToTransparent)to=QColor(from.red(),from.green(),from.blue(),0);
+        if(gradientSettings_.reversed)std::swap(from,to);
+        swatch->setColors(from,to);
+    }
     const bool controls=tool_==Tool::Shape||(shapeLayer&&!gradientTool&&tool_!=Tool::Crop);
     for(const char* name:{"shapeTitle","shapeFillGroup","shapeRestyleButton"})if(auto* control=findChild<QWidget*>(name))setToolbarControlVisible(bar,control,controls);
     if(auto* fill=dynamic_cast<ui::ColorWell*>(findChild<QAbstractButton*>("shapeFillColor")))fill->setColor(shapeLayer?QColor::fromRgbF(shapeStyle_.red,shapeStyle_.green,shapeStyle_.blue):foreground_);

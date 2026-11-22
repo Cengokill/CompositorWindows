@@ -135,6 +135,31 @@ OptionSlider* makeOptionSlider(const char* objectName, const QString& accessible
     return slider;
 }
 void markPill(QWidget* button) { button->setProperty("pill", true); }
+GradientSwatch::GradientSwatch(QWidget* parent) : QWidget(parent) { setFixedSize(56, 18); }
+void GradientSwatch::setColors(const QColor& from, const QColor& to) { if (from == from_ && to == to_) return; from_ = from; to_ = to; update(); }
+QSize GradientSwatch::sizeHint() const { return {56, 18}; }
+void GradientSwatch::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF box = QRectF(rect()).adjusted(.5, .5, -.5, -.5);
+    QPainterPath shape;
+    shape.addRoundedRect(box, 3, 3);
+    painter.save();
+    painter.setClipPath(shape);
+    painter.fillRect(rect(), Qt::white);
+    constexpr int tile = 4;
+    for (int row = 0; row * tile < height(); ++row)
+        for (int column = 0; column * tile < width(); ++column)
+            if ((row + column) % 2 == 0) painter.fillRect(column * tile, row * tile, tile, tile, QColor(128, 128, 128, 115));
+    QLinearGradient fill(box.left(), 0, box.right(), 0);
+    fill.setColorAt(0, from_);
+    fill.setColorAt(1, to_);
+    painter.fillRect(rect(), fill);
+    painter.restore();
+    painter.setPen(QPen(isEnabled() ? QColor(t::separator) : QColor(t::controlTextDisabled), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(shape);
+}
 ColorWell::ColorWell(QWidget* parent) : QAbstractButton(parent) { setCursor(Qt::PointingHandCursor); setFocusPolicy(Qt::StrongFocus); }
 void ColorWell::setColor(const QColor& color) { if (color == color_) return; color_ = color; update(); }
 QSize ColorWell::sizeHint() const { return {t::colorWellWidth, t::colorWellHeight}; }
@@ -174,6 +199,8 @@ QWidget* addToolbarGroup(QToolBar* bar, std::initializer_list<QWidget*> widgets,
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(t::checkBoxGap);
     for (auto* widget : widgets) row->addWidget(widget);
+    // A toolbar hands spare width to expanding widgets; a group keeps the size of its controls.
+    host->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     bar->addWidget(host);
     return host;
 }

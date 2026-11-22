@@ -57,6 +57,17 @@ QWidget* addToolbarGroup(QToolBar* bar, std::initializer_list<QWidget*> widgets,
 QPushButton* addCommandPill(QToolBar* bar, const QString& text, const char* objectName, QAction* command, bool primary);
 // A capsule button; a checkable one fills with the accent blue while checked.
 void markPill(QWidget* button);
+// A small preview of a two-color gradient over a checkerboard, so a transparent end reads as transparency.
+class GradientSwatch final : public QWidget {
+public:
+    explicit GradientSwatch(QWidget* parent = nullptr);
+    void setColors(const QColor& from, const QColor& to);
+    QSize sizeHint() const override;
+protected:
+    void paintEvent(QPaintEvent*) override;
+private:
+    QColor from_{Qt::black}, to_{Qt::white};
+};
 // The current color as a rounded well with a light border; clicking it is up to the owner.
 class ColorWell final : public QAbstractButton {
 public:
