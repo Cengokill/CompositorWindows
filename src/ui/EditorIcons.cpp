@@ -126,6 +126,12 @@ public:
         case EditorIcon::ChevronUp: path({{7,14},{12,9},{17,14}});break;
         case EditorIcon::ChevronLeft: path({{14,7},{9,12},{14,17}});break;
         case EditorIcon::ChevronRight: path({{10,7},{15,12},{10,17}});break;
+        case EditorIcon::Object: {
+            auto pen = p->pen(); pen.setDashPattern({2,2}); p->setPen(pen);
+            p->drawRoundedRect(QRectF(3,3,15,15),1,1);
+            pen.setStyle(Qt::SolidLine); p->setPen(pen); p->setBrush(QApplication::palette().color(QPalette::Window));
+            path({{11,11},{22,15},{17,17},{15,22},{11,11}}); break;
+        }
         case EditorIcon::Link:
             p->translate(12,12);p->rotate(-35);p->drawRoundedRect(QRectF(-4,-10,8,12),4,4);
             p->drawRoundedRect(QRectF(-4,-2,8,12),4,4);break;

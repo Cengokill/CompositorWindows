@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ToolFlyoutButton.h"
 #include "LastFilterJob.h"
 #include "LayerPanel.h"
 #include "SegmentedControl.h"
@@ -193,7 +194,13 @@ for (const auto& entry : entries) {
     bindCommand(a,"Tools",entry.label,[this,t=entry.tool]{selectTool(t==Tool::Brush&&brushMode_==ProjectBrushMode::Erase?Tool::Eraser:t);});
     if(entry.tool==Tool::Brush)commands_->releaseShortcut(a);
     if(!alternate) {
-        auto* button = new QToolButton;
+        auto* button = new ui::ToolFlyoutButton;
+        // Pressing and holding Marquee, Lasso, Wand or Brush offers the other kind through the same choice the options bar makes.
+        const auto choose=[this](const char* control,int index){if(auto* choice=ui::findSegmentedControl(this,control))choice->choose(index);};
+        if(entry.tool==Tool::Marquee)button->setFlyout([this]{return ui::ToolFlyoutButton::Entry{ui::editorIcon(ellipse_?ui::EditorIcon::Marquee:ui::EditorIcon::EllipseMarquee),ellipse_?"Rectangular Marquee":"Ellipse Marquee"};},[this,choose]{choose("marqueeShape",ellipse_?0:1);});
+        if(entry.tool==Tool::Lasso)button->setFlyout([this]{const bool polygonal=lassoKind_==editing::LassoKind::Polygonal;return ui::ToolFlyoutButton::Entry{ui::editorIcon(polygonal?ui::EditorIcon::Lasso:ui::EditorIcon::Polygon),polygonal?"Freehand Lasso":"Polygonal Lasso"};},[this,choose]{choose("lassoKind",lassoKind_==editing::LassoKind::Polygonal?0:1);});
+        if(entry.tool==Tool::Wand)button->setFlyout([this]{return ui::ToolFlyoutButton::Entry{ui::editorIcon(wandObjectMode_?ui::EditorIcon::Wand:ui::EditorIcon::Object),wandObjectMode_?"Magic Wand":"Object Selection"};},[this,choose]{choose("wandKind",wandObjectMode_?0:1);selectTool(Tool::Wand);});
+        if(entry.tool==Tool::Brush)button->setFlyout([this]{const bool erasing=brushMode_==ProjectBrushMode::Erase;return ui::ToolFlyoutButton::Entry{ui::editorIcon(erasing?ui::EditorIcon::Brush:ui::EditorIcon::Eraser),erasing?"Brush":"Eraser"};},[this,choose]{choose("brushMode",brushMode_==ProjectBrushMode::Erase?0:1);});
         button->setDefaultAction(a);
         button->setIconSize({22,22});
         button->setProperty("editorToolButton",true);
@@ -287,6 +294,7 @@ p->canvas->setBlackSurround(canvasOnly_.has_value());p->canvas->setTransformOver
     a->setChecked(actionTool==tool_||(actionTool==Tool::Brush&&tool_==Tool::Eraser)||(actionTool==Tool::Lasso&&tool_==Tool::Polygon));
     if(actionTool==Tool::Marquee)a->setIcon(ui::editorIcon(ellipse_?ui::EditorIcon::EllipseMarquee:ui::EditorIcon::Marquee));
     if(actionTool==Tool::Lasso)a->setIcon(ui::editorIcon(lassoKind_==editing::LassoKind::Polygonal?ui::EditorIcon::Polygon:ui::EditorIcon::Lasso));
+    if(actionTool==Tool::Wand)a->setIcon(ui::editorIcon(wandObjectMode_?ui::EditorIcon::Object:ui::EditorIcon::Wand));
     if(actionTool==Tool::Brush)a->setIcon(ui::editorIcon(brushMode_==ProjectBrushMode::Erase?ui::EditorIcon::Eraser:ui::EditorIcon::Brush));
 }}
 for(auto*a:findChildren<QAction*>())if(a->property("editorTool").isValid()){

@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 #include "ui/SegmentedControl.h"
+#include "ui/ToolFlyoutButton.h"
+#include <QMenu>
 #include <QApplication>
 #include <QInputDialog>
 #include <QCheckBox>
@@ -8,6 +10,7 @@
 #include <QMouseEvent>
 #include <QSpinBox>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTest>
 #include <QTimer>
 #include <iostream>
@@ -48,6 +51,27 @@ void marquee_bar(){Fixture f;command(f.window,"tool.marquee")->trigger();QApplic
  require(!aa->isVisible()&&!ui::findSegmentedControl(&f.window,"lassoKind")->isVisible(),"Marquee has no Anti-alias or lasso kind");
  QTest::mouseClick(shape->segment(1),Qt::LeftButton);QApplication::processEvents();require(shape->currentIndex()==1,"Ellipse chosen");
  command(f.window,"tool.lasso")->trigger();QApplication::processEvents();require(aa->isVisible()&&!shape->isVisible(),"Lasso shows Anti-alias and hides the shape");}
+// Pressing and holding Marquee, Lasso, Wand or Brush offers the other kind of the tool and applies it like the options bar does.
+void tool_flyout(){Fixture f;
+ const auto button=[&](const char* name){for(auto* b:f.window.findChildren<QToolButton*>())if(auto* flyout=dynamic_cast<ui::ToolFlyoutButton*>(b);flyout&&b->accessibleName()==name)return flyout;throw std::runtime_error("tool button missing");};
+ const auto offer=[&](const char* name){auto* menu=button(name)->showFlyout();require(menu&&menu->isVisible()&&menu->actions().size()==1,"flyout offers one alternate tool");const auto text=menu->actions()[0]->text();return std::pair{menu,text};};
+ const auto pick=[&](const char* name,const char* text){auto [menu,offered]=offer(name);require(offered==text,text);menu->actions()[0]->trigger();QApplication::processEvents();};
+ pick("Marquee (M)","Ellipse Marquee");require(ui::findSegmentedControl(&f.window,"marqueeShape")->currentIndex()==1&&button("Marquee (M)")->isChecked(),"Ellipse chosen and the Marquee tool active");
+ pick("Marquee (M)","Rectangular Marquee");require(ui::findSegmentedControl(&f.window,"marqueeShape")->currentIndex()==0,"Rectangle chosen again");
+ pick("Lasso (L)","Polygonal Lasso");require(ui::findSegmentedControl(&f.window,"lassoKind")->currentIndex()==1,"Polygonal chosen");
+ pick("Lasso (L)","Freehand Lasso");require(ui::findSegmentedControl(&f.window,"lassoKind")->currentIndex()==0&&button("Lasso (L)")->isChecked(),"Freehand chosen again");
+ pick("Wand (W)","Object Selection");require(ui::findSegmentedControl(&f.window,"wandKind")->currentIndex()==1&&button("Wand (W)")->isChecked(),"Object chosen and the Wand tool active");
+ pick("Wand (W)","Magic Wand");require(ui::findSegmentedControl(&f.window,"wandKind")->currentIndex()==0,"Wand chosen again");
+ pick("Brush (B)","Eraser");require(ui::findSegmentedControl(&f.window,"brushMode")->currentIndex()==1,"Erase chosen");
+ pick("Brush (B)","Brush");require(ui::findSegmentedControl(&f.window,"brushMode")->currentIndex()==0&&button("Brush (B)")->isChecked(),"Paint chosen again");
+ command(f.window,"tool.move")->trigger();QApplication::processEvents();
+ auto* marquee=button("Marquee (M)");QTest::mousePress(marquee,Qt::LeftButton);QTest::qWait(700);
+ require(marquee->findChild<QMenu*>()&&marquee->findChild<QMenu*>()->isVisible(),"holding the button opens the popup");
+ QTest::mouseRelease(marquee,Qt::LeftButton);marquee->findChild<QMenu*>()->hide();QApplication::processEvents();
+ require(!button("Marquee (M)")->isChecked(),"the long press does not select the tool");
+ QTest::mouseClick(marquee,Qt::LeftButton);QApplication::processEvents();
+ require(button("Marquee (M)")->isChecked()&&!marquee->findChild<QMenu*>()->isVisible(),"a short click selects the tool without a popup");
+ require(!button("Crop (C)")->hasFlyout()&&button("Wand (W)")->hasFlyout(),"only the grouped tools have a popup");}
 void wand_bar(){Fixture f;command(f.window,"tool.wand")->trigger();QApplication::processEvents();
  auto* bar=f.window.findChild<QToolBar*>("selectionOptions");require(bar&&bar->isVisible(),"selection bar shows for the Wand");require(!f.window.findChild<QToolBar*>("wandOptions"),"Wand has no bar of its own");
  auto* title=f.window.findChild<QLabel*>("selectionToolTitle");require(title&&title->text()=="Magic","title is Magic");
@@ -58,4 +82,4 @@ void wand_bar(){Fixture f;command(f.window,"tool.wand")->trigger();QApplication:
  scope->segment(1)->click();kind->segment(1)->click();command(f.window,"tool.lasso")->trigger();QApplication::processEvents();
  require(!kind->isVisible()&&!scope->isVisible()&&!tolerance->isVisible(),"Wand controls hide for another tool");}
 }
-int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="undo_redo_draft")undo_redo_draft();else if(c=="escape_mode_reset")escape_mode_reset();else if(c=="expand_range")expand_range();else if(c=="wand_replace")wand_replace();else if(c=="feather_bar")feather_bar();else if(c=="segmented_slide")segmented_slide();else if(c=="wand_bar")wand_bar();else if(c=="marquee_bar")marquee_bar();else if(c=="lasso_kind_slide")lasso_kind_slide();else if(c=="feather_dialog_default")feather_dialog_default();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="undo_redo_draft")undo_redo_draft();else if(c=="escape_mode_reset")escape_mode_reset();else if(c=="expand_range")expand_range();else if(c=="wand_replace")wand_replace();else if(c=="feather_bar")feather_bar();else if(c=="segmented_slide")segmented_slide();else if(c=="wand_bar")wand_bar();else if(c=="marquee_bar")marquee_bar();else if(c=="tool_flyout")tool_flyout();else if(c=="lasso_kind_slide")lasso_kind_slide();else if(c=="feather_dialog_default")feather_dialog_default();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

@@ -77,7 +77,7 @@ void MainWindow::setupSelectionActions(){
     auto*shape=new ui::SegmentedControl({"Rectangle","Ellipse"});shape->setObjectName("marqueeShape");shape->setAccessibleName("Marquee shape");bar->addWidget(shape);shape->changed=[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);};
     auto*lassoKind=new ui::SegmentedControl({"Freehand","Polygonal"});lassoKind->setObjectName("lassoKind");lassoKind->setAccessibleName("Lasso kind");bar->addWidget(lassoKind);
     lassoKind->changed=[this](int index){if(selectionGesture_.active())pointerCancel();lassoKind_=index?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;selectTool(Tool::Lasso);};
-    auto*wandKind=new ui::SegmentedControl({"Wand","Object"});wandKind->setObjectName("wandKind");wandKind->setAccessibleName("Wand mode");bar->addWidget(wandKind);wandKind->changed=[this](int index){wandObjectMode_=index==1;};
+    auto*wandKind=new ui::SegmentedControl({"Wand","Object"});wandKind->setObjectName("wandKind");wandKind->setAccessibleName("Wand mode");bar->addWidget(wandKind);wandKind->changed=[this](int index){wandObjectMode_=index==1;refresh(false,false);};
     auto*mode=new ui::SegmentedControl({"New","Add","Subtract"});mode->setObjectName("selectionMode");mode->setAccessibleName("Selection mode");bar->addWidget(mode);mode->changed=[this](int i){selectionMode_=editing::SelectionMode(i);};
     // The Wand options sit in this bar too; refresh() shows them only for the Wand tool.
     ui::addToolbarCaption(bar,"Tolerance","wandToleranceCaption");

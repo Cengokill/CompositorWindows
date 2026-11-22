@@ -243,7 +243,7 @@ void MainWindow::keyPressEvent(QKeyEvent*e){
     }
     const auto plainModifiers=(e->key()==Qt::Key_Return||e->key()==Qt::Key_Enter)?e->modifiers()&~Qt::KeypadModifier:e->modifiers();
     if(plainModifiers==Qt::NoModifier){switch(e->key()){
-        case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;
+        case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;refresh(false,false);statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;
         case Qt::Key_Return:case Qt::Key_Enter:if(drawingOriginal_)applyGradient();else if(transformSession_)applyTransformSession();else if(tool_==Tool::Crop)applyCrop();else finishPolygon();return;
         case Qt::Key_Escape:pointerCancel();return;default:break;
     }}
