@@ -129,6 +129,7 @@ private:
     bool pending_{};
 };
 void detach(NativeCanvas*canvas){
+    canvas->viewChanged={};
     canvas->pointerDown={};canvas->pointerDoubleClick={};canvas->pointerMove={};canvas->pointerUp={};canvas->pointerCancel={};canvas->pointerInterrupted={};
     canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};canvas->navigatorProvider={};
     if(canvas->cancelWheelComposite)canvas->cancelWheelComposite();
@@ -174,6 +175,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->pointerDoubleClick=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerBegin(p,m,2);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerMove=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerUpdate(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerUp=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerEnd(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
+    project.canvas->viewChanged=[this]{refreshZoomControl();};
     project.canvas->pointerCancel=[this]{pointerCancel();};project.canvas->pointerInterrupted=[this]{interruptPointer();};
     project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);if(tool_==Tool::Hand&&!spaceHeld_&&!spaceDragging_)if(auto* view=canvas())view->setCursor(pointerOwner_==current()?Qt::ClosedHandCursor:Qt::OpenHandCursor);};
     project.canvas->pointerLeave=[this]{clearBrushPointer();if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal){selectionGesture_.moveCursor({});refreshSelectionGesture();}};

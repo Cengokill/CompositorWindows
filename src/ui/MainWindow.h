@@ -350,6 +350,7 @@ private:
     void openPalette(bool background=false);
     void setupPaletteControls(QWidget*);
     void refreshPaletteControls();
+    void refreshZoomControl();
     void openEditPanelColor(effects_tools::PaletteColor,const QString&,std::function<void(effects_tools::PaletteColor)>);
     void closeEditPanelColor(bool commit);
     void swapPalette();

@@ -681,6 +681,7 @@ void NativeCanvas::installViewport(const graphics::CanvasViewport& state){
     }
     stopWheelZoom();
     zoom=state.zoom;pan={state.pan.x,state.pan.y};backingScale_=state.backingScale;followsFit_=state.followsFit;
+    if(viewChanged)viewChanged();
     if(replacingWheelView&&documentWidth_>0&&documentHeight_>0){
         wheelZoomFrame_=true;
         wheelZoomPending_=bool(deferViewportComposite)||(hasPresented_&&bool(viewportProvider));

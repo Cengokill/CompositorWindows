@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "ui/NativeCanvas.h"
 #include "ui/SegmentedControl.h"
 #include "ui/PaletteDialog.h"
 #include "ui/ToolbarControls.h"
@@ -232,7 +233,7 @@ void shape_background_fill_draft(){
 }
 // Every tool bar names its tool and shows only the controls of the active tool.
 void tool_bars_show_their_own_controls(){
-    MainWindow w(true);w.addProject(fixture());w.resize(3200,900);w.show();QApplication::processEvents();
+    MainWindow w(true);auto& mainProject=w.addProject(fixture());w.resize(3200,900);w.show();QApplication::processEvents();
     const auto tool=[&](const char* id){command(w,id)->trigger();QApplication::processEvents();};
     const auto shown=[&](const char* barName,const char* child){auto* bar=w.findChild<QToolBar*>(barName);auto* widget=w.findChild<QWidget*>(child);REQUIRE(bar&&widget);return !bar->isHidden()&&widget->isVisibleTo(bar);};
     const auto title=[&](const char* name){auto* label=w.findChild<QLabel*>(name);REQUIRE(label&&label->font().bold());return label->text();};
@@ -273,7 +274,12 @@ void tool_bars_show_their_own_controls(){
     REQUIRE(!w.findChild<QToolButton*>("textAlignLeft")->icon().isNull());
     tool("tool.eyedropper");
     REQUIRE(shown("eyedropperOptions","eyedropperSampleRing")&&title("eyedropperTitle")=="Eyedropper"&&w.findChild<QCheckBox*>("eyedropperSampleRing")->isChecked());
+    tool("tool.zoom");
+    REQUIRE(shown("zoomOptions","zoomPercent")&&title("zoomTitle")=="Zoom"&&w.findChild<QToolBar*>("eyedropperOptions")->isHidden());
+    {auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");auto* canvas=mainProject.canvas;REQUIRE(field&&canvas);
+     field->setValue(200);emit field->editingFinished();QApplication::processEvents();REQUIRE(std::abs(canvas->zoom-2)<1e-9);
+     canvas->zoomAt(0.5,canvas->contentRect().center());QApplication::processEvents();REQUIRE(field->value()==50);}
     tool("tool.move");
-    REQUIRE(w.findChild<QToolBar*>("eyedropperOptions")->isHidden()&&w.findChild<QToolBar*>("typeOptions")->isHidden());
+    REQUIRE(w.findChild<QToolBar*>("eyedropperOptions")->isHidden()&&w.findChild<QToolBar*>("zoomOptions")->isHidden()&&w.findChild<QToolBar*>("typeOptions")->isHidden());
 }
 int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

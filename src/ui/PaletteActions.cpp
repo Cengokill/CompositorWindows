@@ -2,6 +2,8 @@
 #include "PaletteSwatches.h"
 #include "ToolbarControls.h"
 #include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QSignalBlocker>
 #include <QGuiApplication>
 #include <QLabel>
 #include <QPushButton>
@@ -10,6 +12,7 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 namespace compositor {
 namespace {
 effects_tools::PaletteColor asPalette(QColor c){return {c.redF(),c.greenF(),c.blueF()};}
@@ -29,6 +32,18 @@ void MainWindow::setupPaletteControls(QWidget* tools){
     ui::addToolbarTitle(eyedropperBar,"Eyedropper","eyedropperTitle");
     auto* sampleRing=ui::addOptionCheck(eyedropperBar,"Sample Ring","eyedropperSampleRing",showSampleRing_);
     connect(sampleRing,&QCheckBox::toggled,this,[this](bool on){showSampleRing_=on;});
+    // The Zoom bar shows the view as a percentage of actual pixels (100 is one display pixel per document pixel) and edits it around the view center.
+    auto* zoomBar=addToolBar("Zoom Options");zoomBar->setObjectName("zoomOptions");
+    ui::addToolbarTitle(zoomBar,"Zoom","zoomTitle");
+    auto* zoomField=ui::makeNumberField(1,3200,100,"Zoom percentage",0);zoomField->setObjectName("zoomPercent");zoomField->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
+    ui::addToolbarGroup(zoomBar,{zoomField,ui::makeCaption("%")},"zoomPercentGroup");
+    connect(zoomField,&QDoubleSpinBox::editingFinished,this,[this,zoomField]{if(canvas()&&!refreshing_)canvas()->zoomAt(zoomField->value()/100,canvas()->contentRect().center());});
+}
+void MainWindow::refreshZoomControl(){
+    auto* field=findChild<QDoubleSpinBox*>("zoomPercent");
+    if(!field||!canvas()||field->hasFocus())return;
+    const QSignalBlocker block(field);
+    field->setValue(std::round(canvas()->zoom*100));
 }
 void MainWindow::refreshPaletteControls(){
     if(!paletteSwatches_)return;
