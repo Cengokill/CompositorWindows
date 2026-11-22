@@ -52,7 +52,7 @@ public:
     std::function<void()> dismissed;
     void showPopup() override;
     void hidePopup() override;
-    // Shows the list as a rounded, lightly translucent panel instead of an opaque rectangle.
+    // Shows the list as a rounded Liquid Glass panel: a translucent neutral tint over the blurred Windows 11 backdrop.
     void useGlassPopup();
 protected:
     bool eventFilter(QObject*, QEvent*) override;

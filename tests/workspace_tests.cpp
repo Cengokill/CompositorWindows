@@ -14,6 +14,7 @@
 #include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QTest>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -143,6 +144,23 @@ test("new_canvas_dropdown_closes_on_outside_click",[]{
    QMouseEvent press(QEvent::MouseButtonPress,QPointF(popup->mapFromGlobal(point)),QPointF(point),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(popup,&press);QApplication::processEvents();
    check(!popup->isVisible(),"A click outside did not close the dropdown list");
   }
+ }
+});
+test("new_canvas_dropdown_lists_are_neutral_translucent_glass",[]{
+ MainWindow w(true);w.resize(1100,760);auto&p=w.addEmptyProject();w.show();check(QTest::qWaitForWindowExposed(&w),"Window not exposed");
+ for(auto*name:{"newCanvasPreset","newCanvasUnit","newCanvasBackground"}){
+  auto*box=control<QComboBox>(p.welcome,name);box->showPopup();QApplication::processEvents();
+  auto*popup=box->view()->window();check(popup->isVisible()&&popup->testAttribute(Qt::WA_TranslucentBackground),"Dropdown list is not a translucent window");
+  // Sample the panel tint above the first row and below the last one, away from the rounded corners and the highlighted row.
+  const QImage panel=popup->grab().toImage();
+  const double scale=panel.devicePixelRatio();
+  for(const QPoint point:{QPoint(popup->width()/2,3),QPoint(popup->width()/2,popup->height()-4)}){
+   const QColor color=panel.pixelColor(int(point.x()*scale),int(point.y()*scale));
+   check(color.alpha()>=60&&color.alpha()<=170,"Dropdown list tint is not clearly translucent");
+   check(std::abs(color.red()-color.green())<=2&&std::abs(color.green()-color.blue())<=2,"Dropdown list tint is not a neutral gray");
+  }
+  check(panel.pixelColor(int(2*scale),int(2*scale)).alpha()==0&&panel.pixelColor(int((popup->width()-3)*scale),int((popup->height()-3)*scale)).alpha()==0,"Dropdown list corners are not rounded off");
+  box->hidePopup();QApplication::processEvents();
  }
 });
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"native_window\":false}\n";return failed?1:0;
