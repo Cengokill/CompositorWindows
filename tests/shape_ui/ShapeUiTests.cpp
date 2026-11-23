@@ -401,7 +401,7 @@ void layer_effect_lists_are_glass(){
 void options_lists_are_rounded_glass(){
     MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
     const auto tool=[&](const char* id){command(w,id)->trigger();QApplication::processEvents();};
-    for(const auto& [id,name]:{std::pair{"tool.wand","wandSampleSize"},{"tool.crop","cropRatioChoice"},{"tool.gradient","gradientStyle"}}){
+    for(const auto& [id,name]:{std::pair{"tool.wand","wandSampleSize"},{"tool.crop","cropRatioChoice"},{"tool.gradient","gradientStyle"},{"tool.move","transformSampling"},{"tool.shape","shapeLineStyle"},{"tool.shape","shapeLineCap"}}){
         tool(id);auto* box=w.findChild<QComboBox*>(name);REQUIRE(box);
         box->showPopup();QApplication::processEvents();
         REQUIRE(glass(box->view()->window()));

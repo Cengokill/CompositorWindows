@@ -81,7 +81,7 @@ void MainWindow::setupBrushControls(){
         foreground_=chosen;refreshGradient();refresh(false,false);
     });
     // Windows also lets the brush paint a layer mask, so the editing target stays in the bar after the reference's controls.
-    target_=new ui::CapsuleDropdown;target_->addItems({"Image","Mask"});target_->setAccessibleName("Editing target");options->addControl(target_);connect(target_,&QComboBox::currentIndexChanged,this,[this](int i){
+    auto* targetBox=new ui::CapsuleDropdown;targetBox->useGlassPopup();target_=targetBox;target_->addItems({"Image","Mask"});target_->setAccessibleName("Editing target");options->addControl(target_);connect(target_,&QComboBox::currentIndexChanged,this,[this](int i){
         if(refreshing_)return;
         if(auto* project=current();project&&project->document&&active())selectLayerTarget(project->active,i==1);
         // Rejected busy/stroke or stale callbacks must show the actual target.
