@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Wonder Assembly LLC; MIT license in LICENSE.
 #include "RetouchSession.h"
 #include "core/DeepImage.h"
+#include "graphics/ParallelBatch.h"
 #include "graphics/PixelAlgorithms.h"
 #include "graphics/RasterSampling.h"
 #include "graphics/SamplingSource.h"
@@ -30,7 +31,6 @@ std::shared_ptr<const Raster> fromPixels(const std::vector<Pixel>& pixels,int w,
     auto image=std::make_shared<Raster>();image->width=w;image->height=h;const int columns=(w+255)/256,rows=(h+255)/256;
     for(int ty=0;ty<rows;++ty)for(int tx=0;tx<columns;++tx){auto tile=std::make_shared<Raster::Tile>();for(int y=0;y<std::min(256,h-ty*256);++y)std::copy_n(pixels.data()+size_t(ty*256+y)*w+tx*256,std::min(256,w-tx*256),tile->pixels.data()+size_t(y)*256);image->tiles.push_back(std::move(tile));}return image;
 }
-std::vector<Pixel> pixelsOf(const Raster& image){std::vector<Pixel> result(size_t(image.width)*image.height);for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x)result[size_t(y)*image.width+x]=image.pixel(x,y);return result;}
 std::shared_ptr<const Raster> maskRaster(const std::shared_ptr<const GrayRaster>& gray){
     if(!gray)throw std::invalid_argument("Missing retouch mask");validSize(gray->width,gray->height);if(gray->pixels.size()!=size_t(gray->width)*gray->height)throw std::invalid_argument("Invalid retouch mask storage");
     std::vector<Pixel> pixels(gray->pixels.size());for(size_t i=0;i<pixels.size();++i){const auto value=gray->pixels[i];pixels[i]={value,value,value,255};}return fromPixels(pixels,gray->width,gray->height);
@@ -90,12 +90,15 @@ struct SparseGaussian {
     Pixel pixel(int x,int y){
         const size_t id=size_t(y/256)*size_t((width+255)/256)+size_t(x/256);auto found=tiles.find(id);
         if(found==tiles.end()){
-            const int left=x/256*256,top=y/256*256,w=std::min(256,width-left),h=std::min(256,height-top),rows=h+radius*2;
+            const int left=x/256*256,top=y/256*256,w=std::min(256,width-left),h=std::min(256,height-top),rows=h+radius*2,columns=w+radius*2;
             auto tile=std::make_shared<Raster::Tile>();std::vector<float> scratch(size_t(w)*rows);
             stats.gaussianScratchPixels=std::max(stats.gaussianScratchPixels,uint64_t(scratch.size()));
+            // Read the tile and its halo once; each kernel tap then indexes this block.
+            std::vector<Pixel> block(size_t(columns)*rows);
+            for(int yy=0;yy<rows;++yy)for(int xx=0;xx<columns;++xx)block[size_t(yy)*columns+xx]=source(left+xx-radius,top+yy-radius);
             constexpr std::array<uint8_t Pixel::*,4> channels{&Pixel::r,&Pixel::g,&Pixel::b,&Pixel::a};
             for(auto channel:channels){
-                for(int yy=0;yy<rows;++yy)for(int xx=0;xx<w;++xx){double value=0;for(int k=-radius;k<=radius;++k)value+=(source(left+xx+k,top+yy-radius).*channel)*kernel[size_t(k+radius)];scratch[size_t(yy)*w+xx]=float(value);}
+                for(int yy=0;yy<rows;++yy){const Pixel* row=block.data()+size_t(yy)*columns;for(int xx=0;xx<w;++xx){double value=0;for(int k=0;k<=radius*2;++k)value+=(row[xx+k].*channel)*kernel[size_t(k)];scratch[size_t(yy)*w+xx]=float(value);}}
                 for(int yy=0;yy<h;++yy)for(int xx=0;xx<w;++xx){double value=0;for(int k=-radius;k<=radius;++k)value+=scratch[size_t(yy+k+radius)*w+xx]*kernel[size_t(k+radius)];tile->pixels[size_t(yy)*256+xx].*channel=byte(value);}
             }
             if(tiles.size()==32){auto oldest=std::min_element(tiles.begin(),tiles.end(),[](const auto&a,const auto&b){return a.second.second<b.second.second;});tiles.erase(oldest);}
@@ -279,6 +282,19 @@ struct RetouchSession::Impl {
             else output[size_t(y)*width+x]=original?graphics::sampleRaster(*original,unit,transform.sampling):Pixel{};}
         ++stats.documentRasterizations;stats.workingBufferPixels+=output.size();return fromPixels(output,width,height);
     }
+    // Same pixels as currentSample(), written straight into the warp grid. The
+    // original layer is immutable, so its rows are resampled in parallel bands.
+    std::vector<Pixel> denseWorking(){
+        std::vector<Pixel> output(size_t(width)*height);
+        if(sources.currentLayer||sources.currentLayerSource){const auto reader=currentReader();for(int y=0;y<height;++y)for(int x=0;x<width;++x)output[size_t(y)*width+x]=reader(x,y);}
+        else{
+            const auto& image=*original;const auto placement=transform;
+            graphics::runParallelBatch(size_t((height+63)/64),0,[&](size_t band){const int y0=int(band)*64,y1=std::min(height,y0+64);
+                for(int y=y0;y<y1;++y)for(int x=0;x<width;++x)output[size_t(y)*width+x]=graphics::sampleRaster(image,placement.toUnit({x+.5,y+.5}),placement.sampling);});
+            ++stats.documentRasterizations;
+        }
+        stats.workingBufferPixels+=output.size();return output;
+    }
     void prepare(){
         if(wide&&uint64_t(width)*height*16>1200000000)throw std::runtime_error("Deep retouch exceeds working memory budget");
         if(settings.mode==Mode::Clone){
@@ -290,8 +306,10 @@ struct RetouchSession::Impl {
             else if(wide){wideSample=currentSampleWide();sample=currentSample();}
             else if(sparseCanvas||sources.currentLayerSource)sparseSample=currentReader();else sample=currentSample();
         }
-        else if(settings.mode==Mode::Blur){const double sigma=settings.blurRadius>0?std::clamp(settings.blurRadius,.1,250.):std::clamp(settings.radius*2/10,1.5,30.);if(wide){wideSample=gaussianWide(currentSampleWide(),width,height,sigma,maskTarget,stats);sample=gaussian(*currentSample(),sigma,maskTarget,stats);}else if(sparseCanvas){sparseGaussian=std::make_unique<SparseGaussian>(width,height,sigma,maskTarget,currentReader(),stats);sparseSample=[this](int x,int y){return sparseGaussian->pixel(x,y);};}else sample=gaussian(*currentSample(),sigma,maskTarget,stats);}
-        else if(warp(settings.mode)){if(wide){wideWorking=currentSampleWide();working=pixelsOf(*currentSample());stats.workingBufferPixels+=working.size();}else if(sparseCanvas)sparseWorking=std::make_unique<SparseWorking>(width,height,currentReader());else {working=pixelsOf(*currentSample());stats.workingBufferPixels+=working.size();}}
+        else if(settings.mode==Mode::Blur){const double sigma=settings.blurRadius>0?std::clamp(settings.blurRadius,.1,250.):std::clamp(settings.radius*2/10,1.5,30.);if(wide){wideSample=gaussianWide(currentSampleWide(),width,height,sigma,maskTarget,stats);sample=gaussian(*currentSample(),sigma,maskTarget,stats);}
+            // 8-bit Blur filters only the tiles a stroke reads, at any canvas size.
+            else{sparseGaussian=std::make_unique<SparseGaussian>(width,height,sigma,maskTarget,currentReader(),stats);sparseSample=[this](int x,int y){return sparseGaussian->pixel(x,y);};}}
+        else if(warp(settings.mode)){if(wide){wideWorking=currentSampleWide();working=denseWorking();}else if(sparseCanvas)sparseWorking=std::make_unique<SparseWorking>(width,height,currentReader());else working=denseWorking();}
         graphics::BrushSessionSettings brush;brush.radius=warp(settings.mode)?std::max(1.,settings.radius)+2:settings.radius;brush.hardness=warp(settings.mode)?1:settings.hardness;brush.opacity=1;
         if(!growing)coverage=std::make_unique<graphics::BrushSession>(original,brush,accelerator,nullptr,graphics::BrushSessionGeometry::forLayer(transform,original->width,original->height,width,height),graphics::BrushSession::Output::CoverageOnly);
     }
@@ -380,10 +398,12 @@ struct RetouchSession::Impl {
     bool appendWarp(Point point){
         if(!last){last=point;if(settings.mode==Mode::Smudge)pickup(point);return true;}
         const auto from=*last;const double distance=std::hypot(point.x-from.x,point.y-from.y),diameter=std::max(2.,settings.radius*2),spacing=std::max(1.,diameter*(settings.mode==Mode::Smudge?.005:.025));if(distance<spacing)return false;
-        const int steps=int(std::ceil(distance/spacing));Point previous=from;
+        const int steps=int(std::ceil(distance/spacing));Point previous=from;std::optional<Point> coverageEnd;
         for(int step=1;step<=steps;++step){const double t=double(step)/steps;const Point next{from.x+(point.x-from.x)*t,from.y+(point.y-from.y)*t};if(settings.mode==Mode::Smudge)smudge(next);else push(previous,next);++stats.warpDabs;
-            if(growing){if(!coverageStarted)coverageStarted=growing->begin(next);else growing->append(next);}
-            else {if(!coverageStarted)coverageStarted=coverage->begin(next);else coverage->append(next);}previous=next;}
+            if(!coverageStarted){coverageStarted=growing?growing->begin(next):coverage->begin(next);++stats.coverageSamples;if(coverageStarted)coverageEnd=next;}previous=next;}
+        // Coverage is a continuous swept stroke, so one segment per pointer event
+        // covers the same path as one per dab without recomposing tiles per dab.
+        if(coverageStarted&&coverageEnd!=point){if(growing)growing->append(point);else coverage->append(point);++stats.coverageSamples;}
         last=point;if(!growing)compose();else if(!warp(settings.mode))growing->recomposeTouched(tileCompositor());return true;
     }
     void finishGrowingHeal(){

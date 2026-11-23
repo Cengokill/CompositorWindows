@@ -1,6 +1,7 @@
 #include "retouch/RetouchSession.h"
 #include "core/DeepImage.h"
 #include "graphics/PixelAlgorithms.h"
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -78,6 +79,58 @@ int main(int argc,char** argv){
         RetouchSession cancelled(layer,32,16,blur,{},{},gpu);cancelled.begin({16,8});require(cancelled.cancelSnapshot()->materializeLayer()==layer,"blur cancel mutated the layer");
         bool refused=false;try{Settings heal;heal.mode=Mode::HealProximity;RetouchSession stroke(layer,32,16,heal);}catch(const std::runtime_error&){refused=true;}
         require(refused,"16-bit healing accepted a silent 8-bit kernel");
+    });
+    // Issue 221: a Blur stroke must not filter the whole canvas before its first dab.
+    test("blur_begin_filters_only_touched_tiles",[&]{
+        Layer layer;layer.id="blur-start";layer.transform=transform(2048,2048);layer.raster=raster(2048,2048,[](int x,int y){return Pixel{uint8_t(x),uint8_t(y),uint8_t(x^y),255};});
+        Settings settings;settings.mode=Mode::Blur;settings.radius=20;RetouchSession stroke(layer,2048,2048,settings,{},{},gpu);
+        require(stroke.begin({1000,1000}),"Blur stroke did not begin");
+        const auto& metrics=stroke.metrics();
+        require(metrics.gaussianScratchPixels<=uint64_t(256+2*90)*256&&metrics.workingBufferPixels<=32ull*256*256,"Blur filtered the whole canvas at stroke start");
+    });
+    // Tile-by-tile Blur keeps the exact separable Gaussian: double kernel, float horizontal pass, double vertical pass.
+    test("blur_tiles_match_independent_gaussian",[&]{
+        const int w=400,h=300;
+        const auto value=[](int x,int y){return uint8_t((x*7+y*13+(x*y)%29)%256);};
+        const auto reference=[&](int px,int py,double sigma,bool clamp,const std::function<uint8_t(int,int)>& channel){
+            const int r=int(std::ceil(sigma*3));std::vector<double> kernel;double total=0;for(int i=-r;i<=r;++i){kernel.push_back(std::exp(-double(i*i)/(2*sigma*sigma)));total+=kernel.back();}for(auto& k:kernel)k/=total;
+            const auto at=[&](int x,int y)->double{if(clamp){x=std::clamp(x,0,w-1);y=std::clamp(y,0,h-1);}return x<0||y<0||x>=w||y>=h?0.:channel(x,y);};
+            double sum=0;for(int k=-r;k<=r;++k){double row=0;for(int j=-r;j<=r;++j)row+=at(px+j,py+k)*kernel[size_t(j+r)];sum+=double(float(row))*kernel[size_t(k+r)];}
+            return uint8_t(std::clamp(std::round(sum),0.,255.));
+        };
+        for(double radius:{20.,100.}){
+            const double sigma=std::clamp(radius*2/10,1.5,30.);
+            Layer image;image.id="blur-image";image.transform=transform(w,h);image.raster=raster(w,h,[&](int x,int y){const auto v=value(x,y);return Pixel{v,uint8_t(255-v),uint8_t(v/2),255};});
+            Settings settings;settings.mode=Mode::Blur;settings.radius=radius;settings.hardness=1;
+            RetouchSession stroke(image,w,h,settings,{},{},gpu);require(stroke.begin({230,150}),"Image blur did not begin");stroke.append({260,150});stroke.append({290,150});stroke.commitSnapshot();
+            const auto result=stroke.committedLayer().raster;
+            for(int x=240;x<=280;++x){
+                const auto red=reference(x,150,sigma,false,[&](int xx,int yy){return value(xx,yy);});
+                const auto alpha=reference(x,150,sigma,false,[](int,int){return uint8_t(255);});
+                if(alpha!=255)continue;
+                require(result->pixel(x,150).r==red,"Tiled image blur differs from the reference Gaussian");
+                require(result->pixel(x,150).g==reference(x,150,sigma,false,[&](int xx,int yy){return uint8_t(255-value(xx,yy));}),"Tiled image blur green differs");
+            }
+            Layer masked=image;masked.id="blur-mask";auto gray=selection(w,h,[&](int x,int y){return value(x,y);});masked.mask=Mask{};masked.mask->raster=gray;
+            RetouchSession maskStroke(masked,w,h,settings,{},{},gpu,true);require(maskStroke.begin({4,150}),"Mask blur did not begin");maskStroke.append({4,170});maskStroke.commitSnapshot();
+            const auto mask=maskStroke.committedLayer().mask->raster;
+            for(int y=152;y<=168;++y)for(int x=0;x<=8;++x)require(mask->pixel(x,y)==reference(x,y,sigma,true,[&](int xx,int yy){return value(xx,yy);}),"Tiled mask blur differs from the clamped reference Gaussian");
+        }
+    });
+    // A warp stroke appends brush coverage once per pointer event, while every dab still moves pixels.
+    test("warp_coverage_once_per_event_matches_fine_events",[&]{
+        Layer layer;layer.id="warp-events";layer.transform=transform(200,100);layer.raster=raster(200,100,[](int x,int y){return Pixel{uint8_t(x),uint8_t(y*2),uint8_t((x*y)%256),255};});
+        for(Mode mode:{Mode::Smudge,Mode::Liquify}){
+            Settings settings;settings.mode=mode;settings.radius=20;settings.hardness=.5;settings.opacity=.8;
+            RetouchSession coarse(layer,200,100,settings,{},{},gpu);coarse.begin({50,50});require(coarse.append({90,50}),"Coarse warp move was refused");
+            require(coarse.metrics().warpDabs==40,"Warp dab spacing changed");
+            require(coarse.metrics().coverageSamples==2,"Warp appended coverage for every dab");
+            RetouchSession fine(layer,200,100,settings,{},{},gpu);fine.begin({50,50});for(int x=51;x<=90;++x)fine.append({double(x),50});
+            require(fine.metrics().warpDabs==40,"Fine warp dab count changed");
+            coarse.commitSnapshot();fine.commitSnapshot();
+            const auto a=coarse.committedLayer().raster,b=fine.committedLayer().raster;
+            for(int x=55;x<=85;++x)require(a->pixel(x,50)==b->pixel(x,50),"Per-event coverage changed fully covered warp pixels");
+        }
     });
     std::cout<<"{\"suite\":\"retouch\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"warp\":"<<(gpu?"true":"false")<<"}\n";return failed?1:0;
 }
