@@ -335,6 +335,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (watched != popup_) return false;
         if (event->type() == QEvent::Show) capture();
+        else if (event->type() == QEvent::Hide) backdrop_ = {};
         else if (event->type() == QEvent::Paint) {
             paint();
             // Otherwise the popup's own paint (for a combo box list, Qt's opaque menu panel) would cover the glass.
@@ -381,6 +382,17 @@ private:
     QPixmap backdrop_;
 };
 
+// Turns one application-wide popup effect off for its lifetime and restores it, whatever leaves the scope.
+struct EffectOff {
+    explicit EffectOff(Qt::UIEffect effect) : effect_(effect), was_(QApplication::isEffectEnabled(effect)) { if (was_) QApplication::setEffectEnabled(effect_, false); }
+    ~EffectOff() { if (was_) QApplication::setEffectEnabled(effect_, true); }
+    EffectOff(const EffectOff&) = delete;
+    EffectOff& operator=(const EffectOff&) = delete;
+private:
+    Qt::UIEffect effect_;
+    bool was_;
+};
+
 void makeTranslucent(QWidget* popup) {
     popup->setWindowFlags(popup->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
     popup->setAttribute(Qt::WA_TranslucentBackground);
@@ -406,7 +418,8 @@ void makeGlassMenu(QMenu* menu) {
         const bool fade = QApplication::isEffectEnabled(Qt::UI_FadeMenu);
         QApplication::setEffectEnabled(Qt::UI_AnimateMenu, false);
         QApplication::setEffectEnabled(Qt::UI_FadeMenu, false);
-        QTimer::singleShot(0, menu, [roll, fade] {
+        // The application is the timer's context, so the effects come back even if the menu is destroyed first.
+        QTimer::singleShot(0, qApp, [roll, fade] {
             QApplication::setEffectEnabled(Qt::UI_AnimateMenu, roll);
             QApplication::setEffectEnabled(Qt::UI_FadeMenu, fade);
         });
@@ -466,10 +479,8 @@ void CapsuleDropdown::showPopup() {
     view()->setMinimumWidth(widest + t::blendMenuTextInset + 8 + 2 * 8 + 2 * 6 + view()->verticalScrollBar()->sizeHint().width() + 12);
     // Qt rolls an editable combo box's list in from an opaque snapshot, which the glass, taken from the screen behind
     // the list as it appears, would then show instead of what lies behind.
-    const bool animate = QApplication::isEffectEnabled(Qt::UI_AnimateCombo);
-    if (animate) QApplication::setEffectEnabled(Qt::UI_AnimateCombo, false);
+    const EffectOff noRoll(Qt::UI_AnimateCombo);
     QComboBox::showPopup();
-    if (animate) QApplication::setEffectEnabled(Qt::UI_AnimateCombo, true);
 }
 void CapsuleDropdown::hidePopup() { QComboBox::hidePopup(); dismiss(); }
 void CapsuleDropdown::paintEvent(QPaintEvent* event) {
