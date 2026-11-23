@@ -4,6 +4,7 @@
 #include "ui/PaletteDialog.h"
 #include "ui/ToolbarControls.h"
 #include "ui/LayerPanelWidgets.h"
+#include "ui/LayerPanelTokens.h"
 #include <QComboBox>
 #include <QApplication>
 #include <QColorDialog>
@@ -337,7 +338,7 @@ void scrub_zoom_title(){
     for(const char* name:{"brushSize","textTracking"}){auto* field=w.findChild<QWidget*>(name);if(!field){auto any=w.findChildren<QDoubleSpinBox*>();for(auto* box:any)if(box->accessibleName()==(QString(name)=="brushSize"?"Brush diameter":"Tracking"))field=box;}
         REQUIRE(field);auto* label=field->parentWidget()->findChild<QLabel*>();REQUIRE(label&&label->cursor().shape()==Qt::SplitHCursor);}
 }
-// The Magic Wand sample, Crop ratio and Gradient color lists and the Type font list open as rounded glass panels:
+// The Magic Wand sample, Crop ratio and Gradient color lists and the Type font and style lists open as rounded glass panels:
 // painted inside, transparent outside the rounded corners.
 void options_lists_are_rounded_glass(){
     MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
@@ -360,5 +361,16 @@ void options_lists_are_rounded_glass(){
     auto* popup=w.findChild<QWidget*>("textFontPopup");
     REQUIRE(glass(popup));
     popup->hide();QApplication::processEvents();
+    auto* styles=w.findChild<QComboBox*>("textStyle");REQUIRE(styles&&styles->count()>0);
+    // The style list opens without the roll animation, which would show an opaque snapshot, and leaves the setting as it was.
+    QApplication::setEffectEnabled(Qt::UI_General,true);QApplication::setEffectEnabled(Qt::UI_AnimateCombo,true);
+    REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateCombo));
+    styles->showPopup();QApplication::processEvents();
+    REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateCombo));
+    REQUIRE(glass(styles->view()->window()));
+    // Every style name fits beside the check mark, although the list of an editable box starts as wide as the box.
+    const int room=styles->view()->viewport()->width()-ui::layer_panel::blendMenuTextInset-8-2*8;
+    for(int index=0;index<styles->count();++index)REQUIRE(styles->view()->fontMetrics().horizontalAdvance(styles->itemText(index))<=room);
+    styles->hidePopup();QApplication::processEvents();
 }
 int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

@@ -396,6 +396,7 @@ void MainWindow::setupTypeControls(){
     styles->setEditable(true);styles->lineEdit()->setReadOnly(true);styles->lineEdit()->setPlaceholderText("Multiple");
     // The editable field sits inside the capsule, so it draws nothing of its own.
     styles->setStyleSheet(styles->styleSheet()+"QComboBox QLineEdit { background: transparent; border: 0; padding: 0; }");
+    styles->useGlassPopup();
     openComboOnFieldClick(styles);
     textStyleBox_=styles;
     auto* size=ui::makeNumberField(1,1000,textDefaults_.fontSize,"Text size");size->setObjectName("textSize");

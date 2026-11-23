@@ -13,11 +13,13 @@
 #include <QPixmap>
 #include <QProxyStyle>
 #include <QScreen>
+#include <QScrollBar>
 #include <QRegularExpression>
 #include <QStyleFactory>
 #include <QStyleOptionSlider>
 #include <QStyledItemDelegate>
 #include <QXmlStreamReader>
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -412,7 +414,23 @@ bool CapsuleDropdown::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::Hide && watched == view()->window()) dismiss();
     return QComboBox::eventFilter(watched, event);
 }
-void CapsuleDropdown::showPopup() { view()->window()->installEventFilter(this); open_ = true; QComboBox::showPopup(); }
+void CapsuleDropdown::showPopup() {
+    view()->window()->installEventFilter(this);
+    open_ = true;
+    if (!property("glassPopup").toBool()) { QComboBox::showPopup(); return; }
+    // Glass rows indent their text past the check mark, which Qt leaves out when it sizes the list; an editable
+    // combo box's list would otherwise only be as wide as the box.
+    int widest = 0;
+    for (int index = 0; index < count(); ++index)
+        widest = std::max({widest, view()->fontMetrics().horizontalAdvance(itemText(index)), fontMetrics().horizontalAdvance(itemText(index))});
+    view()->setMinimumWidth(widest + t::blendMenuTextInset + 8 + 2 * 8 + 2 * 6 + view()->verticalScrollBar()->sizeHint().width() + 12);
+    // Qt rolls an editable combo box's list in from an opaque snapshot, which the glass, taken from the screen behind
+    // the list as it appears, would then show instead of what lies behind.
+    const bool animate = QApplication::isEffectEnabled(Qt::UI_AnimateCombo);
+    if (animate) QApplication::setEffectEnabled(Qt::UI_AnimateCombo, false);
+    QComboBox::showPopup();
+    if (animate) QApplication::setEffectEnabled(Qt::UI_AnimateCombo, true);
+}
 void CapsuleDropdown::hidePopup() { QComboBox::hidePopup(); dismiss(); }
 void CapsuleDropdown::paintEvent(QPaintEvent* event) {
     QComboBox::paintEvent(event);
