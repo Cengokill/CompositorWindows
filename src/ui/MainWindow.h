@@ -353,6 +353,7 @@ private:
     void refreshZoomControl();
     void setupStatusInfo();
     void refreshStatusInfo();
+    bool wandRunning_{};
     QString toolHint() const;
     void openEditPanelColor(effects_tools::PaletteColor,const QString&,std::function<void(effects_tools::PaletteColor)>);
     void closeEditPanelColor(bool commit);

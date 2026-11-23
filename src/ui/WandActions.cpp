@@ -15,8 +15,8 @@
 
 namespace compositor {
 void MainWindow::runWand(Point point,Qt::KeyboardModifiers modifiers,std::optional<editing::SelectionMode> modeOverride){
-    static bool running=false;if(running)return;
-    struct Running{Running(){running=true;}~Running(){running=false;}} guard;
+    if(wandRunning_)return;
+    struct Running{bool& flag;explicit Running(bool& value):flag(value){flag=true;}~Running(){flag=false;}} guard(wandRunning_);
     auto*p=current();if(!p||!p->document||point.x<0||point.y<0||point.x>=p->document->width||point.y>=p->document->height)return;
     const auto before=*p->document;auto sample=before;sample.selection.reset();
     if(!wandAllLayers_){sample.layers.clear();if(const auto*l=active();l&&!l->group&&l->raster){auto layer=*l;layer.mask.reset();layer.maskSourceId.clear();layer.parentId.clear();layer.adjustmentJson.clear();layer.visible=true;layer.opacity=1;layer.blend=Blend::Normal;sample.layers.push_back(std::move(layer));}}
@@ -33,7 +33,10 @@ void MainWindow::runWand(Point point,Qt::KeyboardModifiers modifiers,std::option
         else{auto count=graphics::wandMask({bytes,uint32_t(sample.width),uint32_t(sample.height),size_t(sample.width)*4},size_t(std::floor(point.x)),size_t(std::floor(point.y)),size_t(radius),tolerance,contiguous,{mask.pixels,uint32_t(mask.width),uint32_t(mask.height),size_t(mask.width)});if(count)result.outline=editing::SelectionOutline::fromCoverage(mask,antialiased);}
     }catch(const std::exception&e){result.error=e.what();}return result;});watcher.setFuture(future);// The progress dialog only appears if the selection takes noticeable time; a quick wand click no longer flashes it.
     QEventLoop wait;connect(&watcher,&QFutureWatcher<Result>::finished,&wait,&QEventLoop::quit);connect(&progress,&QProgressDialog::canceled,&wait,&QEventLoop::quit);
-    QTimer::singleShot(200,&progress,[&]{if(!watcher.isFinished())progress.show();});wait.exec();progress.hide();bool cancelled=progress.wasCanceled();future.waitForFinished();if(cancelled||current()!=p||!p->document||*p->document!=before)return;auto result=future.result();if(!result.error.empty())throw std::runtime_error(result.error);
+    // Input stays blocked during the grace period, so a click, undo or tab switch cannot run inside this gesture; the dialog then blocks it as before.
+    QTimer grace;grace.setSingleShot(true);connect(&grace,&QTimer::timeout,&wait,&QEventLoop::quit);grace.start(200);
+    if(!watcher.isFinished())wait.exec(QEventLoop::ExcludeUserInputEvents);
+    if(!watcher.isFinished()){progress.show();wait.exec();}progress.hide();bool cancelled=progress.wasCanceled();future.waitForFinished();if(cancelled||current()!=p||!p->document||*p->document!=before)return;auto result=future.result();if(!result.error.empty())throw std::runtime_error(result.error);
     edit("Magic Wand",[&](Document&d){if(!result.outline){if(mode==editing::SelectionMode::Replace)d.selection.reset();return;}std::optional<editing::SelectionOutline> original;if(d.selection){if(d.selection->outline)original=*d.selection->outline;else if(d.selection->coverage)original=editing::SelectionOutline::fromCoverage(*d.selection->coverage);}auto combined=mode==editing::SelectionMode::Replace?result.outline:editing::applySelection(original,*result.outline,mode,d.width,d.height,antialiased);d.selection=editing::rasterSelection(combined,d.width,d.height);});
 }
 }
