@@ -6,6 +6,7 @@
 #include "EditPanelSession.h"
 #include "NativeCanvas.h"
 #include "PropertyControls.h"
+#include "LayerPanelWidgets.h"
 #include "graphics/MaskSampling.h"
 #include "graphics/Downsample.h"
 #include "imaging/onnx_subject_provider.h"
@@ -47,6 +48,8 @@
 
 namespace compositor {
 namespace {
+// A list in the application's Liquid Glass style, like the other drop-downs.
+ui::CapsuleDropdown* glassCombo(){auto* box=new ui::CapsuleDropdown;box->useGlassPopup();return box;}
 std::filesystem::path subjectModelPath(){
     auto model=QDir(QApplication::applicationDirPath()).filePath("models/birefnet-lite.onnx");
     if(!QFileInfo::exists(model))model=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/dependencies/imaging/model/birefnet-lite.onnx";
@@ -485,7 +488,7 @@ public:
         auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
             auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"||label=="Threshold"||label=="Midpoint"?decimals:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
             if(request_.kind==filters::Kind::Sharpen)spin->setSuffix(label=="Amount"?" %":" px");
-            auto* slider=new ui::TrackSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
+            auto* slider=new ui::OptionSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=(label=="Radius"||label=="Distance"||label=="Amount")&&low>0;
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
@@ -497,8 +500,8 @@ public:
         };
         switch(request_.kind){
         case filters::Kind::RimLight:{
-            auto& rim=request_.settings.rimLight;auto* count=new QComboBox;count->setObjectName("rimLightCount");count->addItems({"1","2","3"});count->setSizeAdjustPolicy(QComboBox::AdjustToContents);count->ensurePolished();count->setFixedWidth(count->sizeHint().width());count->setCurrentIndex(std::clamp(rim.count,1,3)-1);fields_.addRow("Lights",count);
-            auto* active=new QComboBox;active->setObjectName("rimActiveLight");active->setSizeAdjustPolicy(QComboBox::AdjustToContents);active->addItems({"Light 1","Light 2","Light 3"});active->ensurePolished();active->setFixedWidth(active->sizeHint().width());active->clear();for(int i=0;i<std::clamp(rim.count,1,3);++i)active->addItem(QString("Light %1").arg(i+1));fields_.addRow("Edit",active);
+            auto& rim=request_.settings.rimLight;auto* count=glassCombo();count->setObjectName("rimLightCount");count->addItems({"1","2","3"});count->setSizeAdjustPolicy(QComboBox::AdjustToContents);count->ensurePolished();count->setFixedWidth(count->sizeHint().width());count->setCurrentIndex(std::clamp(rim.count,1,3)-1);fields_.addRow("Lights",count);
+            auto* active=glassCombo();active->setObjectName("rimActiveLight");active->setSizeAdjustPolicy(QComboBox::AdjustToContents);active->addItems({"Light 1","Light 2","Light 3"});active->ensurePolished();active->setFixedWidth(active->sizeHint().width());active->clear();for(int i=0;i<std::clamp(rim.count,1,3);++i)active->addItem(QString("Light %1").arg(i+1));fields_.addRow("Edit",active);
             std::array<std::pair<int,int>,3> rows;
             std::vector<QDoubleSpinBox*> rimNumbers;
             for(int i=0;i<3;++i){auto& light=rim.lights[i];const auto& defaults=factory.rimLight.lights[i];rows[i].first=fields_.rowCount();const auto prefix=QString("Light %1 ").arg(i+1);
@@ -516,20 +519,20 @@ public:
         case filters::Kind::AddNoise:{number("Amount",request_.settings.amount,.1,400,1,factory.amount);auto* gaussian=new QCheckBox("Gaussian");auto* mono=new QCheckBox("Monochromatic");gaussian->setChecked(request_.settings.gaussian);mono->setChecked(request_.settings.monochromatic);fields_.addRow(gaussian);fields_.addRow(mono);connect(gaussian,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.gaussian=value;change();});connect(mono,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.monochromatic=value;change();});break;}
         case filters::Kind::LensCorrection:number("Distortion",request_.settings.distortion,-100,100,1,factory.distortion);break;
         case filters::Kind::LensEffects:{
-            auto* mode=new QComboBox;mode->setObjectName("lensEffectMode");mode->addItems({"Anamorphic Flare","Starburst","Mist","Prism","Bokeh"});mode->setCurrentIndex(int(request_.settings.lens.effect));fields_.addRow("Effect",mode);
+            auto* mode=glassCombo();mode->setObjectName("lensEffectMode");mode->addItems({"Anamorphic Flare","Starburst","Mist","Prism","Bokeh"});mode->setCurrentIndex(int(request_.settings.lens.effect));fields_.addRow("Effect",mode);
             auto& v=request_.settings.lens;const auto& d=factory.lens;
             std::array<std::pair<int,int>,5> rows;
             auto begin=[&](int i){rows[i].first=fields_.rowCount();};auto end=[&](int i){rows[i].second=fields_.rowCount();};
             begin(0);number("Threshold",v.threshold,50,100,1,d.threshold);number("Strength",v.flareAmount,0,100,1,d.flareAmount);number("Length",v.flareLength,1,100,1,d.flareLength);number("Blue",v.flareBlue,0,100,1,d.flareBlue);end(0);
             begin(1);number("Star strength",v.starAmount,0,100,1,d.starAmount);number("Star length",v.starLength,2,40,1,d.starLength);number("Star angle",v.starAngle,-180,180,1,d.starAngle);
-            auto* points=new QComboBox;points->setObjectName("lensStarPoints");points->addItems({"4","6","8","12","14"});points->setCurrentText(QString::number(v.starPoints));fields_.addRow("Points",points);connect(points,&QComboBox::currentTextChanged,&dialog_,[this](const QString& text){request_.settings.lens.starPoints=text.toInt();change();});end(1);
+            auto* points=glassCombo();points->setObjectName("lensStarPoints");points->addItems({"4","6","8","12","14"});points->setCurrentText(QString::number(v.starPoints));fields_.addRow("Points",points);connect(points,&QComboBox::currentTextChanged,&dialog_,[this](const QString& text){request_.settings.lens.starPoints=text.toInt();change();});end(1);
             begin(2);number("Mist strength",v.mistStrength,0,100,1,d.mistStrength);number("Size",v.mistSize,0,100,1,d.mistSize);end(2);
             begin(3);number("Prism strength",v.prismAmount,0,100,1,d.prismAmount);number("Copies",v.prismCopies,1,8,0,d.prismCopies);number("Offset",v.prismOffset,0,50,1,d.prismOffset);number("Prism angle",v.prismAngle,-180,180,1,d.prismAngle);number("Blur",v.prismBlur,0,100,1,d.prismBlur);
             auto* both=new QCheckBox("Both ways");both->setChecked(v.prismBothWays);fields_.addRow(both);connect(both,&QCheckBox::toggled,&dialog_,[this](bool checked){request_.settings.lens.prismBothWays=checked;change();});end(3);
             begin(4);number("Radius",v.bokehRadius,.5,6,1,d.bokehRadius);number("Brightness",v.bokehBrightness,0,100,1,d.bokehBrightness);number("Ring",v.bokehRing,0,100,1,d.bokehRing);
-            auto* shape=new QComboBox;shape->setObjectName("lensBokehShape");shape->addItems({"Round","Hexagon","Oval","Cat's Eye"});shape->setCurrentIndex(int(v.bokehShape));fields_.addRow("Shape",shape);connect(shape,&QComboBox::currentIndexChanged,&dialog_,[this](int index){request_.settings.lens.bokehShape=filters::BokehShape(index);change();});end(4);
-            auto show=[this,rows](int index){for(int i=0;i<5;++i)for(int row=rows[i].first;row<rows[i].second;++row)fields_.setRowVisible(row,i==index||(i==0&&row==rows[0].first&&index==1));};show(mode->currentIndex());
-            connect(mode,&QComboBox::currentIndexChanged,&dialog_,[this,show](int index){request_.settings.lens.effect=filters::LensEffect(index);show(index);dialog_.adjustSize();change();});break;
+            auto* shape=glassCombo();shape->setObjectName("lensBokehShape");shape->addItems({"Round","Hexagon","Oval","Cat's Eye"});shape->setCurrentIndex(int(v.bokehShape));fields_.addRow("Shape",shape);connect(shape,&QComboBox::currentIndexChanged,&dialog_,[this](int index){request_.settings.lens.bokehShape=filters::BokehShape(index);change();});end(4);
+            auto show=[this,rows](int index){for(const bool visible:{false,true})for(int i=0;i<5;++i)for(int row=rows[i].first;row<rows[i].second;++row){const bool wanted=i==index||(i==0&&row==rows[0].first&&index==1);if(wanted==visible)fields_.setRowVisible(row,wanted);}};show(mode->currentIndex());
+            connect(mode,&QComboBox::currentIndexChanged,&dialog_,[this,show](int index){request_.settings.lens.effect=filters::LensEffect(index);show(index);layout_.invalidate();layout_.activate();dialog_.resize(dialog_.width(),dialog_.sizeHint().height());change();});break;
         }
         case filters::Kind::ContentAwareFill:break;
         case filters::Kind::Vignette:number("Strength",request_.settings.vignette,0,100,1,factory.vignette);number("Midpoint",request_.settings.vignetteMidpoint,0,1,2,factory.vignetteMidpoint);break;

@@ -1,5 +1,7 @@
 #include "CameraRawPanel.h"
 #include "PropertyControls.h"
+#include "LayerPanelTokens.h"
+#include "LayerPanelWidgets.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QButtonGroup>
@@ -26,6 +28,12 @@
 
 namespace compositor::ui {
 namespace {
+// A list in the application's Liquid Glass style, like the other drop-downs.
+CapsuleDropdown* glassCombo() {
+    auto* box = new CapsuleDropdown;
+    box->useGlassPopup();
+    return box;
+}
 class ResetLabel final : public QLabel {
 public:
     std::function<void()> reset;
@@ -216,53 +224,53 @@ void paintThumb(QPainter& painter, const QRectF& bounds, bool hovered) {
     painter.drawEllipse(bounds.adjusted(0.5, 0.5, -0.5, -0.5));
     painter.restore();
 }
-// Windows-style slider. Two-colour tracks (A left, B right) paint their gradient across the whole
-// groove, so the colour ends stay fixed while the knob moves; the part not yet reached is dimmed.
+// Slider drawn like the options-bar slider (4-pixel track, wide rounded knob, application blue). Two-colour tracks
+// (A left, B right) paint their gradient across the whole groove, so the colour ends stay fixed while the knob moves;
+// the part not yet reached is dimmed.
 class CameraRawSlider final : public TrackSlider {
 public:
     explicit CameraRawSlider(Qt::Orientation orientation, QWidget* parent = nullptr) : TrackSlider(orientation, parent) {
-        setFixedHeight(24);
+        setFixedHeight(layer_panel::optionSliderHeight);
         setCursor(Qt::PointingHandCursor);
-        setAttribute(Qt::WA_Hover);
     }
     void setTrackColors(QColor left, QColor right) { left_ = left; right_ = right; }
 protected:
-    static constexpr int knob = 16;
+    static constexpr int knobWidth = layer_panel::optionKnobWidth;
+    static constexpr int knobHeight = layer_panel::optionKnobHeight;
     QRectF groove() const {
-        constexpr double thickness = 4;
-        return {knob / 2.0, (height() - thickness) / 2.0, std::max(0.0, width() - double(knob)), thickness};
+        constexpr double thickness = layer_panel::optionSliderTrack;
+        return {0.0, (height() - thickness) / 2.0, double(width()), thickness};
     }
+    double travel() const { return std::max(0.0, width() - double(knobWidth)); }
     double ratio() const {
         return maximum() == minimum() ? 0 : double(value() - minimum()) / double(maximum() - minimum());
     }
-    QPointF knobCenter() const {
-        const auto track = groove();
-        return {track.left() + ratio() * track.width(), height() / 2.0};
-    }
+    QPointF knobCenter() const { return {knobWidth / 2.0 + ratio() * travel(), height() / 2.0}; }
     int valueFrom(double x) const {
-        const auto track = groove();
-        if (track.width() <= 0 || maximum() == minimum()) return value();
-        const double placed = std::clamp((x - track.left()) / track.width(), 0., 1.);
+        if (travel() <= 0 || maximum() == minimum()) return value();
+        const double placed = std::clamp((x - knobWidth / 2.0) / travel(), 0., 1.);
         return int(std::lround(minimum() + placed * (maximum() - minimum())));
     }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
+        if (!isEnabled()) painter.setOpacity(0.45);
         const auto track = groove();
         const double radius = track.height() / 2;
         const bool bicolor = left_.isValid() && right_.isValid();
         // Gradient geometry is the full groove: A stays at the left end and B at the right end.
         QLinearGradient fill(track.topLeft(), track.topRight());
-        fill.setColorAt(0, bicolor ? left_ : QColor("#579cf5"));
-        fill.setColorAt(1, bicolor ? right_ : QColor("#579cf5"));
+        fill.setColorAt(0, bicolor ? left_ : QColor(layer_panel::accent));
+        fill.setColorAt(1, bicolor ? right_ : QColor(layer_panel::accent));
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#494c53"));
+        painter.setBrush(QColor(layer_panel::optionTrack));
         painter.drawRoundedRect(track, radius, radius);
         if (bicolor) {
+            const double faded = painter.opacity();
             painter.setBrush(fill);
-            painter.setOpacity(0.35);
+            painter.setOpacity(faded * 0.35);
             painter.drawRoundedRect(track, radius, radius);
-            painter.setOpacity(1);
+            painter.setOpacity(faded);
         }
         const QPointF center = knobCenter();
         QPainterPath reached;
@@ -271,7 +279,11 @@ protected:
         painter.setBrush(fill);
         painter.drawRoundedRect(track, radius, radius);
         painter.setClipping(false);
-        paintThumb(painter, QRectF(center.x() - knob / 2.0, center.y() - knob / 2.0, knob, knob), underMouse());
+        const QRectF knob(center.x() - knobWidth / 2.0, center.y() - knobHeight / 2.0, knobWidth, knobHeight);
+        painter.setBrush(QColor(0, 0, 0, 90));
+        painter.drawRoundedRect(knob.translated(0, 1), knobHeight / 2.0, knobHeight / 2.0);
+        painter.setBrush(isSliderDown() ? QColor(Qt::white) : QColor(layer_panel::primary));
+        painter.drawRoundedRect(knob, knobHeight / 2.0, knobHeight / 2.0);
     }
     void mousePressEvent(QMouseEvent* event) override {
         if (event->button() != Qt::LeftButton || !isEnabled()) return;
@@ -746,7 +758,7 @@ void CameraRawPanel::build() {
     addSlider(light, "Blacks", &settings_.blacks, -100, 100, 0, 0, 2, {}, false);
 
     auto* color = addSection(sections, "Color", "color", true, &eyes_.color, [this] { return settings_.adjustsColor(); });
-    whiteBalance_ = new QComboBox;
+    whiteBalance_ = glassCombo();
     whiteBalance_->setObjectName("cameraRawWhiteBalance");
     whiteBalance_->addItems({"Custom", "Auto"});
     whiteBalance_->setAccessibleName("White Balance");
@@ -780,7 +792,7 @@ void CameraRawPanel::build() {
     curvePageLayout->addWidget(point);
     curvePageLayout->addWidget(toolButton("Curve Target", Tool::Curve));
     curve->addWidget(curvePages);
-    auto* channel = new QComboBox;
+    auto* channel = glassCombo();
     channel->setObjectName("cameraRawCurveChannel");
     channel->addItems({"RGB", "Red", "Green", "Blue"});
     channel->setAccessibleName("Curve Channel");
@@ -797,7 +809,7 @@ void CameraRawPanel::build() {
     addSlider(curve, "Darks", &settings_.curve.darks, -100, 100, 0, 0, 0, {}, false);
     addSlider(curve, "Shadows", &settings_.curve.shadows, -100, 100, 0, 0, 0, {}, false);
     auto* refine = addSlider(curve, "Refine Saturation", &settings_.curve.refineSaturation, -100, 100, 0, 0, 0, {}, false);
-    auto* presets = new QComboBox;
+    auto* presets = glassCombo();
     presets->setObjectName("cameraRawCurvePreset");
     presets->addItems({"Curve Preset", "Linear", "Medium Contrast", "Strong Contrast"});
     presets->setAccessibleName("Curve Preset");
@@ -884,7 +896,7 @@ void CameraRawPanel::build() {
     auto* pointLayout = new QVBoxLayout(pointHost);
     pointLayout->setContentsMargins(0, 0, 0, 0);
     pointLayout->addWidget(toolButton("Point Color", Tool::PointColor));
-    auto* pointList = new QComboBox;
+    auto* pointList = glassCombo();
     pointList->setObjectName("cameraRawPoints");
     pointList->setAccessibleName("Point Color");
     pointLayout->addWidget(pointList);
@@ -974,7 +986,7 @@ void CameraRawPanel::build() {
     });
 
     auto* grading = addSection(sections, "Color Grading", "grading", true, &eyes_.grading, [this] { return settings_.grading.adjusts(); });
-    auto* gradePage = new QComboBox;
+    auto* gradePage = glassCombo();
     gradePage->setObjectName("cameraRawGradePage");
     gradePage->addItems({"Three-Way", "Shadows", "Midtones", "Highlights", "Global"});
     gradePage->setAccessibleName("Color Grading");
@@ -1012,7 +1024,7 @@ void CameraRawPanel::build() {
     addSlider(effects, "Texture", &settings_.texture, -100, 100, 0, 0, 0, {}, false);
     addSlider(effects, "Clarity", &settings_.clarity, -100, 100, 0, 0, 0, {}, false);
     addSlider(effects, "Dehaze", &settings_.dehaze, -100, 100, 0, 0, 0, {}, false);
-    auto* glowStyle = new QComboBox;
+    auto* glowStyle = glassCombo();
     glowStyle->setObjectName("cameraRawGlowStyle");
     glowStyle->addItems({"Diffusion", "Bloom", "Halation"});
     glowStyle->setAccessibleName("Glow Style");
@@ -1021,7 +1033,7 @@ void CameraRawPanel::build() {
     addSlider(effects, "Glow Range", &settings_.glowRange, -100, 100, 0, 0, 0, {}, false);
     addSlider(effects, "Glow Spread", &settings_.glowSpread, -100, 100, 0, 0, 0, {}, false);
     addSlider(effects, "Glow Warmth", &settings_.glowWarmth, -100, 100, 0, 0, 0, {}, false);
-    auto* vignetteStyle = new QComboBox;
+    auto* vignetteStyle = glassCombo();
     vignetteStyle->setObjectName("cameraRawVignetteStyle");
     vignetteStyle->addItems({"Highlight Priority", "Color Priority", "Paint Overlay"});
     vignetteStyle->setAccessibleName("Vignette Style");
@@ -1099,11 +1111,11 @@ void CameraRawPanel::build() {
     });
 
     auto* geometry = addSection(sections, "Geometry", "geometry", false, &eyes_.geometry, [this] { return settings_.geometry.adjusts(); });
-    auto* upright = new QComboBox;
+    auto* upright = glassCombo();
     upright->setObjectName("cameraRawUpright");
     upright->addItems({"Off", "Guided"});
     upright->setAccessibleName("Upright");
-    auto* projection = new QComboBox;
+    auto* projection = glassCombo();
     projection->setObjectName("cameraRawProjection");
     projection->addItems({"Perspective", "Rectilinear"});
     projection->setAccessibleName("Projection");
@@ -1143,7 +1155,7 @@ void CameraRawPanel::build() {
     });
 
     auto* calibration = addSection(sections, "Calibration", "calibration", false, &eyes_.calibration, [this] { return settings_.calibration.adjusts(); });
-    auto* process = new QComboBox;
+    auto* process = glassCombo();
     process->setObjectName("cameraRawProcess");
     process->addItems({"Version 1", "Version 2", "Version 3", "Version 4", "Version 5", "Version 6"});
     process->setAccessibleName("Process");

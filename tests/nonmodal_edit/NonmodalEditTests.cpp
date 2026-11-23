@@ -103,8 +103,8 @@ void rim_light_control_alignment(){
                 require(slider->width()==referenceSlider->width()&&slider->mapTo(&p,QPoint()).x()==referenceSlider->mapTo(&p,QPoint()).x(),"rim sliders do not align");
             }
         }
-        require(count->width()<=count->fontMetrics().horizontalAdvance("3")+60,"light count menu is too wide");
-        require(active->width()<=active->fontMetrics().horizontalAdvance("Light 3")+60,"active light menu is too wide");
+        require(count->width()<=count->fontMetrics().horizontalAdvance("3")+80,"light count menu is too wide");
+        require(active->width()<=active->fontMetrics().horizontalAdvance("Light 3")+80,"active light menu is too wide");
         require(count->width()<active->width(),"count menu should be narrower than light names");
         f.unchanged();
     });

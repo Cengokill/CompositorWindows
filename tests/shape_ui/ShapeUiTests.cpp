@@ -6,6 +6,7 @@
 #include "ui/LayerPanelWidgets.h"
 #include "ui/LayerPanelTokens.h"
 #include <QComboBox>
+#include <QDialog>
 #include <QApplication>
 #include <QColorDialog>
 #include <QElapsedTimer>
@@ -348,6 +349,34 @@ bool glass(QWidget* popup){
     const auto alpha=[&](int x,int y){return panel.pixelColor(int(x*scale),int(y*scale)).alpha();};
     return alpha(2,2)==0&&alpha(popup->width()-3,popup->height()-3)==0&&alpha(popup->width()/2,popup->height()-4)>0;
 }
+void filter_sliders_use_option_slider(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    command(w,"filter.gaussian")->trigger();QApplication::processEvents();
+    QDialog* panel=nullptr;for(auto* d:w.findChildren<QDialog*>())if(d->isVisible())panel=d;
+    REQUIRE(panel);int count=0;
+    for(auto* slider:panel->findChildren<QSlider*>()){++count;REQUIRE(dynamic_cast<ui::OptionSlider*>(slider));}
+    REQUIRE(count>0);panel->reject();QApplication::processEvents();
+}
+void filter_lists_use_glass_dropdown(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    command(w,"filter.lens_effects")->trigger();QApplication::processEvents();
+    QDialog* panel=nullptr;for(auto* d:w.findChildren<QDialog*>())if(d->isVisible())panel=d;
+    REQUIRE(panel);auto* mode=panel->findChild<QComboBox*>("lensEffectMode");REQUIRE(mode);
+    int count=0;for(auto* box:panel->findChildren<QComboBox*>()){++count;REQUIRE(dynamic_cast<ui::CapsuleDropdown*>(box)&&box->property("glassPopup").toBool());}
+    REQUIRE(count>0);panel->reject();QApplication::processEvents();
+}
+void lens_effects_panel_fits_its_rows(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    command(w,"filter.lens_effects")->trigger();QApplication::processEvents();
+    QDialog* panel=nullptr;for(auto* d:w.findChildren<QDialog*>())if(d->isVisible())panel=d;
+    REQUIRE(panel);auto* mode=panel->findChild<QComboBox*>("lensEffectMode");REQUIRE(mode);
+    const int order[]{3,0,4,1,2,3,2,4,0,1,4,3};
+    for(int index:order){
+        mode->setCurrentIndex(index);QTest::qWait(20);QApplication::processEvents();
+        REQUIRE(panel->height()<=panel->sizeHint().height()+4);
+    }
+    panel->reject();QApplication::processEvents();
+}
 void options_lists_are_rounded_glass(){
     MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
     const auto tool=[&](const char* id){command(w,id)->trigger();QApplication::processEvents();};
@@ -403,4 +432,4 @@ void layer_footer_menus_are_rounded_glass(){
         menu->hide();QApplication::processEvents();
     }
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"layer_footer_menus_are_rounded_glass",layer_footer_menus_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"filter_sliders_use_option_slider",filter_sliders_use_option_slider},{"filter_lists_use_glass_dropdown",filter_lists_use_glass_dropdown},{"lens_effects_panel_fits_its_rows",lens_effects_panel_fits_its_rows},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"layer_footer_menus_are_rounded_glass",layer_footer_menus_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

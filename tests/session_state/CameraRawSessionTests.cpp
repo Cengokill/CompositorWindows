@@ -3,6 +3,8 @@
 #undef main
 #include "filters/CameraRaw.h"
 #include "ui/ImportCommit.h"
+#include "ui/LayerPanelWidgets.h"
+#include <QComboBox>
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -378,6 +380,14 @@ void slider_knob_geometry() {
         const QPointF knob = brightCentroid(sliderImage);
         require(std::abs(knob.y() - sliderImage.height() / 2.0) <= 1.25, "slider knob is vertically centered");
         require(std::abs(knob.x() - sliderImage.width() / 2.0) <= 2.0, "slider knob starts centered on the track");
+        slider->setValue(slider->maximum());
+        sliderImage.fill(Qt::transparent);
+        slider->render(&sliderImage);
+        int lists = 0;
+        for (auto* box : dialog.findChildren<QComboBox*>()) { ++lists; require(dynamic_cast<compositor::ui::CapsuleDropdown*>(box) && box->property("glassPopup").toBool(), "Camera Raw lists use the glass drop-down"); }
+        require(lists >= 8, "Camera Raw lists were found");
+        require(sliderImage.pixelColor(sliderImage.width() / 4, sliderImage.height() / 2).name() == "#067dff", "reached track is the application blue");
+        require(sliderImage.pixelColor(sliderImage.width() - 9, sliderImage.height() / 2).name() == "#e0e0e0", "knob is the shared option-slider knob");
         bool luminanceFits = false;
         for (auto* label : dialog.findChildren<QLabel*>()) {
             if (label->text() != "Luminance" || !label->isVisible()) continue;

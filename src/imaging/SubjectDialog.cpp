@@ -1,6 +1,7 @@
 #include "SubjectDialog.h"
 #include "onnx_subject_provider.h"
 #include "../ui/PropertyControls.h"
+#include "../ui/LayerPanelWidgets.h"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QComboBox>
 #include <QDialog>
@@ -55,7 +56,7 @@ class SubjectDialog final:public QDialog {
     std::optional<GrayMask> committed_;
     bool previewReady_{};
     QAbstractSpinBox* control(QGridLayout* layout,int row,const QString& text,int low,int high,int value,int defaultValue,const QString& suffix){
-        auto* label=new QLabel(text,advanced_);auto* slider=new ui::TrackSlider(Qt::Horizontal,advanced_);slider->setRange(low,high);slider->setDefaultValue(defaultValue);slider->setValue(value);slider->setAccessibleName(text);
+        auto* label=new QLabel(text,advanced_);auto* slider=new ui::OptionSlider(Qt::Horizontal,advanced_);slider->setRange(low,high);slider->setDefaultValue(defaultValue);slider->setValue(value);slider->setAccessibleName(text);
         QAbstractSpinBox* spin;
         if(nonmodal_){auto* field=new ui::PropertyNumber(advanced_);field->setDecimals(0);field->setRange(low,high);field->setSingleStep(1);field->setValue(value);field->setSuffix(suffix);spin=field;
             connect(slider,&QSlider::valueChanged,field,&QDoubleSpinBox::setValue);connect(field,&QDoubleSpinBox::valueChanged,this,[this,slider](double v){slider->setValue(int(v));queuePreview();});
@@ -119,7 +120,7 @@ public:
         setWindowTitle(tr("Remove Background"));setObjectName("subjectPanel");setModal(!nonmodal_);resize(nonmodal_?440:760,nonmodal_?380:690);if(nonmodal_)setWindowFlags(Qt::Tool|Qt::WindowTitleHint|Qt::WindowCloseButtonHint);auto* layout=new QVBoxLayout(this);
         preview_=new Preview(this);preview_->setImage(source);layout->addWidget(preview_,1);
         if(nonmodal_)preview_->hide();
-        auto* qualityLayout=new QHBoxLayout;auto* qualityLabel=new QLabel(tr("Quality"),this);quality_=new QComboBox(this);quality_->setObjectName("backgroundQuality");quality_->addItems({tr("Basic"),tr("Advanced")});quality_->setCurrentIndex(options.initial.advanced?1:0);quality_->setAccessibleName(tr("Quality"));qualityLabel->setBuddy(quality_);qualityLayout->addWidget(qualityLabel);qualityLayout->addWidget(quality_);qualityLayout->addStretch();layout->addLayout(qualityLayout);
+        auto* qualityLayout=new QHBoxLayout;auto* qualityLabel=new QLabel(tr("Quality"),this);auto* qualityBox=new ui::CapsuleDropdown(this);qualityBox->useGlassPopup();quality_=qualityBox;quality_->setObjectName("backgroundQuality");quality_->addItems({tr("Basic"),tr("Advanced")});quality_->setCurrentIndex(options.initial.advanced?1:0);quality_->setAccessibleName(tr("Quality"));qualityLabel->setBuddy(quality_);qualityLayout->addWidget(qualityLabel);qualityLayout->addWidget(quality_);qualityLayout->addStretch();layout->addLayout(qualityLayout);
         advanced_=new QWidget(this);auto* grid=new QGridLayout(advanced_);grid->setContentsMargins(0,0,0,0);refine_=control(grid,0,tr("Refine"),0,40,setting(options.initial.refineEdges,0,40,12),12,tr(" px"));contrast_=control(grid,1,tr("Contrast"),0,100,setting(options.initial.contrast,0,100,25),25,tr(" %"));shift_=control(grid,2,tr("Shift Edge"),-10,10,setting(options.initial.shiftEdge,-10,10,0),0,tr(" px"));advanced_->setVisible(options.initial.advanced);layout->addWidget(advanced_);
         auto* guidance=new QLabel(tr("Works best with a distinct, opaque subject. Transparent objects, fine hair and fur may need manual mask cleanup."),this);guidance->setWordWrap(true);layout->addWidget(guidance);
         status_=new QLabel(this);status_->setWordWrap(true);layout->addWidget(status_);progress_=new QProgressBar(this);progress_->setRange(0,0);progress_->setTextVisible(false);layout->addWidget(progress_);
