@@ -1,6 +1,8 @@
 # Current checkpoint
 
-Windows version **1.5.13** was published on 2026-11-14 from `ec6663214228d4e9ccf21a15ebe86511bfa5407d`, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+Windows version **1.6.0** was published on 2026-11-23 from `7a856b02cccdb79e24516897a416f1b01e807099`, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+
+The [1.6.0 release](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.6.0) redesigns the Layers panel with drop indicators, refreshes the tool options bars, adds JPEG and PNG export options, restores the layer/mask editing target, and speeds up deep-stack zoom and retouch strokes. Its manifest records `sourceDirty: false`; all ten packaging checks and MSI ICE validation passed. All seven published asset hashes match the candidate. MSI installation and upgrade were not tested in this run.
 
 The [1.5.13 release](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.5.13) improves zoom and layer visibility responsiveness, reveals canvas-selected layers in the panel, and fixes shape fill, canvas selection, Hand cursors and What's New behavior. Its manifest records `sourceDirty: false`; seven portable checks and MSI ICE validation passed. All six published asset hashes match the candidate. MSI installation and upgrade were not tested in this run.
 
