@@ -411,12 +411,23 @@ void CapsuleDropdown::useGlassPopup() {
 }
 void CapsuleDropdown::dismiss() { if (!open_) return; open_ = false; if (dismissed) dismissed(); }
 bool CapsuleDropdown::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::Hide && watched == view()->window()) dismiss();
+    if (watched == view()->window()) {
+        if (event->type() == QEvent::Hide) dismiss();
+        else if (event->type() == QEvent::MouseButtonPress) openingPress_ = false;
+        // Qt keeps a list open through the release of the press on the box that opened it, but not when the list is
+        // opened from elsewhere, such as an editable box's text field; the release would then close it at once.
+        else if (event->type() == QEvent::MouseButtonRelease && openingPress_) {
+            openingPress_ = false;
+            if (opened_.elapsed() < QApplication::doubleClickInterval()) return true;
+        }
+    }
     return QComboBox::eventFilter(watched, event);
 }
 void CapsuleDropdown::showPopup() {
     view()->window()->installEventFilter(this);
     open_ = true;
+    openingPress_ = QGuiApplication::mouseButtons().testFlag(Qt::LeftButton);
+    opened_.start();
     if (!property("glassPopup").toBool()) { QComboBox::showPopup(); return; }
     // Glass rows indent their text past the check mark, which Qt leaves out when it sizes the list; an editable
     // combo box's list would otherwise only be as wide as the box.

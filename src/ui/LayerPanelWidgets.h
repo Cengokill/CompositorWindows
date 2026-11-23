@@ -2,6 +2,7 @@
 #include "PropertyControls.h"
 #include <QColor>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QFont>
 #include <QFrame>
 #include <QLineEdit>
@@ -64,6 +65,8 @@ protected:
 private:
     void dismiss();
     bool open_{};
+    bool openingPress_{};
+    QElapsedTimer opened_;
 };
 
 // A button that looks like CapsuleDropdown (left-aligned text, up and down chevrons) but opens its own popup.
