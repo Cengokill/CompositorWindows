@@ -285,7 +285,8 @@ void tool_bars_show_their_own_controls(){
      REQUIRE(text("statusZoom").endsWith(" %")&&text("statusDimensions").contains(QString::fromUtf8(" × "))&&text("statusProfile")=="sRGB · Transparent");
      REQUIRE(text("statusHint").startsWith("Click to zoom in"));
      tool("tool.marquee");REQUIRE(text("statusHint").startsWith("Drag a rectangle")&&text("statusHint").contains("Alt subtract"));
-     tool("tool.zoom");}
+     // A message left on the status bar does not stay in place of the next tool's hint.
+     w.statusBar()->showMessage("Object selection");tool("tool.zoom");REQUIRE(text("statusHint").startsWith("Click to zoom in"));}
     REQUIRE(shown("zoomOptions","zoomPercent")&&title("zoomTitle")=="Zoom"&&w.findChild<QToolBar*>("eyedropperOptions")->isHidden());
     {auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");auto* canvas=mainProject.canvas;REQUIRE(field&&canvas);
      field->setValue(200);emit field->editingFinished();QApplication::processEvents();REQUIRE(std::abs(canvas->zoom-2)<1e-9);

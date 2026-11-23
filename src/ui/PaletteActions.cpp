@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QStatusBar>
+#include <QTimer>
 #include <QHBoxLayout>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -57,7 +58,10 @@ void MainWindow::setupStatusInfo(){
     host->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
     bar->addPermanentWidget(host,1);
     // A transient message takes the place of the hint until it clears.
-    connect(bar,&QStatusBar::messageChanged,this,[this]{refreshStatusInfo();});
+    // Qt keeps a message without a timeout until another one replaces it, so the hint returns by itself after a while.
+    auto* expire=new QTimer(bar);expire->setSingleShot(true);expire->setInterval(8000);
+    connect(expire,&QTimer::timeout,bar,&QStatusBar::clearMessage);
+    connect(bar,&QStatusBar::messageChanged,this,[this,expire](const QString& message){if(message.isEmpty())expire->stop();else expire->start();refreshStatusInfo();});
     refreshStatusInfo();
 }
 void MainWindow::refreshStatusInfo(){

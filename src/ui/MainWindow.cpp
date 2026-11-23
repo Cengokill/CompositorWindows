@@ -255,7 +255,7 @@ void MainWindow::selectTool(Tool value){
     if(value==Tool::Brush||value==Tool::Eraser)brushMode_=value==Tool::Eraser?ProjectBrushMode::Erase:ProjectBrushMode::Paint;
     if(value==Tool::Lasso&&lassoKind_==editing::LassoKind::Polygonal)value=Tool::Polygon;
     if(value==Tool::Polygon)lassoKind_=editing::LassoKind::Polygonal;
-    if(value!=tool_){applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();const bool leftHand=tool_==Tool::Hand;tool_=value;if(canvas()&&tool_==Tool::Hand)canvas()->setCursor(Qt::OpenHandCursor);else if(canvas()&&leftHand)canvas()->unsetCursor();if(canvas())canvas()->updateHoverCursorAtPointer();}
+    if(value!=tool_){statusBar()->clearMessage();applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();const bool leftHand=tool_==Tool::Hand;tool_=value;if(canvas()&&tool_==Tool::Hand)canvas()->setCursor(Qt::OpenHandCursor);else if(canvas()&&leftHand)canvas()->unsetCursor();if(canvas())canvas()->updateHoverCursorAtPointer();}
     if(value==Tool::Crop&&!cropDraft_)if(auto* p=current();p&&p->document){cropRatioChoice_="Free";cropDraft_=editing::Rect{0,0,double(p->document->width),double(p->document->height)};if(p->document->selection&&p->document->selection->coverage){auto bounds=editing::coverageBounds(*p->document->selection->coverage);if(!bounds.empty())cropDraft_=bounds;}}
     if(auto* box=ui::findSegmentedControl(this,"lassoKind"))box->setCurrentIndex(lassoKind_==editing::LassoKind::Polygonal?1:0);
     if(auto* box=findChild<QComboBox*>("cropRatioChoice")){const QSignalBlocker block(box);box->setCurrentText(cropRatioChoice_);}
