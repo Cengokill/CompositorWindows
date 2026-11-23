@@ -27,6 +27,10 @@ inline constexpr auto selectedRow = "#444444";
 inline constexpr auto focusedRow = "#0059d1";
 inline constexpr auto focusedRowDetail = "#b3cdf1";
 inline constexpr auto hoveredRow = "#303030";
+// The window surfaces: tool rail, options bars, tab strip and cards, their border, and the area around the canvas.
+inline constexpr auto surface = "#1f1f1f";
+inline constexpr auto surfaceBorder = "#363636";
+inline constexpr auto canvasSurround = "#1b1b1b";
 
 inline constexpr int minWidth = 261;
 inline constexpr int maxWidth = 372;

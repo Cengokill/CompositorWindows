@@ -11,6 +11,7 @@
 #include "LayerPanel.h"
 #include "LayerPanelWidgets.h"
 #include "EditorIcons.h"
+#include "LayerPanelTokens.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
@@ -136,7 +137,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override { QWidget::resizeEvent(event); schedule(); }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        painter.fillRect(rect(),QColor(0x20,0x21,0x25));
+        painter.fillRect(rect(),QColor(ui::layer_panel::surface));
     }
 private:
     void schedule(){if(pending_)return;pending_=true;QTimer::singleShot(0,this,[this]{pending_=false;align();});}
@@ -199,7 +200,7 @@ void MainWindow::initializeProject(EditorProject&project){
         if(!button->defaultAction())connect(button,&QToolButton::clicked,this,[this]{newDialog();});
         button->setToolButtonStyle(Qt::ToolButtonIconOnly);button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));
         if(button->defaultAction())connect(button->defaultAction(),&QAction::changed,button,[button]{button->setIcon(ui::editorIcon(ui::EditorIcon::Plus));});
-        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");corner->setAcceptDrops(true);button->setAcceptDrops(true);corner->setObjectName("tabCorner");tabs_->setCornerWidget(corner,Qt::TopRightCorner);
+        button->setText("+");button->setAccessibleName("New canvas; drop into a new project");button->setToolTip("New canvas · Drop images or layers here for new projects");corner->setAcceptDrops(true);button->setAcceptDrops(true);tabs_->setCornerWidget(corner,Qt::TopRightCorner);
     }
     project.canvas=new NativeCanvas(warp_);
     project.canvas->showPixelGrid=true;
@@ -244,6 +245,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->guideDragUpdated=[this](bool horizontal,double position){statusBar()->showMessage(QString("%1 guide %2").arg(horizontal?QStringLiteral("Horizontal"):QStringLiteral("Vertical")).arg(position,0,'f',1));};
     project.canvas->guideDragCanceled=[this]{statusBar()->clearMessage();};
     project.canvas->guideDragFinished=[this](bool horizontal,double position,int index){
+        statusBar()->clearMessage();
         try{
             if(auto* item=findChild<QAction*>("viewGuides"))item->setChecked(true);
             if(auto* surface=canvas())surface->showGuides=true;
@@ -282,7 +284,7 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     initializeProject(*raw);applyRememberedBrushPressure(raw->toolState.brushSettings);applyRememberedSnapAndGrid(raw->toolState.snapPolicy,raw->toolState.layoutGrid);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
     raw->welcome=new QWidget;raw->welcome->setObjectName("newCanvasWelcome");auto*outer=new QVBoxLayout(raw->welcome);outer->addStretch();
     auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setObjectName("newCanvasCard");panel->setMaximumWidth(440);
-    panel->setStyleSheet("QWidget#newCanvasCard { background: #1f1f1f; border: 1px solid #363636; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
+    panel->setStyleSheet(QString("QWidget#newCanvasCard { background: %1; border: 1px solid %2; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }").arg(ui::layer_panel::surface,ui::layer_panel::surfaceBorder));
     auto*form=new QFormLayout(panel);form->setContentsMargins(28,28,28,26);form->setVerticalSpacing(14);form->setHorizontalSpacing(18);
     auto*heading=new QLabel("New canvas");heading->setObjectName("newCanvasHeading");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
     auto draft=std::make_shared<NewCanvasDraft>();

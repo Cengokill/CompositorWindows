@@ -283,8 +283,8 @@ void installVisualStyle() {
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
         QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
         QTabWidget::pane { border: 0; }
-        QTabBar, QWidget#tabCorner { background: #1f1f1f; }
-        QTabBar::tab { background: transparent; color: #a0a0a0; padding: 4px 12px; margin: 4px 3px; border: 1px solid transparent; border-radius: 15px; font-weight: 600; }
+        QTabBar, QWidget#newProjectCorner { background: #1f1f1f; }
+        QTabBar::tab { background: transparent; color: #a0a0a0; padding: 4px 12px; margin: 6px 3px; border: 1px solid transparent; border-radius: 15px; font-weight: 600; }
         QTabBar::tab:selected { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,58),stop:0.55 rgba(255,255,255,22),stop:1 rgba(255,255,255,30)); color: #f2f2f2; border: 1px solid rgba(255,255,255,92); }
         QTabBar::tab:hover:!selected { color: white; background: rgba(255,255,255,20); border-color: rgba(255,255,255,38); }
         QTabBar::close-button { subcontrol-position: right; width: 13px; height: 13px; }
