@@ -247,8 +247,8 @@ void MainWindow::editLayerEffect(int kind){
     auto* size=new QDoubleSpinBox(&dialog);size->setRange(0,250);size->setDecimals(1);
     auto* angle=new QDoubleSpinBox(&dialog);angle->setRange(-360,360);angle->setDecimals(1);
     auto* distance=new QDoubleSpinBox(&dialog);distance->setRange(0,30000);distance->setDecimals(1);
-    auto* position=new QComboBox(&dialog);position->addItems({"Outside","Center","Inside"});
-    auto* blend=new QComboBox(&dialog);for(const char* name:blendNames)blend->addItem(name);
+    auto* position=new ui::CapsuleDropdown(&dialog);position->useGlassPopup();position->addItems({"Outside","Center","Inside"});
+    auto* blend=new ui::CapsuleDropdown(&dialog);blend->useGlassPopup();for(const char* name:blendNames)blend->addItem(name);
     auto* colorButton=new QPushButton("Color",&dialog);
     Pixel color{0,0,0,255};
     if(kind==0){enabled->setChecked(layer->effects.stroke.enabled||!layer->effects.specified);size->setValue(layer->effects.stroke.size);position->setCurrentIndex(layer->effects.stroke.position);color=layer->effects.stroke.color;}
