@@ -18,6 +18,7 @@
 #include <QStyleFactory>
 #include <QStyleOptionSlider>
 #include <QStyledItemDelegate>
+#include <QTimer>
 #include <QXmlStreamReader>
 #include <algorithm>
 #include <map>
@@ -324,18 +325,20 @@ namespace {
 // lightly (shrinking with area averaging and enlarging smoothly keeps the shapes and text behind it readable). Its
 // paint becomes that blur under a translucent neutral gray tint (the #1f1f1f surfaces), a soft highlight along the top
 // and a light rim, clipped to a rounded panel; outside the panel the window stays transparent. The view behind is
-// taken once per opening.
+// taken once per opening. A menu draws its items in its own paint, which then follows the glass.
 class GlassPopupPainter final : public QObject {
 public:
-    explicit GlassPopupPainter(QWidget* popup) : QObject(popup), popup_(popup) { popup->installEventFilter(this); }
+    GlassPopupPainter(QWidget* popup, bool ownPaint) : QObject(popup), popup_(popup), ownPaint_(ownPaint) {
+        popup->installEventFilter(this);
+    }
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (watched != popup_) return false;
         if (event->type() == QEvent::Show) capture();
         else if (event->type() == QEvent::Paint) {
             paint();
-            // The popup's own paint (for a combo box list, Qt's opaque menu panel) would cover the glass.
-            return true;
+            // Otherwise the popup's own paint (for a combo box list, Qt's opaque menu panel) would cover the glass.
+            return !ownPaint_;
         }
         return false;
     }
@@ -374,14 +377,40 @@ private:
         painter.drawPath(shape);
     }
     QWidget* popup_;
+    bool ownPaint_;
     QPixmap backdrop_;
 };
+
+void makeTranslucent(QWidget* popup) {
+    popup->setWindowFlags(popup->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    popup->setAttribute(Qt::WA_TranslucentBackground);
+}
 }
 
 void makeGlassPopup(QWidget* popup) {
-    popup->setWindowFlags(popup->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
-    popup->setAttribute(Qt::WA_TranslucentBackground);
-    new GlassPopupPainter(popup);
+    makeTranslucent(popup);
+    new GlassPopupPainter(popup, false);
+}
+
+void makeGlassMenu(QMenu* menu) {
+    makeTranslucent(menu);
+    new GlassPopupPainter(menu, true);
+    // Items as in the glass lists: a full capsule in the application blue under the pointer.
+    menu->setStyleSheet(QString("QMenu { background: transparent; border: 0; padding: 7px; }"
+                                "QMenu::item { padding: 7px 24px 7px 14px; border-radius: 15px; }"
+                                "QMenu::item:selected { background: %1; color: white; }").arg(t::accent));
+    // Qt rolls or fades a menu in from a snapshot, which the glass, taken from the screen behind the menu as it
+    // appears, would then show instead of what lies behind. The menu decides while it opens, after aboutToShow.
+    QObject::connect(menu, &QMenu::aboutToShow, menu, [menu] {
+        const bool roll = QApplication::isEffectEnabled(Qt::UI_AnimateMenu);
+        const bool fade = QApplication::isEffectEnabled(Qt::UI_FadeMenu);
+        QApplication::setEffectEnabled(Qt::UI_AnimateMenu, false);
+        QApplication::setEffectEnabled(Qt::UI_FadeMenu, false);
+        QTimer::singleShot(0, menu, [roll, fade] {
+            QApplication::setEffectEnabled(Qt::UI_AnimateMenu, roll);
+            QApplication::setEffectEnabled(Qt::UI_FadeMenu, fade);
+        });
+    });
 }
 
 CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {

@@ -10,6 +10,7 @@
 #include <QWidget>
 #include <functional>
 
+class QMenu;
 class QPainter;
 
 namespace compositor::ui {
@@ -48,6 +49,8 @@ private:
 // Makes a popup window a rounded Liquid Glass panel: a translucent neutral tint over a light blur of what lies behind
 // it, with transparent corners. The panel replaces the popup's own paint; its child widgets paint over it as usual.
 void makeGlassPopup(QWidget* popup);
+// The same panel for a menu, whose items are drawn over it, each a capsule in the application blue under the pointer.
+void makeGlassMenu(QMenu* menu);
 
 // Capsule selector that preserves transient preview and dismissal callbacks.
 class CapsuleDropdown final : public QComboBox {

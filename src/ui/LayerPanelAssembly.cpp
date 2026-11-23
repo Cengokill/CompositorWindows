@@ -342,6 +342,7 @@ void MainWindow::setupLayerFooter() {
         button->setToolTip(tip);
         auto* menu = new QMenu(button);
         menu->setObjectName(menuName);
+        ui::makeGlassMenu(menu);
         button->setMenu(menu);
         row->addWidget(button);
         return menu;

@@ -15,6 +15,7 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QLabel>
+#include <QMenu>
 #include <QSlider>
 #include <QKeyEvent>
 #include <QTimer>
@@ -340,15 +341,15 @@ void scrub_zoom_title(){
 }
 // The Magic Wand sample, Crop ratio and Gradient color lists and the Type font and style lists open as rounded glass panels:
 // painted inside, transparent outside the rounded corners.
+bool glass(QWidget* popup){
+    REQUIRE(popup&&popup->isVisible()&&popup->testAttribute(Qt::WA_TranslucentBackground));
+    const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
+    const auto alpha=[&](int x,int y){return panel.pixelColor(int(x*scale),int(y*scale)).alpha();};
+    return alpha(2,2)==0&&alpha(popup->width()-3,popup->height()-3)==0&&alpha(popup->width()/2,popup->height()-4)>0;
+}
 void options_lists_are_rounded_glass(){
     MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
     const auto tool=[&](const char* id){command(w,id)->trigger();QApplication::processEvents();};
-    const auto glass=[](QWidget* popup){
-        REQUIRE(popup&&popup->isVisible()&&popup->testAttribute(Qt::WA_TranslucentBackground));
-        const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
-        const auto alpha=[&](int x,int y){return panel.pixelColor(int(x*scale),int(y*scale)).alpha();};
-        return alpha(2,2)==0&&alpha(popup->width()-3,popup->height()-3)==0&&alpha(popup->width()/2,popup->height()-4)>0;
-    };
     for(const auto& [id,name]:{std::pair{"tool.wand","wandSampleSize"},{"tool.crop","cropRatioChoice"},{"tool.gradient","gradientStyle"}}){
         tool(id);auto* box=w.findChild<QComboBox*>(name);REQUIRE(box);
         box->showPopup();QApplication::processEvents();
@@ -382,4 +383,23 @@ void options_lists_are_rounded_glass(){
     REQUIRE(styles->view()->isVisible());
     styles->hidePopup();QApplication::processEvents();
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+// The Layers footer menus (New Adjustment Layer, New Filter Layer, Add Layer Effect) open as rounded glass panels with
+// their items drawn over the glass, and without the roll or fade animation, which would show an opaque snapshot.
+void layer_footer_menus_are_rounded_glass(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    QApplication::setEffectEnabled(Qt::UI_General,true);QApplication::setEffectEnabled(Qt::UI_AnimateMenu,true);
+    for(const char* name:{"layerAdjustmentFooterMenu","layerFilterLayerFooterMenu","layerEffectsMenu"}){
+        auto* menu=w.findChild<QMenu*>(name);REQUIRE(menu&&!menu->actions().isEmpty());
+        menu->popup(w.mapToGlobal(QPoint(200,200)));QApplication::processEvents();
+        REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateMenu));
+        REQUIRE(glass(menu));
+        // The first item's name is drawn in light ink over the glass.
+        const QImage panel=menu->grab().toImage();const double scale=panel.devicePixelRatio();
+        const QRect item=menu->actionGeometry(menu->actions().first());
+        int lightest=0;
+        for(int y=item.top();y<=item.bottom();++y)for(int x=item.left();x<=item.right();++x)lightest=std::max(lightest,panel.pixelColor(int(x*scale),int(y*scale)).lightness());
+        REQUIRE(lightest>180);
+        menu->hide();QApplication::processEvents();
+    }
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"layer_footer_menus_are_rounded_glass",layer_footer_menus_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
