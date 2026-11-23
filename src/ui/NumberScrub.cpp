@@ -18,16 +18,16 @@
 #include <QToolBar>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace compositor::ui {
 namespace {
-ScrubHistory& history() { static ScrubHistory value; return value; }
 constexpr int dragThreshold = 3;
 constexpr double fineFactor = .1, coarseFactor = 10;
 
 class Scrubber final : public QObject {
 public:
-    Scrubber(QLabel* label, QAbstractSpinBox* field) : QObject(label), label_(label), field_(field) {
+    Scrubber(QLabel* label, QAbstractSpinBox* field, ScrubHistory history) : QObject(label), label_(label), field_(field), history_(std::move(history)) {
         label->installEventFilter(this);
         label->setCursor(Qt::SplitHCursor);
     }
@@ -72,7 +72,7 @@ private:
         if (!dragging_) {
             if (std::abs(x - pressX_) < dragThreshold) return;
             dragging_ = true;
-            depthBefore_ = history().depth ? history().depth() : -1;
+            depthBefore_ = history_.depth ? history_.depth() : -1;
             qApp->installEventFilter(this);
         }
         // Changing the modifier mid-drag rescales only from the current position, so the value never jumps.
@@ -132,7 +132,7 @@ private:
         if (value() != originalValue_) setValue(originalValue_);
         // Closes whatever edit the live values opened, now that the value is back where it was.
         emit field_->editingFinished();
-        if (history().undo && depthBefore_ >= 0 && history().depth() > depthBefore_) history().undo();
+        if (history_.undo && depthBefore_ >= 0 && history_.depth() > depthBefore_) history_.undo();
         setHover(label_->underMouse());
     }
     // The label paints itself, then a flat double arrow sits under the text while the pointer is over it.
@@ -155,6 +155,7 @@ private:
     }
     QLabel* label_;
     QAbstractSpinBox* field_;
+    ScrubHistory history_;
     bool pressed_{}, dragging_{};
     double pressX_{}, rebaseX_{}, startValue_{}, originalValue_{};
     int depthBefore_{-1};
@@ -174,43 +175,42 @@ bool isCaption(QWidget* widget) {
     auto* label = qobject_cast<QLabel*>(widget);
     return label && label->property("optionCaption").toBool() && !label->text().isEmpty() && label->text().front().isLetter();
 }
-void pair(const QList<QWidget*>& siblings) {
+void pair(const QList<QWidget*>& siblings, const ScrubHistory& history) {
     for (int i = 0; i < siblings.size(); ++i) {
         if (!isCaption(siblings[i])) continue;
         // A slider may sit between a caption and its field; anything else means the caption belongs to another control.
         for (int j = i + 1; j < siblings.size(); ++j) {
-            if (auto* box = fieldIn(siblings[j])) { attachScrub(static_cast<QLabel*>(siblings[i]), box); break; }
+            if (auto* box = fieldIn(siblings[j])) { attachScrub(static_cast<QLabel*>(siblings[i]), box, history); break; }
             if (!qobject_cast<QAbstractSlider*>(siblings[j])) break;
         }
     }
 }
 }
 
-void attachScrub(QLabel* label, QAbstractSpinBox* field) {
+void attachScrub(QLabel* label, QAbstractSpinBox* field, ScrubHistory history) {
     if (!label || !field || label->findChild<QObject*>("numberScrub")) return;
-    auto* scrubber = new Scrubber(label, field);
+    auto* scrubber = new Scrubber(label, field, std::move(history));
     scrubber->setObjectName("numberScrub");
 }
 
 void installNumberScrubbing(QMainWindow* window, ScrubHistory hooks) {
-    history() = std::move(hooks);
     for (auto* bar : window->findChildren<QToolBar*>()) {
         // Captions placed straight on the bar, then those inside the groups the bar holds.
         QList<QWidget*> direct;
         for (auto* action : bar->actions())
             if (auto* widget = bar->widgetForAction(action)) direct << widget;
-        pair(direct);
+        pair(direct, hooks);
         for (auto* host : bar->findChildren<QWidget*>()) {
             auto* row = qobject_cast<QHBoxLayout*>(host->layout());
             if (!row) continue;
             QList<QWidget*> items;
             for (int i = 0; i < row->count(); ++i)
                 if (auto* widget = row->itemAt(i)->widget()) items << widget;
-            pair(items);
+            pair(items, hooks);
         }
     }
     // The Zoom bar has no caption: its bold title is the handle.
     if (auto* title = window->findChild<QLabel*>("zoomTitle"))
-        if (auto* field = window->findChild<QDoubleSpinBox*>("zoomPercent")) attachScrub(title, field);
+        if (auto* field = window->findChild<QDoubleSpinBox*>("zoomPercent")) attachScrub(title, field, hooks);
 }
 }
