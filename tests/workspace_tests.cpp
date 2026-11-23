@@ -167,5 +167,14 @@ test("new_canvas_dropdown_lists_are_rounded_glass_over_what_lies_behind",[]{
  check(color.alpha()==255&&color.red()>color.green()+60&&color.red()>color.blue()+60,"Dropdown list glass does not show what lies behind it");
  unit->hidePopup();QApplication::processEvents();
 });
+test("first_import_names_untitled_project",[]{
+ QTemporaryDir dir;check(dir.isValid(),"temporary directory");
+ const auto write=[&](const char* name){QImage image(8,6,QImage::Format_ARGB32);image.fill(Qt::blue);const auto path=dir.filePath(name);check(image.save(path),"fixture image");return path;};
+ const auto first=write("Sunset.png"),second=write("Harbor.png");
+ MainWindow w(true);w.resize(900,650);w.show();auto*tabs=w.findChild<QTabWidget*>();check(tabs&&tabs->count()==1&&tabs->tabText(0).startsWith("Untitled"),"Fresh project is not untitled");
+ const auto waitFor=[&](const char* text){for(int i=0;i<100&&!tabs->tabText(0).contains(text);++i)QTest::qWait(50);return tabs->tabText(0).contains(text);};
+ w.importSelectedImages({first});check(waitFor("Sunset"),"First import did not name the project after the image");
+ w.importSelectedImages({second});QTest::qWait(500);check(tabs->tabText(0).contains("Sunset")&&!tabs->tabText(0).contains("Harbor"),"A later import renamed the project again");
+});
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"native_window\":false}\n";return failed?1:0;
 }

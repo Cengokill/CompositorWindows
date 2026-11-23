@@ -279,7 +279,8 @@ ui::ImportQueue* MainWindow::ensureImportQueue(){
         auto*p=project(target);if(!p)throw std::runtime_error("The import destination was closed");
         const bool first=ui::commitPreparedImport(*p,result);
         // Like Photoshop, a project still carrying its default name takes the name of the first image imported into it.
-        if(p->path.isEmpty()&&p->document&&QRegularExpression("^Untitled( \\d+)?$").match(p->defaultTitle).hasMatch()){
+        static const QRegularExpression untitled("^Untitled( \\d+)?$");
+        if(p->path.isEmpty()&&p->document&&untitled.match(p->defaultTitle).hasMatch()){
             const size_t prior=result.before.document?result.before.document->layers.size():0;
             if(p->document->layers.size()>prior&&!p->document->layers[prior].name.empty())p->defaultTitle=QString::fromStdString(p->document->layers[prior].name);
         }
