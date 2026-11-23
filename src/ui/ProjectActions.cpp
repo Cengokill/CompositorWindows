@@ -99,10 +99,10 @@ private:
     QPointF pointer_;
 };
 // Qt shortens the tab bar for the corner widget, so its bottom edge stops at the
-// button while the Layers title border sits on a lower pixel behind it. The
-// corner matches the tab-bar height and one separator runs from the strip's left
-// edge through the clearance before the dock. The Layers title uses that height
-// so its border is the same row.
+// button. The corner matches the tab-bar height and one separator runs from the
+// strip's left edge through the clearance before the dock. The strip is the
+// 50-pixel Layers header plus the row of that separator, so the separator is on
+// the row of the divider under the Layers title.
 class WorkspaceTabCorner final : public QWidget {
 public:
     explicit WorkspaceTabCorner(QTabWidget* tabs):QWidget(tabs),tabs_(tabs){
