@@ -1,3 +1,23 @@
+# Compositor Windows 1.6.0
+
+## New features
+
+- See where layers will land as you drag them in the redesigned Layers panel. Drop between rows to reorder, or onto a folder to move layers inside.
+- Feather a selection directly from the tool options bar. Lasso, Magic Wand, Crop and Brush now group their settings by tool.
+- Choose Standard, Optimized or Progressive JPEG. Export an interlaced PNG, keep transparency or fill transparent areas with a background color.
+
+## Improvements
+
+- Zoom through deep layer stacks more smoothly with Alt+wheel, including documents with masks, folders and adjustment layers.
+- Start Blur strokes faster on 8-bit layers. Smudge and Liquify respond sooner as you drag, and Texture previews update faster in Camera Raw.
+- Install with the new setup EXE bearing the Compositor icon. The x64 MSI and portable ZIP are also available.
+
+## Fixes
+
+- The Layers panel shows the current editing target when you select a layer with a mask. Use the selector to switch between the image and its mask.
+- Center a layer using the canvas guides. A hidden layout grid no longer pulls the layer off center.
+- Preview, apply and export Lens Effects on larger SDR images, including 2240 × 3360 photos. Full-resolution SDR rendering supports up to 8 million pixels.
+
 # Compositor Windows 1.5.13
 
 ## New features

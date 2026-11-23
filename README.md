@@ -22,15 +22,14 @@ Windows title bars and system buttons are the default. If you prefer the colored
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.5.13
+## What's new in 1.6.0
 
 See the [release notes](docs/release-notes.md) for details.
 
-- **Faster canvas interactions.** Alt+wheel zoom and layer visibility changes are more responsive, especially with multiple layers.
-- **Find selected layers.** Selecting a layer on the canvas scrolls its row into view and opens its parent folders.
-- **Shape editing.** With the Shape tool active, change the selected shape's fill with Background Color and see controls relevant to its type.
-- **More reliable interactions.** With Auto-select enabled, choose the layer under the pointer even inside the current layer's bounds. The Hand tool shows open and closed hand cursors.
-- **What's New.** Reopen release notes from Help; development builds no longer mark stable-package notes as read.
+- **Layers and selections.** See the drop position as you drag layers in the redesigned panel. Feather a selection from the tool options bar.
+- **JPEG and PNG export.** Choose Standard, Optimized or Progressive JPEG. Interlace a PNG or fill transparent pixels with a background color.
+- **Faster editing.** Zoom through deep layer stacks more smoothly. Blur, Smudge and Liquify start faster on 8-bit layers, and Camera Raw updates Texture previews sooner.
+- **Alignment and effects.** Snap a layer to the canvas center with the grid hidden. Preview, apply and export Lens Effects on SDR photos up to 8 million pixels at full resolution.
 
 The command palette (**Ctrl+Shift+P**) finds every command and tool by name.
 
