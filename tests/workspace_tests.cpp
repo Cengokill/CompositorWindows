@@ -14,7 +14,6 @@
 #include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QTest>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -146,22 +145,27 @@ test("new_canvas_dropdown_closes_on_outside_click",[]{
   }
  }
 });
-test("new_canvas_dropdown_lists_are_neutral_translucent_glass",[]{
+test("new_canvas_dropdown_lists_are_rounded_glass_over_what_lies_behind",[]{
  MainWindow w(true);w.resize(1100,760);auto&p=w.addEmptyProject();w.show();check(QTest::qWaitForWindowExposed(&w),"Window not exposed");
  for(auto*name:{"newCanvasPreset","newCanvasUnit","newCanvasBackground"}){
   auto*box=control<QComboBox>(p.welcome,name);box->showPopup();QApplication::processEvents();
   auto*popup=box->view()->window();check(popup->isVisible()&&popup->testAttribute(Qt::WA_TranslucentBackground),"Dropdown list is not a translucent window");
-  // Sample the panel tint above the first row and below the last one, away from the rounded corners and the highlighted row.
-  const QImage panel=popup->grab().toImage();
-  const double scale=panel.devicePixelRatio();
-  for(const QPoint point:{QPoint(popup->width()/2,3),QPoint(popup->width()/2,popup->height()-4)}){
-   const QColor color=panel.pixelColor(int(point.x()*scale),int(point.y()*scale));
-   check(color.alpha()>=60&&color.alpha()<=170,"Dropdown list tint is not clearly translucent");
-   check(std::abs(color.red()-color.green())<=2&&std::abs(color.green()-color.blue())<=2,"Dropdown list tint is not a neutral gray");
-  }
+  // Outside the rounded panel the list window is transparent rather than an opaque rectangle.
+  const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
   check(panel.pixelColor(int(2*scale),int(2*scale)).alpha()==0&&panel.pixelColor(int((popup->width()-3)*scale),int((popup->height()-3)*scale)).alpha()==0,"Dropdown list corners are not rounded off");
+  check(panel.pixelColor(int(popup->width()/2*scale),int((popup->height()-4)*scale)).alpha()>0,"Dropdown list panel is not painted");
   box->hidePopup();QApplication::processEvents();
  }
+ // The glass shows a blurred view of what lies behind it: the Units list over a red Width field turns red there.
+ auto*width=control<QDoubleSpinBox>(p.welcome,"newCanvasWidth");width->setStyleSheet("QDoubleSpinBox { background: #ff0000; }");QApplication::processEvents();
+ auto*unit=control<QComboBox>(p.welcome,"newCanvasUnit");unit->showPopup();QApplication::processEvents();
+ auto*popup=unit->view()->window();
+ const QPoint behind=popup->mapFromGlobal(width->mapToGlobal(QPoint(width->width()-30,width->height()/2)));
+ check(popup->rect().contains(behind),"Units list does not cover the Width field");
+ const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
+ const QColor color=panel.pixelColor(int(behind.x()*scale),int(behind.y()*scale));
+ check(color.alpha()==255&&color.red()>color.green()+60&&color.red()>color.blue()+60,"Dropdown list glass does not show what lies behind it");
+ unit->hidePopup();QApplication::processEvents();
 });
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"native_window\":false}\n";return failed?1:0;
 }

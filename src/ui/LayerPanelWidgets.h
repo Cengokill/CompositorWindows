@@ -5,6 +5,7 @@
 #include <QFont>
 #include <QFrame>
 #include <QLineEdit>
+#include <QPixmap>
 #include <QToolButton>
 #include <QWidget>
 #include <functional>
@@ -52,14 +53,17 @@ public:
     std::function<void()> dismissed;
     void showPopup() override;
     void hidePopup() override;
-    // Shows the list as a rounded Liquid Glass panel: a translucent neutral tint over the blurred Windows 11 backdrop.
+    // Shows the list as a rounded Liquid Glass panel: a translucent neutral tint over a light blur of what lies behind it.
     void useGlassPopup();
 protected:
     bool eventFilter(QObject*, QEvent*) override;
     void paintEvent(QPaintEvent*) override;
 private:
     void dismiss();
+    void captureGlassBackdrop();
+    void paintGlassPanel();
     bool open_{};
+    QPixmap glassBackdrop_;
 };
 
 // A button that looks like CapsuleDropdown (left-aligned text, up and down chevrons) but opens its own popup.

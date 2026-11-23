@@ -150,7 +150,7 @@ target_compile_options(compositor_platform PRIVATE /W4 /WX /utf-8)
 target_link_libraries(compositor_platform PUBLIC d2d1 d3d11 dxgi dxguid mscms bcrypt gdi32 user32 advapi32 Qt6::Core)
 add_library(compositor_ui src/ui/NativeCanvas.cpp src/ui/MainWindow.cpp src/ui/FileActions.cpp src/ui/BrushActions.cpp)
 target_sources(compositor_ui PRIVATE src/ui/EditorIcons.cpp)
-target_sources(compositor_ui PRIVATE src/ui/LayerPanelWidgets.cpp src/ui/GlassBackdrop.cpp)
+target_sources(compositor_ui PRIVATE src/ui/LayerPanelWidgets.cpp)
 qt_add_resources(compositor_ui layer_panel_icons PREFIX "/" FILES
   assets/icons/lucide/search.svg assets/icons/lucide/x.svg
   assets/icons/lucide/list-checks.svg

@@ -3,7 +3,6 @@
 #include "ImportActions.h"
 #include "WorkspaceDropQueue.h"
 #include "LayerPanelTokens.h"
-#include "GlassBackdrop.h"
 #include <QApplication>
 #include <QDialog>
 #include <QDir>
@@ -27,6 +26,12 @@
 #include <exception>
 #include <optional>
 #include <utility>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dwmapi.h>
 
 static void initializeReleaseNotesResource(){Q_INIT_RESOURCE(release_notes);}
 
@@ -131,7 +136,11 @@ QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const Release
     dialog->ensurePolished();
     // The native frame stays. The Windows 11 transient (acrylic) backdrop is applied to this window and extended under the client area, which the translucent surface above lets through.
     dialog->setAttribute(Qt::WA_TranslucentBackground);
-    applyGlassBackdrop(dialog);
+    if(const auto handle=reinterpret_cast<HWND>(dialog->winId())){
+        constexpr DWORD systemBackdropType=38;constexpr int transientWindow=3;
+        DwmSetWindowAttribute(handle,systemBackdropType,&transientWindow,sizeof(transientWindow));
+        const MARGINS wholeWindow{-1,-1,-1,-1};DwmExtendFrameIntoClientArea(handle,&wholeWindow);
+    }
     const QRect parentBounds=parent?QRect(parent->mapToGlobal(QPoint(0,0)),parent->size()):QRect();
     auto* screen=QGuiApplication::screenAt(parentBounds.center());
     if(!screen)screen=QGuiApplication::primaryScreen();
