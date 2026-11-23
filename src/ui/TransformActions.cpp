@@ -36,6 +36,8 @@ protected:
         QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setPen(Qt::NoPen);
         p.setBrush(!isEnabled()?QColor(t::controlDisabled):isChecked()?QColor(t::accent):underMouse()?QColor(t::pressed):QColor(t::control));
         p.drawRoundedRect(QRectF(rect()),t::fieldRadius,t::fieldRadius);
+        // Keyboard focus is a thin ring, since the lock is otherwise only a fill.
+        if(hasFocus()){p.setPen(QPen(QColor(t::primary),1.5));p.setBrush(Qt::NoBrush);p.drawRoundedRect(QRectF(rect()).adjusted(1,1,-1,-1),t::fieldRadius,t::fieldRadius);}
         p.setPen(QPen(!isEnabled()?QColor(t::controlTextDisabled):isChecked()?QColor(Qt::white):QColor(t::primary),1.5,Qt::SolidLine,Qt::RoundCap));p.setBrush(Qt::NoBrush);
         p.translate(width()/2.,height()/2.);p.rotate(-35);p.drawRoundedRect(QRectF(-3.5,-8,7,10),3.5,3.5);p.drawRoundedRect(QRectF(-3.5,-2,7,10),3.5,3.5);
     }
