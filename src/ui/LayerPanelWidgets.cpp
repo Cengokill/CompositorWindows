@@ -4,17 +4,23 @@
 #include <QApplication>
 #include <QFile>
 #include <QFontDatabase>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPixmap>
 #include <QProxyStyle>
+#include <QScreen>
+#include <QScrollBar>
 #include <QRegularExpression>
 #include <QStyleFactory>
 #include <QStyleOptionSlider>
 #include <QStyledItemDelegate>
+#include <QTimer>
 #include <QXmlStreamReader>
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -23,6 +29,8 @@ static void initializeLayerPanelIcons() { Q_INIT_RESOURCE(layer_panel_icons); }
 namespace compositor::ui {
 namespace {
 namespace t = layer_panel;
+constexpr int glassPopupRadius = 18;
+constexpr int glassBlurReduction = 5;
 
 QFont panelFont(int pixels, QFont::Weight weight = QFont::Normal) {
     static const QString family = QFontDatabase::families().contains("Segoe UI Variable")
@@ -51,7 +59,30 @@ public:
             painter->restore();
             item.rect.adjust(0, t::blendGroupGap, 0, 0);
         }
-        if (owner_ && index.row() == owner_->currentIndex()) {
+        if (owner_ && owner_->property("glassPopup").toBool()) {
+            // Glass list: the highlighted row is a full capsule in the application blue, and the current choice carries a check mark.
+            const bool enabled = index.flags().testFlag(Qt::ItemIsEnabled);
+            const bool hot = enabled && (item.state & (QStyle::State_Selected | QStyle::State_MouseOver));
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            if (hot) {
+                const QRectF pill = QRectF(item.rect).adjusted(0, 1, 0, -1);
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(QColor(t::accent));
+                painter->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+            }
+            if (enabled && index.row() == owner_->currentIndex()) {
+                painter->setPen(QPen(Qt::white, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                const auto x = item.rect.left() + t::blendMenuCheckInset + 4;
+                const auto y = item.rect.center().y();
+                painter->drawLine(QPoint(x, y), QPoint(x + 3, y + 3));
+                painter->drawLine(QPoint(x + 3, y + 3), QPoint(x + 8, y - 4));
+            }
+            painter->restore();
+            if (enabled) item.rect.adjust(t::blendMenuTextInset + 8, 0, 0, 0);
+            item.state &= ~(QStyle::State_Selected | QStyle::State_MouseOver);
+            if (hot) item.palette.setColor(QPalette::Text, Qt::white);
+        } else if (owner_ && index.row() == owner_->currentIndex()) {
             painter->save();
             painter->setBrush(QColor(t::accent));
             painter->setPen(Qt::NoPen);
@@ -76,7 +107,8 @@ private:
 
 class SliderStyle final : public QProxyStyle {
 public:
-    SliderStyle() : QProxyStyle(QStyleFactory::create("Fusion")) {}
+    struct Metrics { int track, knobWidth, knobHeight; qreal knobRadius; const char* trackColor; const char* knobColor; };
+    explicit SliderStyle(Metrics metrics = {t::sliderTrack, t::sliderKnobWidth, t::sliderKnobHeight, t::sliderKnobRadius, t::track, t::knob}) : QProxyStyle(QStyleFactory::create("Fusion")), m(metrics) {}
     QRect subControlRect(ComplexControl control, const QStyleOptionComplex* option,
                          SubControl part, const QWidget* widget) const override {
         if (control != CC_Slider) return QProxyStyle::subControlRect(control, option, part, widget);
@@ -85,13 +117,13 @@ public:
             return QProxyStyle::subControlRect(control, option, part, widget);
         const auto area = option->rect;
         if (part == SC_SliderGroove)
-            return {area.x(), area.y() + (area.height() - t::sliderTrack) / 2, area.width(), t::sliderTrack};
+            return {area.x(), area.y() + (area.height() - m.track) / 2, area.width(), m.track};
         if (part == SC_SliderHandle) {
-            const int travel = qMax(0, area.width() - t::sliderKnobWidth);
+            const int travel = qMax(0, area.width() - m.knobWidth);
             const int position = QStyle::sliderPositionFromValue(slider->minimum, slider->maximum,
                                                                   slider->sliderPosition, travel, slider->upsideDown);
-            return {area.x() + position, area.y() + (area.height() - t::sliderKnobHeight) / 2,
-                    t::sliderKnobWidth, t::sliderKnobHeight};
+            return {area.x() + position, area.y() + (area.height() - m.knobHeight) / 2,
+                    m.knobWidth, m.knobHeight};
         }
         return QProxyStyle::subControlRect(control, option, part, widget);
     }
@@ -109,26 +141,28 @@ public:
         const auto groove = subControlRect(control, option, SC_SliderGroove, widget);
         const auto knob = subControlRect(control, option, SC_SliderHandle, widget);
         painter->setPen(Qt::NoPen);
-        painter->setBrush(QColor(t::track));
-        painter->drawRoundedRect(QRectF(groove), t::sliderTrack / 2.0, t::sliderTrack / 2.0);
+        painter->setBrush(QColor(m.trackColor));
+        painter->drawRoundedRect(QRectF(groove), m.track / 2.0, m.track / 2.0);
         const qreal fraction = slider->maximum > slider->minimum
             ? qreal(slider->sliderPosition - slider->minimum) / (slider->maximum - slider->minimum) : 0;
-        const qreal travel = qMax(0, groove.width() - t::sliderKnobWidth);
+        const qreal travel = qMax(0, groove.width() - m.knobWidth);
         const qreal position = fraction * travel;
-        const qreal ramp = qMin(qreal(t::sliderKnobWidth / 2 + 1), travel / 2);
-        qreal fill = position + t::sliderKnobWidth / 2.0;
-        if (ramp > 0 && position < ramp) fill = position / ramp * (ramp + t::sliderKnobWidth / 2.0);
+        const qreal ramp = qMin(qreal(m.knobWidth / 2 + 1), travel / 2);
+        qreal fill = position + m.knobWidth / 2.0;
+        if (ramp > 0 && position < ramp) fill = position / ramp * (ramp + m.knobWidth / 2.0);
         else if (ramp > 0 && travel - position < ramp)
-            fill = groove.width() - (travel - position) / ramp * (ramp + t::sliderKnobWidth / 2.0);
+            fill = groove.width() - (travel - position) / ramp * (ramp + m.knobWidth / 2.0);
         painter->setBrush(QColor(t::accent));
         painter->drawRoundedRect(QRectF(groove.x(), groove.y(), fill, groove.height()),
-                                 t::sliderTrack / 2.0, t::sliderTrack / 2.0);
+                                 m.track / 2.0, m.track / 2.0);
         painter->setBrush(QColor(0, 0, 0, 90));
-        painter->drawRoundedRect(QRectF(knob).translated(0, 1), t::sliderKnobRadius, t::sliderKnobRadius);
-        painter->setBrush(option->state & State_Sunken ? QColor(Qt::white) : QColor(t::knob));
-        painter->drawRoundedRect(QRectF(knob), t::sliderKnobRadius, t::sliderKnobRadius);
+        painter->drawRoundedRect(QRectF(knob).translated(0, 1), m.knobRadius, m.knobRadius);
+        painter->setBrush(option->state & State_Sunken ? QColor(Qt::white) : QColor(m.knobColor));
+        painter->drawRoundedRect(QRectF(knob), m.knobRadius, m.knobRadius);
         painter->restore();
     }
+private:
+    Metrics m;
 };
 
 // An icon's primitives, parsed once from its bundled SVG on the UI thread.
@@ -286,6 +320,112 @@ void SearchField::paintEvent(QPaintEvent*) {
                                           t::searchIconFrame, t::searchIconFrame), QColor(t::secondary));
 }
 
+namespace {
+// Liquid Glass for a popup window: when it is about to appear, the screen area it will cover is captured and blurred
+// lightly (shrinking with area averaging and enlarging smoothly keeps the shapes and text behind it readable). Its
+// paint becomes that blur under a translucent neutral gray tint (the #1f1f1f surfaces), a soft highlight along the top
+// and a light rim, clipped to a rounded panel; outside the panel the window stays transparent. The view behind is
+// taken once per opening. A menu draws its items in its own paint, which then follows the glass.
+class GlassPopupPainter final : public QObject {
+public:
+    GlassPopupPainter(QWidget* popup, bool ownPaint) : QObject(popup), popup_(popup), ownPaint_(ownPaint) {
+        popup->installEventFilter(this);
+    }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched != popup_) return false;
+        if (event->type() == QEvent::Show) capture();
+        else if (event->type() == QEvent::Hide) backdrop_ = {};
+        else if (event->type() == QEvent::Paint) {
+            paint();
+            // Otherwise the popup's own paint (for a combo box list, Qt's opaque menu panel) would cover the glass.
+            return !ownPaint_;
+        }
+        return false;
+    }
+private:
+    void capture() {
+        backdrop_ = {};
+        const QRect area = popup_->geometry();
+        auto* screen = QGuiApplication::screenAt(area.center());
+        if (!screen) screen = popup_->screen();
+        if (!screen || area.isEmpty()) return;
+        const QRect local = area.translated(-screen->geometry().topLeft());
+        const QImage behind = screen->grabWindow(0, local.x(), local.y(), local.width(), local.height()).toImage();
+        if (behind.isNull()) return;
+        const QSize reduced = (behind.size() / glassBlurReduction).expandedTo(QSize(1, 1));
+        backdrop_ = QPixmap::fromImage(behind.scaled(reduced, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                                           .scaled(behind.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    }
+    void paint() {
+        QPainter painter(popup_);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        const QRectF panel = QRectF(popup_->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainterPath shape;
+        shape.addRoundedRect(panel, glassPopupRadius - 0.5, glassPopupRadius - 0.5);
+        painter.save();
+        painter.setClipPath(shape);
+        if (!backdrop_.isNull()) painter.drawPixmap(popup_->rect(), backdrop_);
+        QLinearGradient tint(panel.topLeft(), panel.bottomLeft());
+        tint.setColorAt(0, QColor(90, 90, 90, 120));
+        tint.setColorAt(0.25, QColor(44, 44, 44, 105));
+        tint.setColorAt(1, QColor(31, 31, 31, 125));
+        painter.fillPath(shape, tint);
+        painter.restore();
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(255, 255, 255, 46), 1));
+        painter.drawPath(shape);
+    }
+    QWidget* popup_;
+    bool ownPaint_;
+    QPixmap backdrop_;
+};
+
+// Turns one application-wide popup effect off for its lifetime and restores it, whatever leaves the scope.
+struct EffectOff {
+    explicit EffectOff(Qt::UIEffect effect) : effect_(effect), was_(QApplication::isEffectEnabled(effect)) { if (was_) QApplication::setEffectEnabled(effect_, false); }
+    ~EffectOff() { if (was_) QApplication::setEffectEnabled(effect_, true); }
+    EffectOff(const EffectOff&) = delete;
+    EffectOff& operator=(const EffectOff&) = delete;
+private:
+    Qt::UIEffect effect_;
+    bool was_;
+};
+
+void makeTranslucent(QWidget* popup) {
+    popup->setWindowFlags(popup->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    popup->setAttribute(Qt::WA_TranslucentBackground);
+}
+}
+
+void makeGlassPopup(QWidget* popup) {
+    makeTranslucent(popup);
+    new GlassPopupPainter(popup, false);
+}
+
+void makeGlassMenu(QMenu* menu) {
+    makeTranslucent(menu);
+    new GlassPopupPainter(menu, true);
+    // Items as in the glass lists: a full capsule in the application blue under the pointer.
+    menu->setStyleSheet(QString("QMenu { background: transparent; border: 0; padding: 7px; }"
+                                "QMenu::item { padding: 7px 24px 7px 14px; border-radius: 15px; }"
+                                "QMenu::item:selected { background: %1; color: white; }").arg(t::accent));
+    // Qt rolls or fades a menu in from a snapshot, which the glass, taken from the screen behind the menu as it
+    // appears, would then show instead of what lies behind. The menu decides while it opens, after aboutToShow.
+    QObject::connect(menu, &QMenu::aboutToShow, menu, [menu] {
+        const bool roll = QApplication::isEffectEnabled(Qt::UI_AnimateMenu);
+        const bool fade = QApplication::isEffectEnabled(Qt::UI_FadeMenu);
+        QApplication::setEffectEnabled(Qt::UI_AnimateMenu, false);
+        QApplication::setEffectEnabled(Qt::UI_FadeMenu, false);
+        // The application is the timer's context, so the effects come back even if the menu is destroyed first.
+        QTimer::singleShot(0, qApp, [roll, fade] {
+            QApplication::setEffectEnabled(Qt::UI_AnimateMenu, roll);
+            QApplication::setEffectEnabled(Qt::UI_FadeMenu, fade);
+        });
+    });
+}
+
 CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
     setMinimumWidth(t::blendMinimumWidth);
     setFixedHeight(t::blendHeight);
@@ -303,12 +443,45 @@ CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
         .arg(panelFont(t::searchFont).family()).arg(t::searchFont));
     connect(this, &QComboBox::highlighted, this, [this](int index) { if (open_ && preview) preview(index); });
 }
+void CapsuleDropdown::useGlassPopup() {
+    setProperty("glassPopup", true);
+    makeGlassPopup(view()->window());
+    view()->viewport()->setAutoFillBackground(false);
+    setStyleSheet(styleSheet() +
+        "QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }"
+        "QComboBox QAbstractItemView::item { min-height: 28px; padding: 3px 8px; }");
+}
 void CapsuleDropdown::dismiss() { if (!open_) return; open_ = false; if (dismissed) dismissed(); }
 bool CapsuleDropdown::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::Hide && watched == view()->window()) dismiss();
+    if (watched == view()->window()) {
+        if (event->type() == QEvent::Hide) dismiss();
+        else if (event->type() == QEvent::MouseButtonPress) openingPress_ = false;
+        // Qt keeps a list open through the release of the press on the box that opened it, but not when the list is
+        // opened from elsewhere, such as an editable box's text field; the release would then close it at once.
+        else if (event->type() == QEvent::MouseButtonRelease && openingPress_) {
+            openingPress_ = false;
+            if (opened_.elapsed() < QApplication::doubleClickInterval()) return true;
+        }
+    }
     return QComboBox::eventFilter(watched, event);
 }
-void CapsuleDropdown::showPopup() { view()->window()->installEventFilter(this); open_ = true; QComboBox::showPopup(); }
+void CapsuleDropdown::showPopup() {
+    view()->window()->installEventFilter(this);
+    open_ = true;
+    openingPress_ = QGuiApplication::mouseButtons().testFlag(Qt::LeftButton);
+    opened_.start();
+    if (!property("glassPopup").toBool()) { QComboBox::showPopup(); return; }
+    // Glass rows indent their text past the check mark, which Qt leaves out when it sizes the list; an editable
+    // combo box's list would otherwise only be as wide as the box.
+    int widest = 0;
+    for (int index = 0; index < count(); ++index)
+        widest = std::max({widest, view()->fontMetrics().horizontalAdvance(itemText(index)), fontMetrics().horizontalAdvance(itemText(index))});
+    view()->setMinimumWidth(widest + t::blendMenuTextInset + 8 + 2 * 8 + 2 * 6 + view()->verticalScrollBar()->sizeHint().width() + 12);
+    // Qt rolls an editable combo box's list in from an opaque snapshot, which the glass, taken from the screen behind
+    // the list as it appears, would then show instead of what lies behind.
+    const EffectOff noRoll(Qt::UI_AnimateCombo);
+    QComboBox::showPopup();
+}
 void CapsuleDropdown::hidePopup() { QComboBox::hidePopup(); dismiss(); }
 void CapsuleDropdown::paintEvent(QPaintEvent* event) {
     QComboBox::paintEvent(event);
@@ -324,11 +497,48 @@ void CapsuleDropdown::paintEvent(QPaintEvent* event) {
     paintSymbol(painter, "chevron-down", QRectF(x - size / 2, t::blendChevronBottom, size, size), color);
 }
 
+CapsuleButton::CapsuleButton(QWidget* parent) : QToolButton(parent) {
+    setMinimumWidth(t::blendMinimumWidth);
+    setFixedHeight(t::blendHeight);
+    setFont(panelFont(t::searchFont));
+    setToolButtonStyle(Qt::ToolButtonTextOnly);
+}
+void CapsuleButton::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool hot = isEnabled() && (underMouse() || isDown());
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(hot ? t::pressed : t::control));
+    painter.drawRoundedRect(QRectF(rect()), t::blendHeight / 2.0, t::blendHeight / 2.0);
+    const auto color = isEnabled() ? QColor(t::primary) : QColor(t::disabled);
+    painter.setPen(color);
+    painter.setFont(font());
+    const QRect textArea(t::blendLeading, 0, width() - t::blendLeading - t::blendTrailing, height());
+    painter.drawText(textArea, Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(text(), Qt::ElideRight, textArea.width()));
+    const qreal x = width() - t::blendChevronTrailing;
+    const qreal size = t::blendChevronSize;
+    painter.save();
+    painter.translate(x, t::blendChevronTop + size / 2);
+    painter.rotate(180);
+    paintSymbol(painter, "chevron-down", QRectF(-size / 2, -size / 2, size, size), color);
+    painter.restore();
+    paintSymbol(painter, "chevron-down", QRectF(x - size / 2, t::blendChevronBottom, size, size), color);
+}
+
 Slider::Slider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orientation, parent) {
     setFixedHeight(t::sliderHeight);
     setMinimumWidth(t::sliderMinimumWidth);
     // QWidget::setStyle does not take ownership.
     auto* style = new SliderStyle;
+    style->setParent(this);
+    setStyle(style);
+    setStyleSheet(QString("QSlider::sub-page:horizontal { background: %1; }").arg(t::accent));
+}
+
+OptionSlider::OptionSlider(Qt::Orientation orientation, QWidget* parent) : TrackSlider(orientation, parent) {
+    setFixedHeight(t::optionSliderHeight);
+    setMinimumWidth(t::sliderMinimumWidth);
+    auto* style = new SliderStyle({t::optionSliderTrack, t::optionKnobWidth, t::optionKnobHeight, t::optionKnobHeight / 2.0, t::optionTrack, t::primary});
     style->setParent(this);
     setStyle(style);
     setStyleSheet(QString("QSlider::sub-page:horizontal { background: %1; }").arg(t::accent));

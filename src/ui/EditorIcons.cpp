@@ -49,10 +49,16 @@ public:
             for (const auto& point : {QPointF(5,5),QPointF(20,8),QPointF(15,20),QPointF(4,16)}) {
                 p->setBrush(QApplication::palette().color(QPalette::Window)); p->drawRect(QRectF(point-QPointF(1.5,1.5),QSizeF(3,3)));
             } break;
-        case EditorIcon::Wand:
-            path({{5,10},{8,7},{21,20},{18,23},{5,10}}); line(10,9,7,12);
-            line(5,2,5,6); line(3,4,7,4); line(16,2,16,6); line(14,4,18,4);
-            line(3,15,3,19); line(1,17,5,17); break;
+        case EditorIcon::Wand: {
+            // A wand with sparkles, in the spirit of the Mac Compositor's wand.and.stars symbol (drawn here, not copied from it).
+            p->save(); p->translate(4.5,19.5); p->rotate(-45); p->drawRoundedRect(QRectF(0,-1.9,13.5,3.8),1.9,1.9); p->restore();
+            auto sparkle = [&](double cx, double cy, double r) {
+                QPainterPath star; star.moveTo(cx,cy-r); star.quadTo(cx,cy,cx+r,cy); star.quadTo(cx,cy,cx,cy+r); star.quadTo(cx,cy,cx-r,cy); star.quadTo(cx,cy,cx,cy-r);
+                p->setPen(Qt::NoPen); p->setBrush(color); p->drawPath(star);
+            };
+            sparkle(18,6.2,4.4); sparkle(20.6,13.4,2.4); sparkle(10.6,4.4,2.4);
+            break;
+        }
         case EditorIcon::Crop:
             path({{6,2},{6,18},{22,18}}); path({{2,6},{18,6},{18,22}}); line(9,15,21,3); break;
         case EditorIcon::Brush: {
@@ -86,6 +92,9 @@ public:
         case EditorIcon::Shape:
             p->drawEllipse(QRectF(3,3,13,13)); p->setBrush(QApplication::palette().color(QPalette::Window));
             p->drawRoundedRect(QRectF(9,9,12,12),1.5,1.5); break;
+        case EditorIcon::Rectangle: p->drawRoundedRect(QRectF(3,5,18,14),1.5,1.5); break;
+        case EditorIcon::Ellipse: p->drawEllipse(QRectF(3,5,18,14)); break;
+        case EditorIcon::Line: line(5,19,19,5); break;
         case EditorIcon::Eyedropper:
             path({{15,5},{19,9},{9,19},{5,19},{5,15},{15,5}});
             line(4,20,6,18); line(13,4,20,11); p->setBrush(color);
@@ -126,6 +135,12 @@ public:
         case EditorIcon::ChevronUp: path({{7,14},{12,9},{17,14}});break;
         case EditorIcon::ChevronLeft: path({{14,7},{9,12},{14,17}});break;
         case EditorIcon::ChevronRight: path({{10,7},{15,12},{10,17}});break;
+        case EditorIcon::Object: {
+            auto pen = p->pen(); pen.setDashPattern({2,2}); p->setPen(pen);
+            p->drawRoundedRect(QRectF(3,3,15,15),1,1);
+            pen.setStyle(Qt::SolidLine); p->setPen(pen); p->setBrush(QApplication::palette().color(QPalette::Window));
+            path({{11,11},{22,15},{17,17},{15,22},{11,11}}); break;
+        }
         case EditorIcon::Link:
             p->translate(12,12);p->rotate(-35);p->drawRoundedRect(QRectF(-4,-10,8,12),4,4);
             p->drawRoundedRect(QRectF(-4,-2,8,12),4,4);break;

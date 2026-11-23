@@ -7,6 +7,8 @@
 #include <QFormLayout>
 #include <QMainWindow>
 #include <QPainter>
+#include <QIcon>
+#include <QPixmap>
 #include <QPointer>
 #include <QSettings>
 #include <QTabBar>

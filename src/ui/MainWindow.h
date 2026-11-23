@@ -52,7 +52,7 @@ class QSpinBox;
 class QToolButton;
 
 namespace compositor {
-namespace ui {class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
+namespace ui {class SegmentedControl;class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
 struct EditorProject {
     std::optional<Document> document;
     std::string active;
@@ -109,6 +109,10 @@ private:
     ui::LayerOpacityField* opacityPercent_{};
     QComboBox* target_{};
     std::array<QDoubleSpinBox*,5> geometry_{};
+    std::array<QDoubleSpinBox*,5> barGeometry_{};
+    // Shows the transform values in the dock and in the options bar, which repeats the same five fields.
+    void showGeometry(const double (&values)[5]);
+    void enableGeometry(bool enabled);
     QAction *undo_{},*redo_{};
     std::vector<std::unique_ptr<EditorProject>> projects_;
     EditorProject* activeProject_{};
@@ -157,9 +161,9 @@ private:
     std::optional<bool> retouchAxisHorizontal_;
     std::array<QDoubleSpinBox*,3> retouchTip_{};
     std::array<ui::TrackSlider*,2> retouchSliders_{};
-    QComboBox *healingModes_{}, *blurModes_{};
+    ui::SegmentedControl *healingModes_{}, *blurModes_{};
     QToolBar* retouchBar_{};
-    QCheckBox *cloneAligned_{}, *cloneAllLayers_{};
+    QCheckBox* cloneAligned_{};ui::SegmentedControl* cloneAllLayers_{};
     QColor background_{Qt::white};
     editing::GradientSettings gradientSettings_;
     editing::ShapeStyle shapeStyle_;
@@ -209,7 +213,7 @@ private:
     std::optional<editing::Rect> cropDraft_;
     QString cropRatioChoice_{"Free"};
     editing::LassoKind lassoKind_{editing::LassoKind::Freehand};
-    int selectionExpandAmount_{1},selectionContractAmount_{1};
+    int selectionExpandAmount_{1},selectionContractAmount_{1},selectionFeatherAmount_{2};
     std::optional<editing::CropDrag> cropDrag_;
     std::optional<editing::CropSnap> cropSnap_;
     bool ellipse_{},selectionAntialias_{true},movingSelection_{};
@@ -336,6 +340,7 @@ private:
     void cancelCrop();
     void refreshCropControls();
     void resizeSelection(bool expand,double amount);
+    void featherSelectionBy(double radius);
     bool handleEditingKey(QKeyEvent*);
     bool beginTemporaryHand(Point);
     bool updateTemporaryHand(Point,bool finish);
@@ -345,6 +350,11 @@ private:
     void openPalette(bool background=false);
     void setupPaletteControls(QWidget*);
     void refreshPaletteControls();
+    void refreshZoomControl();
+    void setupStatusInfo();
+    void refreshStatusInfo();
+    bool wandRunning_{};
+    QString toolHint() const;
     void openEditPanelColor(effects_tools::PaletteColor,const QString&,std::function<void(effects_tools::PaletteColor)>);
     void closeEditPanelColor(bool commit);
     void swapPalette();

@@ -200,6 +200,7 @@ QDockWidget* MainWindow::setupLayersDock() {
     blendLabel->setStyleSheet(QString("QLabel { color: %1; font-family: '%2'; font-size: %3px; }")
                                   .arg(t::primary, ui::layerPanelFont(t::captionFont).family()).arg(t::captionFont));
     auto* blendPicker = new ui::PreviewComboBox(appearance);
+    blendPicker->useGlassPopup();
     blend_ = blendPicker;
     blend_->setObjectName("layerBlend");
     blend_->setAccessibleName("Layer blend mode");
@@ -342,6 +343,7 @@ void MainWindow::setupLayerFooter() {
         button->setToolTip(tip);
         auto* menu = new QMenu(button);
         menu->setObjectName(menuName);
+        ui::makeGlassMenu(menu);
         button->setMenu(menu);
         row->addWidget(button);
         return menu;

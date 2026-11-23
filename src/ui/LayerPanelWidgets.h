@@ -2,6 +2,7 @@
 #include "PropertyControls.h"
 #include <QColor>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QFont>
 #include <QFrame>
 #include <QLineEdit>
@@ -9,6 +10,7 @@
 #include <QWidget>
 #include <functional>
 
+class QMenu;
 class QPainter;
 
 namespace compositor::ui {
@@ -44,6 +46,12 @@ private:
     QLineEdit* edit_{};
 };
 
+// Makes a popup window a rounded Liquid Glass panel: a translucent neutral tint over a light blur of what lies behind
+// it, with transparent corners. The panel replaces the popup's own paint; its child widgets paint over it as usual.
+void makeGlassPopup(QWidget* popup);
+// The same panel for a menu, whose items are drawn over it, each a capsule in the application blue under the pointer.
+void makeGlassMenu(QMenu* menu);
+
 // Capsule selector that preserves transient preview and dismissal callbacks.
 class CapsuleDropdown final : public QComboBox {
 public:
@@ -52,18 +60,36 @@ public:
     std::function<void()> dismissed;
     void showPopup() override;
     void hidePopup() override;
+    // Shows the list as a rounded Liquid Glass panel: a translucent neutral tint over a light blur of what lies behind it.
+    void useGlassPopup();
 protected:
     bool eventFilter(QObject*, QEvent*) override;
     void paintEvent(QPaintEvent*) override;
 private:
     void dismiss();
     bool open_{};
+    bool openingPress_{};
+    QElapsedTimer opened_;
+};
+
+// A button that looks like CapsuleDropdown (left-aligned text, up and down chevrons) but opens its own popup.
+class CapsuleButton final : public QToolButton {
+public:
+    explicit CapsuleButton(QWidget* parent = nullptr);
+protected:
+    void paintEvent(QPaintEvent*) override;
 };
 
 // Thin 3-pixel opacity track with a 10 x 18-pixel upright knob.
 class Slider final : public TrackSlider {
 public:
     explicit Slider(Qt::Orientation orientation, QWidget* parent = nullptr);
+};
+
+// Options-bar slider: a 4-pixel track and a wide, almost round 18 x 15 knob.
+class OptionSlider final : public TrackSlider {
+public:
+    explicit OptionSlider(Qt::Orientation orientation, QWidget* parent = nullptr);
 };
 
 // Fixed-width, rounded numeric field. Editing behavior belongs to its owner.

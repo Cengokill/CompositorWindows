@@ -1,9 +1,23 @@
 #include "ui/MainWindow.h"
+#include "ui/NativeCanvas.h"
+#include "ui/SegmentedControl.h"
 #include "ui/PaletteDialog.h"
+#include "ui/ToolbarControls.h"
+#include "ui/LayerPanelWidgets.h"
+#include "ui/LayerPanelTokens.h"
+#include <QComboBox>
+#include <QDialog>
 #include <QApplication>
 #include <QColorDialog>
 #include <QElapsedTimer>
+#include <QMouseEvent>
+#include <QTest>
+#include <QStatusBar>
 #include <QPushButton>
+#include <QToolButton>
+#include <QLabel>
+#include <QMenu>
+#include <QSlider>
 #include <QKeyEvent>
 #include <QTimer>
 #include <QToolBar>
@@ -17,7 +31,7 @@ using namespace compositor;
 Document fixture(){Document d;d.id="shape-witness";d.width=100;d.height=80;for(const char* id:{"bottom","middle","top"}){Layer l;l.id=id;l.name=id;l.transform={0,0,8,8};l.raster=Raster::filled(8,8,{50,60,70,255});d.layers.push_back(l);}return d;}
 void shapeTool(MainWindow& w){for(auto* action:w.findChildren<QAction*>())if(action->text()=="Shape (U)"){action->trigger();return;}throw std::runtime_error("Shape tool absent");}
 QDoubleSpinBox* radius(MainWindow&w){for(auto* value:w.findChildren<QDoubleSpinBox*>())if(value->accessibleName()=="Corner radius")return value;throw std::runtime_error("Shape radius absent");}
-QComboBox* kind(MainWindow&w){auto* value=w.findChild<QComboBox*>("shapeKind");REQUIRE(value);return value;}
+ui::SegmentedControl* kind(MainWindow&w){auto* value=ui::findSegmentedControl(&w,"shapeKind");REQUIRE(value);return value;}
 void down(EditorProject&p,Point at){p.canvas->pointerDown({at.x,at.y},{});}
 void move(EditorProject&p,Point at,Qt::KeyboardModifiers flags={}){p.canvas->pointerMove({at.x,at.y},flags);}
 void up(EditorProject&p,Point at,Qt::KeyboardModifiers flags={}){p.canvas->pointerUp({at.x,at.y},flags);}
@@ -28,13 +42,13 @@ void shape_insert_folder(){MainWindow w(true);auto d=fixture();d.layers[0].raste
 void shape_insert_nested_child(){MainWindow w(true);auto d=fixture();d.layers[0].raster.reset();d.layers[0].group=true;d.layers[1].parentId="bottom";auto&p=w.addProject(d);p.active="middle";p.selected={p.active};shapeTool(w);draw(p);REQUIRE(p.document->layers[2].id==p.active&&added(p).parentId=="bottom"&&p.document->layers[3].id=="top");}
 void shape_fractional_anchor(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p,{10.6,12.4},{20.2,22.6});REQUIRE(added(p).transform==Transform{11,12,9,11});REQUIRE(added(p).raster->width==9&&added(p).raster->height==11);}
 void shape_center_square(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p,{-10.6,12.4},{-4.2,16.4},Qt::ShiftModifier|Qt::AltModifier);REQUIRE(added(p).transform==Transform{-18,5,14,14});}
-void shape_kind_change_cancels(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);shapeTool(w);down(p,{10,12});move(p,{20,24});kind(w)->setCurrentIndex(1);up(p,{20,24});REQUIRE(p.document==d&&p.history.undoCount()==0);draw(p);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).kind==editing::ShapeKind::Ellipse);}
+void shape_kind_change_cancels(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);shapeTool(w);down(p,{10,12});move(p,{20,24});kind(w)->choose(1);up(p,{20,24});REQUIRE(p.document==d&&p.history.undoCount()==0);draw(p);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).kind==editing::ShapeKind::Ellipse);}
 void shape_radius_limit(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);REQUIRE(radius(w)->minimum()==0&&radius(w)->maximum()==5000);radius(w)->setValue(9000);REQUIRE(radius(w)->value()==5000);draw(p);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).cornerRadius==5000);}
 void shape_radius_frozen(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);radius(w)->setValue(3);down(p,{10,12});move(p,{20,24});radius(w)->setValue(8);up(p,{20,24});REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).cornerRadius==3);REQUIRE(radius(w)->value()==8);}
 void shape_draft_immutable(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);const auto active=p.active;shapeTool(w);down(p,{10,12});move(p,{20,24});REQUIRE(p.document==d&&p.active==active&&p.history.undoCount()==0);p.canvas->pointerCancel();REQUIRE(p.document==d&&p.active==active&&p.history.undoCount()==0);}
 void shape_click_noop(){MainWindow w(true);auto d=fixture();auto&p=w.addProject(d);shapeTool(w);down(p,{10.6,12.4});up(p,{10.6,12.4});REQUIRE(p.document==d&&p.history.undoCount()==0);}
 void shape_history_selection(){MainWindow w(true);auto d=fixture();d.selection=editing::rasterSelection(editing::SelectionOutline::rectangle({1,2,3,4},false),100,80);d.layers.back().mask=Mask{std::make_shared<GrayRaster>(GrayRaster{1,1,{255}})};auto&p=w.addProject(d);p.maskSelected=true;shapeTool(w);draw(p);REQUIRE(p.document->selection==d.selection&&!p.maskSelected);REQUIRE(p.history.undoCount()==1&&p.history.undoName()=="Rectangle");auto snapshot=p.history.undo();REQUIRE(snapshot&&snapshot->document==d);}
-void shape_stroke_draw(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);auto*checkbox=w.findChild<QCheckBox*>("shapeStroke");REQUIRE(checkbox);checkbox->setChecked(true);w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->setValue(3);draw(p);const auto style=editing::decodeShapeStyle(added(p).shapeJson);REQUIRE(style.strokeEnabled&&style.strokeWidth==3);REQUIRE(added(p).raster->pixel(0,0).a==255);kind(w)->setCurrentIndex(2);draw(p,{30,30},{40,40});REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
+void shape_stroke_draw(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);auto*checkbox=w.findChild<QCheckBox*>("shapeStroke");REQUIRE(checkbox);checkbox->setChecked(true);w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->setValue(3);draw(p);const auto style=editing::decodeShapeStyle(added(p).shapeJson);REQUIRE(style.strokeEnabled&&style.strokeWidth==3);REQUIRE(added(p).raster->pixel(0,0).a==255);kind(w)->choose(2);draw(p,{30,30},{40,40});REQUIRE(!editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
 void shape_style_loads_from_selected_layer(){MainWindow w(true);auto d=fixture();editing::ShapeStyle style{editing::ShapeKind::Rectangle,0,0,0,0};style.strokeEnabled=true;style.strokeWidth=3;d.layers.push_back(*editing::createShapeLayer({10,10,20,20},style,"Stroked"));auto&p=w.addProject(d);p.active=d.layers.back().id;p.selected={p.active};shapeTool(w);REQUIRE(w.findChild<QCheckBox*>("shapeStroke")->isChecked());REQUIRE(w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->value()==3);}
 void shape_controls_edit_selected_layer(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);const auto id=p.active;const auto fill=editing::decodeShapeStyle(added(p).shapeJson);w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->setValue(3);const auto style=editing::decodeShapeStyle(added(p).shapeJson);REQUIRE(p.active==id&&style.strokeEnabled&&style.strokeWidth==3);REQUIRE(style.red==fill.red&&style.green==fill.green&&style.blue==fill.blue);REQUIRE(p.history.undoName()=="Shape Style");}
 QAction* command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
@@ -56,11 +70,11 @@ void shape_smoothing_draft(){
     shapeTool(w);
     auto* smoothing=w.findChild<QCheckBox*>("shapeSmoothing");
     REQUIRE(smoothing&&!smoothing->isChecked()&&!smoothing->isHidden());
-    kind(w)->setCurrentIndex(1);
+    kind(w)->choose(1);
     REQUIRE(smoothing->isHidden());
-    kind(w)->setCurrentIndex(2);
+    kind(w)->choose(2);
     REQUIRE(smoothing->isHidden());
-    kind(w)->setCurrentIndex(0);
+    kind(w)->choose(0);
     REQUIRE(!smoothing->isHidden());
     radius(w)->setValue(15);
     smoothing->setChecked(true);
@@ -117,14 +131,14 @@ void shape_smoothing_history(){
     REQUIRE(added(p)==ordinary&&!smoothing->isChecked());
     command(w,"edit.redo")->trigger();
     REQUIRE(added(p)==smoothed&&smoothing->isChecked());
-    kind(w)->setCurrentIndex(1);
+    kind(w)->choose(1);
     REQUIRE(smoothing->isHidden()&&!editing::decodeShapeStyle(added(p).shapeJson).smoothing);
     command(w,"edit.undo")->trigger();
     REQUIRE(added(p)==smoothed&&!smoothing->isHidden()&&smoothing->isChecked());
 }
 void shape_width_steps_coalesce(){MainWindow w(true);auto&p=w.addProject(fixture());shapeTool(w);draw(p);const auto base=p.history.undoCount();w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);auto*width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");const auto before=editing::decodeShapeStyle(added(p).shapeJson).strokeWidth;width->setValue(3);width->setValue(4);width->setValue(5);REQUIRE(p.history.undoCount()==base+1);emit width->editingFinished();REQUIRE(p.history.undoCount()==base+2&&p.history.undoName()=="Shape Style");REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeWidth==5);command(w,"edit.undo")->trigger();REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeWidth==before&&editing::decodeShapeStyle(added(p).shapeJson).strokeEnabled);}
 void shape_line_controls(){
-    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->setCurrentIndex(2);
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->choose(2);
     auto* style=w.findChild<QComboBox*>("shapeLineStyle");auto* cap=w.findChild<QComboBox*>("shapeLineCap");auto* width=w.findChild<QDoubleSpinBox*>("shapeLineWidth");REQUIRE(style&&cap&&width);
     style->setCurrentIndex(1);cap->setCurrentIndex(1);width->setValue(6);emit width->editingFinished();
     const auto before=*p.document;down(p,{10,30});move(p,{80,30});REQUIRE(p.canvas->shapeDraft());p.canvas->pointerCancel();REQUIRE(!p.canvas->shapeDraft()&&*p.document==before&&p.history.undoCount()==0);
@@ -132,41 +146,44 @@ void shape_line_controls(){
     style->setCurrentIndex(5);REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).lineStyle==editing::ShapeLineStyle::Dotted&&p.history.undoCount()==2);command(w,"edit.undo")->trigger();REQUIRE(added(p)==line&&style->currentIndex()==1);command(w,"edit.redo")->trigger();REQUIRE(style->currentIndex()==5);
     const auto prior=added(p);const auto priorStyle=editing::decodeShapeStyle(prior.shapeJson);auto endpoint=[](const Layer& l,const editing::ShapeStyle& s){return l.transform.fromUnit({s.startX*(l.raster->width-1)/l.raster->width,s.startY*(l.raster->height-1)/l.raster->height});};const auto start=endpoint(prior,priorStyle);width->setValue(30);emit width->editingFinished();const auto changed=added(p);const auto changedStyle=editing::decodeShapeStyle(changed.shapeJson);const auto moved=endpoint(changed,changedStyle);REQUIRE(std::hypot(start.x-moved.x,start.y-moved.y)<.001);command(w,"edit.undo")->trigger();REQUIRE(added(p)==prior);
 }
-template<class T>
-QAction* barControl(MainWindow& w,T* widget){auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar&&widget);for(auto* action:bar->actions()){if(bar->widgetForAction(action)==widget)return action;if(auto* hosted=qobject_cast<QWidgetAction*>(action);hosted&&hosted->defaultWidget()==widget)return action;}throw std::runtime_error("toolbar control absent");}
-bool barCommandVisible(MainWindow& w,const char* id){auto* bar=w.findChild<QToolBar*>("drawingOptions");REQUIRE(bar);for(auto* action:bar->actions())if(action->property("commandId").toString()==id)return action->isVisible();throw std::runtime_error(std::string("toolbar command absent ")+id);}
+// The drawing bar shows one group of options per tool; a widget counts as hidden when its group is.
+bool hiddenInBar(MainWindow& w,const char* name){auto* bar=w.findChild<QToolBar*>("drawingOptions");auto* widget=w.findChild<QWidget*>(name);REQUIRE(bar&&widget);return !widget->isVisibleTo(bar);}
 void shape_bar_limits_selected_shape(){
     MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});
-    REQUIRE(!barCommandVisible(w,"tool.gradient"));
-    REQUIRE(barCommandVisible(w,"tool.shape"));
-    REQUIRE(barControl(w,w.findChild<QComboBox*>("gradientShape"))->isVisible()==false);
-    REQUIRE(w.findChild<QComboBox*>("gradientStyle")->isHidden());
-    REQUIRE(w.findChild<QCheckBox*>("gradientReverse")->isHidden());
-    REQUIRE(w.findChild<QDoubleSpinBox*>("gradientOpacity")->isHidden());
-    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
-    REQUIRE(w.findChild<QComboBox*>("shapeLineStyle")->isHidden());
-    REQUIRE(w.findChild<QComboBox*>("shapeLineCap")->isHidden());
-    REQUIRE(w.findChild<QComboBox*>("cropRatioChoice")->isHidden());
-    REQUIRE(!w.findChild<QComboBox*>("shapeKind")->isHidden());
-    REQUIRE(!w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden());
-    REQUIRE(!w.findChild<QCheckBox*>("shapeSmoothing")->isHidden());
-    REQUIRE(!w.findChild<QCheckBox*>("shapeStroke")->isHidden());
-    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeStrokeWidth")->isHidden());
-    REQUIRE(barControl(w,w.findChild<QPushButton*>("shapeStrokeColor"))->isVisible()==false);
-    kind(w)->setCurrentIndex(1);
-    REQUIRE(w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden()&&w.findChild<QCheckBox*>("shapeSmoothing")->isHidden());
-    REQUIRE(!w.findChild<QCheckBox*>("shapeStroke")->isHidden()&&w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
-    kind(w)->setCurrentIndex(2);
-    REQUIRE(!w.findChild<QDoubleSpinBox*>("shapeLineWidth")->isHidden());
-    REQUIRE(!w.findChild<QComboBox*>("shapeLineStyle")->isHidden()&&!w.findChild<QComboBox*>("shapeLineCap")->isHidden());
-    REQUIRE(w.findChild<QCheckBox*>("shapeStroke")->isHidden()&&w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->isHidden());
-    REQUIRE(!barCommandVisible(w,"tool.gradient"));
+    const auto hidden=[&](const char* name){return hiddenInBar(w,name);};
+    for(const char* name:{"gradientTitle","gradientShape","gradientStyle","gradientReverse","gradientOpacityGroup","gradientOpacity","gradientOpacitySlider","gradientCancelButton","gradientApplyButton"})REQUIRE(hidden(name));
+    for(const char* name:{"shapeLineWidth","shapeLineStyle","shapeLineCap","cropRatioChoice","shapeStrokeWidth","shapeStrokeColor"})REQUIRE(hidden(name));
+    for(const char* name:{"shapeTitle","shapeKind","shapeFillColor","shapeCornerRadius","shapeSmoothing","shapeStroke"})REQUIRE(!hidden(name));
+    kind(w)->choose(1);
+    REQUIRE(hidden("shapeCornerRadius")&&hidden("shapeSmoothing"));
+    REQUIRE(!hidden("shapeStroke")&&hidden("shapeLineWidth"));
+    kind(w)->choose(2);
+    REQUIRE(!hidden("shapeLineWidth")&&!hidden("shapeLineStyle")&&!hidden("shapeLineCap"));
+    REQUIRE(hidden("shapeStroke")&&hidden("shapeCornerRadius"));
     const auto shapeId=p.active;command(w,"tool.move")->trigger();
-    REQUIRE(barCommandVisible(w,"tool.gradient")&&!w.findChild<QComboBox*>("gradientShape")->isHidden());
+    // The gradient options belong to the Gradient tool alone; a selected shape keeps its own options.
+    REQUIRE(hidden("gradientShape")&&!hidden("shapeKind"));
     p.active="top";p.selected={"top"};shapeTool(w);
-    REQUIRE(barCommandVisible(w,"tool.gradient")&&!w.findChild<QComboBox*>("gradientShape")->isHidden());
-    p.active=shapeId;p.selected={shapeId};shapeTool(w);
-    REQUIRE(!barCommandVisible(w,"tool.gradient")&&w.findChild<QComboBox*>("gradientShape")->isHidden());
+    REQUIRE(hidden("gradientShape")&&!hidden("shapeKind"));
+    command(w,"tool.gradient")->trigger();
+    REQUIRE(!hidden("gradientShape")&&!hidden("gradientTitle")&&hidden("shapeKind"));
+    p.active=shapeId;p.selected={shapeId};command(w,"tool.gradient")->trigger();
+    REQUIRE(!hidden("gradientShape")&&hidden("shapeKind"));
+}
+// The Fill well opens the color dialog; with a shape selected it repaints it in one undo step, with none it sets the next shape's color.
+void fill_well_opens_color_dialog(){
+    MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);
+    const auto pick=[&](QColor color){auto* well=w.findChild<QAbstractButton*>("shapeFillColor");REQUIRE(well&&well->isEnabled());bool opened=false;
+        QTimer::singleShot(0,&w,[&]{if(auto* dialog=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;dialog->setCurrentColor(color);dialog->accept();}});
+        well->click();QApplication::processEvents();REQUIRE(opened);};
+    pick(QColor(10,200,30));
+    REQUIRE(dynamic_cast<ui::ColorWell*>(w.findChild<QAbstractButton*>("shapeFillColor"))->color()==QColor(10,200,30));
+    draw(p,{10,12},{90,72});const auto base=p.history.undoCount();
+    pick(QColor(255,0,0));
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).red==1&&p.history.undoCount()==base+1);
+    kind(w)->choose(2);draw(p,{10,12},{90,72});const auto lineBase=p.history.undoCount();
+    pick(QColor(0,0,255));
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).blue==1&&p.history.undoCount()==lineBase+1);
 }
 void shape_background_fill_selected(){
     MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);draw(p,{10,12},{90,72});const auto id=p.active;
@@ -192,14 +209,14 @@ void shape_background_fill_selected(){
     REQUIRE(editing::decodeShapeStyle(layerById(p,id).shapeJson).red==1&&editing::decodeShapeStyle(layerById(p,id).shapeJson).green==0&&editing::decodeShapeStyle(layerById(p,id).shapeJson).blue==0);
 }
 void shape_background_fill_ellipse_and_line(){
-    {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->setCurrentIndex(1);draw(p,{10,12},{90,72});
+    {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->choose(1);draw(p,{10,12},{90,72});
         const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);
         REQUIRE(beforeStyle.kind==editing::ShapeKind::Ellipse&&beforeStyle.cornerRadius==0);
         chooseShapeBackground(w,"00FF00",true);
         const auto style=editing::decodeShapeStyle(added(p).shapeJson);
         REQUIRE(style.kind==editing::ShapeKind::Ellipse&&style.cornerRadius==0&&style.red==0&&style.green==1&&style.blue==0);
         REQUIRE(added(p).transform==before.transform&&added(p).raster->pixel(40,30)==Pixel{0,255,0,255}&&p.history.undoName()=="Shape Style");}
-    {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->setCurrentIndex(2);draw(p,{10,30},{80,30});
+    {MainWindow w(true);auto& p=w.addProject(fixture());shapeTool(w);kind(w)->choose(2);draw(p,{10,30},{80,30});
         const auto before=added(p);const auto beforeStyle=editing::decodeShapeStyle(before.shapeJson);int px=-1,py=-1;
         for(int y=0;y<before.raster->height&&px<0;++y)for(int x=0;x<before.raster->width;++x)if(before.raster->pixel(x,y).a==255){px=x;py=y;break;}
         REQUIRE(px>=0&&before.raster->pixel(px,py)==Pixel{0,0,0,255});
@@ -220,4 +237,220 @@ void shape_background_fill_draft(){
     REQUIRE(*p.document==before&&p.history.undoCount()==count&&p.canvas->shapeDraft());
     p.canvas->pointerCancel();REQUIRE(!p.canvas->shapeDraft()&&*p.document==before&&p.history.undoCount()==count&&paletteHex(w,"palette.background")=="FF0000");
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+// Every tool bar names its tool and shows only the controls of the active tool.
+void tool_bars_show_their_own_controls(){
+    MainWindow w(true);auto& mainProject=w.addProject(fixture());w.resize(3200,900);w.show();QApplication::processEvents();
+    const auto tool=[&](const char* id){command(w,id)->trigger();QApplication::processEvents();};
+    const auto shown=[&](const char* barName,const char* child){auto* bar=w.findChild<QToolBar*>(barName);auto* widget=w.findChild<QWidget*>(child);REQUIRE(bar&&widget);return !bar->isHidden()&&widget->isVisibleTo(bar);};
+    const auto title=[&](const char* name){auto* label=w.findChild<QLabel*>(name);REQUIRE(label&&label->font().bold());return label->text();};
+    tool("tool.heal");
+    REQUIRE(shown("retouchOptions","retouchHealingMode")&&!shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&!shown("retouchOptions","retouchCloneHint")&&title("retouchFamily")=="Spot Healing");
+    tool("tool.clone");
+    REQUIRE(shown("retouchOptions","retouchAligned")&&shown("retouchOptions","retouchAllLayers")&&shown("retouchOptions","retouchCloneHint")&&!shown("retouchOptions","retouchHealingMode")&&title("retouchFamily")=="Clone Stamp");
+    tool("tool.retouch");
+    REQUIRE(shown("retouchOptions","retouchSmearMode")&&!shown("retouchOptions","retouchAligned")&&!shown("retouchOptions","retouchCloneHint")&&title("retouchFamily")=="Smear"&&w.findChild<QLabel*>("retouchOpacityLabel")->text()=="Strength");
+    tool("tool.gradient");
+    REQUIRE(shown("drawingOptions","gradientShape")&&shown("drawingOptions","gradientOpacityGroup")&&!shown("drawingOptions","shapeKind")&&title("gradientTitle")=="Gradient");
+    REQUIRE(shown("drawingOptions","gradientSwatch"));
+    // The Opacity caption sits right against its slider: the group does not stretch.
+    {auto* group=w.findChild<QWidget*>("gradientOpacityGroup");auto* caption=group->findChild<QLabel*>();auto* track=w.findChild<QSlider*>("gradientOpacitySlider");REQUIRE(caption&&track);const int gap=track->mapTo(group,QPoint(0,0)).x()-(caption->mapTo(group,QPoint(0,0)).x()+caption->width());REQUIRE(gap>=0&&gap<=10);}
+    auto* slider=w.findChild<QSlider*>("gradientOpacitySlider");auto* number=w.findChild<QDoubleSpinBox*>("gradientOpacity");REQUIRE(slider&&number);
+    slider->setValue(40);REQUIRE(number->value()==40);number->setValue(65);REQUIRE(slider->value()==65);
+    REQUIRE(!command(w,"gradient.apply")->isEnabled());
+    REQUIRE(!w.findChild<QPushButton*>("gradientApplyButton")->isEnabled());
+    tool("tool.shape");
+    REQUIRE(shown("drawingOptions","shapeKind")&&!shown("drawingOptions","gradientShape")&&title("shapeTitle")=="Shape");
+    // Rectangle order: Fill, Stroke, Width, Radius, Smooth Corners.
+    {auto* bar=w.findChild<QToolBar*>("drawingOptions");const auto x=[&](const char* name){auto* widget=w.findChild<QWidget*>(name);REQUIRE(widget);return widget->mapTo(bar,QPoint(0,0)).x();};
+     w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);QApplication::processEvents();
+     REQUIRE(x("shapeFillColor")<x("shapeStroke")&&x("shapeStroke")<x("shapeStrokeColor")&&x("shapeStrokeColor")<x("shapeStrokeWidth")&&x("shapeStrokeWidth")<x("shapeCornerRadius")&&x("shapeCornerRadius")<x("shapeSmoothing"));
+     REQUIRE(!w.findChild<QCheckBox*>("shapeSmoothing")->isEnabled());
+     w.findChild<QDoubleSpinBox*>("shapeCornerRadius")->setValue(10);REQUIRE(w.findChild<QSlider*>("shapeCornerRadiusSlider")->value()==10&&w.findChild<QCheckBox*>("shapeSmoothing")->isEnabled());}
+    tool("tool.type");
+    REQUIRE(!w.findChild<QToolBar*>("typeOptions")->isHidden());
+    REQUIRE(w.findChild<QToolButton*>("textFont")->isVisibleTo(w.findChild<QToolBar*>("typeOptions")));
+    REQUIRE(title("typeTitle")=="Type");
+    REQUIRE(!shown("typeOptions","textDoneButton"));
+    // Without a text being edited, the color well still opens the color dialog and sets the color of the next text.
+    {auto* well=dynamic_cast<ui::ColorWell*>(w.findChild<QAbstractButton*>("textColor"));REQUIRE(well&&well->isEnabled());bool opened=false;
+     QTimer::singleShot(0,&w,[&]{if(auto* dialog=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){opened=true;dialog->setCurrentColor(QColor(10,200,30));dialog->accept();}});
+     well->click();QApplication::processEvents();REQUIRE(opened&&well->color()==QColor(10,200,30));}
+    // The font and style selectors are capsules like the other drop-downs, and the alignment is drawn with icons.
+    REQUIRE(dynamic_cast<ui::CapsuleButton*>(w.findChild<QToolButton*>("textFont"))&&dynamic_cast<ui::CapsuleDropdown*>(w.findChild<QComboBox*>("textStyle")));
+    REQUIRE(!w.findChild<QToolButton*>("textAlignLeft")->icon().isNull());
+    tool("tool.eyedropper");
+    REQUIRE(shown("eyedropperOptions","eyedropperSampleRing")&&title("eyedropperTitle")=="Eyedropper"&&w.findChild<QCheckBox*>("eyedropperSampleRing")->isChecked());
+    tool("tool.zoom");
+    // The status bar shows the view and canvas on the left and a hint for the tool on the right.
+    {auto text=[&](const char* name){auto* label=w.findChild<QLabel*>(name);REQUIRE(label);return label->text();};
+     REQUIRE(text("statusZoom").endsWith(" %")&&text("statusDimensions").contains(QString::fromUtf8(" × "))&&text("statusProfile")=="sRGB · Transparent");
+     REQUIRE(text("statusHint").startsWith("Click to zoom in"));
+     tool("tool.marquee");REQUIRE(text("statusHint").startsWith("Drag a rectangle")&&text("statusHint").contains("Alt subtract"));
+     // A message left on the status bar does not stay in place of the next tool's hint.
+     w.statusBar()->showMessage("Object selection");tool("tool.zoom");REQUIRE(text("statusHint").startsWith("Click to zoom in"));}
+    REQUIRE(shown("zoomOptions","zoomPercent")&&title("zoomTitle")=="Zoom"&&w.findChild<QToolBar*>("eyedropperOptions")->isHidden());
+    {auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");auto* canvas=mainProject.canvas;REQUIRE(field&&canvas);
+     field->setValue(200);emit field->editingFinished();QApplication::processEvents();REQUIRE(std::abs(canvas->zoom-2)<1e-9);
+     canvas->zoomAt(0.5,canvas->contentRect().center());QApplication::processEvents();REQUIRE(field->value()==50);}
+    tool("tool.move");
+    REQUIRE(w.findChild<QToolBar*>("eyedropperOptions")->isHidden()&&w.findChild<QToolBar*>("zoomOptions")->isHidden()&&w.findChild<QToolBar*>("typeOptions")->isHidden());
+}
+// Dragging a caption scrubs the value of its field; the helper sends press, move and release the way the mouse does.
+void sendMouse(QWidget* label,QEvent::Type type,double globalX,Qt::KeyboardModifiers modifiers={}){
+    const QPointF local(label->width()/2.,label->height()/2.);const QPointF global=label->mapToGlobal(local)+QPointF(globalX,0);
+    QMouseEvent event(type,local,global,Qt::LeftButton,type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,modifiers);QApplication::sendEvent(label,&event);
+}
+QLabel* captionOf(MainWindow& w,const char* group){auto* host=w.findChild<QWidget*>(group);REQUIRE(host);auto* label=host->findChild<QLabel*>();REQUIRE(label);return label;}
+void scrub_drag_is_one_undo_step(){
+    MainWindow w(true);auto& p=w.addProject(fixture());w.resize(3200,900);w.show();shapeTool(w);draw(p,{10,12},{90,72});
+    w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);QApplication::processEvents();
+    auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");auto* label=captionOf(w,"shapeStrokeGroup");REQUIRE(width&&label->cursor().shape()==Qt::SplitHCursor);
+    const double start=width->value();const auto base=p.history.undoCount();
+    sendMouse(label,QEvent::MouseButtonPress,0);sendMouse(label,QEvent::MouseMove,10);
+    REQUIRE(std::abs(width->value()-(start+10))<1e-9);
+    sendMouse(label,QEvent::MouseMove,20,Qt::ShiftModifier);sendMouse(label,QEvent::MouseMove,30,Qt::ShiftModifier);REQUIRE(std::abs(width->value()-(start+11))<1e-9);
+    sendMouse(label,QEvent::MouseMove,30);sendMouse(label,QEvent::MouseMove,20);REQUIRE(std::abs(width->value()-(start+1))<1e-9);
+    sendMouse(label,QEvent::MouseButtonRelease,20);
+    REQUIRE(editing::decodeShapeStyle(added(p).shapeJson).strokeWidth==width->value());
+    REQUIRE(p.history.undoCount()==base+1&&p.history.undoName()=="Shape Style");
+    command(w,"edit.undo")->trigger();REQUIRE(p.history.undoCount()==base&&std::abs(width->value()-start)<1e-9);
+}
+void scrub_escape_and_click(){
+    MainWindow w(true);auto& p=w.addProject(fixture());w.resize(3200,900);w.show();shapeTool(w);draw(p,{10,12},{90,72});
+    w.findChild<QCheckBox*>("shapeStroke")->setChecked(true);QApplication::processEvents();
+    auto* width=w.findChild<QDoubleSpinBox*>("shapeStrokeWidth");auto* label=captionOf(w,"shapeStrokeGroup");
+    const double start=width->value();const auto base=p.history.undoCount();const auto before=added(p);
+    sendMouse(label,QEvent::MouseButtonPress,0);sendMouse(label,QEvent::MouseMove,25);REQUIRE(width->value()!=start);
+    QTest::keyClick(&w,Qt::Key_Escape);QApplication::processEvents();
+    sendMouse(label,QEvent::MouseButtonRelease,25);
+    REQUIRE(width->value()==start&&added(p)==before&&p.history.undoCount()==base);
+    // A click without movement leaves the value alone and puts the cursor in the field.
+    sendMouse(label,QEvent::MouseButtonPress,0);sendMouse(label,QEvent::MouseButtonRelease,0);QApplication::processEvents();
+    REQUIRE(width->value()==start&&p.history.undoCount()==base);
+}
+void scrub_zoom_title(){
+    MainWindow w(true);auto& p=w.addProject(fixture());w.resize(3200,900);w.show();command(w,"tool.zoom")->trigger();QApplication::processEvents();
+    auto* title=w.findChild<QLabel*>("zoomTitle");auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");REQUIRE(title&&field&&title->cursor().shape()==Qt::SplitHCursor);
+    p.canvas->zoomAt(1,p.canvas->contentRect().center());QApplication::processEvents();REQUIRE(field->value()==100);
+    sendMouse(title,QEvent::MouseButtonPress,0);sendMouse(title,QEvent::MouseMove,50);
+    REQUIRE(field->value()==150&&std::abs(p.canvas->zoom-1.5)<1e-9);
+    sendMouse(title,QEvent::MouseMove,50,Qt::ControlModifier);sendMouse(title,QEvent::MouseMove,60,Qt::ControlModifier);
+    REQUIRE(field->value()==250&&std::abs(p.canvas->zoom-2.5)<1e-9);
+    sendMouse(title,QEvent::MouseButtonRelease,60);REQUIRE(std::abs(p.canvas->zoom-2.5)<1e-9);
+    // The Brush size and the Tracking captions scrub their fields too.
+    for(const char* name:{"brushSize","textTracking"}){auto* field=w.findChild<QWidget*>(name);if(!field){auto any=w.findChildren<QDoubleSpinBox*>();for(auto* box:any)if(box->accessibleName()==(QString(name)=="brushSize"?"Brush diameter":"Tracking"))field=box;}
+        REQUIRE(field);auto* label=field->parentWidget()->findChild<QLabel*>();REQUIRE(label&&label->cursor().shape()==Qt::SplitHCursor);}
+}
+// The Magic Wand sample, Crop ratio and Gradient color lists and the Type font and style lists open as rounded glass panels:
+// painted inside, transparent outside the rounded corners.
+bool glass(QWidget* popup){
+    REQUIRE(popup&&popup->isVisible()&&popup->testAttribute(Qt::WA_TranslucentBackground));
+    const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
+    const auto alpha=[&](int x,int y){return panel.pixelColor(int(x*scale),int(y*scale)).alpha();};
+    return alpha(2,2)==0&&alpha(popup->width()-3,popup->height()-3)==0&&alpha(popup->width()/2,popup->height()-4)>0;
+}
+void filter_sliders_use_option_slider(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    command(w,"filter.gaussian")->trigger();QApplication::processEvents();
+    QDialog* panel=nullptr;for(auto* d:w.findChildren<QDialog*>())if(d->isVisible())panel=d;
+    REQUIRE(panel);int count=0;
+    for(auto* slider:panel->findChildren<QSlider*>()){++count;REQUIRE(dynamic_cast<ui::OptionSlider*>(slider));}
+    REQUIRE(count>0);panel->reject();QApplication::processEvents();
+}
+void filter_lists_use_glass_dropdown(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    command(w,"filter.lens_effects")->trigger();QApplication::processEvents();
+    QDialog* panel=nullptr;for(auto* d:w.findChildren<QDialog*>())if(d->isVisible())panel=d;
+    REQUIRE(panel);auto* mode=panel->findChild<QComboBox*>("lensEffectMode");REQUIRE(mode);
+    int count=0;for(auto* box:panel->findChildren<QComboBox*>()){++count;REQUIRE(dynamic_cast<ui::CapsuleDropdown*>(box)&&box->property("glassPopup").toBool());}
+    REQUIRE(count>0);panel->reject();QApplication::processEvents();
+}
+void lens_effects_panel_fits_its_rows(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    command(w,"filter.lens_effects")->trigger();QApplication::processEvents();
+    QDialog* panel=nullptr;for(auto* d:w.findChildren<QDialog*>())if(d->isVisible())panel=d;
+    REQUIRE(panel);auto* mode=panel->findChild<QComboBox*>("lensEffectMode");REQUIRE(mode);
+    const int order[]{3,0,4,1,2,3,2,4,0,1,4,3};
+    for(int index:order){
+        mode->setCurrentIndex(index);QTest::qWait(20);QApplication::processEvents();
+        REQUIRE(panel->height()<=panel->sizeHint().height()+4);
+    }
+    panel->reject();QApplication::processEvents();
+}
+void layer_blend_list_is_glass(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    auto* blend=w.findChild<QComboBox*>("layerBlend");REQUIRE(blend&&blend->count()>1);
+    blend->showPopup();QApplication::processEvents();
+    REQUIRE(glass(blend->view()->window()));
+    blend->hidePopup();QApplication::processEvents();
+}
+void layer_effect_lists_are_glass(){
+    MainWindow w(true);auto& project=w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    REQUIRE(!project.active.empty());
+    auto* menu=w.findChild<QMenu*>("layerEffectsMenu");REQUIRE(menu&&menu->actions().size()==6);
+    for(auto* action:menu->actions()){
+        int lists=0;bool checked=false;
+        QTimer::singleShot(50,[&]{
+            auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if(dialog){for(auto* box:dialog->findChildren<QComboBox*>()){++lists;if(!(dynamic_cast<ui::CapsuleDropdown*>(box)&&box->property("glassPopup").toBool()))lists=-100;}checked=true;dialog->reject();}
+        });
+        action->trigger();
+        REQUIRE(checked);REQUIRE(lists==2);
+    }
+}
+void options_lists_are_rounded_glass(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    const auto tool=[&](const char* id){command(w,id)->trigger();QApplication::processEvents();};
+    for(const auto& [id,name]:{std::pair{"tool.wand","wandSampleSize"},{"tool.crop","cropRatioChoice"},{"tool.gradient","gradientStyle"},{"tool.move","transformSampling"},{"tool.shape","shapeLineStyle"},{"tool.shape","shapeLineCap"}}){
+        tool(id);auto* box=w.findChild<QComboBox*>(name);REQUIRE(box);
+        box->showPopup();QApplication::processEvents();
+        REQUIRE(glass(box->view()->window()));
+        box->hidePopup();QApplication::processEvents();
+    }
+    tool("tool.type");
+    auto* fonts=w.findChild<QToolButton*>("textFont");REQUIRE(fonts&&fonts->isEnabled());
+    fonts->click();QApplication::processEvents();
+    auto* popup=w.findChild<QWidget*>("textFontPopup");
+    REQUIRE(glass(popup));
+    popup->hide();QApplication::processEvents();
+    auto* styles=w.findChild<QComboBox*>("textStyle");REQUIRE(styles&&styles->count()>0);
+    // The style list opens without the roll animation, which would show an opaque snapshot, and leaves the setting as it was.
+    QApplication::setEffectEnabled(Qt::UI_General,true);QApplication::setEffectEnabled(Qt::UI_AnimateCombo,true);
+    REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateCombo));
+    styles->showPopup();QApplication::processEvents();
+    REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateCombo));
+    REQUIRE(glass(styles->view()->window()));
+    // Every style name fits beside the check mark, although the list of an editable box starts as wide as the box.
+    const int room=styles->view()->viewport()->width()-ui::layer_panel::blendMenuTextInset-8-2*8;
+    for(int index=0;index<styles->count();++index)REQUIRE(styles->view()->fontMetrics().horizontalAdvance(styles->itemText(index))<=room);
+    styles->hidePopup();QApplication::processEvents();
+    // A click on the style field opens its list, and the list stays open once the button is released.
+    // Through the window, as a real click is: the release then goes to the open list.
+    QWindow* window=w.windowHandle();REQUIRE(window);
+    const QPoint field=window->mapFromGlobal(styles->lineEdit()->mapToGlobal(styles->lineEdit()->rect().center()));
+    QTest::mousePress(window,Qt::LeftButton,{},field);QApplication::processEvents();
+    REQUIRE(styles->view()->isVisible());
+    QTest::mouseRelease(window,Qt::LeftButton,{},field);QApplication::processEvents();
+    REQUIRE(styles->view()->isVisible());
+    styles->hidePopup();QApplication::processEvents();
+}
+// The Layers footer menus (New Adjustment Layer, New Filter Layer, Add Layer Effect) open as rounded glass panels with
+// their items drawn over the glass, and without the roll or fade animation, which would show an opaque snapshot.
+void layer_footer_menus_are_rounded_glass(){
+    MainWindow w(true);w.addProject(fixture());w.resize(1600,900);w.show();QApplication::processEvents();
+    QApplication::setEffectEnabled(Qt::UI_General,true);QApplication::setEffectEnabled(Qt::UI_AnimateMenu,true);
+    for(const char* name:{"layerAdjustmentFooterMenu","layerFilterLayerFooterMenu","layerEffectsMenu"}){
+        auto* menu=w.findChild<QMenu*>(name);REQUIRE(menu&&!menu->actions().isEmpty());
+        menu->popup(w.mapToGlobal(QPoint(200,200)));QApplication::processEvents();
+        REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateMenu));
+        REQUIRE(glass(menu));
+        // The first item's name is drawn in light ink over the glass.
+        const QImage panel=menu->grab().toImage();const double scale=panel.devicePixelRatio();
+        const QRect item=menu->actionGeometry(menu->actions().first());
+        int lightest=0;
+        for(int y=item.top();y<=item.bottom();++y)for(int x=item.left();x<=item.right();++x)lightest=std::max(lightest,panel.pixelColor(int(x*scale),int(y*scale)).lightness());
+        REQUIRE(lightest>180);
+        menu->hide();QApplication::processEvents();
+    }
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"filter_sliders_use_option_slider",filter_sliders_use_option_slider},{"filter_lists_use_glass_dropdown",filter_lists_use_glass_dropdown},{"lens_effects_panel_fits_its_rows",lens_effects_panel_fits_its_rows},{"layer_blend_list_is_glass",layer_blend_list_is_glass},{"layer_effect_lists_are_glass",layer_effect_lists_are_glass},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"layer_footer_menus_are_rounded_glass",layer_footer_menus_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

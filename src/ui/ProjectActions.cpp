@@ -9,7 +9,9 @@
 #include "LayerMergeJob.h"
 #include "LastFilterJob.h"
 #include "LayerPanel.h"
+#include "LayerPanelWidgets.h"
 #include "EditorIcons.h"
+#include "LayerPanelTokens.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
@@ -23,7 +25,9 @@
 #include <QLabel>
 #include <QMoveEvent>
 #include <QPaintEvent>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalBlocker>
@@ -65,11 +69,40 @@ constexpr NewCanvasPreset newCanvasPresets[]{
 struct NewCanvasDraft { int width{1920},height{1080}; editing::PrintUnit unit{editing::PrintUnit::Pixels}; double dpi{72}; int preset{-1}; };
 // Raster::filled enforces this budget for an opaque background; a transparent canvas allocates no pixels.
 constexpr uint64_t solidCanvasPixelBudget=100000000;
+// The new-project button: a glass disc whose highlight follows the pointer, with the plus drawn on the exact center.
+class GlassPlusButton final : public QToolButton {
+public:
+    explicit GlassPlusButton(QWidget* parent):QToolButton(parent){setMouseTracking(true);setAttribute(Qt::WA_Hover);}
+protected:
+    void mouseMoveEvent(QMouseEvent* event) override {pointer_=event->position();update();QToolButton::mouseMoveEvent(event);}
+    void enterEvent(QEnterEvent* event) override {pointer_=event->position();update();QToolButton::enterEvent(event);}
+    void leaveEvent(QEvent* event) override {update();QToolButton::leaveEvent(event);}
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF disc=QRectF(rect()).adjusted(.5,.5,-.5,-.5);
+        const bool hot=isEnabled()&&underMouse(),down=isDown();
+        QPainterPath shape;shape.addEllipse(disc);
+        painter.setPen(Qt::NoPen);painter.setBrush(QColor(255,255,255,down?8:hot?26:16));painter.drawPath(shape);
+        painter.save();painter.setClipPath(shape);
+        // A soft sheen along the top edge, and a light that follows the pointer.
+        QLinearGradient sheen(disc.topLeft(),disc.bottomLeft());sheen.setColorAt(0,QColor(255,255,255,hot?58:38));sheen.setColorAt(.55,QColor(255,255,255,0));
+        painter.fillRect(disc,sheen);
+        if(hot){QRadialGradient glow(pointer_,disc.width()*.8);glow.setColorAt(0,QColor(255,255,255,down?40:78));glow.setColorAt(1,QColor(255,255,255,0));painter.fillRect(disc,glow);}
+        painter.restore();
+        painter.setBrush(Qt::NoBrush);painter.setPen(QPen(QColor(255,255,255,hot?120:78),1));painter.drawEllipse(disc);
+        const QPointF center=disc.center();const double arm=5;
+        painter.setPen(QPen(QColor(isEnabled()?"#ececec":"#6a6a6a"),1.7,Qt::SolidLine,Qt::RoundCap));
+        painter.drawLine(QPointF(center.x()-arm,center.y()),QPointF(center.x()+arm,center.y()));
+        painter.drawLine(QPointF(center.x(),center.y()-arm),QPointF(center.x(),center.y()+arm));
+    }
+private:
+    QPointF pointer_;
+};
 // Qt shortens the tab bar for the corner widget, so its bottom edge stops at the
-// button while the Layers title border sits on a lower pixel behind it. The
-// corner matches the tab-bar height and one separator runs from the strip's left
-// edge through the clearance before the dock. The Layers title uses that height
-// so its border is the same row.
+// button. The corner matches the tab-bar height and one separator runs from the
+// strip's left edge through the clearance before the dock. The strip is the
+// 50-pixel Layers header plus the row of that separator, so the separator is on
+// the row of the divider under the Layers title.
 class WorkspaceTabCorner final : public QWidget {
 public:
     explicit WorkspaceTabCorner(QTabWidget* tabs):QWidget(tabs),tabs_(tabs){
@@ -77,9 +110,9 @@ public:
         auto* layout=new QHBoxLayout(this);
         layout->setContentsMargins(0,0,6,0);
         layout->setSpacing(0);
-        button_=new QToolButton(this);
+        button_=new GlassPlusButton(this);
         button_->setObjectName("newProjectDropTarget");
-        button_->setFixedSize(32,30);
+        button_->setFixedSize(30,30);
         layout->addWidget(button_,0,Qt::AlignVCenter);
         line_=new QWidget(tabs_);
         line_->setObjectName("workspaceSeparator");
@@ -104,7 +137,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override { QWidget::resizeEvent(event); schedule(); }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        painter.fillRect(rect(),QColor(0x20,0x21,0x25));
+        painter.fillRect(rect(),QColor(ui::layer_panel::surface));
     }
 private:
     void schedule(){if(pending_)return;pending_=true;QTimer::singleShot(0,this,[this]{pending_=false;align();});}
@@ -129,6 +162,7 @@ private:
     bool pending_{};
 };
 void detach(NativeCanvas*canvas){
+    canvas->viewChanged={};
     canvas->pointerDown={};canvas->pointerDoubleClick={};canvas->pointerMove={};canvas->pointerUp={};canvas->pointerCancel={};canvas->pointerInterrupted={};
     canvas->pointerHover={};canvas->pointerLeave={};canvas->rightPointerDown={};canvas->rightPointerMove={};canvas->navigationAllowed={};canvas->viewportProvider={};canvas->navigatorProvider={};
     if(canvas->cancelWheelComposite)canvas->cancelWheelComposite();
@@ -174,6 +208,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->pointerDoubleClick=[this](QPointF p,Qt::KeyboardModifiers m){try{pointerBegin(p,m,2);}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerMove=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerUpdate(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
     project.canvas->pointerUp=[this](NativeCanvas::PointerSample p,Qt::KeyboardModifiers m){try{pointerEnd(p.position,m,p.pressure.value_or(1));}catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}};
+    project.canvas->viewChanged=[this]{refreshZoomControl();refreshStatusInfo();};
     project.canvas->pointerCancel=[this]{pointerCancel();};project.canvas->pointerInterrupted=[this]{interruptPointer();};
     project.canvas->pointerHover=[this](QPointF point,Qt::KeyboardModifiers flags){if(editPanel_)editPanel_->sampleHover({point.x(),point.y()});updateBrushPointer(point,flags);hoverSelection(point,flags);if(tool_==Tool::Hand&&!spaceHeld_&&!spaceDragging_)if(auto* view=canvas())view->setCursor(pointerOwner_==current()?Qt::ClosedHandCursor:Qt::OpenHandCursor);};
     project.canvas->pointerLeave=[this]{clearBrushPointer();if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal){selectionGesture_.moveCursor({});refreshSelectionGesture();}};
@@ -210,6 +245,7 @@ void MainWindow::initializeProject(EditorProject&project){
     project.canvas->guideDragUpdated=[this](bool horizontal,double position){statusBar()->showMessage(QString("%1 guide %2").arg(horizontal?QStringLiteral("Horizontal"):QStringLiteral("Vertical")).arg(position,0,'f',1));};
     project.canvas->guideDragCanceled=[this]{statusBar()->clearMessage();};
     project.canvas->guideDragFinished=[this](bool horizontal,double position,int index){
+        statusBar()->clearMessage();
         try{
             if(auto* item=findChild<QAction*>("viewGuides"))item->setChecked(true);
             if(auto* surface=canvas())surface->showGuides=true;
@@ -248,11 +284,11 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     initializeProject(*raw);applyRememberedBrushPressure(raw->toolState.brushSettings);applyRememberedSnapAndGrid(raw->toolState.snapPolicy,raw->toolState.layoutGrid);raw->page=new QStackedWidget;raw->page->setObjectName("projectPage");
     raw->welcome=new QWidget;raw->welcome->setObjectName("newCanvasWelcome");auto*outer=new QVBoxLayout(raw->welcome);outer->addStretch();
     auto*row=new QHBoxLayout;row->addStretch();auto*panel=new QWidget;panel->setObjectName("newCanvasCard");panel->setMaximumWidth(440);
-    panel->setStyleSheet("QWidget#newCanvasCard { background: #27292e; border: 1px solid #3b3e46; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }");
+    panel->setStyleSheet(QString("QWidget#newCanvasCard { background: %1; border: 1px solid %2; border-radius: 14px; } QLabel { background: transparent; } QLabel#newCanvasHeading { font-size: 28px; font-weight: 500; margin-bottom: 14px; }").arg(ui::layer_panel::surface,ui::layer_panel::surfaceBorder));
     auto*form=new QFormLayout(panel);form->setContentsMargins(28,28,28,26);form->setVerticalSpacing(14);form->setHorizontalSpacing(18);
     auto*heading=new QLabel("New canvas");heading->setObjectName("newCanvasHeading");QFont font=heading->font();font.setPointSize(20);heading->setFont(font);form->addRow(heading);
     auto draft=std::make_shared<NewCanvasDraft>();
-    auto*preset=new QComboBox;preset->setObjectName("newCanvasPreset");preset->setAccessibleName("Canvas preset");
+    auto*preset=new ui::CapsuleDropdown;preset->useGlassPopup();preset->setObjectName("newCanvasPreset");preset->setAccessibleName("Canvas preset");
     preset->addItem("Custom",-1);
     std::string_view category;int defaultPreset=0;
     for(int entry=0;entry<int(std::size(newCanvasPresets));++entry){
@@ -262,16 +298,16 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
         if(item.unit==editing::PrintUnit::Pixels&&item.width==1920&&item.height==1080)defaultPreset=preset->count()-1;
     }
     preset->setCurrentIndex(defaultPreset);
-    auto*unit=new QComboBox;unit->setObjectName("newCanvasUnit");unit->setAccessibleName("Canvas units");
+    auto*unit=new ui::CapsuleDropdown;unit->useGlassPopup();unit->setObjectName("newCanvasUnit");unit->setAccessibleName("Canvas units");
     unit->addItem("Pixels",int(editing::PrintUnit::Pixels));unit->addItem("Inches",int(editing::PrintUnit::Inches));unit->addItem("Centimeters",int(editing::PrintUnit::Centimeters));unit->addItem("Millimeters",int(editing::PrintUnit::Millimeters));
     auto*resolution=new QSpinBox;resolution->setObjectName("newCanvasResolution");resolution->setAccessibleName("Resolution");resolution->setRange(1,9600);resolution->setValue(72);resolution->setSuffix(" DPI");
     auto*width=new QDoubleSpinBox;auto*height=new QDoubleSpinBox;width->setObjectName("newCanvasWidth");height->setObjectName("newCanvasHeight");width->setAccessibleName("Width");height->setAccessibleName("Height");
-    auto*background=new QComboBox;background->setObjectName("newCanvasBackground");background->setAccessibleName("Background");
+    auto*background=new ui::CapsuleDropdown;background->useGlassPopup();background->setObjectName("newCanvasBackground");background->setAccessibleName("Background");
     background->addItem("Transparent",QColor(Qt::transparent));background->addItem("White",QColor(Qt::white));background->addItem("Black",QColor(Qt::black));
     auto*summary=new QLabel;summary->setObjectName("newCanvasSummary");
     if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){draft->width=image.width();draft->height=image.height();preset->setCurrentIndex(0);}}
     form->addRow("Preset",preset);form->addRow("Units",unit);form->addRow("Width",width);form->addRow("Height",height);form->addRow("Resolution",resolution);form->addRow("Background",background);form->addRow(summary);
-    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);form->addRow(buttons);
+    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);for(auto*button:{open,import,create})button->setProperty("pill",true);create->setProperty("primary",true);form->addRow(buttons);
     connect(open,&QPushButton::clicked,this,[this]{openProjectDialog();});connect(import,&QPushButton::clicked,this,[this]{importWelcomeImage();});
     // Shows the draft in every control. Typed spin text is rewritten only when requested, so a value being typed is not moved under the caret.
     auto syncNewCanvas=[draft,width,height,summary,background,create](bool rewriteSizes){

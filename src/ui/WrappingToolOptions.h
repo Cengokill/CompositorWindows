@@ -33,10 +33,15 @@ private:
     int arrange(const QRect& rect,bool place) const {
         const auto margins=contentsMargins();const auto area=rect.adjusted(margins.left(),margins.top(),-margins.right(),-margins.bottom());
         int x=area.left(),y=area.top(),rowHeight=0;
+        struct Placed{QLayoutItem* item;QPoint position;QSize size;};
+        std::vector<Placed> row;
+        // Controls of different heights share a row's center line, so captions line up with the fields beside them.
+        const auto flush=[&]{if(place)for(const auto& entry:row)entry.item->setGeometry(QRect(QPoint(entry.position.x(),y+(rowHeight-entry.size.height())/2),entry.size));row.clear();};
         for(auto* item:items_){if(item->isEmpty())continue;const auto size=item->sizeHint().expandedTo(item->minimumSize());
-            if(x>area.left()&&x+size.width()>area.right()+1){x=area.left();y+=rowHeight+spacing();rowHeight=0;}
-            if(place)item->setGeometry(QRect(QPoint(x,y),size));x+=size.width()+spacing();rowHeight=std::max(rowHeight,size.height());
+            if(x>area.left()&&x+size.width()>area.right()+1){flush();x=area.left();y+=rowHeight+spacing();rowHeight=0;}
+            row.push_back({item,QPoint(x,y),size});x+=size.width()+spacing();rowHeight=std::max(rowHeight,size.height());
         }
+        flush();
         return y+rowHeight-rect.top()+margins.bottom();
     }
 };

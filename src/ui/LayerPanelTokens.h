@@ -1,4 +1,5 @@
 #pragma once
+#include "AccentColor.h"
 
 // Shared visual measurements for the Layers panel and its reusable controls.
 // One macOS point maps to one Qt logical pixel. Colors sampled from the
@@ -9,7 +10,7 @@ inline constexpr auto primary = "#e0e0e0";
 inline constexpr auto secondary = "#a3a3a3";
 inline constexpr auto disabled = "#666666";
 inline constexpr auto separator = "#393939";
-inline constexpr auto accent = "#067dff";
+inline constexpr auto accent = ui::accentBlue;
 inline constexpr auto selectedThumbnail = "#007aff";
 inline constexpr auto control = "#353535";
 inline constexpr auto field = "#22292b";
@@ -18,10 +19,18 @@ inline constexpr auto knob = "#ebebeb";
 inline constexpr auto hover = "#353535";
 inline constexpr auto pressed = "#444444";
 inline constexpr auto popup = "#202020";
+inline constexpr auto controlDisabled = "#2c2c2c";
+inline constexpr auto fieldDisabled = "#2b2d2e";
+inline constexpr auto controlTextDisabled = "#4f4f4f";
+inline constexpr auto controlPressed = "#2e2e2e";
 inline constexpr auto selectedRow = "#444444";
 inline constexpr auto focusedRow = "#0059d1";
 inline constexpr auto focusedRowDetail = "#b3cdf1";
 inline constexpr auto hoveredRow = "#303030";
+// The window surfaces: tool rail, options bars, tab strip and cards, their border, and the area around the canvas.
+inline constexpr auto surface = "#1f1f1f";
+inline constexpr auto surfaceBorder = "#363636";
+inline constexpr auto canvasSurround = "#1b1b1b";
 
 inline constexpr int minWidth = 261;
 inline constexpr int maxWidth = 372;
@@ -46,12 +55,29 @@ inline constexpr int percentSpacing = 2;
 inline constexpr int percentWidth = 44;
 inline constexpr int percentHeight = 26;
 inline constexpr int fieldRadius = 6;
+inline constexpr int controlHeight = 24;
+inline constexpr int segmentInset = 2;
+inline constexpr int segmentPadding = 12;
+inline constexpr int pillPadding = 14;
+inline constexpr int numberFieldWidth = 44;
+inline constexpr int checkBoxSize = 16;
+inline constexpr int checkBoxRadius = 4;
+inline constexpr int checkBoxGap = 6;
 inline constexpr int sliderHeight = 22;
 inline constexpr int sliderMinimumWidth = 40;
 inline constexpr int sliderTrack = 3;
 inline constexpr int sliderKnobWidth = 10;
 inline constexpr int sliderKnobHeight = 18;
 inline constexpr int sliderKnobRadius = 5;
+inline constexpr auto optionTrack = "#393939";
+inline constexpr int optionSliderHeight = 20;
+inline constexpr int optionSliderTrack = 4;
+inline constexpr int optionKnobWidth = 18;
+inline constexpr int optionKnobHeight = 15;
+inline constexpr int optionSliderWidth = 140;
+inline constexpr int colorWellWidth = 34;
+inline constexpr int colorWellHeight = 20;
+inline constexpr int colorWellRadius = 4;
 inline constexpr int blendMinimumWidth = 60;
 inline constexpr int blendHeight = 24;
 inline constexpr int blendLeading = 12;

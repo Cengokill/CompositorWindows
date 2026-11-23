@@ -1,6 +1,8 @@
 #include "VisualStyle.h"
 #include "CommandRegistry.h"
 #include "EditorIcons.h"
+#include "AccentColor.h"
+#include "ToolbarControls.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QDialog>
@@ -83,16 +85,18 @@ public:
             if(!(option->state&State_On))painter->drawLine(r.topLeft(),r.bottomRight());
             painter->restore();return;
         }
-        if(element==PE_IndicatorCheckBox||element==PE_IndicatorRadioButton) {
+        if(element==PE_IndicatorCheckBox) {
+            paintCheckBoxIndicator(painter,QRectF(option->rect),option->state&(State_On|State_NoChange),option->state&State_Enabled,option->state&State_MouseOver);
+            return;
+        }
+        if(element==PE_IndicatorRadioButton) {
             painter->save();painter->setRenderHint(QPainter::Antialiasing);
             auto r=QRectF(option->rect).adjusted(1.5,1.5,-1.5,-1.5);
             const bool on=option->state&(State_On|State_NoChange);
             painter->setOpacity(option->state&State_Enabled?1:.35);
-            painter->setPen(QPen(on?QColor(accent):QColor("#54565c"),1));painter->setBrush(on?QColor(accent):QColor("#303136"));
-            if(element==PE_IndicatorRadioButton)painter->drawEllipse(r);else painter->drawRoundedRect(r,4,4);
-            if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
-                if(element==PE_IndicatorRadioButton){painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
-                else{QPainterPath check;check.moveTo(r.left()+3,r.center().y());check.lineTo(r.center().x()-1,r.bottom()-3);check.lineTo(r.right()-2.5,r.top()+3);painter->drawPath(check);}}
+            painter->setPen(QPen(on?QColor(accentBlue):QColor("#54565c"),1));painter->setBrush(on?QColor(accentBlue):QColor("#303136"));
+            painter->drawEllipse(r);
+            if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
             painter->restore();return;
         }
         if(element==PE_IndicatorArrowDown||element==PE_IndicatorArrowUp||element==PE_IndicatorArrowLeft||element==PE_IndicatorArrowRight) {
@@ -105,7 +109,7 @@ public:
             else{arrow.moveTo(-1.5,-3);arrow.lineTo(1.5,0);arrow.lineTo(-1.5,3);}
             painter->drawPath(arrow);painter->restore();return;
         }
-        if(element==PE_FrameFocusRect)return;
+        if(element==PE_FrameFocusRect||element==PE_FrameTabBarBase)return;
         QProxyStyle::drawPrimitive(element,option,painter,widget);
     }
 };
@@ -185,7 +189,8 @@ public:
         if((event->type()==QEvent::Show||event->type()==QEvent::WinIdChange)&&widget->isWindow()&&widget->property("studioChrome").toBool())nativeTitleColor(widget);
         if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick) {
             auto* mouse=static_cast<QMouseEvent*>(event);if(mouse->button()!=Qt::LeftButton)return false;
-            auto* top=widget->window();if(!top->windowFlags().testFlag(Qt::FramelessWindowHint)||!top->windowHandle())return false;
+            // A frameless popup list is not a window to resize: a click outside it must reach the popup so that it closes.
+            auto* top=widget->window();if(top->windowType()==Qt::Popup||!top->windowFlags().testFlag(Qt::FramelessWindowHint)||!top->windowHandle())return false;
             const auto point=top->mapFromGlobal(mouse->globalPosition().toPoint());
             Qt::Edges edges;if(point.x()<5)edges|=Qt::LeftEdge;if(point.x()>top->width()-5)edges|=Qt::RightEdge;
             if(point.y()<5)edges|=Qt::TopEdge;if(point.y()>top->height()-5)edges|=Qt::BottomEdge;
@@ -240,19 +245,18 @@ void installVisualStyle() {
         QMenuBar::item:selected { background: #35373c; }
         QMenu { background: #292b30; border: 1px solid #45474e; border-radius: 9px; padding: 6px; }
         QMenu::item { padding: 7px 24px 7px 12px; border-radius: 5px; }
-        QMenu::item:selected { background: #376dac; }
         QMenu::item:disabled { color: #686b73; }
         QMenu::separator { height: 1px; background: #3d3f46; margin: 5px 8px; }
         QToolTip { background: #34363b; border: 1px solid #4b4e56; border-radius: 5px; padding: 6px 9px; }
-        QToolBar { background: #242529; border: 0; border-bottom: 1px solid #303237; padding: 5px 10px; spacing: 7px; }
+        QToolBar { background: #1f1f1f; border: 0; padding: 5px 10px; spacing: 7px; }
         QToolBar::handle { width: 0; height: 0; }
+        QWidget#newCanvasWelcome { background: #141414; }
         QToolBar QToolButton { padding: 5px 9px; border: 1px solid transparent; border-radius: 6px; }
         QToolButton#qt_toolbar_ext_button { padding: 2px; min-width: 18px; }
-        QToolButton#newProjectDropTarget { padding: 4px; }
         QPushButton, QToolButton { background: #33353b; border: 1px solid #41434b; border-radius: 7px; padding: 5px 12px; min-height: 18px; }
         QPushButton:hover, QToolButton:hover { background: #3d4047; border-color: #565a64; }
         QPushButton:pressed, QToolButton:pressed { background: #27292e; }
-        QPushButton:default, QPushButton[primary="true"], QToolButton:checked { background: #428bea; border-color: #589df4; color: white; }
+        /* The default, primary and checked blue is appended below from AccentColor.h. */
         QPushButton:disabled, QToolButton:disabled { color: #676a73; border-color: #303237; background: #292b30; }
         QPushButton:focus, QToolButton:focus { border-color: #78b0f7; }
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #2b2d32; border: 1px solid #393c43; border-radius: 6px; padding: 4px 7px; min-height: 18px; }
@@ -264,7 +268,7 @@ void installVisualStyle() {
         QComboBox { padding-right: 22px; }
         QComboBox::drop-down { width: 20px; border: 0; }
         QComboBox::down-arrow { image: url(:/assets/icons/chevron-down.png); width: 12px; height: 12px; }
-        QComboBox QAbstractItemView { background: #2b2d32; border: 1px solid #454850; padding: 4px; outline: 0; selection-background-color: #376dac; }
+        QComboBox QAbstractItemView { background: #2b2d32; border: 1px solid #454850; padding: 4px; outline: 0; }
         QCheckBox, QRadioButton { spacing: 7px; background: transparent; }
         QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
         QSlider::groove:horizontal { height: 4px; background: #494c53; border-radius: 2px; }
@@ -279,10 +283,10 @@ void installVisualStyle() {
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
         QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
         QTabWidget::pane { border: 0; }
-        QTabBar { background: #202125; }
-        QTabBar::tab { background: transparent; color: #969aa4; padding: 8px 13px; margin: 4px 2px; border: 1px solid transparent; border-radius: 7px; }
-        QTabBar::tab:selected { background: #303239; color: #eff0f2; border-color: #41444c; }
-        QTabBar::tab:hover { color: white; background: #292c31; }
+        QTabBar, QWidget#newProjectCorner { background: #1f1f1f; }
+        QTabBar::tab { background: transparent; color: #a0a0a0; padding: 4px 12px; margin: 10px 3px 11px; border: 1px solid transparent; border-radius: 15px; font-weight: 600; }
+        QTabBar::tab:selected { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,58),stop:0.55 rgba(255,255,255,22),stop:1 rgba(255,255,255,30)); color: #f2f2f2; border: 1px solid rgba(255,255,255,92); }
+        QTabBar::tab:hover:!selected { color: white; background: rgba(255,255,255,20); border-color: rgba(255,255,255,38); }
         QTabBar::close-button { subcontrol-position: right; width: 13px; height: 13px; }
         QDockWidget { border: 0; }
         QWidget#sectionTitle { border-bottom: 1px solid #303237; background: #222326; }
@@ -299,11 +303,13 @@ void installVisualStyle() {
         QHeaderView::section { background: #27292e; color: #a8acb5; border: 0; border-bottom: 1px solid #383b42; padding: 7px; }
         QGroupBox { border: 1px solid #3b3e45; border-radius: 8px; margin-top: 14px; padding: 12px; }
         QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #b8bdc7; }
-        QStatusBar { background: #202125; border-top: 1px solid #303237; color: #959aa4; font-size: 11px; }
+        QStatusBar { background: #1f1f1f; border-top: 1px solid #2f2f2f; color: #9a9a9a; font-size: 11px; }
+        QStatusBar QLabel { color: #9a9a9a; background: transparent; }
         QStatusBar::item { border: 0; }
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
-    )");
+    )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n"
+        "QMenu::item:selected { background: %1; }\nQComboBox QAbstractItemView { selection-background-color: %1; }\nQComboBox:focus { border-color: %1; }\n").arg(accentBlue)+optionsBarStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 

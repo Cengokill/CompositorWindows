@@ -1,10 +1,13 @@
 #include "MainWindow.h"
 #include "SelectionCursors.h"
+#include "SegmentedControl.h"
+#include "ToolbarControls.h"
 #include "editing/PixelEdits.h"
 #include "editing/SelectionExtras.h"
 #include <QMenuBar>
 #include <QToolBar>
 #include <QCheckBox>
+#include <QLabel>
 #include <QApplication>
 #include <QClipboard>
 #include <QMimeData>
@@ -42,7 +45,13 @@ void MainWindow::setupSelectionActions(){
     });
     action(menu,"All",QKeySequence::SelectAll,[this]{edit("Select All",[&](Document&d){d.selection=editing::rasterSelection(editing::SelectionOutline::rectangle({0,0,double(d.width),double(d.height)}),d.width,d.height);});});
     action(menu,"Deselect",QKeySequence("Ctrl+D"),[this]{edit("Deselect",[](Document&d){d.selection.reset();});});
-    action(menu,"Feather…",{},[this]{auto*p=current();if(!p||!p->document||!p->document->selection)return;bool ok=false;auto radius=QInputDialog::getDouble(this,"Feather Selection","Radius",2,0,250,1,&ok);if(ok)edit("Feather",[radius](Document&d){if(d.selection)d.selection=editing::featherSelection(*d.selection,radius);});});
+    action(menu,"Feather…",{},[this]{
+        auto*p=current();if(!p||!p->document||!p->document->selection)return;
+        bool ok=false;const auto radius=QInputDialog::getDouble(this,"Feather Selection","Radius",selectionFeatherAmount_,0,250,0,&ok);
+        if(!ok)return;
+        selectionFeatherAmount_=int(radius);if(auto* spin=findChild<QSpinBox*>("selectionFeatherAmount")){const QSignalBlocker block(spin);spin->setValue(selectionFeatherAmount_);}
+        featherSelectionBy(radius);
+    });
     action(menu,"Color Range…",{},[this]{auto*p=current();auto*l=active();if(!p||!p->document||!l||!l->raster)return;bool ok=false;auto tolerance=QInputDialog::getInt(this,"Color Range","Tolerance",32,0,255,1,&ok);if(!ok)return;edit("Color Range",[l,tolerance](Document&d){auto mask=editing::colorRangeMask(*l->raster,l->raster->width/2,l->raster->height/2,tolerance);if(mask->width!=d.width||mask->height!=d.height)throw std::runtime_error("Color range needs a canvas-sized layer");d.selection=Selection{mask};});});
     action(menu,"Inverse",QKeySequence("Ctrl+Shift+I"),[this]{if(current()&&current()->document&&current()->document->selection)edit("Inverse",[](Document&d){
         if(d.selection->outline)d.selection=editing::rasterSelection(editing::inverseSelection(*d.selection->outline,d.width,d.height),d.width,d.height);
@@ -60,27 +69,42 @@ void MainWindow::setupSelectionActions(){
     action(clipboard,"Layer via Copy",QKeySequence("Ctrl+J"),[this]{copySelection(false,false,true);});
     action(clipboard,"Clear",{},[this]{pixelEdit(int(editing::PixelEdit::Clear));});
     auto*bar=addToolBar("Selection Options");bar->setObjectName("selectionOptions");
-    auto*marquee=bar->addAction("Marquee (M)");bindCommand(marquee,"Tools","Marquee (M)",[this]{selectTool(Tool::Marquee);});commands_->releaseShortcut(marquee);
-    auto*shape=new QComboBox;shape->addItems({"Rectangle","Ellipse"});shape->setAccessibleName("Marquee shape");bar->addWidget(shape);connect(shape,&QComboBox::currentIndexChanged,this,[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);});
-    auto*lasso=bar->addAction("Lasso (L)");bindCommand(lasso,"Tools","Lasso (L)",[this]{selectTool(Tool::Lasso);});commands_->releaseShortcut(lasso);
-    auto*polygon=bar->addAction("Polygonal Lasso");bindCommand(polygon,"Tools","Polygon",[this]{selectTool(Tool::Polygon);});commands_->releaseShortcut(polygon);
-    auto*lassoKind=new QComboBox;lassoKind->setObjectName("lassoKind");lassoKind->setAccessibleName("Lasso kind");lassoKind->addItems({"Freehand","Polygonal"});bar->addWidget(lassoKind);
-    connect(lassoKind,&QComboBox::currentIndexChanged,this,[this](int index){if(selectionGesture_.active())pointerCancel();lassoKind_=index?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;selectTool(Tool::Lasso);});
+    // The tool rail shows these three tools; the actions stay here as command targets so the bar shows only the active tool's options.
+    auto*marquee=bar->addAction("Marquee (M)");bindCommand(marquee,"Tools","Marquee (M)",[this]{selectTool(Tool::Marquee);});commands_->releaseShortcut(marquee);marquee->setVisible(false);
+    auto*lasso=bar->addAction("Lasso (L)");bindCommand(lasso,"Tools","Lasso (L)",[this]{selectTool(Tool::Lasso);});commands_->releaseShortcut(lasso);lasso->setVisible(false);
+    auto*polygon=bar->addAction("Polygonal Lasso");bindCommand(polygon,"Tools","Polygon",[this]{selectTool(Tool::Polygon);});commands_->releaseShortcut(polygon);polygon->setVisible(false);
+    ui::addToolbarTitle(bar,"Lasso","selectionToolTitle");
+    auto*shape=new ui::SegmentedControl({"Rectangle","Ellipse"});shape->setObjectName("marqueeShape");shape->setAccessibleName("Marquee shape");bar->addWidget(shape);shape->changed=[this](int v){if(selectionGesture_.active())pointerCancel();ellipse_=v==1;selectTool(Tool::Marquee);};
+    auto*lassoKind=new ui::SegmentedControl({"Freehand","Polygonal"});lassoKind->setObjectName("lassoKind");lassoKind->setAccessibleName("Lasso kind");bar->addWidget(lassoKind);
+    lassoKind->changed=[this](int index){if(selectionGesture_.active())pointerCancel();lassoKind_=index?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;selectTool(Tool::Lasso);};
+    auto*wandKind=new ui::SegmentedControl({"Wand","Object"});wandKind->setObjectName("wandKind");wandKind->setAccessibleName("Wand mode");bar->addWidget(wandKind);wandKind->changed=[this](int index){wandObjectMode_=index==1;refresh(false,false);};
+    auto*mode=new ui::SegmentedControl({"New","Add","Subtract"});mode->setObjectName("selectionMode");mode->setAccessibleName("Selection mode");bar->addWidget(mode);mode->changed=[this](int i){selectionMode_=editing::SelectionMode(i);};
+    // The Wand options sit in this bar too; refresh() shows them only for the Wand tool.
+    ui::addToolbarCaption(bar,"Tolerance","wandToleranceCaption");
+    auto*tolerance=ui::addNumberField(bar,"wandTolerance","Wand tolerance",0,255,wandTolerance_);connect(tolerance,&QSpinBox::valueChanged,this,[this](int v){wandTolerance_=v;});
+    auto*sample=ui::addDropdown(bar,"wandSampleSize","Wand sample size",{"Point Sample","3 by 3 Average","5 by 5 Average"});sample->useGlassPopup();connect(sample,&QComboBox::currentIndexChanged,this,[this](int v){wandSampleRadius_=v;});
+    auto*scope=new ui::SegmentedControl({"This Layer","All Layers"});scope->setObjectName("wandScope");scope->setAccessibleName("Wand layers");bar->addWidget(scope);scope->changed=[this](int index){wandAllLayers_=index==1;};
+    auto*contiguous=ui::addOptionCheck(bar,"Contiguous","wandContiguous",wandContiguous_);connect(contiguous,&QCheckBox::toggled,this,[this](bool v){wandContiguous_=v;});
+    auto*aa=ui::addOptionCheck(bar,"Anti-alias","selectionAntialias",true);connect(aa,&QCheckBox::toggled,this,[this](bool v){selectionAntialias_=v;});
+    bar->addSeparator();
     for(bool expand:{true,false}){
-        auto* button=bar->addAction(expand?"Expand":"Contract");bindCommand(button,"Select",expand?"Expand…":"Contract…",[this,expand]{resizeSelection(expand,expand?selectionExpandAmount_:selectionContractAmount_);});
-        auto* amount=new QSpinBox;amount->setObjectName(expand?"selectionExpandAmount":"selectionContractAmount");amount->setAccessibleName(expand?"Expand pixels":"Contract pixels");amount->setRange(1,500);amount->setValue(1);amount->setSuffix(" px");bar->addWidget(amount);
+        auto* button=bar->addAction(expand?"Expand":"Contract");bindCommand(button,"Select",expand?"Expand…":"Contract…",[this,expand]{resizeSelection(expand,expand?selectionExpandAmount_:selectionContractAmount_);});ui::markPillButton(bar,button);
+        auto* amount=ui::addNumberField(bar,expand?"selectionExpandAmount":"selectionContractAmount",expand?"Expand pixels":"Contract pixels",1,500,1,"px");
         connect(amount,&QSpinBox::valueChanged,this,[this,expand](int value){(expand?selectionExpandAmount_:selectionContractAmount_)=value;});
     }
-    auto*mode=new QComboBox;mode->setObjectName("selectionMode");mode->addItems({"New selection","Add","Subtract"});mode->setAccessibleName("Selection mode");bar->addWidget(mode);connect(mode,&QComboBox::currentIndexChanged,this,[this](int i){selectionMode_=editing::SelectionMode(i);});
-    auto*aa=new QCheckBox("Antialias");aa->setChecked(true);bar->addWidget(aa);connect(aa,&QCheckBox::toggled,this,[this](bool v){selectionAntialias_=v;});
-    auto*wandBar=addToolBar("Magic Wand Options");wandBar->setObjectName("wandOptions");auto*tolerance=new QSpinBox;tolerance->setRange(0,255);tolerance->setValue(32);tolerance->setPrefix("Tolerance ");tolerance->setAccessibleName("Wand tolerance");wandBar->addWidget(tolerance);connect(tolerance,&QSpinBox::valueChanged,this,[this](int v){wandTolerance_=v;});
-    auto*sample=new QComboBox;sample->addItems({"Point Sample","3 by 3 Average","5 by 5 Average"});sample->setAccessibleName("Wand sample size");wandBar->addWidget(sample);connect(sample,&QComboBox::currentIndexChanged,this,[this](int v){wandSampleRadius_=v;});auto*contiguous=new QCheckBox("Contiguous");contiguous->setChecked(true);wandBar->addWidget(contiguous);connect(contiguous,&QCheckBox::toggled,this,[this](bool v){wandContiguous_=v;});auto*all=new QCheckBox("Sample All Layers");wandBar->addWidget(all);connect(all,&QCheckBox::toggled,this,[this](bool v){wandAllLayers_=v;});
+    auto* feather=bar->addAction("Feather");bindCommand(feather,"Select","Feather…",[this]{featherSelectionBy(selectionFeatherAmount_);});ui::markPillButton(bar,feather);
+    auto* featherAmount=ui::addNumberField(bar,"selectionFeatherAmount","Feather pixels",0,250,selectionFeatherAmount_,"px");
+    connect(featherAmount,&QSpinBox::valueChanged,this,[this](int value){selectionFeatherAmount_=value;});
+}
+void MainWindow::featherSelectionBy(double radius){
+    if(!ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()))return;
+    edit("Feather",[radius](Document& d){if(d.selection)d.selection=editing::featherSelection(*d.selection,radius);});
 }
 void MainWindow::resizeSelection(bool expand,double amount){
     if(!ui::commandEnabled(ui::CommandGate::ModifySelection,commandState()))return;
     edit(expand?"Expand Selection":"Contract Selection",[&](Document& document){auto outline=outlineOf(document.selection);if(outline)document.selection=editing::rasterSelection(outline->resized(expand?amount:-amount,document.width,document.height),document.width,document.height);});
 }
-bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int clickCount){
+bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int){
     const bool selectionTool=tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand;
     if(!selectionTool)return false;
     auto* p=current();if(!p||!p->document||!canEditLayers())return true;
@@ -90,7 +114,7 @@ bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int 
         point=snapGesturePoint(point,modifiers);
         const auto first=p->canvas->viewMapping().toView(selectionGesture_.draft()->points.front());
         const auto here=p->canvas->viewMapping().toView(point);
-        if(selectionGesture_.polygonPress(point,std::hypot(here.x-first.x,here.y-first.y),clickCount)==editing::PolygonPressResult::FinishRequested)finishSelectionGesture();
+        if(selectionGesture_.polygonPress(point,std::hypot(here.x-first.x,here.y-first.y))==editing::PolygonPressResult::FinishRequested)finishSelectionGesture();
         else refreshSelectionGesture();
         return true;
     }
@@ -162,7 +186,7 @@ void MainWindow::cancelSelectionGesture(){
 void MainWindow::refreshSelectionGesture(){
     auto* p=current();if(p&&p->canvas)p->canvas->setSelectionDraft(selectionOwner_==p?selectionGesture_.draft():std::nullopt);
     const auto mode=selectionGesture_.cursorMode(selectionModifiers_.testFlag(Qt::ShiftModifier),selectionModifiers_.testFlag(Qt::AltModifier),selectionMode_);
-    if(auto* box=findChild<QComboBox*>("selectionMode")){QSignalBlocker block(box);box->setCurrentIndex(int(mode));}
+    if(auto* box=ui::findSegmentedControl(this,"selectionMode"))box->setCurrentIndex(int(mode));
     if(p&&p->canvas){
         p->canvas->setProperty("selectionCursorMode",int(mode));
         if((tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand)&&!spaceHeld_&&!spaceDragging_){

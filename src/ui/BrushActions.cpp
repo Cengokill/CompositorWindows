@@ -1,6 +1,11 @@
 #include "MainWindow.h"
 #include "PropertyControls.h"
 #include "WrappingToolOptions.h"
+#include "LayerPanelTokens.h"
+#include "LayerPanelWidgets.h"
+#include "SegmentedControl.h"
+#include "ToolbarControls.h"
+#include <QColorDialog>
 #include "CropViewport.h"
 #include <QToolBar>
 #include <QLabel>
@@ -37,19 +42,12 @@ void MainWindow::applyRememberedBrushPressure(graphics::BrushSessionSettings& se
 void MainWindow::setupBrushControls(){
     auto*bar=addToolBar("Brush Options");bar->setObjectName("brushOptions");
     auto* options=new ui::WrappingToolOptions;options->setObjectName("brushOptionsContents");bar->addWidget(options);
-    target_=new QComboBox;target_->addItems({"Image","Mask"});target_->setAccessibleName("Editing target");options->addControl(target_);connect(target_,&QComboBox::currentIndexChanged,this,[this](int i){
-        if(refreshing_)return;
-        if(auto* project=current();project&&project->document&&active())selectLayerTarget(project->active,i==1);
-        // Rejected busy/stroke or stale callbacks must show the actual target.
-        if(target_){QSignalBlocker block(target_);target_->setCurrentIndex(current()&&current()->maskSelected?1:0);}
-        refreshBrushControls();
-    });
-    auto*maskWhite=new QCheckBox("Paint mask white");maskWhite->setObjectName("paintMaskWhite");maskWhite->setChecked(maskPaintWhite_);options->addControl(maskWhite);connect(maskWhite,&QCheckBox::toggled,this,[this](bool v){maskPaintWhite_=v;refreshPaletteControls();});
-    auto* modes=new QButtonGroup(this);modes->setExclusive(true);
-    std::array<QToolButton*,2> modeButtons{};
-    for(bool erase:{false,true}){auto* button=new QToolButton;modeButtons[size_t(erase)]=button;button->setText(erase?"Erase":"Paint");button->setAccessibleName(erase?"Erase":"Paint");button->setObjectName(erase?"brushModeErase":"brushModePaint");button->setCheckable(true);modes->addButton(button);connect(button,&QToolButton::clicked,this,[this,erase]{selectTool(erase?Tool::Eraser:Tool::Brush);refreshBrushControls();});}
-    options->addGroup({modeButtons[0],modeButtons[1]});
-    auto slider=[&](int index){auto* value=new ui::TrackSlider(Qt::Horizontal);value->setObjectName(index?"brushOpacitySlider":"brushHardnessSlider");value->setAccessibleName(index?"Brush opacity slider":"Brush hardness slider");value->setRange(index?100:0,10000);value->setDefaultValue(10000);value->setFixedWidth(100);brushSliders_[size_t(index)]=value;return value;};
+    options->addControl(ui::makeTitle("Brush","brushTitle"));
+    auto* mode=new ui::SegmentedControl({"Paint","Erase"});mode->setObjectName("brushMode");mode->setAccessibleName("Brush mode");
+    mode->segment(0)->setObjectName("brushModePaint");mode->segment(1)->setObjectName("brushModeErase");
+    mode->changed=[this](int index){selectTool(index?Tool::Eraser:Tool::Brush);refreshBrushControls();};
+    options->addControl(mode);
+    auto slider=[&](int index){auto* value=ui::makeOptionSlider(index?"brushOpacitySlider":"brushHardnessSlider",index?"Brush opacity slider":"Brush hardness slider",index?100:0,10000);brushSliders_[size_t(index)]=value;return value;};
     auto pressureToggle=[&](const char* name,const char* label,const char* key,bool graphics::BrushSessionSettings::*setting){
         auto* button=new QToolButton;
         button->setObjectName(name);
@@ -57,6 +55,7 @@ void MainWindow::setupBrushControls(){
         button->setAccessibleName(label);
         button->setToolTip(label);
         button->setCheckable(true);
+        ui::markPill(button);
         connect(button,&QToolButton::toggled,this,[this,button,key,setting](bool checked){
             if(refreshing_||stroke_||retouch_){
                 const QSignalBlocker block(button);
@@ -70,9 +69,26 @@ void MainWindow::setupBrushControls(){
     };
     auto* sizePressure=pressureToggle(pressureSizeControl,"Pen pressure for brush size",pressureSizeKey,&graphics::BrushSessionSettings::pressureSize);
     auto* opacityPressure=pressureToggle(pressureOpacityControl,"Pen pressure for brush opacity",pressureOpacityKey,&graphics::BrushSessionSettings::pressureOpacity);
-    auto*size=new ui::PropertyNumber;size->setDecimals(0);size->setRange(1,2000);size->setValue(40);size->setAccessibleName("Brush diameter");options->addGroup({new QLabel("Size"),size,sizePressure});
-    auto*hardness=new ui::PropertyNumber;hardness->setDecimals(0);hardness->setRange(0,100);hardness->setValue(100);hardness->setSuffix("%");options->addGroup({new QLabel("Hardness"),slider(0),hardness});
-    auto*opacity=new ui::PropertyNumber;opacity->setDecimals(0);opacity->setRange(1,100);opacity->setValue(100);opacity->setSuffix("%");options->addGroup({new QLabel("Opacity"),slider(1),opacity,opacityPressure});
+    auto*size=ui::makeNumberField(1,2000,40,"Brush diameter");options->addGroup({ui::makeCaption("Size"),size,ui::makeCaption("px"),sizePressure});
+    auto*hardness=ui::makeNumberField(0,100,100,"Brush hardness");options->addGroup({ui::makeCaption("Hardness"),slider(0),hardness,ui::makeCaption("%")});
+    auto*opacity=ui::makeNumberField(1,100,100,"Brush opacity");options->addGroup({ui::makeCaption("Opacity"),slider(1),opacity,ui::makeCaption("%"),opacityPressure});
+    auto* colorWell=new ui::ColorWell;colorWell->setObjectName("brushColor");colorWell->setAccessibleName("Brush color");options->addGroup({ui::makeCaption("Color"),colorWell});
+    connect(colorWell,&QAbstractButton::clicked,this,[this]{
+        if(stroke_||retouch_||(current()&&current()->maskSelected))return;
+        // The same Windows color dialog as Stroke Color, so Pick Screen Color and custom colors are available.
+        const auto chosen=QColorDialog::getColor(foreground_,this);
+        if(!chosen.isValid()||stroke_||retouch_)return;
+        foreground_=chosen;refreshGradient();refresh(false,false);
+    });
+    // Windows also lets the brush paint a layer mask, so the editing target stays in the bar after the reference's controls.
+    auto* targetBox=new ui::CapsuleDropdown;targetBox->useGlassPopup();target_=targetBox;target_->addItems({"Image","Mask"});target_->setAccessibleName("Editing target");options->addControl(target_);connect(target_,&QComboBox::currentIndexChanged,this,[this](int i){
+        if(refreshing_)return;
+        if(auto* project=current();project&&project->document&&active())selectLayerTarget(project->active,i==1);
+        // Rejected busy/stroke or stale callbacks must show the actual target.
+        if(target_){QSignalBlocker block(target_);target_->setCurrentIndex(current()&&current()->maskSelected?1:0);}
+        refreshBrushControls();
+    });
+    auto*maskWhite=ui::makeOptionCheck("Paint mask white");maskWhite->setObjectName("paintMaskWhite");maskWhite->setChecked(maskPaintWhite_);options->addControl(maskWhite);connect(maskWhite,&QCheckBox::toggled,this,[this](bool v){maskPaintWhite_=v;refreshPaletteControls();});
     for(auto* number:{size,hardness,opacity})number->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
     hardness->setAccessibleName("Brush hardness");opacity->setAccessibleName("Brush opacity");
     brushTip_={size,hardness,opacity};
@@ -98,7 +114,7 @@ void MainWindow::refreshBrushControls(){
         }
     }
     const bool modeEnabled=ui::commandEnabled(ui::CommandGate::Tool,commandState());
-    for(bool erase:{false,true})if(auto* button=findChild<QToolButton*>(erase?"brushModeErase":"brushModePaint")){const QSignalBlocker block(button);button->setChecked((brushMode_==ProjectBrushMode::Erase)==erase);button->setEnabled(modeEnabled);}
+    if(auto* modeControl=ui::findSegmentedControl(this,"brushMode")){modeControl->setCurrentIndex(brushMode_==ProjectBrushMode::Erase?1:0);modeControl->setEnabled(modeEnabled);}
 }
 bool MainWindow::beginBrush(Point point,Qt::KeyboardModifiers modifiers,std::optional<double> pressure){
     if(tool_!=Tool::Brush&&tool_!=Tool::Eraser)return false;
@@ -226,7 +242,7 @@ void MainWindow::keyPressEvent(QKeyEvent*e){
     }
     const auto plainModifiers=(e->key()==Qt::Key_Return||e->key()==Qt::Key_Enter)?e->modifiers()&~Qt::KeypadModifier:e->modifiers();
     if(plainModifiers==Qt::NoModifier){switch(e->key()){
-        case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;
+        case Qt::Key_Tab:if(tool_==Tool::Wand){wandObjectMode_=!wandObjectMode_;refresh(false,false);statusBar()->showMessage(wandObjectMode_?"Object selection":"Magic wand");return;}break;
         case Qt::Key_Return:case Qt::Key_Enter:if(drawingOriginal_)applyGradient();else if(transformSession_)applyTransformSession();else if(tool_==Tool::Crop)applyCrop();else finishPolygon();return;
         case Qt::Key_Escape:pointerCancel();return;default:break;
     }}

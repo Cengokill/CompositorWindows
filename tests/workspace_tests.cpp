@@ -131,5 +131,50 @@ test("new_canvas_background_saves_reopens_and_exports",[]{
  check(image.pixelColor(0,0)==QColor(255,255,255,255)&&image.pixelColor(1275,1650)==QColor(255,255,255,255)&&image.pixelColor(2549,3299)==QColor(255,255,255,255),"PNG corners and center are opaque white");
  check(image.dotsPerMeterX()==qRound(300/0.0254)&&image.dotsPerMeterY()==qRound(300/0.0254),"PNG records 300 DPI");
 });
+test("new_canvas_dropdown_closes_on_outside_click",[]{
+ MainWindow w(true);w.resize(1100,760);auto&p=w.addEmptyProject();w.show();check(QTest::qWaitForWindowExposed(&w),"Window not exposed");
+ for(auto*name:{"newCanvasPreset","newCanvasUnit","newCanvasBackground"}){
+  auto*box=control<QComboBox>(p.welcome,name);box->showPopup();QApplication::processEvents();
+  auto*popup=box->view()->window();check(popup->isVisible(),"Dropdown list did not open");
+  // Press just outside the list, left of it and then below it, as a click beside the menu does.
+  const QPoint outside[]{{popup->geometry().left()-3,popup->geometry().center().y()},{popup->geometry().center().x(),popup->geometry().bottom()+3}};
+  for(const auto point:outside){
+   if(!popup->isVisible()){box->showPopup();QApplication::processEvents();}
+   QMouseEvent press(QEvent::MouseButtonPress,QPointF(popup->mapFromGlobal(point)),QPointF(point),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(popup,&press);QApplication::processEvents();
+   check(!popup->isVisible(),"A click outside did not close the dropdown list");
+  }
+ }
+});
+test("new_canvas_dropdown_lists_are_rounded_glass_over_what_lies_behind",[]{
+ MainWindow w(true);w.resize(1100,760);auto&p=w.addEmptyProject();w.show();check(QTest::qWaitForWindowExposed(&w),"Window not exposed");
+ for(auto*name:{"newCanvasPreset","newCanvasUnit","newCanvasBackground"}){
+  auto*box=control<QComboBox>(p.welcome,name);box->showPopup();QApplication::processEvents();
+  auto*popup=box->view()->window();check(popup->isVisible()&&popup->testAttribute(Qt::WA_TranslucentBackground),"Dropdown list is not a translucent window");
+  // Outside the rounded panel the list window is transparent rather than an opaque rectangle.
+  const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
+  check(panel.pixelColor(int(2*scale),int(2*scale)).alpha()==0&&panel.pixelColor(int((popup->width()-3)*scale),int((popup->height()-3)*scale)).alpha()==0,"Dropdown list corners are not rounded off");
+  check(panel.pixelColor(int(popup->width()/2*scale),int((popup->height()-4)*scale)).alpha()>0,"Dropdown list panel is not painted");
+  box->hidePopup();QApplication::processEvents();
+ }
+ // The glass shows a blurred view of what lies behind it: the Units list over a red Width field turns red there.
+ auto*width=control<QDoubleSpinBox>(p.welcome,"newCanvasWidth");width->setStyleSheet("QDoubleSpinBox { background: #ff0000; }");QApplication::processEvents();
+ auto*unit=control<QComboBox>(p.welcome,"newCanvasUnit");unit->showPopup();QApplication::processEvents();
+ auto*popup=unit->view()->window();
+ const QPoint behind=popup->mapFromGlobal(width->mapToGlobal(QPoint(width->width()-30,width->height()/2)));
+ check(popup->rect().contains(behind),"Units list does not cover the Width field");
+ const QImage panel=popup->grab().toImage();const double scale=panel.devicePixelRatio();
+ const QColor color=panel.pixelColor(int(behind.x()*scale),int(behind.y()*scale));
+ check(color.alpha()==255&&color.red()>color.green()+60&&color.red()>color.blue()+60,"Dropdown list glass does not show what lies behind it");
+ unit->hidePopup();QApplication::processEvents();
+});
+test("first_import_names_untitled_project",[]{
+ QTemporaryDir dir;check(dir.isValid(),"temporary directory");
+ const auto write=[&](const char* name){QImage image(8,6,QImage::Format_ARGB32);image.fill(Qt::blue);const auto path=dir.filePath(name);check(image.save(path),"fixture image");return path;};
+ const auto first=write("Sunset.png"),second=write("Harbor.png");
+ MainWindow w(true);w.resize(900,650);w.show();auto*tabs=w.findChild<QTabWidget*>();check(tabs&&tabs->count()==1&&tabs->tabText(0).startsWith("Untitled"),"Fresh project is not untitled");
+ const auto waitFor=[&](const char* text){for(int i=0;i<100&&!tabs->tabText(0).contains(text);++i)QTest::qWait(50);return tabs->tabText(0).contains(text);};
+ w.importSelectedImages({first});check(waitFor("Sunset"),"First import did not name the project after the image");
+ w.importSelectedImages({second});QTest::qWait(500);check(tabs->tabText(0).contains("Sunset")&&!tabs->tabText(0).contains("Harbor"),"A later import renamed the project again");
+});
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"native_window\":false}\n";return failed?1:0;
 }

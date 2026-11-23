@@ -193,6 +193,7 @@ public:
     explicit NativeCanvas(bool warp,QWidget* parent=nullptr);
     ~NativeCanvas() override;
     double zoom{1}; // Physical display pixels per document pixel.
+    std::function<void()> viewChanged; // Runs after the viewport changes, so a zoom readout can follow it.
     QPointF pan; // Logical view pixels (DIPs).
     bool showPixelGrid{};
     bool showGuides{};

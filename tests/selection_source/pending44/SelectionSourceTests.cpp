@@ -1,5 +1,6 @@
 #include "ui/MainWindow.h"
 #include "ui/LayerPanel.h"
+#include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QFile>
 #include <QImage>
@@ -95,10 +96,10 @@ struct Session {
     void refresh(){(window.*member(Refresh{}))(false,false);}
     void selectTool(ProjectTool value){(window.*member(SelectTool{}))(value);}
     void trigger(const char* id){auto* action=command(window,id);guard(action->isEnabled(),"Source command precondition enabled");action->trigger();}
-    void setKind(LassoKind value){auto* combo=window.findChild<QComboBox*>("lassoKind");guard(combo,"Lasso control exists");combo->setCurrentIndex(value==LassoKind::Polygonal?1:0);}
-    void setEllipse(bool value){for(auto* combo:window.findChildren<QComboBox*>())if(combo->accessibleName()=="Marquee shape"){combo->setCurrentIndex(value?1:0);return;}throw std::runtime_error("Marquee control missing");}
-    void setChoice(SelectionMode value){window.findChild<QComboBox*>("selectionMode")->setCurrentIndex(int(value));}
-    void setAA(bool value){for(auto* box:window.findChildren<QCheckBox*>())if(box->text()=="Antialias"){box->setChecked(value);return;}throw std::runtime_error("Antialias control missing");}
+    void setKind(LassoKind value){auto* control=ui::findSegmentedControl(&window,"lassoKind");guard(control,"Lasso control exists");control->choose(value==LassoKind::Polygonal?1:0);}
+    void setEllipse(bool value){if(auto* shape=ui::findSegmentedControl(&window,"marqueeShape")){shape->choose(value?1:0);return;}throw std::runtime_error("Marquee control missing");}
+    void setChoice(SelectionMode value){ui::findSegmentedControl(&window,"selectionMode")->choose(int(value));}
+    void setAA(bool value){for(auto* box:window.findChildren<QCheckBox*>())if(box->text()=="Anti-alias"){box->setChecked(value);return;}throw std::runtime_error("Anti-alias control missing");}
     std::shared_ptr<const SelectionOutline> outline(){return selection()?selection()->outline:nullptr;}
     Rect bounds(){auto value=outline();guard(bool(value),"Native outline representation exists");return value->bounds();}
     bool boundsEqual(Rect value){return outline()&&bounds()==value;}
@@ -116,7 +117,7 @@ struct Session {
     SelectionMode mode(bool shift,bool option){return selectionMode(shift,option,choice());}
     SelectionMode cursorMode(bool shift,bool option){return gesture().cursorMode(shift,option,choice());}
     void held(bool shift,bool option){(window.*member(Keys{}))(flags(shift,option));}
-    SelectionMode displayed(){return SelectionMode(window.findChild<QComboBox*>("selectionMode")->currentIndex());}
+    SelectionMode displayed(){return SelectionMode(ui::findSegmentedControl(&window,"selectionMode")->currentIndex());}
     bool canModify(){return ui::commandEnabled(ui::CommandGate::ModifySelection,(window.*member(State{}))(&project));}
     void resize(bool expand,double amount){(window.*member(Resize{}))(expand,amount);}
     bool canMove(Point point){

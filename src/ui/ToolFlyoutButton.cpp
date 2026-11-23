@@ -1,0 +1,67 @@
+#include "ToolFlyoutButton.h"
+#include "LayerPanelTokens.h"
+#include <QAction>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
+
+namespace compositor::ui {
+namespace {
+constexpr int holdMilliseconds = 400;
+}
+ToolFlyoutButton::ToolFlyoutButton() {
+    hold_.setSingleShot(true);
+    hold_.setInterval(holdMilliseconds);
+    connect(&hold_, &QTimer::timeout, this, [this] { if (isDown()) showFlyout(); });
+}
+void ToolFlyoutButton::setFlyout(std::function<Entry()> describe, std::function<void()> activate) {
+    setFlyouts([describe = std::move(describe), activate = std::move(activate)] {
+        auto entry = describe();
+        entry.activate = activate;
+        return std::vector<Entry>{entry};
+    });
+}
+void ToolFlyoutButton::setFlyouts(std::function<std::vector<Entry>()> describe) {
+    describe_ = std::move(describe);
+    if (menu_) return;
+    menu_ = new QMenu(this);
+    // The icon gets room on its left so it is not clipped by the popup edge, and the hovered entry takes the application blue.
+    menu_->setStyleSheet(QString("QMenu::item:selected { background: %1; } QMenu::icon { padding-left: 18px; }").arg(layer_panel::accent));
+}
+QMenu* ToolFlyoutButton::showFlyout() {
+    if (!describe_ || !menu_) return nullptr;
+    menu_->clear();
+    for (const auto& entry : describe_()) {
+        auto* action = menu_->addAction(entry.icon, entry.text);
+        connect(action, &QAction::triggered, this, [activate = entry.activate] { if (activate) activate(); });
+    }
+    // The press that opened the popup must not also click the tool.
+    hold_.stop();
+    setDown(false);
+    menu_->popup(mapToGlobal(QPoint(width() + 2, 0)));
+    return menu_;
+}
+void ToolFlyoutButton::mousePressEvent(QMouseEvent* event) {
+    if (describe_ && event->button() == Qt::LeftButton) hold_.start();
+    QToolButton::mousePressEvent(event);
+}
+void ToolFlyoutButton::mouseReleaseEvent(QMouseEvent* event) {
+    hold_.stop();
+    QToolButton::mouseReleaseEvent(event);
+}
+void ToolFlyoutButton::paintEvent(QPaintEvent* event) {
+    QToolButton::paintEvent(event);
+    if (!describe_) return;
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const auto color = palette().color(isEnabled() ? QPalette::Active : QPalette::Disabled, QPalette::ButtonText);
+    QPainterPath triangle;
+    const QPointF corner(width() - 4.5, height() - 4.5);
+    triangle.moveTo(corner);
+    triangle.lineTo(corner + QPointF(-4.5, 0));
+    triangle.lineTo(corner + QPointF(0, -4.5));
+    triangle.closeSubpath();
+    painter.fillPath(triangle, color);
+}
+}

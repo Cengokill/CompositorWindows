@@ -1,6 +1,7 @@
 // Native presentation witness for TransformOverlay.drawShapeDraft. The source
 // fills outside the document clip while keeping the canonical document intact.
 #include "ui/MainWindow.h"
+#include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QFile>
@@ -31,11 +32,11 @@ int main(int argc,char** argv){
         auto& project=window.addProject(document);window.resize(1050,780);window.show();window.activateWindow();pump(200);
         auto& canvas=*project.canvas;canvas.setDisplayProfileOverride(directory/"deliberately-missing-profile.icc");canvas.zoomAt(4*canvas.devicePixelRatioF(),canvas.rect().center());canvas.showPixelGrid=false;
         for(auto* action:window.findChildren<QAction*>())if(action->text()=="Shape (U)"){action->trigger();break;}
-        pump(100);auto* kind=window.findChild<QComboBox*>("shapeKind");check(kind,"Shape kind control missing");
+        pump(100);auto* kind=ui::findSegmentedControl(&window,"shapeKind");check(kind,"Shape kind control missing");
         const auto before=canvas.captureRendered();check(!canvas.presentationConvertsColor()&&!canvas.presentationDiagnostic().isEmpty(),"Explicit sRGB fallback did not isolate presentation");
         image(before,directory/"canvas-before.png");
         for(int index=0;index<2;++index){
-            kind->setCurrentIndex(index);const std::string name=index==0?"native_shape_rectangle_live":"native_shape_ellipse_live";
+            kind->choose(index);const std::string name=index==0?"native_shape_rectangle_live":"native_shape_ellipse_live";
             const Point sample{-4,24};const auto at=devicePoint(canvas,sample);const auto baseline=pixel(before,at);
             canvas.pointerDown({-16,8},{});canvas.pointerMove({32,40},{});pump(40);
             const auto live=canvas.captureRendered();image(live,directory/(name+"-live.png"));
