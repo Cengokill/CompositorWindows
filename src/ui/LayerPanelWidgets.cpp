@@ -10,6 +10,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPixmap>
 #include <QProxyStyle>
 #include <QScreen>
 #include <QRegularExpression>
@@ -316,6 +317,71 @@ void SearchField::paintEvent(QPaintEvent*) {
                                           t::searchIconFrame, t::searchIconFrame), QColor(t::secondary));
 }
 
+namespace {
+// Liquid Glass for a popup window: when it is about to appear, the screen area it will cover is captured and blurred
+// lightly (shrinking with area averaging and enlarging smoothly keeps the shapes and text behind it readable). Its
+// paint becomes that blur under a translucent neutral gray tint (the #1f1f1f surfaces), a soft highlight along the top
+// and a light rim, clipped to a rounded panel; outside the panel the window stays transparent. The view behind is
+// taken once per opening.
+class GlassPopupPainter final : public QObject {
+public:
+    explicit GlassPopupPainter(QWidget* popup) : QObject(popup), popup_(popup) { popup->installEventFilter(this); }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched != popup_) return false;
+        if (event->type() == QEvent::Show) capture();
+        else if (event->type() == QEvent::Paint) {
+            paint();
+            // The popup's own paint (for a combo box list, Qt's opaque menu panel) would cover the glass.
+            return true;
+        }
+        return false;
+    }
+private:
+    void capture() {
+        backdrop_ = {};
+        const QRect area = popup_->geometry();
+        auto* screen = QGuiApplication::screenAt(area.center());
+        if (!screen) screen = popup_->screen();
+        if (!screen || area.isEmpty()) return;
+        const QRect local = area.translated(-screen->geometry().topLeft());
+        const QImage behind = screen->grabWindow(0, local.x(), local.y(), local.width(), local.height()).toImage();
+        if (behind.isNull()) return;
+        const QSize reduced = (behind.size() / glassBlurReduction).expandedTo(QSize(1, 1));
+        backdrop_ = QPixmap::fromImage(behind.scaled(reduced, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                                           .scaled(behind.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    }
+    void paint() {
+        QPainter painter(popup_);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        const QRectF panel = QRectF(popup_->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainterPath shape;
+        shape.addRoundedRect(panel, glassPopupRadius - 0.5, glassPopupRadius - 0.5);
+        painter.save();
+        painter.setClipPath(shape);
+        if (!backdrop_.isNull()) painter.drawPixmap(popup_->rect(), backdrop_);
+        QLinearGradient tint(panel.topLeft(), panel.bottomLeft());
+        tint.setColorAt(0, QColor(90, 90, 90, 120));
+        tint.setColorAt(0.25, QColor(44, 44, 44, 105));
+        tint.setColorAt(1, QColor(31, 31, 31, 125));
+        painter.fillPath(shape, tint);
+        painter.restore();
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(255, 255, 255, 46), 1));
+        painter.drawPath(shape);
+    }
+    QWidget* popup_;
+    QPixmap backdrop_;
+};
+}
+
+void makeGlassPopup(QWidget* popup) {
+    popup->setWindowFlags(popup->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    popup->setAttribute(Qt::WA_TranslucentBackground);
+    new GlassPopupPainter(popup);
+}
+
 CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
     setMinimumWidth(t::blendMinimumWidth);
     setFixedHeight(t::blendHeight);
@@ -335,9 +401,7 @@ CapsuleDropdown::CapsuleDropdown(QWidget* parent) : QComboBox(parent) {
 }
 void CapsuleDropdown::useGlassPopup() {
     setProperty("glassPopup", true);
-    auto* container = view()->window();
-    container->setWindowFlags(container->windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
-    container->setAttribute(Qt::WA_TranslucentBackground);
+    makeGlassPopup(view()->window());
     view()->viewport()->setAutoFillBackground(false);
     setStyleSheet(styleSheet() +
         "QComboBox QAbstractItemView { background: transparent; border: 0; padding: 6px; outline: 0; }"
@@ -345,57 +409,8 @@ void CapsuleDropdown::useGlassPopup() {
 }
 void CapsuleDropdown::dismiss() { if (!open_) return; open_ = false; if (dismissed) dismissed(); }
 bool CapsuleDropdown::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == view()->window()) {
-        if (event->type() == QEvent::Hide) dismiss();
-        else if (property("glassPopup").toBool()) {
-            if (event->type() == QEvent::Show) captureGlassBackdrop();
-            else if (event->type() == QEvent::Paint) {
-                paintGlassPanel();
-                // The list window's own paint is only Qt's opaque menu panel, which would cover the glass.
-                return true;
-            }
-        }
-    }
+    if (event->type() == QEvent::Hide && watched == view()->window()) dismiss();
     return QComboBox::eventFilter(watched, event);
-}
-// Takes the screen area the list is about to cover, before its window appears, and blurs it lightly: shrinking with
-// area averaging and enlarging smoothly gives a soft blur that keeps the shapes and text behind the list readable.
-void CapsuleDropdown::captureGlassBackdrop() {
-    glassBackdrop_ = {};
-    auto* container = view()->window();
-    const QRect area = container->geometry();
-    auto* screen = QGuiApplication::screenAt(area.center());
-    if (!screen) screen = container->screen();
-    if (!screen || area.isEmpty()) return;
-    const QRect local = area.translated(-screen->geometry().topLeft());
-    const QImage behind = screen->grabWindow(0, local.x(), local.y(), local.width(), local.height()).toImage();
-    if (behind.isNull()) return;
-    const QSize reduced = (behind.size() / glassBlurReduction).expandedTo(QSize(1, 1));
-    glassBackdrop_ = QPixmap::fromImage(behind.scaled(reduced, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                                            .scaled(behind.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-}
-// Liquid Glass: the blurred view behind the list, a translucent neutral gray tint (the #1f1f1f surfaces), a soft
-// highlight along the top and a light rim, clipped to a rounded panel. Outside the panel the window stays transparent.
-void CapsuleDropdown::paintGlassPanel() {
-    auto* container = view()->window();
-    QPainter painter(container);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    const QRectF panel = QRectF(container->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    QPainterPath shape;
-    shape.addRoundedRect(panel, glassPopupRadius - 0.5, glassPopupRadius - 0.5);
-    painter.save();
-    painter.setClipPath(shape);
-    if (!glassBackdrop_.isNull()) painter.drawPixmap(container->rect(), glassBackdrop_);
-    QLinearGradient tint(panel.topLeft(), panel.bottomLeft());
-    tint.setColorAt(0, QColor(90, 90, 90, 120));
-    tint.setColorAt(0.25, QColor(44, 44, 44, 105));
-    tint.setColorAt(1, QColor(31, 31, 31, 125));
-    painter.fillPath(shape, tint);
-    painter.restore();
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor(255, 255, 255, 46), 1));
-    painter.drawPath(shape);
 }
 void CapsuleDropdown::showPopup() { view()->window()->installEventFilter(this); open_ = true; QComboBox::showPopup(); }
 void CapsuleDropdown::hidePopup() { QComboBox::hidePopup(); dismiss(); }

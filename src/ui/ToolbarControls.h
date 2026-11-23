@@ -1,4 +1,5 @@
 #pragma once
+#include "LayerPanelWidgets.h"
 #include <QAbstractButton>
 #include <QColor>
 #include <QRectF>
@@ -9,7 +10,6 @@
 class QAbstractSpinBox;
 class QAction;
 class QCheckBox;
-class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -34,7 +34,7 @@ void markPillButton(QToolBar* bar, QAction* action);
 // A small right-aligned number field without spin arrows, followed by an optional unit such as "px". Returns the field.
 QSpinBox* addNumberField(QToolBar* bar, const char* objectName, const QString& accessibleName, int minimum, int maximum, int value, const QString& unit = {});
 // A capsule dropdown, the same control as the blend-mode selector of the Layers panel.
-QComboBox* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items = {});
+CapsuleDropdown* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items = {});
 // A check box. Every check box in the application is drawn by the application style with paintCheckBoxIndicator.
 QCheckBox* addOptionCheck(QToolBar* bar, const QString& text, const char* objectName, bool checked = false);
 // The one check box box: a field-colored rounded square, filled with the accent blue and a white tick when checked.

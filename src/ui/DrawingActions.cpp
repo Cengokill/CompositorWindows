@@ -91,7 +91,7 @@ void MainWindow::setupDrawingActions(){
     ui::addToolbarTitle(bar,"Gradient","gradientTitle");
     auto*gradientShape=new ui::SegmentedControl({"Linear","Radial"});gradientShape->setObjectName("gradientShape");gradientShape->setAccessibleName("Gradient shape");gradientShape->setToolTip("Linear runs along the line; Radial spreads out from the start point");bar->addWidget(gradientShape);gradientShape->changed=[this](int i){gradientSettings_.shape=editing::GradientShape(i);refreshGradient();};
     auto*swatch=new ui::GradientSwatch;swatch->setObjectName("gradientSwatch");swatch->setAccessibleName("Gradient preview");bar->addWidget(swatch);
-    auto*style=ui::addDropdown(bar,"gradientStyle","Gradient colors",{"Foreground to Background","Foreground to Transparent"});style->setCurrentIndex(1);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();refreshShapeControls();});
+    auto*style=ui::addDropdown(bar,"gradientStyle","Gradient colors",{"Foreground to Background","Foreground to Transparent"});style->useGlassPopup();style->setCurrentIndex(1);connect(style,&QComboBox::currentIndexChanged,this,[this](int i){gradientSettings_.style=editing::GradientStyle(i);refreshGradient();refreshShapeControls();});
     auto*reverse=ui::addOptionCheck(bar,"Reverse","gradientReverse");connect(reverse,&QCheckBox::toggled,this,[this](bool v){gradientSettings_.reversed=v;refreshGradient();refreshShapeControls();});
     auto*opacitySlider=ui::makeOptionSlider("gradientOpacitySlider","Gradient opacity slider",1,100);
     auto*opacity=ui::makeNumberField(1,100,100,"Gradient opacity");opacity->setObjectName("gradientOpacity");opacity->releaseFocus=[this]{if(canvas())canvas()->setFocus();};
@@ -166,7 +166,7 @@ void MainWindow::setupDrawingActions(){
     ui::addCommandPill(bar,"Update Shape Style","shapeRestyleButton",restyle,false);
     ui::addToolbarTitle(bar,"Crop","cropTitle");
     auto* ratioLabel=ui::addToolbarCaption(bar,"Ratio","cropRatioLabel");
-    auto*cropRatioControl=ui::addDropdown(bar,"cropRatioChoice","Crop ratio");
+    auto*cropRatioControl=ui::addDropdown(bar,"cropRatioChoice","Crop ratio");cropRatioControl->useGlassPopup();
     ratioLabel->setBuddy(cropRatioControl);
     // Groups are drawn by the capsule dropdown's own delegate: a flagged item starts a new group under a thin line, not a separator row.
     cropRatioControl->addItems({"Free","Canvas","1:1","4:3","16:9","2.39:1","3:4","9:16"});

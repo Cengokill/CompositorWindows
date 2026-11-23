@@ -5,7 +5,6 @@
 #include <QFont>
 #include <QFrame>
 #include <QLineEdit>
-#include <QPixmap>
 #include <QToolButton>
 #include <QWidget>
 #include <functional>
@@ -45,6 +44,10 @@ private:
     QLineEdit* edit_{};
 };
 
+// Makes a popup window a rounded Liquid Glass panel: a translucent neutral tint over a light blur of what lies behind
+// it, with transparent corners. The panel replaces the popup's own paint; its child widgets paint over it as usual.
+void makeGlassPopup(QWidget* popup);
+
 // Capsule selector that preserves transient preview and dismissal callbacks.
 class CapsuleDropdown final : public QComboBox {
 public:
@@ -60,10 +63,7 @@ protected:
     void paintEvent(QPaintEvent*) override;
 private:
     void dismiss();
-    void captureGlassBackdrop();
-    void paintGlassPanel();
     bool open_{};
-    QPixmap glassBackdrop_;
 };
 
 // A button that looks like CapsuleDropdown (left-aligned text, up and down chevrons) but opens its own popup.

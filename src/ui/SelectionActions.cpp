@@ -82,7 +82,7 @@ void MainWindow::setupSelectionActions(){
     // The Wand options sit in this bar too; refresh() shows them only for the Wand tool.
     ui::addToolbarCaption(bar,"Tolerance","wandToleranceCaption");
     auto*tolerance=ui::addNumberField(bar,"wandTolerance","Wand tolerance",0,255,wandTolerance_);connect(tolerance,&QSpinBox::valueChanged,this,[this](int v){wandTolerance_=v;});
-    auto*sample=ui::addDropdown(bar,"wandSampleSize","Wand sample size",{"Point Sample","3 by 3 Average","5 by 5 Average"});connect(sample,&QComboBox::currentIndexChanged,this,[this](int v){wandSampleRadius_=v;});
+    auto*sample=ui::addDropdown(bar,"wandSampleSize","Wand sample size",{"Point Sample","3 by 3 Average","5 by 5 Average"});sample->useGlassPopup();connect(sample,&QComboBox::currentIndexChanged,this,[this](int v){wandSampleRadius_=v;});
     auto*scope=new ui::SegmentedControl({"This Layer","All Layers"});scope->setObjectName("wandScope");scope->setAccessibleName("Wand layers");bar->addWidget(scope);scope->changed=[this](int index){wandAllLayers_=index==1;};
     auto*contiguous=ui::addOptionCheck(bar,"Contiguous","wandContiguous",wandContiguous_);connect(contiguous,&QCheckBox::toggled,this,[this](bool v){wandContiguous_=v;});
     auto*aa=ui::addOptionCheck(bar,"Anti-alias","selectionAntialias",true);connect(aa,&QCheckBox::toggled,this,[this](bool v){selectionAntialias_=v;});

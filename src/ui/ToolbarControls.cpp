@@ -219,7 +219,7 @@ QPushButton* addCommandPill(QToolBar* bar, const QString& text, const char* obje
     bar->addWidget(button);
     return button;
 }
-QComboBox* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items) {
+CapsuleDropdown* addDropdown(QToolBar* bar, const char* objectName, const QString& accessibleName, const QStringList& items) {
     auto* dropdown = new CapsuleDropdown;
     dropdown->setObjectName(objectName);
     dropdown->setAccessibleName(accessibleName);

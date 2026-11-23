@@ -207,14 +207,15 @@ public:
     TextFontPopup(QWidget* parent,QToolButton* anchor)
         :QWidget(parent,Qt::Popup),anchor_(anchor){
         setObjectName("textFontPopup");
+        // The same Liquid Glass panel as the capsule drop-down lists, with the chosen face as a blue capsule.
+        ui::makeGlassPopup(this);
         setStyleSheet(QString(R"(
-            QWidget#textFontPopup { background:#26282d; border:1px solid #454850; }
-            QListWidget#textFontResults { background:#26282d; border:0; outline:0; }
-            QListWidget#textFontResults::item { padding:4px 8px; min-height:20px; }
+            QListWidget#textFontResults { background:transparent; border:0; outline:0; }
+            QListWidget#textFontResults::item { padding:4px 8px; min-height:20px; border-radius:14px; }
             QListWidget#textFontResults::item:selected { background:%1; color:white; }
         )").arg(ui::layer_panel::accent));
         auto* layout=new QVBoxLayout(this);
-        layout->setContentsMargins(8,8,8,8);
+        layout->setContentsMargins(10,10,10,10);
         search_=new QLineEdit(this);
         search_->setObjectName("textFontSearch");
         search_->setAccessibleName("Search fonts");
