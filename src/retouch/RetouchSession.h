@@ -39,7 +39,7 @@ struct Sources {
 // Freeze the layer stack and render requested sample tiles with bounded caching.
 std::shared_ptr<const graphics::SamplingSource> compositeSource(Document);
 struct Metrics {
-    uint64_t publishedTileCopies{},documentRasterizations{},workingBufferPixels{},gaussianScratchPixels{},healingRegionPixels{},warpDabs{};
+    uint64_t publishedTileCopies{},documentRasterizations{},workingBufferPixels{},gaussianScratchPixels{},healingRegionPixels{},warpDabs{},coverageSamples{};
 };
 class RetouchSession {
 public:
