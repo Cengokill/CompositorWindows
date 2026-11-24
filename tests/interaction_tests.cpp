@@ -336,6 +336,21 @@ selectionOpacity("selection_digits_lasso_polygonal","Lasso (L)","lassoKind",1);
 selectionOpacity("selection_digits_polygon","Polygon",nullptr,0);
 selectionOpacity("selection_digits_wand","Wand (W)","wandKind",0);
 selectionOpacity("selection_digits_object","Wand (W)","wandKind",1);
+test("selection_digits_from_azerty_row_and_keypad",[]{
+ MainWindow w(true);Document d=example();auto&p=w.addProject(d);action(w,"Marquee (M)");
+ auto press=[&](int key,Qt::KeyboardModifiers modifiers,quint32 scan,const QString&text){QKeyEvent event(QEvent::KeyPress,key,modifiers,scan,0,0,text);QApplication::sendEvent(&w,&event);};
+ press(Qt::Key_ParenLeft,Qt::NoModifier,0x06,"(");
+ require(p.document->layers.front().opacity==.5&&p.history.undoCount()==1,"AZERTY top-row 5 did not set 50%");
+ QTest::qWait(700);press(Qt::Key_Ampersand,Qt::NoModifier,0x02,"&");press(Qt::Key_Egrave,Qt::NoModifier,0x08,"è");
+ require(p.document->layers.front().opacity==.17&&p.history.undoCount()==3,"Two quick AZERTY top-row digits did not set 17%");
+ QTest::qWait(700);press(Qt::Key_9,Qt::KeypadModifier,0x49,"9");
+ require(p.document->layers.front().opacity==.9&&p.history.undoCount()==4,"Keypad 9 did not set 90%");
+ QTest::qWait(700);press(Qt::Key_Agrave,Qt::NoModifier,0x0B,"à");
+ require(p.document->layers.front().opacity==1&&p.history.undoCount()==5,"AZERTY top-row 0 did not set 100%");
+ const auto before=p.document;QTest::qWait(700);
+ press(Qt::Key_5,Qt::ShiftModifier,0x06,"5");press(Qt::Key_Q,Qt::NoModifier,0x10,"a");
+ require(p.document==before&&p.history.undoCount()==5,"Shifted digit or an ordinary letter changed the opacity");
+});
 test("selection_digits_ignored_during_gesture",[]{
  MainWindow w(true);auto&p=w.addProject(example());
  action(w,"Marquee (M)");p.canvas->pointerDown({20,20},{});p.canvas->pointerMove({50,40},{});
