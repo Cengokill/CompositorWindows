@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "ui/ExportProgressDialog.h"
 #include "imaging/cmyk.h"
 #include "../cmyk/Fixtures.h"
 #include "../cmyk/ProfileFixture.h"
@@ -23,6 +24,7 @@
 #include <QSettings>
 #include <QSlider>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -75,6 +77,10 @@ void chooseLayerMenuEntry(MainWindow& window,const std::vector<std::string>& ids
     timer.start();emit tree->customContextMenuRequested(tree->visualItemRect(layerItem(window,ids.front())).center());timer.stop();
     if(error)std::rethrow_exception(error);require(chosen,"Layer menu entry was not chosen");
 }
+// Lets the dialog's animations run and paint for `ms`.
+void settle(int ms){QElapsedTimer waited;waited.start();while(waited.elapsed()<ms){QApplication::processEvents();QThread::msleep(5);}}
+bool isBlue(const QColor& color){return color.blue()>=150&&color.red()<=60&&color.blue()-color.red()>=100;}
+QPoint inDialog(QWidget* dialog,QWidget* child,QPoint at){return child->mapTo(dialog,at);}
 QMessageBox* shown(MainWindow& window,const char* name){auto* box=window.findChild<QMessageBox*>(name);return box&&box->isVisible()?box:nullptr;}
 void press(QMessageBox* box,const char* text){for(auto* button:box->buttons())if(button->text()==text){button->click();return;}throw std::runtime_error(std::string("Message box has no button ")+text);}
 }
@@ -268,6 +274,39 @@ int main(int argc,char**argv){
         const auto exported=imaging::WicCodec::decode(std::filesystem::path(destination.toStdWString())).image;
         require(exported.width==2&&exported.height==3&&exported.pixels[0]==255&&exported.pixels[3]==255,"The single layer export is not the trimmed layer");
         require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"Single layer export changed the project");
+    });
+    test("export_progress_dialog_tiles",[]{
+        MainWindow window(true);
+        ui::ExportProgressDialog dialog(&window,"Export Layers as PNGs","Saving layer",5);
+        int cancelled=0;dialog.setCancelHandler([&]{++cancelled;});dialog.show();dialog.setProgress(2,"Shape.png");settle(1000);
+        // The application chrome must not wrap this dialog: the wrapper hid the children of the Qt progress dialog.
+        require(!dialog.findChild<QWidget*>("dialogContent"),"The progress dialog was wrapped by the dialog chrome");
+        auto* heading=dialog.findChild<QLabel*>("exportProgressHeading");auto* current=dialog.findChild<QLabel*>("exportProgressCurrent");auto* count=dialog.findChild<QLabel*>("exportProgressCount");
+        auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");auto* cancel=dialog.findChild<QPushButton*>("exportProgressCancel");
+        require(heading&&current&&count&&strip&&cancel&&heading->isVisible()&&current->isVisible()&&strip->isVisible()&&cancel->isVisible(),"A progress control is missing or hidden");
+        require(heading->text()=="Exporting layer 3 of 5"&&current->text()=="Shape.png"&&count->text()=="2 of 5 done"&&cancel->text()=="Cancel","Progress texts are wrong");
+        require(cancel->property("pill").toBool(),"Cancel is not the capsule button");
+        const auto image=dialog.grab().toImage();
+        // Tiles are 44 px with 8 px gaps. The two written tiles are filled with the accent blue, the others are glass.
+        const auto sample=[&](int tile){const auto at=inDialog(&dialog,strip,QPoint(tile*52+7,strip->height()-9));return image.pixelColor(at);};
+        require(isBlue(sample(0))&&isBlue(sample(1)),"Written tiles are not filled with the accent blue");
+        require(!isBlue(sample(3))&&!isBlue(sample(4)),"Waiting tiles are filled");
+        // The surface behind the controls is opaque.
+        require(image.pixelColor(QPoint(3,dialog.height()/2)).alpha()==255,"The progress window is not opaque");
+        cancel->click();cancel->click();
+        require(cancelled==1&&!cancel->isEnabled()&&cancel->text()=="Cancelling…","Cancel did not ask for a stop exactly once");
+    });
+    test("export_progress_dialog_bar",[]{
+        MainWindow window(true);
+        ui::ExportProgressDialog dialog(&window,"Export Image","Saving image",1);
+        dialog.show();dialog.setProgress(0,"Photo.png");settle(400);
+        auto* heading=dialog.findChild<QLabel*>("exportProgressHeading");auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");
+        require(heading&&strip&&heading->isVisible()&&heading->text()=="Saving image"&&dialog.findChild<QLabel*>("exportProgressCurrent")->text()=="Photo.png","Single export texts are wrong");
+        // The sliding capsule is 35% of the bar wide, so a row through the bar always crosses some of it.
+        const auto image=dialog.grab().toImage();bool capsule=false;const auto row=strip->height()/2;
+        for(int x=0;x<strip->width();++x)capsule=capsule||isBlue(image.pixelColor(inDialog(&dialog,strip,QPoint(x,row))));
+        require(capsule,"The sliding capsule is not drawn");
+        dialog.finish(1);require(!dialog.isVisible(),"A single export did not close at once");
     });
     std::cout<<"Export UI "<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

@@ -19,6 +19,7 @@
 #include "VirtualImageDrop.h"
 #include "ProjectLayerDrag.h"
 #include "ProjectLayerCopyJob.h"
+#include "ExportProgressDialog.h"
 #include "LayerCopyCommit.h"
 #include <QDir>
 #include <QDialog>
@@ -1057,9 +1058,9 @@ void MainWindow::exportImage(){
     const auto chosen=kind();
     const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+((chosen==ExportKind::Png||chosen==ExportKind::ChannelPack)?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Tiff?".tif":chosen==ExportKind::Exr?".exr":chosen==ExportKind::Gif?".gif":".pdf");
     const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
-    QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
+    ui::ExportProgressDialog saving(this,"Export Image","Saving image",1);saving.setObjectName("imageExportSaving");saving.setProgress(0,QFileInfo(destination).fileName());
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;
-    connect(&saving,&QProgressDialog::canceled,&saving,[copyCancelled]{copyCancelled->store(true);});
+    saving.setCancelHandler([copyCancelled]{copyCancelled->store(true);});
     connect(&copy,&QFutureWatcher<QString>::finished,&saving,&QDialog::accept);
     copy.setFuture(QtConcurrent::run([readyPath,destination,copyCancelled]{try{imaging::copyEncodedAtomic(nativePath(readyPath),nativePath(destination),[copyCancelled]{return copyCancelled->load();});return QString();}catch(const imaging::ExportCancelled&){return QString();}catch(const std::exception&e){return QString::fromUtf8(e.what());}}));
     saving.exec();copy.waitForFinished();if(!copy.result().isEmpty())throw std::runtime_error(copy.result().toStdString());
@@ -1103,20 +1104,19 @@ void MainWindow::exportLayers(){
     }
     struct Outcome{int written{};QStringList empty,failed;bool cancelled{};};
     const int total=int(targets.size());
-    const auto label=[total](int index){return QString("Exporting layer %1 of %2…").arg(index+1).arg(total);};
     p->projectBusy=true;refresh(false,false);
     struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
-    QProgressDialog progress(label(0),"Cancel",0,total,this);progress.setObjectName("layerExportProgress");progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);progress.setAutoClose(false);progress.setAutoReset(false);
+    ui::ExportProgressDialog progress(this,"Export Layers as PNGs","Saving layer",total);progress.setObjectName("layerExportProgress");progress.setProgress(0,targets[0].file);
     auto cancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<Outcome> watcher;
-    connect(&progress,&QProgressDialog::canceled,&progress,[cancelled]{cancelled->store(true);});
-    connect(&watcher,&QFutureWatcher<Outcome>::finished,&progress,&QDialog::accept);
+    progress.setCancelHandler([cancelled]{cancelled->store(true);});
+    connect(&watcher,&QFutureWatcher<Outcome>::finished,&progress,[&]{const auto done=watcher.result();progress.finish(done.cancelled?-1:done.written+int(done.empty.size())+int(done.failed.size()));});
     auto* dialog=&progress;
-    watcher.setFuture(QtConcurrent::run([snapshot,targets,cancelled,dialog,label,total]{
+    watcher.setFuture(QtConcurrent::run([snapshot,targets,cancelled,dialog,total]{
         Outcome outcome;
         for(int index=0;index<total;++index){
             const auto& target=targets[size_t(index)];
             if(cancelled->load()){outcome.cancelled=true;break;}
-            QMetaObject::invokeMethod(dialog,[dialog,label,index]{dialog->setValue(index);dialog->setLabelText(label(index));},Qt::QueuedConnection);
+            QMetaObject::invokeMethod(dialog,[dialog,index,file=target.file]{dialog->setProgress(index,file);},Qt::QueuedConnection);
             imaging::ExportOptions options;options.cancelled=[cancelled]{return cancelled->load();};
             try{
                 if(exportLayerPngAtomic(snapshot,target.id,nativePath(target.path),options))++outcome.written;else outcome.empty.append(target.name);
