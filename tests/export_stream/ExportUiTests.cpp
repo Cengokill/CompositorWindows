@@ -63,6 +63,10 @@ void chooseLayerMenuEntry(MainWindow& window,const std::vector<std::string>& ids
             if(!chosen){
                 for(auto* widget:QApplication::topLevelWidgets()){
                     auto* menu=qobject_cast<QMenu*>(widget);if(!menu||menu->objectName()!="layerContextMenu"||!menu->isVisible())continue;
+                    // Liquid Glass like the menu bar: a frameless translucent window, the Mask submenu included.
+                    const auto glass=[](QMenu* m){return m->testAttribute(Qt::WA_TranslucentBackground)&&(m->windowFlags()&Qt::FramelessWindowHint);};
+                    require(glass(menu),"The layer menu is not Liquid Glass");
+                    for(auto* child:menu->findChildren<QMenu*>())require(glass(child),"A layer submenu is not Liquid Glass");
                     for(auto* action:menu->actions())if(action->text()==entry){require(action->isEnabled(),"Layer export entry is disabled");chosen=true;
                         // Not from inside this timer slot: Qt delivers no timer events to nested loops started from one,
                         // and the entry opens modal dialogs that this timer must still answer.
