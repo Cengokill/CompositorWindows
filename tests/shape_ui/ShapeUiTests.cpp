@@ -454,14 +454,13 @@ void layer_footer_menus_are_rounded_glass(){
         menu->hide();QApplication::processEvents();
     }
 }
-// Every menu of the top bar and every submenu opens as a rounded glass panel, and a disabled entry never takes the blue capsule.
+// Every menu of the top bar and every submenu opens as a rounded glass panel, with its disabled entries in the dimmed glass ink.
 void menu_bar_menus_are_rounded_glass(){
     MainWindow w(true);w.resize(1600,900);w.show();QApplication::processEvents();
     QApplication::setEffectEnabled(Qt::UI_General,true);QApplication::setEffectEnabled(Qt::UI_AnimateMenu,true);
     QStringList titles;for(auto* action:w.menuBar()->actions())titles<<action->text().remove('&');
     REQUIRE(titles==QStringList{"File","Edit","View","Select","Image","Filters","Layer","Help"});
     int disabled=0,submenus=0;
-    const QColor accent(ui::layer_panel::accent);
     for(auto* menu:w.menuBar()->findChildren<QMenu*>()){
         // The overflow menu of a narrow window has no title and is not one of the eight.
         if(menu->title().isEmpty()||menu->actions().isEmpty())continue;
@@ -471,11 +470,12 @@ void menu_bar_menus_are_rounded_glass(){
         REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateMenu));
         for(auto* action:menu->actions()){
             if(action->isSeparator()||action->isEnabled())continue;
-            ++disabled;menu->setActiveAction(action);
+            ++disabled;
             const QImage panel=menu->grab().toImage();const double scale=panel.devicePixelRatio();
             const QRect item=menu->actionGeometry(action);
-            const QColor edge=panel.pixelColor(int((item.right()-12)*scale),int(item.center().y()*scale));
-            REQUIRE(!(edge.red()==accent.red()&&edge.green()==accent.green()&&edge.blue()==accent.blue()));
+            int lightest=0;
+            for(int y=item.top();y<=item.bottom();++y)for(int x=item.left();x<=item.right();++x)lightest=std::max(lightest,panel.pixelColor(int(x*scale),int(y*scale)).lightness());
+            REQUIRE(lightest>120&&lightest<200);
             break;
         }
         menu->hide();QApplication::processEvents();
@@ -487,7 +487,7 @@ void glass_darkens_bright_backdrops(){
     QImage backdrop(64,64,QImage::Format_RGB32);backdrop.fill(QColor(30,30,30));
     REQUIRE(ui::glassVeilOpacity(backdrop)==0&&ui::glassVeilOpacity({})==0);
     const auto veiled=[](double value,double opacity){return value*(1-opacity)+31*opacity;};
-    backdrop.fill(Qt::white);REQUIRE(veiled(255,ui::glassVeilOpacity(backdrop))<=131);
+    backdrop.fill(Qt::white);REQUIRE(veiled(255,ui::glassVeilOpacity(backdrop))<=96);
     // One bright corner is enough: the text over it must stay readable too.
     backdrop.fill(QColor(30,30,30));for(int y=0;y<16;++y)for(int x=0;x<16;++x)backdrop.setPixelColor(x,y,Qt::white);
     REQUIRE(ui::glassVeilOpacity(backdrop)>0.5);

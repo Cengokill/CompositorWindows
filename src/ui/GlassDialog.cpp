@@ -80,9 +80,9 @@ QString glassStyleSheet() {
         QTreeView[glassCard="true"] QHeaderView::section { background: transparent; color: %2; border: 0; border-bottom: 1px solid rgba(255,255,255,34); padding: 5px 8px; }
         QLineEdit[glassSearch="true"] { background: rgba(255,255,255,18); color: %1; border: 1px solid rgba(255,255,255,40); border-radius: 16px; padding: 0 12px; min-height: 32px; max-height: 32px; selection-background-color: %4; }
         QLineEdit[glassSearch="true"]:focus { background: rgba(255,255,255,18); border-color: %4; }
-        QDialog[glassDialog="true"] QKeySequenceEdit QLineEdit { background: %5; color: %1; border: 1px solid %3; border-radius: 6px; }
+        QDialog[glassDialog="true"] QKeySequenceEdit QLineEdit { background: %5; color: %1; border: 1px solid %3; border-radius: %6px; }
         QDialog[glassDialog="true"] QKeySequenceEdit QLineEdit:focus { border-color: %4; }
         )")
-        .arg(t::primary, t::secondary, t::separator, t::accent, t::field);
+        .arg(t::primary, t::secondary, t::separator, t::accent, t::field).arg(t::fieldRadius);
 }
 }

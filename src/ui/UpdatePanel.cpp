@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -138,6 +139,14 @@ public:
     void reject() override {
         if (busy_) { closeWhenSettled_ = true; requestCancel(); return; }
         QDialog::reject();
+    }
+protected:
+    bool event(QEvent* event) override {
+        const bool handled = QDialog::event(event);
+        // A status line that wraps onto more lines needs a taller panel.
+        if (event->type() == QEvent::LayoutRequest && layout()->hasHeightForWidth())
+            resize(width(), std::max(height(), layout()->totalHeightForWidth(width())));
+        return handled;
     }
 private:
     static QPushButton* button(QHBoxLayout* row, const char* text, const char* name) {

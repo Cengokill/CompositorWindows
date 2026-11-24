@@ -33,7 +33,7 @@ QString rowText(const CommandListItem& item){
     if(!item.shortcut.isEmpty())text+="    "+item.shortcut;
     return text;
 }
-// The label, its menu in secondary ink and the shortcut on the right. The current row is a full capsule, in the application
+// The label, its menu in dimmer ink and the shortcut on the right. The current row is a full capsule, in the application
 // blue when the command can run.
 class RowDelegate final:public QStyledItemDelegate {
 public:
@@ -51,8 +51,8 @@ public:
             painter->setBrush(current&&enabled?QColor(layer_panel::accent):QColor(255,255,255,20));
             painter->drawRoundedRect(pill,pill.height()/2,pill.height()/2);
         }
-        const QColor ink=!enabled?QColor(255,255,255,90):current?QColor(Qt::white):QColor(layer_panel::primary);
-        const QColor detail=!enabled?ink:current?QColor(255,255,255,200):QColor(layer_panel::secondary);
+        const QColor ink=!enabled?QColor(layer_panel::glassDisabled):current?QColor(Qt::white):QColor(layer_panel::primary);
+        const QColor detail=!enabled?ink:current?QColor(255,255,255,200):QColor(layer_panel::glassDetail);
         const auto metrics=option.fontMetrics;
         QRect area=option.rect.adjusted(kRowInset,0,-kRowInset,0);
         painter->setFont(option.font);

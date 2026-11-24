@@ -31,6 +31,9 @@ inline constexpr auto hoveredRow = "#303030";
 inline constexpr auto surface = "#1f1f1f";
 inline constexpr auto surfaceBorder = "#363636";
 inline constexpr auto canvasSurround = "#1b1b1b";
+// Ink on Liquid Glass, as translucent white (#AARRGGBB) so that it follows the brightness of what lies behind.
+inline constexpr auto glassDetail = "#aaffffff";
+inline constexpr auto glassDisabled = "#78ffffff";
 
 inline constexpr int minWidth = 261;
 inline constexpr int maxWidth = 372;

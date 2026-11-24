@@ -46,7 +46,8 @@ QDialog* openAboutDialog(QWidget* parent) {
     auto* version = new QLabel("Compositor Windows " + QCoreApplication::applicationVersion());
     version->setObjectName("aboutVersion");
     version->setTextFormat(Qt::PlainText);
-    version->setProperty("glassSubtitle", true);
+    // The version reads as part of the title, in the same ink.
+    version->setStyleSheet(QString("color: %1;").arg(layer_panel::primary));
     auto* rule = new QFrame;
     rule->setProperty("glassRule", true);
     rule->setFixedHeight(1);

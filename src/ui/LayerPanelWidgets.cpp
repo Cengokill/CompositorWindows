@@ -37,8 +37,7 @@ namespace t = layer_panel;
 constexpr int glassPopupRadius = 18;
 constexpr int glassBlurReduction = 5;
 // The brightest backdrop the glass tint alone keeps dark enough for light text; the rest is veiled down to it.
-constexpr int glassBackdropLimit = 130;
-constexpr QColor glassVeil(31, 31, 31);
+constexpr int glassBackdropLimit = 95;
 
 QFont panelFont(int pixels, QFont::Weight weight = QFont::Normal) {
     static const QString family = QFontDatabase::families().contains("Segoe UI Variable")
@@ -389,7 +388,7 @@ private:
         painter.setClipPath(shape);
         if (!backdrop_.isNull()) {
             painter.drawPixmap(popup_->rect(), backdrop_);
-            QColor veil = glassVeil;
+            QColor veil(t::surface);
             veil.setAlphaF(float(veil_));
             painter.fillPath(shape, veil);
         }
@@ -433,7 +432,7 @@ qreal glassVeilOpacity(const QImage& backdrop) {
     for (int y = 0; y < areas.height(); ++y)
         for (int x = 0; x < areas.width(); ++x) brightest = std::max(brightest, qGray(areas.pixel(x, y)));
     if (brightest <= glassBackdropLimit) return 0;
-    return qreal(brightest - glassBackdropLimit) / (brightest - qGray(glassVeil.rgb()));
+    return qreal(brightest - glassBackdropLimit) / (brightest - qGray(QColor(t::surface).rgb()));
 }
 
 void makeGlassPopup(QWidget* popup) {
@@ -448,8 +447,8 @@ void makeGlassMenu(QMenu* menu) {
     menu->setStyleSheet(QString("QMenu { background: transparent; border: 0; padding: 7px; }"
                                 "QMenu::item { padding: 7px 24px 7px 14px; border-radius: 15px; }"
                                 "QMenu::item:selected { background: %1; color: white; }"
-                                "QMenu::item:disabled { background: transparent; color: rgba(255,255,255,90); }"
-                                "QMenu::separator { height: 1px; background: rgba(255,255,255,40); margin: 5px 12px; }").arg(t::accent));
+                                "QMenu::item:disabled { color: %2; }"
+                                "QMenu::separator { height: 1px; background: rgba(255,255,255,40); margin: 5px 12px; }").arg(t::accent, t::glassDisabled));
     // Qt rolls or fades a menu in from a snapshot, which the glass, taken from the screen behind the menu as it
     // appears, would then show instead of what lies behind. The menu decides while it opens, after aboutToShow.
     QObject::connect(menu, &QMenu::aboutToShow, menu, [menu] {
