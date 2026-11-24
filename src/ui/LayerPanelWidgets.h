@@ -10,6 +10,7 @@
 #include <QWidget>
 #include <functional>
 
+class QImage;
 class QMenu;
 class QPainter;
 
@@ -51,6 +52,8 @@ private:
 void makeGlassPopup(QWidget* popup);
 // The same panel for a menu, whose items are drawn over it, each a capsule in the application blue under the pointer.
 void makeGlassMenu(QMenu* menu);
+// How strongly the glass darkens what lies behind it so that light text stays readable: 0 over a dark backdrop.
+qreal glassVeilOpacity(const QImage& backdrop);
 
 // Capsule selector that preserves transient preview and dismissal callbacks.
 class CapsuleDropdown final : public QComboBox {

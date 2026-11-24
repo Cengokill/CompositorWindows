@@ -140,6 +140,11 @@ void panel_release_check(){
     check->click();require(calls==1&&!check->isEnabled()&&text(panel,"updateReleaseStatus").contains("Checking"),"release check started once and shows progress");
     check->click();require(calls==1,"no second request while one is pending");
     pending("Compositor 0.2.0 is available.");require(text(panel,"updateReleaseStatus")=="Compositor 0.2.0 is available."&&check->isEnabled(),"result shown and button re-enabled");
+    check->click();const int width=panel->width();
+    pending("Could not check for updates: "+QString("the connection was closed before the response was complete. ").repeated(6));
+    auto* report=panel->findChild<QLabel*>("updateReleaseStatus");
+    for(int i=0;i<50&&report->height()<report->heightForWidth(report->width());++i)QTest::qWait(10);
+    require(report->height()>=report->heightForWidth(report->width())&&panel->width()==width,"the panel grows for a long message without widening");
     check->click();panel->reject();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);require(panel.isNull(),"panel closed");
     pending("late");// Must not touch the destroyed panel.
     QPointer<QDialog> plain=ui::openUpdatePanel(&owner,{},root.path());settled(plain);require(!button(plain,"updateReleaseCheck")->isVisible(),"no release button without a host");

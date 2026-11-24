@@ -9,13 +9,18 @@
 #include <QSpinBox>
 #include <QMenu>
 #include <QMenuBar>
-#include <QMessageBox>
+#include <QDialog>
+#include <QLabel>
+#include <QListWidget>
+#include <QPointer>
+#include <QPushButton>
 #include <QTimer>
 #include <QTest>
 #include <QJsonObject>
 #include <QSet>
 #include <QToolButton>
 #include <QWidgetAction>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 using namespace compositor;
@@ -25,7 +30,21 @@ ui::CommandRegistry& registry(MainWindow&w){for(auto*object:w.findChildren<QObje
 QAction*command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
 Document example(bool raster=true,bool visible=true){Document d;d.id=newId();d.width=96;d.height=64;Layer layer;layer.id=newId();layer.name="Image";layer.transform={0,0,96,64};layer.visible=visible;if(raster)layer.raster=Raster::filled(96,64,{140,70,35,255});d.layers.push_back(layer);return d;}
 void gradient(MainWindow&w,EditorProject&p){command(w,"tool.gradient")->trigger();p.canvas->pointerDown({8,30},{});p.canvas->pointerMove({80,30},{});p.canvas->pointerUp({80,30},{});registry(w).refresh();check(command(w,"gradient.apply")->isEnabled(),"gradient was not left pending");}
-void about_version(){MainWindow w(true);QCoreApplication::setApplicationVersion(COMPOSITOR_VERSION_STRING);QString text;QTimer::singleShot(0,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){text=box->text();box->accept();}});command(w,"app.about")->trigger();check(text.contains(QStringLiteral("Compositor Windows ")+COMPOSITOR_VERSION_STRING),"About must display the application version");}
+void about_version(){
+    MainWindow w(true);QCoreApplication::setApplicationVersion(COMPOSITOR_VERSION_STRING);
+    command(w,"app.about")->trigger();QApplication::processEvents();
+    auto* about=w.findChild<QDialog*>("aboutDialog");check(about&&about->isVisible(),"About did not open");
+    check(about->findChild<QLabel*>("aboutVersion")->text()==QStringLiteral("Compositor Windows ")+COMPOSITOR_VERSION_STRING,"About must display the application version");
+    auto* text=about->findChild<QLabel*>("aboutText");auto* card=about->findChild<QWidget*>("aboutCard");auto* close=about->findChild<QPushButton*>("aboutClose");
+    check(text&&card&&close,"About content missing");
+    check(text->text().contains("https://x.com/Cengokill")&&text->text().contains("https://github.com/robbietilton/Compositor")&&text->openExternalLinks(),"About links missing");
+    // The text fills its card: the last sentence is followed by the card margin only, then the button row and the dialog margin.
+    check(text->height()>=text->heightForWidth(text->width()),"About text is clipped");
+    check(text->height()<=text->heightForWidth(text->width())+2,"About leaves spare room under the last sentence");
+    check(about->height()-about->mapFromGlobal(close->mapToGlobal(QPoint(0,close->height()))).y()<=24,"About leaves spare room under the button");
+    const QPointer<QDialog> alive(about);close->click();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    check(!alive,"About did not close");
+}
 void registered_actions(){MainWindow w(true);w.addProject(example());for(auto*object:w.findChildren<QObject*>())check(!object->property("unregisteredCommand").toBool(),"host requested an uncatalogued command");size_t leaves=0;for(auto*menu:w.findChildren<QMenu*>())for(auto*action:menu->actions())if(!action->menu()&&!action->isSeparator()){++leaves;check(!action->property("commandId").toString().isEmpty(),"menu leaf has no command id");}check(leaves>65,"menu inventory unexpectedly small");auto*tools=w.findChild<QToolBar*>("tools");check(tools,"tools toolbar missing");auto* widget=tools->findChild<QWidget*>("paletteSwatches");check(widget,"palette tool rail container missing");
     QSet<QString> ids;const auto buttons=widget->findChildren<QToolButton*>();check(buttons.size()==4,"palette container must expose exactly four actionable controls");
     for(auto*button:buttons){auto* leaf=button->defaultAction();check(leaf,"palette control has no default action");const auto id=leaf->property("commandId").toString();check(!id.isEmpty()&&ui::commandSpecById(id),"palette control action is not catalogued");bool bound=false;for(const auto& entry:registry(w).manifest()){const auto object=entry.toObject();if(object["id"].toString()==id&&object["object_name"].toString()==leaf->objectName())bound=true;}check(bound,"palette control action is not registered");ids.insert(id);}
@@ -51,4 +70,56 @@ void command_palette(){
     QTest::keyClicks(&field,"bml");check(field.text()=="bml","tool letters remain reserved after palette");
 }
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+double luminance(const QColor& color){const auto part=[](int value){const double v=value/255.;return v<=.03928?v/12.92:std::pow((v+.055)/1.055,2.4);};return .2126*part(color.red())+.7152*part(color.green())+.0722*part(color.blue());}
+double contrast(const QColor& a,const QColor& b){const double x=luminance(a),y=luminance(b);return (std::max(x,y)+.05)/(std::min(x,y)+.05);}
+// The glass opens over whatever the canvas holds, and a white canvas is the hardest case for its light text.
+void palette_contrast(){
+    MainWindow w(true);w.resize(1280,820);w.show();QTest::qWait(100);
+    QWidget cover(&w);cover.setGeometry(w.rect());cover.setStyleSheet("background: white;");cover.setAttribute(Qt::WA_StyledBackground);cover.show();cover.raise();QTest::qWait(100);
+    command(w,"help.command_palette")->trigger();QTest::qWait(100);
+    auto* palette=w.findChild<QWidget*>("commandPalette");auto* list=palette?palette->findChild<QListWidget*>("commandPaletteList"):nullptr;
+    check(list&&list->count()>1,"palette rows missing");
+    const QImage panel=palette->grab().toImage();const double scale=panel.devicePixelRatio();
+    const auto pixel=[&](int x,int y){return panel.pixelColor(int(x*scale),int(y*scale));};
+    bool enabledRow=false,disabledRow=false;
+    for(int i=1;i<list->count();++i){
+        auto* item=list->item(i);const bool enabled=item->data(Qt::UserRole+1).toBool();
+        if(!item->text().contains("Ctrl+")||(enabled?enabledRow:disabledRow))continue;
+        const QRect row(list->viewport()->mapTo(palette,list->visualItemRect(item).topLeft()),list->visualItemRect(item).size());
+        if(row.bottom()>palette->height()-20)break;
+        const QColor glass=pixel(row.left()+row.width()*6/10,row.center().y());
+        check(glass.lightness()>40,"the white backdrop did not reach the glass");
+        const auto brightest=[&](int left,int right){QColor ink=glass;for(int y=row.top()+6;y<row.bottom()-6;++y)for(int x=left;x<right;++x)if(luminance(pixel(x,y))>luminance(ink))ink=pixel(x,y);return ink;};
+        const double label=contrast(brightest(row.left()+10,row.left()+80),glass),shortcut=contrast(brightest(row.left()+row.width()*75/100,row.right()-4),glass);
+        std::cout<<item->text().toStdString()<<" enabled="<<enabled<<" label="<<label<<" shortcut="<<shortcut<<'\n';
+        if(enabled){enabledRow=true;check(label>=4.5&&shortcut>=4.5,"enabled text is hard to read over a white canvas");}
+        else{disabledRow=true;check(label>=3&&shortcut>=3,"disabled text is hard to read over a white canvas");}
+    }
+    check(enabledRow&&disabledRow,"palette shows no enabled or no disabled row with a shortcut");
+    palette->close();
+}
+// Without the Windows acrylic backdrop, here offscreen and on a frameless window in the Mac title bar style, the dialog paints
+// an opaque surface of its own.
+void about_opaque_surface(){
+    MainWindow w(true);w.show();QApplication::processEvents();
+    for(bool mac:{false,true}){
+        qApp->setProperty("studioMacTitleBar",mac);
+        command(w,"app.about")->trigger();QApplication::processEvents();
+        auto* about=w.findChild<QDialog*>("aboutDialog");check(about&&about->windowFlags().testFlag(Qt::FramelessWindowHint)==mac,"About did not follow the title bar style");
+        const QImage surface=about->grab().toImage();
+        for(const QPoint& point:{QPoint(6,surface.height()/2),QPoint(surface.width()/2,surface.height()-6)}){
+            const auto color=surface.pixelColor(point);check(color.alpha()==255&&color.lightness()<80,"About surface is not opaque and dark");
+        }
+        about->close();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    }
+}
+// About returns at once, so the commands it blocks while it is open must come back when it closes.
+void about_restores_commands(){
+    MainWindow w(true);w.addProject(example());w.show();QApplication::processEvents();registry(w).refresh();
+    check(command(w,"file.new")->isEnabled()&&command(w,"tool.brush")->isEnabled(),"commands unavailable before About");
+    command(w,"app.about")->trigger();QApplication::processEvents();
+    auto* about=w.findChild<QDialog*>("aboutDialog");check(about&&!command(w,"tool.brush")->isEnabled(),"About did not block commands");
+    about->findChild<QPushButton*>("aboutClose")->click();QApplication::processEvents();
+    check(command(w,"file.new")->isEnabled()&&command(w,"tool.brush")->isEnabled(),"commands stayed disabled after About");
+}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="about_restores_commands")about_restores_commands();else if(name=="about_opaque_surface")about_opaque_surface();else if(name=="palette_contrast")palette_contrast();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

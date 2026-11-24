@@ -1,4 +1,6 @@
 #include "KeyboardShortcutDialog.h"
+#include "GlassDialog.h"
+#include "ToolbarControls.h"
 #include <QBrush>
 #include <QColor>
 #include <QHBoxLayout>
@@ -18,11 +20,11 @@ QString keysText(const QList<QKeySequence>& keys){QStringList text;for(const aut
 }
 KeyboardShortcutDialog::KeyboardShortcutDialog(QWidget* parent,const CommandRegistry& registry,Commit commit)
     :QDialog(parent),defaults_(registry.defaultShortcuts()),draft_(registry.shortcuts()),commit_(std::move(commit)){
-    setObjectName("keyboardShortcutDialog");setWindowTitle("Keyboard Shortcuts");resize(640,640);
-    auto* layout=new QVBoxLayout(this);
-    search_=new QLineEdit;search_->setObjectName("shortcutSearch");search_->setPlaceholderText("Search commands");search_->setClearButtonEnabled(true);layout->addWidget(search_);
-    list_=new QTreeWidget;list_->setObjectName("shortcutList");list_->setColumnCount(3);list_->setHeaderLabels({"Command","Menu","Shortcut"});list_->setRootIsDecorated(false);list_->setAccessibleName("Commands and shortcuts");
-    list_->header()->setSectionResizeMode(0,QHeaderView::Stretch);
+    setObjectName("keyboardShortcutDialog");setWindowTitle("Keyboard Shortcuts");
+    auto* layout=new QVBoxLayout(this);layout->setContentsMargins(24,22,24,20);layout->setSpacing(12);
+    search_=new QLineEdit;search_->setObjectName("shortcutSearch");search_->setProperty("glassSearch",true);search_->setPlaceholderText("Search commands");search_->setClearButtonEnabled(true);layout->addWidget(search_);
+    list_=new QTreeWidget;list_->setObjectName("shortcutList");list_->setProperty("glassCard",true);list_->setColumnCount(3);list_->setHeaderLabels({"Command","Menu","Shortcut"});list_->setRootIsDecorated(false);list_->setAccessibleName("Commands and shortcuts");
+    list_->header()->setSectionResizeMode(0,QHeaderView::Stretch);list_->setColumnWidth(1,140);
     for(const auto& item:registry.listCommands()){
         if(!draft_.count(item.id))continue;
         auto* row=new QTreeWidgetItem(list_,{item.label,item.menu,{}});row->setData(0,Qt::UserRole,item.id);
@@ -41,6 +43,9 @@ KeyboardShortcutDialog::KeyboardShortcutDialog(QWidget* parent,const CommandRegi
     save_=new QPushButton("Save");save_->setObjectName("shortcutSave");save_->setDefault(true);
     buttons->addWidget(restore);buttons->addStretch(1);buttons->addWidget(cancel);buttons->addWidget(save_);
     layout->addLayout(buttons);
+    for(auto* button:{clear_,restore,cancel,save_})markPill(button);
+    save_->setProperty("primary",true);
+    makeGlassDialog(this);resize(680,660);
     connect(search_,&QLineEdit::textChanged,this,[this]{refreshRows();});
     connect(list_,&QTreeWidget::currentItemChanged,this,[this]{loadSelection();});
     connect(primary_,&QKeySequenceEdit::keySequenceChanged,this,[this]{editSelection();});
@@ -84,11 +89,13 @@ void KeyboardShortcutDialog::validate(){
     for(int i=0;i<list_->topLevelItemCount();++i){auto* row=list_->topLevelItem(i);row->setForeground(2,flagged.count(row->data(0,Qt::UserRole).toString())?QBrush(QColor(232,72,72)):list_->palette().text());}
     save_->setEnabled(problems.isEmpty());
     status_->setText(problems.isEmpty()?QString{}:"Save is unavailable until each shortcut is unique and valid. Change or clear these assignments:\n"+problems.join("\n"));
+    status_->setVisible(!status_->text().isEmpty());
 }
 void KeyboardShortcutDialog::save(){
     validate();if(!save_->isEnabled())return;
     QString error;
     if(commit_&&commit_(draft_,&error)){accept();return;}
     status_->setText(error.isEmpty()?"The shortcuts could not be saved. Your previous shortcuts are still active.":error);
+    status_->setVisible(true);
 }
 }

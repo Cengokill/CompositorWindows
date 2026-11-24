@@ -1,9 +1,12 @@
 #include "UpdatePanel.h"
+#include "GlassDialog.h"
+#include "ToolbarControls.h"
 #include "update/ReleaseCheck.h"
 #include "update/Updater.h"
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -98,8 +101,8 @@ public:
     UpdatePanel(QWidget* parent, UpdatePanelHost host, QString directory)
         : QDialog(parent), host_(std::move(host)), directory_(std::move(directory)) {
         setObjectName("updatePanel"); setWindowTitle("Check for Updates");
-        setWindowModality(Qt::NonModal); setAttribute(Qt::WA_DeleteOnClose); resize(520, 260);
-        auto* layout = new QVBoxLayout(this);
+        setWindowModality(Qt::NonModal); setAttribute(Qt::WA_DeleteOnClose);
+        auto* layout = new QVBoxLayout(this); layout->setContentsMargins(24, 22, 24, 20); layout->setSpacing(12);
         information_ = new QLabel; information_->setObjectName("updateSourceInformation"); information_->setWordWrap(true); layout->addWidget(information_);
         versions_ = new QLabel; versions_->setObjectName("updateVersions"); versions_->setWordWrap(true); layout->addWidget(versions_);
         status_ = new QLabel("Preparing update check…"); status_->setObjectName("updateStatus"); status_->setAccessibleName("Update status"); status_->setWordWrap(true); layout->addWidget(status_);
@@ -111,6 +114,7 @@ public:
         connect(automatic_, &QCheckBox::toggled, this, [](bool enabled) { QSettings settings; update::setAutomaticChecksEnabled(settings, enabled); });
         layout->addWidget(automatic_);
         releaseStatus_ = new QLabel; releaseStatus_->setObjectName("updateReleaseStatus"); releaseStatus_->setAccessibleName("Release check status"); releaseStatus_->setWordWrap(true); layout->addWidget(releaseStatus_);
+        layout->addStretch();
         auto* row = new QHBoxLayout; layout->addLayout(row);
         releaseCheck_ = button(row, "Check for New Release", "updateReleaseCheck"); releaseCheck_->setVisible(bool(host_.checkRelease));
         connect(releaseCheck_, &QPushButton::clicked, this, [this] { checkRelease(); });
@@ -124,6 +128,8 @@ public:
         connect(restart_, &QPushButton::clicked, this, [this] { restart(); });
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] { finished(); });
         timer_.setInterval(40); connect(&timer_, &QTimer::timeout, this, [this] { paintProgress(); });
+        releaseCheck_->setProperty("primary", true); for (auto* line : {versions_, retained_, releaseStatus_}) line->hide();
+        makeGlassDialog(this); resize(560, 200);
         controls(); QTimer::singleShot(0, this, [this] { begin(false); });
     }
     ~UpdatePanel() override {
@@ -134,10 +140,20 @@ public:
         if (busy_) { closeWhenSettled_ = true; requestCancel(); return; }
         QDialog::reject();
     }
+protected:
+    bool event(QEvent* event) override {
+        const bool handled = QDialog::event(event);
+        // A status line that wraps onto more lines needs a taller panel.
+        if (event->type() == QEvent::LayoutRequest && layout()->hasHeightForWidth())
+            resize(width(), std::max(height(), layout()->totalHeightForWidth(width())));
+        return handled;
+    }
 private:
     static QPushButton* button(QHBoxLayout* row, const char* text, const char* name) {
-        auto* result = new QPushButton(QString::fromUtf8(text)); result->setObjectName(name); row->addWidget(result); return result;
+        auto* result = new QPushButton(QString::fromUtf8(text)); result->setObjectName(name); markPill(result); row->addWidget(result); return result;
     }
+    // An empty line takes no room.
+    static void setLine(QLabel* line, const QString& text) { line->setText(text); line->setVisible(!text.isEmpty()); }
     void controls() {
         check_->setEnabled(!busy_); install_->setEnabled(!busy_ && available_);
         cancel_->setVisible(busy_); cancel_->setEnabled(busy_ && !progress_->cancelled.load());
@@ -146,12 +162,12 @@ private:
     }
     void begin(bool install) {
         if (busy_ || (install && !available_)) return;
-        available_ = false; installed_ = false; retained_->clear();
+        available_ = false; installed_ = false; setLine(retained_, {});
         try {
             configuration_ = configuration(directory_);
             // An unconfigured build explains itself in the status line alone; showing it in both labels repeated the text.
             information_->setText(configuration_.configured ? configuration_.information : QString{}); information_->setVisible(configuration_.configured);
-            versions_->setText(configuration_.root.empty() ? QString{} : "Running version: " + configuration_.runningVersion);
+            setLine(versions_, configuration_.root.empty() ? QString{} : "Running version: " + configuration_.runningVersion);
             if (!configuration_.configured) { status_->setText(configuration_.information); setProperty("updateState", "unconfigured"); controls(); return; }
             progress_ = std::make_shared<Progress>(); busy_ = true; installing_ = install;
             setProperty("updateState", install ? "installing" : "checking");
@@ -181,11 +197,11 @@ private:
     }
     void checkRelease() {
         if (!host_.checkRelease || !releaseCheck_->isEnabled()) return;
-        releaseCheck_->setEnabled(false); releaseStatus_->setText("Checking for a new stable release…");
+        releaseCheck_->setEnabled(false); setLine(releaseStatus_, "Checking for a new stable release…");
         QPointer<UpdatePanel> alive(this);
         host_.checkRelease([alive](const QString& status) {
             if (!alive) return;
-            alive->releaseStatus_->setText(status); alive->releaseCheck_->setEnabled(true);
+            setLine(alive->releaseStatus_, status); alive->releaseCheck_->setEnabled(true);
         });
     }
     void requestCancel() {
@@ -202,9 +218,9 @@ private:
         timer_.stop(); paintProgress(); busy_ = false; progressBar_->hide();
         try {
             const auto result = watcher_.result();
-            versions_->setText(QString("Running version: %1\nActive installed version: %2").arg(configuration_.runningVersion,
+            setLine(versions_, QString("Running version: %1\nActive installed version: %2").arg(configuration_.runningVersion,
                 result.active ? result.active->current.text() : "unavailable"));
-            retained_->setText(result.active && !result.active->previous.isEmpty() ? "Retained previous version: " + result.active->previous : QString{});
+            setLine(retained_, result.active && !result.active->previous.isEmpty() ? "Retained previous version: " + result.active->previous : QString{});
             installed_ = result.active && !result.active->pending && result.active->current.text() != configuration_.runningVersion;
             if (!result.error.isEmpty()) {
                 status_->setText(result.cancelled ? (result.active
