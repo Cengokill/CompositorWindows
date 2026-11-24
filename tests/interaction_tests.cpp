@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
+#include "ui/SegmentedControl.h"
 #include <QApplication>
+#include <QLineEdit>
 #include <QDir>
 #include <QMouseEvent>
 #include <QTest>
@@ -307,6 +309,56 @@ test("failed_save_reports_error_and_keeps_document_dirty",[]{
  commandAction(w,"file.save_as")->trigger();awaitSave(p);
  require(answers.texts.size()==1&&!p.saveError.isEmpty(),"Failed write was not reported");
  require(p.path==dir.filePath("Good.comp")&&p.history.modified()&&p.history.undoCount()==undoCount&&p.document==before,"Failed write changed the project path, dirty state or document");
+});
+// Number keys set the opacity of the selected layers with every selection tool, as with Move.
+auto selectionOpacity=[&](const char*name,const char*tool,const char*kindControl,int kind){test(name,[=]{
+ MainWindow w(true);Document d=example();Layer second=d.layers.front();second.id=newId();second.name="Second";d.layers.push_back(second);
+ auto&p=w.addProject(d);const auto first=p.document->layers[0].id,other=p.document->layers[1].id;p.selected={first};p.active=first;
+ action(w,tool);if(kindControl)static_cast<ui::SegmentedControl*>(named<QWidget>(w,kindControl))->choose(kind);
+ QTest::keyClick(&w,Qt::Key_3);
+ require(p.document->layers[0].opacity==.3&&p.document->layers[1].opacity==1&&p.history.undoCount()==1&&p.history.undoName()=="Layer Opacity","One digit did not set the selected layer opacity in one undo step");
+ QTest::qWait(700);QTest::keyClick(&w,Qt::Key_7);
+ require(p.document->layers[0].opacity==.7&&p.history.undoCount()==2,"A digit after the quick-input window did not start a new value");
+ QTest::keyClick(&w,Qt::Key_5);
+ require(p.document->layers[0].opacity==.75&&p.history.undoCount()==3,"Two quick digits did not set an exact value");
+ QTest::qWait(700);QTest::keyClick(&w,Qt::Key_0);
+ require(p.document->layers[0].opacity==1,"Zero did not set full opacity");
+ p.selected={first,other};p.active=other;QTest::qWait(700);QTest::keyClick(&w,Qt::Key_4);
+ require(p.document->layers[0].opacity==.4&&p.document->layers[1].opacity==.4,"Digit did not reach every selected layer");
+ const auto afterAll=p.history.undoCount();commandAction(w,"edit.undo")->trigger();
+ require(p.history.undoCount()==afterAll-1&&p.document->layers[0].opacity==1&&p.document->layers[1].opacity==1,"One digit was not one undo step for all selected layers");
+ commandAction(w,"edit.redo")->trigger();require(p.document->layers[0].opacity==.4&&p.document->layers[1].opacity==.4,"Redo did not restore the digit opacity");
+});};
+selectionOpacity("selection_digits_marquee_rectangle","Marquee (M)",nullptr,0);
+selectionOpacity("selection_digits_marquee_ellipse","Marquee (M)","marqueeShape",1);
+selectionOpacity("selection_digits_lasso_freehand","Lasso (L)","lassoKind",0);
+selectionOpacity("selection_digits_lasso_polygonal","Lasso (L)","lassoKind",1);
+selectionOpacity("selection_digits_polygon","Polygon",nullptr,0);
+selectionOpacity("selection_digits_wand","Wand (W)","wandKind",0);
+selectionOpacity("selection_digits_object","Wand (W)","wandKind",1);
+test("selection_digits_ignored_during_gesture",[]{
+ MainWindow w(true);auto&p=w.addProject(example());
+ action(w,"Marquee (M)");p.canvas->pointerDown({20,20},{});p.canvas->pointerMove({50,40},{});
+ QTest::keyClick(&w,Qt::Key_5);require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Digit changed opacity during a marquee drag");
+ p.canvas->pointerCancel();
+ action(w,"Polygon");p.canvas->pointerDown({20,20},{});p.canvas->pointerUp({20,20},{});
+ QTest::keyClick(&w,Qt::Key_5);require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Digit changed opacity while a polygon was open");
+ p.canvas->pointerCancel();QTest::keyClick(&w,Qt::Key_5);
+ require(p.document->layers.front().opacity==.5&&p.history.undoCount()==1,"Digit stayed blocked after the gesture ended");
+});
+test("selection_digits_leave_brush_and_gradient_opacity",[]{
+ MainWindow w(true);auto&p=w.addProject(example());
+ action(w,"Brush (B)");QTest::keyClick(&w,Qt::Key_6);
+ require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Brush digit changed layer opacity");
+ action(w,"Gradient (G)");QTest::qWait(700);QTest::keyClick(&w,Qt::Key_2);
+ require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Gradient digit changed layer opacity");
+});
+test("selection_digits_typed_into_field_keep_layer_opacity",[]{
+ MainWindow w(true);auto&p=w.addProject(example());action(w,"Marquee (M)");
+ QLineEdit field(&w);field.setGeometry(300,100,220,30);w.show();field.setFocus();QTest::qWait(50);
+ require(QApplication::focusWidget()==&field,"Field did not take focus");
+ QTest::keyClick(&w,Qt::Key_5);
+ require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Digit typed in a field changed layer opacity");
 });
 std::cout<<"{\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false}\n";return failed?1:0;
 }
