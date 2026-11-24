@@ -2,6 +2,10 @@
 
 ## New features
 
+- Work in a refreshed interface. Tool options bars, the Layers panel, project tabs, the New canvas card and the status bar share a new look and one accent blue.
+- Choose from Liquid Glass drop-down lists in the tool options bars, the Layers panel's Blend control, filter panels, Camera Raw and New canvas. The Layers panel's adjustment, filter and effect menus and this What's New window use the same glass.
+- See redesigned check boxes across the application. Tool options bars add new sliders, segmented choices and capsule buttons.
+- Hold the Marquee, Lasso, Wand, Brush or Shape button to pick another variant. Drag a number field's caption in the tool options bar to change its value.
 - See where layers will land as you drag them in the redesigned Layers panel. Drop between rows to reorder, or onto a folder to move layers inside.
 - Feather a selection directly from the tool options bar. Lasso, Magic Wand, Crop and Brush now group their settings by tool.
 - Choose Standard, Optimized or Progressive JPEG. Export an interlaced PNG, keep transparency or fill transparent areas with a background color.
