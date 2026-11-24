@@ -38,6 +38,8 @@ struct WriteGate{
     std::function<void()> hook()const{auto e=entered,r=release;return [e,r]{e->store(true);for(int i=0;i<10000&&!r->load();++i)QThread::msleep(1);};}
     void open()const{release->store(true);}
 };
+// Counts key presses that reach the object it watches.
+struct KeyProbe:QObject{int presses=0;bool eventFilter(QObject*,QEvent*event)override{if(event->type()==QEvent::KeyPress)++presses;return false;}};
 QAction* commandAction(MainWindow&w,const char* id){for(auto*a:w.findChildren<QAction*>())if(a->property("commandId").toString()==id)return a;throw std::runtime_error("Missing command");}
 // Answers modal message boxes in order while a nested loop runs, and records their text.
 struct MessageAnswers{
@@ -371,12 +373,30 @@ test("selection_digits_ignored_during_gesture",[]{
  p.canvas->pointerCancel();QTest::keyClick(&w,Qt::Key_5);
  require(p.document->layers.front().opacity==.5&&p.history.undoCount()==1,"Digit stayed blocked after the gesture ended");
 });
-test("selection_digits_leave_brush_and_gradient_opacity",[]{
+test("brush_and_gradient_digits_do_not_edit_layer_opacity",[]{
  MainWindow w(true);auto&p=w.addProject(example());
  action(w,"Brush (B)");QTest::keyClick(&w,Qt::Key_6);
  require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Brush digit changed layer opacity");
+ require(named<QSlider>(w,"brushOpacitySlider")->value()==6000,"Brush digit did not set the brush opacity");
  action(w,"Gradient (G)");QTest::qWait(700);QTest::keyClick(&w,Qt::Key_2);
  require(p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Gradient digit changed layer opacity");
+});
+test("selection_digits_in_layers_panel_stay_out_of_text",[]{
+ // While text is edited, a digit typed with the Layers list focused must not be inserted into the text.
+ MainWindow w(true);auto&p=w.addProject(example());w.show();p.canvas->setFocus();QTest::keyClick(&w,Qt::Key_T);
+ drag(p,{10,10},{110,60});QTest::keyClick(&w,Qt::Key_H);
+ auto*tree=named<QTreeWidget>(w,"layersTree");tree->setFocus();QTest::qWait(50);QTest::keyClick(tree,Qt::Key_5);
+ QTest::keyClick(&w,Qt::Key_Return,Qt::ControlModifier);
+ const auto&text=p.document->layers.back();
+ require(text.text&&text.text->value=="h","A digit typed in the Layers list was inserted into the text");
+});
+test("selection_digits_reach_layers_tree_when_no_shortcut_uses_them",[]{
+ // A digit nothing uses stays available to the tree's type-ahead search; one the window uses never reaches the tree.
+ MainWindow w(true);auto&p=w.addProject(example());auto*tree=named<QTreeWidget>(w,"layersTree");KeyProbe probe;tree->installEventFilter(&probe);
+ action(w,"Hand (H)");QTest::keyClick(tree,Qt::Key_5);
+ require(probe.presses==1&&p.document->layers.front().opacity==1&&p.history.undoCount()==0,"Hand tool digit did not reach the Layers list");
+ action(w,"Marquee (M)");QTest::keyClick(tree,Qt::Key_5);
+ require(probe.presses==1&&p.document->layers.front().opacity==.5&&p.history.undoCount()==1,"A digit used for opacity also reached the Layers list");
 });
 test("selection_digits_typed_into_field_keep_layer_opacity",[]{
  MainWindow w(true);auto&p=w.addProject(example());action(w,"Marquee (M)");
