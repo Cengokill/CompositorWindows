@@ -2,6 +2,7 @@
 #include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QLineEdit>
+#include <QTreeWidget>
 #include <QDir>
 #include <QMouseEvent>
 #include <QTest>
@@ -350,6 +351,15 @@ test("selection_digits_from_azerty_row_and_keypad",[]{
  const auto before=p.document;QTest::qWait(700);
  press(Qt::Key_5,Qt::ShiftModifier,0x06,"5");press(Qt::Key_Q,Qt::NoModifier,0x10,"a");
  require(p.document==before&&p.history.undoCount()==5,"Shifted digit or an ordinary letter changed the opacity");
+});
+test("selection_digits_typed_while_layers_panel_has_focus",[]{
+ // The Layers list is a tree view that consumes digits as type-ahead search, so the window never saw them.
+ MainWindow w(true);auto&p=w.addProject(example());action(w,"Marquee (M)");w.show();
+ auto*tree=named<QTreeWidget>(w,"layersTree");tree->setFocus();QTest::qWait(50);
+ QTest::keyClick(tree,Qt::Key_5);
+ require(p.document->layers.front().opacity==.5&&p.history.undoCount()==1,"Digit typed in the Layers list did not set the opacity");
+ QTest::qWait(700);QKeyEvent azerty(QEvent::KeyPress,Qt::Key_Egrave,Qt::NoModifier,0x08,0,0,"è");QApplication::sendEvent(tree,&azerty);
+ require(p.document->layers.front().opacity==.7&&p.history.undoCount()==2,"AZERTY digit typed in the Layers list did not set the opacity");
 });
 test("selection_digits_ignored_during_gesture",[]{
  MainWindow w(true);auto&p=w.addProject(example());

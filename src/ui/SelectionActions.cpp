@@ -2,6 +2,7 @@
 #include "SelectionCursors.h"
 #include "SegmentedControl.h"
 #include "ToolbarControls.h"
+#include "OpacityDigit.h"
 #include "editing/PixelEdits.h"
 #include "editing/SelectionExtras.h"
 #include <QMenuBar>
@@ -286,6 +287,10 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event){
                 auto flags=key->modifiers();const auto flag=key->key()==Qt::Key_Shift?Qt::ShiftModifier:key->key()==Qt::Key_Alt?Qt::AltModifier:Qt::ControlModifier;
                 flags.setFlag(flag,event->type()==QEvent::KeyPress);
                 try{selectionModifiersChanged(flags);}catch(const std::exception& error){pointerCancel();statusBar()->showMessage(error.what());}
+            }else if(event->type()==QEvent::KeyPress&&widget->objectName()=="layersTree"&&ui::plainDigit(key)>=0){
+                // The Layers list would take a digit as type-ahead search; let the window use it for the opacity shortcut first.
+                const std::unique_ptr<QKeyEvent> forwarded(key->clone());keyPressEvent(forwarded.get());
+                if(forwarded->isAccepted())return true;
             }
         }
     }

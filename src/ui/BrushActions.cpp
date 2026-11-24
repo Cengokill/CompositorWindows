@@ -5,6 +5,7 @@
 #include "LayerPanelWidgets.h"
 #include "SegmentedControl.h"
 #include "ToolbarControls.h"
+#include "OpacityDigit.h"
 #include <QColorDialog>
 #include "CropViewport.h"
 #include <QToolBar>
@@ -226,17 +227,6 @@ bool MainWindow::updateBrush(Point point,bool finish,double pressure){
     }catch(const std::exception&e){pointerCancel();statusBar()->showMessage(e.what());}
     return true;
 }
-namespace{
-// The digit of a plain press of a top-row or keypad digit key, or -1. The top row is also matched by scan code because
-// an AZERTY keyboard types symbols there (& é " ' ( - è _ ç à) unless Shift is held, and the keypad adds a modifier.
-int plainDigit(const QKeyEvent*e){
-    if((e->modifiers()&~Qt::KeypadModifier)!=Qt::NoModifier)return -1;
-    if(e->key()>=Qt::Key_0&&e->key()<=Qt::Key_9)return e->key()-Qt::Key_0;
-    if(e->modifiers()&Qt::KeypadModifier)return -1;
-    const auto scan=e->nativeScanCode();
-    return scan>=0x02&&scan<=0x0B?int((scan-1)%10):-1;
-}
-}
 void MainWindow::keyPressEvent(QKeyEvent*e){
     auto*focus=QApplication::focusWidget();if(qobject_cast<QLineEdit*>(focus)||qobject_cast<QAbstractSpinBox*>(focus)||qobject_cast<QTextEdit*>(focus)||qobject_cast<QPlainTextEdit*>(focus)){QMainWindow::keyPressEvent(e);return;}
     if(handleTextKey(e)){e->accept();return;}
@@ -248,7 +238,7 @@ void MainWindow::keyPressEvent(QKeyEvent*e){
         if(e->key()==Qt::Key_BracketLeft||e->key()==Qt::Key_BracketRight||e->key()==Qt::Key_BraceLeft||e->key()==Qt::Key_BraceRight){bool up=e->key()==Qt::Key_BracketRight||e->key()==Qt::Key_BraceRight;if(e->modifiers()==Qt::ShiftModifier||e->key()==Qt::Key_BraceLeft||e->key()==Qt::Key_BraceRight){double quarter=*hardness*4;*hardness=std::clamp(up?std::floor(quarter+.001)+1:std::ceil(quarter-.001)-1,0.,4.)/4;}else{double diameter=*radius*2;*radius=std::clamp(up?std::max(diameter+1,std::round(diameter*1.2)):std::min(diameter-1,std::round(diameter/1.2)),1.,2000.)/2;}refresh(false,false);return;}
     }
     const bool selectionTool=tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand;
-    const int typedDigit=plainDigit(e);
+    const int typedDigit=ui::plainDigit(e);
     if(typedDigit>=0&&!stroke_&&!retouch_&&(brushTool||tool_==Tool::Gradient||((tool_==Tool::Move||(selectionTool&&!selectionGesture_.active()&&!movingSelection_))&&canEditLayers()))){
         const int digit=typedDigit;QElapsedTimer clock;clock.start();const auto now=clock.msecsSinceReference();int percent=digit?digit*10:100;if(opacityDigit_&&now-opacityDigit_->second<600){percent=std::max(1,opacityDigit_->first*10+digit);opacityDigit_.reset();}else opacityDigit_=std::pair{digit,now};double value=percent/100.;
         if(tool_==Tool::CloneStamp)cloneSettings_.opacity=value;else if(tool_==Tool::Blur)blurSettings_.opacity=value;else if(brushTool)brushSettings_.opacity=value;else if(tool_==Tool::Gradient){gradientSettings_.opacity=value;refreshGradient();}else{auto selected=layerSelection().ids;finishOpacityEdit();edit("Layer Opacity",[&](Document&d){for(auto&layer:d.layers)if(!layer.group&&std::find(selected.begin(),selected.end(),layer.id)!=selected.end())layer.opacity=value;});}refresh(false,false);return;
