@@ -1,8 +1,8 @@
 #include "WhatsNew.h"
+#include "GlassDialog.h"
 #include "MainWindow.h"
 #include "ImportActions.h"
 #include "WorkspaceDropQueue.h"
-#include "LayerPanelTokens.h"
 #include <QApplication>
 #include <QDialog>
 #include <QDir>
@@ -26,12 +26,6 @@
 #include <exception>
 #include <optional>
 #include <utility>
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <dwmapi.h>
 
 static void initializeReleaseNotesResource(){Q_INIT_RESOURCE(release_notes);}
 
@@ -105,21 +99,12 @@ QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const Release
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowFlag(Qt::WindowContextHelpButtonHint,false);
     dialog->setWindowFlag(Qt::WindowCloseButtonHint,true);
-    // Liquid Glass: a dark tint with a soft highlight along the top edge, over the system backdrop applied below, and a translucent rounded card for the notes.
-    dialog->setStyleSheet(QString(R"(
-        QDialog#whatsNewDialog { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(78,80,90,168),stop:0.22 rgba(40,41,46,156),stop:1 rgba(24,24,27,176)); border:0; }
-        QWidget#dialogContent { background:transparent; }
-        QLabel#whatsNewHeading { color:%1; font-size:28px; font-weight:600; }
-        QLabel#whatsNewVersion { color:%2; font-size:13px; }
-        QFrame#whatsNewRule { background:%3; border:0; }
-        QTextBrowser#whatsNewContent { background:rgba(255,255,255,12); border:1px solid rgba(255,255,255,34); border-radius:16px; padding:14px; color:%1; }
-    )").arg(layer_panel::primary,layer_panel::secondary,layer_panel::separator));
     auto* layout=new QVBoxLayout(dialog);layout->setContentsMargins(24,22,24,20);layout->setSpacing(12);
-    auto* heading=new QLabel("What's New");heading->setObjectName("whatsNewHeading");
-    auto* subtitle=new QLabel(QString("Compositor Windows %1").arg(version));subtitle->setObjectName("whatsNewVersion");
-    auto* rule=new QFrame;rule->setObjectName("whatsNewRule");rule->setFixedHeight(1);
+    auto* heading=new QLabel("What's New");heading->setObjectName("whatsNewHeading");heading->setProperty("glassHeading",true);
+    auto* subtitle=new QLabel(QString("Compositor Windows %1").arg(version));subtitle->setObjectName("whatsNewVersion");subtitle->setProperty("glassSubtitle",true);
+    auto* rule=new QFrame;rule->setObjectName("whatsNewRule");rule->setProperty("glassRule",true);rule->setFixedHeight(1);
     layout->addWidget(heading);layout->addWidget(subtitle);layout->addWidget(rule);
-    auto* content=new QTextBrowser;content->setObjectName("whatsNewContent");
+    auto* content=new QTextBrowser;content->setObjectName("whatsNewContent");content->setProperty("glassCard",true);
     content->setAccessibleName("Release notes");content->setOpenExternalLinks(true);
     content->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     content->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
@@ -133,14 +118,7 @@ QDialog* openWhatsNewDialog(QWidget* parent,const QString& version,const Release
     buttons->addWidget(proceed);layout->addLayout(buttons);
     QObject::connect(proceed,&QPushButton::clicked,dialog,&QDialog::accept);
 
-    dialog->ensurePolished();
-    // The native frame stays. The Windows 11 transient (acrylic) backdrop is applied to this window and extended under the client area, which the translucent surface above lets through.
-    dialog->setAttribute(Qt::WA_TranslucentBackground);
-    if(const auto handle=reinterpret_cast<HWND>(dialog->winId())){
-        constexpr DWORD systemBackdropType=38;constexpr int transientWindow=3;
-        DwmSetWindowAttribute(handle,systemBackdropType,&transientWindow,sizeof(transientWindow));
-        const MARGINS wholeWindow{-1,-1,-1,-1};DwmExtendFrameIntoClientArea(handle,&wholeWindow);
-    }
+    makeGlassDialog(dialog);
     const QRect parentBounds=parent?QRect(parent->mapToGlobal(QPoint(0,0)),parent->size()):QRect();
     auto* screen=QGuiApplication::screenAt(parentBounds.center());
     if(!screen)screen=QGuiApplication::primaryScreen();

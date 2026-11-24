@@ -9,7 +9,10 @@
 #include <QSpinBox>
 #include <QMenu>
 #include <QMenuBar>
-#include <QMessageBox>
+#include <QDialog>
+#include <QLabel>
+#include <QPointer>
+#include <QPushButton>
 #include <QTimer>
 #include <QTest>
 #include <QJsonObject>
@@ -25,7 +28,21 @@ ui::CommandRegistry& registry(MainWindow&w){for(auto*object:w.findChildren<QObje
 QAction*command(MainWindow&w,const char*id){for(auto*action:w.findChildren<QAction*>())if(action->property("commandId").toString()==id)return action;throw std::runtime_error(std::string("missing registered command ")+id);}
 Document example(bool raster=true,bool visible=true){Document d;d.id=newId();d.width=96;d.height=64;Layer layer;layer.id=newId();layer.name="Image";layer.transform={0,0,96,64};layer.visible=visible;if(raster)layer.raster=Raster::filled(96,64,{140,70,35,255});d.layers.push_back(layer);return d;}
 void gradient(MainWindow&w,EditorProject&p){command(w,"tool.gradient")->trigger();p.canvas->pointerDown({8,30},{});p.canvas->pointerMove({80,30},{});p.canvas->pointerUp({80,30},{});registry(w).refresh();check(command(w,"gradient.apply")->isEnabled(),"gradient was not left pending");}
-void about_version(){MainWindow w(true);QCoreApplication::setApplicationVersion(COMPOSITOR_VERSION_STRING);QString text;QTimer::singleShot(0,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){text=box->text();box->accept();}});command(w,"app.about")->trigger();check(text.contains(QStringLiteral("Compositor Windows ")+COMPOSITOR_VERSION_STRING),"About must display the application version");}
+void about_version(){
+    MainWindow w(true);QCoreApplication::setApplicationVersion(COMPOSITOR_VERSION_STRING);
+    command(w,"app.about")->trigger();QApplication::processEvents();
+    auto* about=w.findChild<QDialog*>("aboutDialog");check(about&&about->isVisible(),"About did not open");
+    check(about->findChild<QLabel*>("aboutVersion")->text()==QStringLiteral("Compositor Windows ")+COMPOSITOR_VERSION_STRING,"About must display the application version");
+    auto* text=about->findChild<QLabel*>("aboutText");auto* card=about->findChild<QWidget*>("aboutCard");auto* close=about->findChild<QPushButton*>("aboutClose");
+    check(text&&card&&close,"About content missing");
+    check(text->text().contains("https://x.com/Cengokill")&&text->text().contains("https://github.com/robbietilton/Compositor")&&text->openExternalLinks(),"About links missing");
+    // The text fills its card: the last sentence is followed by the card margin only, then the button row and the dialog margin.
+    check(text->height()>=text->heightForWidth(text->width()),"About text is clipped");
+    check(text->height()<=text->heightForWidth(text->width())+2,"About leaves spare room under the last sentence");
+    check(about->height()-about->mapFromGlobal(close->mapToGlobal(QPoint(0,close->height()))).y()<=24,"About leaves spare room under the button");
+    const QPointer<QDialog> alive(about);close->click();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    check(!alive,"About did not close");
+}
 void registered_actions(){MainWindow w(true);w.addProject(example());for(auto*object:w.findChildren<QObject*>())check(!object->property("unregisteredCommand").toBool(),"host requested an uncatalogued command");size_t leaves=0;for(auto*menu:w.findChildren<QMenu*>())for(auto*action:menu->actions())if(!action->menu()&&!action->isSeparator()){++leaves;check(!action->property("commandId").toString().isEmpty(),"menu leaf has no command id");}check(leaves>65,"menu inventory unexpectedly small");auto*tools=w.findChild<QToolBar*>("tools");check(tools,"tools toolbar missing");auto* widget=tools->findChild<QWidget*>("paletteSwatches");check(widget,"palette tool rail container missing");
     QSet<QString> ids;const auto buttons=widget->findChildren<QToolButton*>();check(buttons.size()==4,"palette container must expose exactly four actionable controls");
     for(auto*button:buttons){auto* leaf=button->defaultAction();check(leaf,"palette control has no default action");const auto id=leaf->property("commandId").toString();check(!id.isEmpty()&&ui::commandSpecById(id),"palette control action is not catalogued");bool bound=false;for(const auto& entry:registry(w).manifest()){const auto object=entry.toObject();if(object["id"].toString()==id&&object["object_name"].toString()==leaf->objectName())bound=true;}check(bound,"palette control action is not registered");ids.insert(id);}

@@ -17,6 +17,7 @@
 #include <QToolButton>
 #include <QLabel>
 #include <QMenu>
+#include <QMenuBar>
 #include <QSlider>
 #include <QKeyEvent>
 #include <QTimer>
@@ -453,4 +454,42 @@ void layer_footer_menus_are_rounded_glass(){
         menu->hide();QApplication::processEvents();
     }
 }
-int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"filter_sliders_use_option_slider",filter_sliders_use_option_slider},{"filter_lists_use_glass_dropdown",filter_lists_use_glass_dropdown},{"lens_effects_panel_fits_its_rows",lens_effects_panel_fits_its_rows},{"layer_blend_list_is_glass",layer_blend_list_is_glass},{"layer_effect_lists_are_glass",layer_effect_lists_are_glass},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"layer_footer_menus_are_rounded_glass",layer_footer_menus_are_rounded_glass},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}
+// Every menu of the top bar and every submenu opens as a rounded glass panel, and a disabled entry never takes the blue capsule.
+void menu_bar_menus_are_rounded_glass(){
+    MainWindow w(true);w.resize(1600,900);w.show();QApplication::processEvents();
+    QApplication::setEffectEnabled(Qt::UI_General,true);QApplication::setEffectEnabled(Qt::UI_AnimateMenu,true);
+    QStringList titles;for(auto* action:w.menuBar()->actions())titles<<action->text().remove('&');
+    REQUIRE(titles==QStringList{"File","Edit","View","Select","Image","Filters","Layer","Help"});
+    int disabled=0,submenus=0;
+    const QColor accent(ui::layer_panel::accent);
+    for(auto* menu:w.menuBar()->findChildren<QMenu*>()){
+        // The overflow menu of a narrow window has no title and is not one of the eight.
+        if(menu->title().isEmpty()||menu->actions().isEmpty())continue;
+        if(!w.menuBar()->actions().contains(menu->menuAction()))++submenus;
+        menu->popup(w.mapToGlobal(QPoint(100,60)));QApplication::processEvents();
+        REQUIRE(glass(menu));
+        REQUIRE(QApplication::isEffectEnabled(Qt::UI_AnimateMenu));
+        for(auto* action:menu->actions()){
+            if(action->isSeparator()||action->isEnabled())continue;
+            ++disabled;menu->setActiveAction(action);
+            const QImage panel=menu->grab().toImage();const double scale=panel.devicePixelRatio();
+            const QRect item=menu->actionGeometry(action);
+            const QColor edge=panel.pixelColor(int((item.right()-12)*scale),int(item.center().y()*scale));
+            REQUIRE(!(edge.red()==accent.red()&&edge.green()==accent.green()&&edge.blue()==accent.blue()));
+            break;
+        }
+        menu->hide();QApplication::processEvents();
+    }
+    REQUIRE(submenus>=8&&disabled>0);
+}
+// Light text stays readable when a glass panel opens over a bright picture; a dark backdrop keeps the plain glass.
+void glass_darkens_bright_backdrops(){
+    QImage backdrop(64,64,QImage::Format_RGB32);backdrop.fill(QColor(30,30,30));
+    REQUIRE(ui::glassVeilOpacity(backdrop)==0&&ui::glassVeilOpacity({})==0);
+    const auto veiled=[](double value,double opacity){return value*(1-opacity)+31*opacity;};
+    backdrop.fill(Qt::white);REQUIRE(veiled(255,ui::glassVeilOpacity(backdrop))<=131);
+    // One bright corner is enough: the text over it must stay readable too.
+    backdrop.fill(QColor(30,30,30));for(int y=0;y<16;++y)for(int x=0;x<16;++x)backdrop.setPixelColor(x,y,Qt::white);
+    REQUIRE(ui::glassVeilOpacity(backdrop)>0.5);
+}
+int main(int argc,char**argv){QApplication app(argc,argv);std::map<std::string,void(*)()>tests{{"scrub_drag_is_one_undo_step",scrub_drag_is_one_undo_step},{"scrub_escape_and_click",scrub_escape_and_click},{"scrub_zoom_title",scrub_zoom_title},{"tool_bars_show_their_own_controls",tool_bars_show_their_own_controls},{"filter_sliders_use_option_slider",filter_sliders_use_option_slider},{"filter_lists_use_glass_dropdown",filter_lists_use_glass_dropdown},{"lens_effects_panel_fits_its_rows",lens_effects_panel_fits_its_rows},{"layer_blend_list_is_glass",layer_blend_list_is_glass},{"layer_effect_lists_are_glass",layer_effect_lists_are_glass},{"options_lists_are_rounded_glass",options_lists_are_rounded_glass},{"layer_footer_menus_are_rounded_glass",layer_footer_menus_are_rounded_glass},{"menu_bar_menus_are_rounded_glass",menu_bar_menus_are_rounded_glass},{"glass_darkens_bright_backdrops",glass_darkens_bright_backdrops},{"fill_well_opens_color_dialog",fill_well_opens_color_dialog},{"shape_controls_edit_selected_layer",shape_controls_edit_selected_layer},{"shape_style_loads_from_selected_layer",shape_style_loads_from_selected_layer},{"shape_stroke_draw",shape_stroke_draw},{"shape_line_controls",shape_line_controls},{"shape_insert_sibling",shape_insert_sibling},{"shape_insert_folder",shape_insert_folder},{"shape_insert_nested_child",shape_insert_nested_child},{"shape_fractional_anchor",shape_fractional_anchor},{"shape_center_square",shape_center_square},{"shape_kind_change_cancels",shape_kind_change_cancels},{"shape_radius_limit",shape_radius_limit},{"shape_radius_frozen",shape_radius_frozen},{"shape_draft_immutable",shape_draft_immutable},{"shape_click_noop",shape_click_noop},{"shape_history_selection",shape_history_selection},{"shape_undo_resyncs_bar",shape_undo_resyncs_bar},{"shape_width_steps_coalesce",shape_width_steps_coalesce},{"shape_smoothing_draft",shape_smoothing_draft},{"shape_smoothing_history",shape_smoothing_history},{"shape_bar_limits_selected_shape",shape_bar_limits_selected_shape},{"shape_background_fill_selected",shape_background_fill_selected},{"shape_background_fill_ellipse_and_line",shape_background_fill_ellipse_and_line},{"shape_background_fill_cancel",shape_background_fill_cancel},{"shape_background_fill_same_color",shape_background_fill_same_color},{"shape_background_fill_other_tool",shape_background_fill_other_tool},{"shape_background_fill_pixel_layer",shape_background_fill_pixel_layer},{"shape_background_fill_draft",shape_background_fill_draft}};int failed=0,passed=0;for(const auto&[name,test]:tests){if(argc>1&&argv[1]!=name)continue;try{test();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception&e){++failed;std::cout<<"FAIL "<<name<<": "<<e.what()<<'\n';}}if(argc>1&&!tests.contains(argv[1]))return 2;std::cout<<"RESULT passed="<<passed<<" failed="<<failed<<'\n';return failed?1:0;}

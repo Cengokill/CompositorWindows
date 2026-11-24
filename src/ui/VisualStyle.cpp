@@ -2,6 +2,9 @@
 #include "CommandRegistry.h"
 #include "EditorIcons.h"
 #include "AccentColor.h"
+#include "GlassDialog.h"
+#include "LayerPanelTokens.h"
+#include "LayerPanelWidgets.h"
 #include "ToolbarControls.h"
 #include <QApplication>
 #include <QAbstractButton>
@@ -97,6 +100,15 @@ public:
             painter->setPen(QPen(on?QColor(accentBlue):QColor("#54565c"),1));painter->setBrush(on?QColor(accentBlue):QColor("#303136"));
             painter->drawEllipse(r);
             if(on){painter->setPen(QPen(Qt::white,1.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));painter->setBrush(Qt::white);painter->drawEllipse(r.center(),2,2);}
+            painter->restore();return;
+        }
+        if(element==PE_IndicatorMenuCheckMark) {
+            // The same check mark as the current choice in a glass list.
+            if(!(option->state&State_On))return;
+            painter->save();painter->setRenderHint(QPainter::Antialiasing);
+            painter->setPen(QPen(option->state&State_Enabled?QColor(Qt::white):QColor(layer_panel::disabled),2,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+            const QPointF c=QRectF(option->rect).center()+QPointF(4,0);
+            painter->drawPolyline(QPolygonF{c+QPointF(-4,0),c+QPointF(-1,3),c+QPointF(4,-4)});
             painter->restore();return;
         }
         if(element==PE_IndicatorArrowDown||element==PE_IndicatorArrowUp||element==PE_IndicatorArrowLeft||element==PE_IndicatorArrowRight) {
@@ -241,8 +253,9 @@ void installVisualStyle() {
         QWidget { color: #e4e5e7; selection-background-color: #376dac; selection-color: white; }
         QMainWindow, QDialog { background: #222326; border: 1px solid #37393f; }
         QMenuBar { background: #222326; padding: 3px 8px; spacing: 3px; border-bottom: 1px solid #303237; }
-        QMenuBar::item { padding: 6px 9px; background: transparent; border-radius: 5px; }
-        QMenuBar::item:selected { background: #35373c; }
+        QMenuBar::item { padding: 5px 10px; background: transparent; border: 1px solid transparent; border-radius: 13px; }
+        QMenuBar::item:selected { background: rgba(255,255,255,20); border-color: rgba(255,255,255,38); }
+        QMenuBar::item:pressed { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,58),stop:0.55 rgba(255,255,255,22),stop:1 rgba(255,255,255,30)); border-color: rgba(255,255,255,92); color: white; }
         QMenu { background: #292b30; border: 1px solid #45474e; border-radius: 9px; padding: 6px; }
         QMenu::item { padding: 7px 24px 7px 12px; border-radius: 5px; }
         QMenu::item:disabled { color: #686b73; }
@@ -309,7 +322,7 @@ void installVisualStyle() {
         QProgressBar { border: 0; background: #33363c; border-radius: 4px; text-align: center; }
         QProgressBar::chunk { background: #579cf5; border-radius: 4px; }
     )"+QString("QPushButton:default, QPushButton[primary=\"true\"], QToolButton:checked { background: %1; border-color: %1; color: white; }\n"
-        "QMenu::item:selected { background: %1; }\nQComboBox QAbstractItemView { selection-background-color: %1; }\nQComboBox:focus { border-color: %1; }\n").arg(accentBlue)+optionsBarStyleSheet());
+        "QMenu::item:selected { background: %1; }\nQComboBox QAbstractItemView { selection-background-color: %1; }\nQComboBox:focus { border-color: %1; }\n").arg(accentBlue)+optionsBarStyleSheet()+glassStyleSheet());
     qApp->installEventFilter(new ChromeEvents(qApp));
 }
 
@@ -341,5 +354,6 @@ void styleWorkspace(QMainWindow* window) {
     for(const auto& pair:{std::pair{"Clipboard","Edit"},std::pair{"Adjustments","Image"},std::pair{"Canvas","Image"},std::pair{"Transform","Layer"}})
         if(auto* child=findMenu(pair.first))if(auto* parent=findMenu(pair.second)){menu->removeAction(child->menuAction());parent->addSeparator();parent->addMenu(child);}
     for(const auto* title:{"File","Edit","View","Select","Image","Filters","Layer","Help"})if(auto* item=findMenu(title)){menu->removeAction(item->menuAction());menu->addMenu(item);}
+    for(auto* child:menu->findChildren<QMenu*>())makeGlassMenu(child);
 }
 }

@@ -23,6 +23,11 @@
 #include <algorithm>
 #include <map>
 #include <vector>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dwmapi.h>
 
 static void initializeLayerPanelIcons() { Q_INIT_RESOURCE(layer_panel_icons); }
 
@@ -31,6 +36,9 @@ namespace {
 namespace t = layer_panel;
 constexpr int glassPopupRadius = 18;
 constexpr int glassBlurReduction = 5;
+// The brightest backdrop the glass tint alone keeps dark enough for light text; the rest is veiled down to it.
+constexpr int glassBackdropLimit = 130;
+constexpr QColor glassVeil(31, 31, 31);
 
 QFont panelFont(int pixels, QFont::Weight weight = QFont::Normal) {
     static const QString family = QFontDatabase::families().contains("Segoe UI Variable")
@@ -325,7 +333,8 @@ namespace {
 // lightly (shrinking with area averaging and enlarging smoothly keeps the shapes and text behind it readable). Its
 // paint becomes that blur under a translucent neutral gray tint (the #1f1f1f surfaces), a soft highlight along the top
 // and a light rim, clipped to a rounded panel; outside the panel the window stays transparent. The view behind is
-// taken once per opening. A menu draws its items in its own paint, which then follows the glass.
+// taken once per opening. A menu draws its items in its own paint, which then follows the glass. Over a bright backdrop
+// a dark veil under the tint keeps the text readable.
 class GlassPopupPainter final : public QObject {
 public:
     GlassPopupPainter(QWidget* popup, bool ownPaint) : QObject(popup), popup_(popup), ownPaint_(ownPaint) {
@@ -335,7 +344,10 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (watched != popup_) return false;
         if (event->type() == QEvent::Show) capture();
-        else if (event->type() == QEvent::Hide) backdrop_ = {};
+        else if (event->type() == QEvent::Hide) {
+            backdrop_ = {};
+            lastHidden().start();
+        }
         else if (event->type() == QEvent::Paint) {
             paint();
             // Otherwise the popup's own paint (for a combo box list, Qt's opaque menu panel) would cover the glass.
@@ -347,6 +359,10 @@ private:
     void capture() {
         backdrop_ = {};
         const QRect area = popup_->geometry();
+        // Moving along the menu bar hides one menu and shows the next at once. The hidden one stays on screen until
+        // Windows composes its next frame, and would otherwise appear in the glass of the new one.
+        if (QGuiApplication::platformName() == "windows" && lastHidden().isValid() && lastHidden().elapsed() < 100)
+            for (int frame = 0; frame < 2; ++frame) DwmFlush();
         auto* screen = QGuiApplication::screenAt(area.center());
         if (!screen) screen = popup_->screen();
         if (!screen || area.isEmpty()) return;
@@ -356,6 +372,11 @@ private:
         const QSize reduced = (behind.size() / glassBlurReduction).expandedTo(QSize(1, 1));
         backdrop_ = QPixmap::fromImage(behind.scaled(reduced, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                                            .scaled(behind.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+        veil_ = glassVeilOpacity(behind);
+    }
+    static QElapsedTimer& lastHidden() {
+        static QElapsedTimer timer;
+        return timer;
     }
     void paint() {
         QPainter painter(popup_);
@@ -366,7 +387,12 @@ private:
         shape.addRoundedRect(panel, glassPopupRadius - 0.5, glassPopupRadius - 0.5);
         painter.save();
         painter.setClipPath(shape);
-        if (!backdrop_.isNull()) painter.drawPixmap(popup_->rect(), backdrop_);
+        if (!backdrop_.isNull()) {
+            painter.drawPixmap(popup_->rect(), backdrop_);
+            QColor veil = glassVeil;
+            veil.setAlphaF(float(veil_));
+            painter.fillPath(shape, veil);
+        }
         QLinearGradient tint(panel.topLeft(), panel.bottomLeft());
         tint.setColorAt(0, QColor(90, 90, 90, 120));
         tint.setColorAt(0.25, QColor(44, 44, 44, 105));
@@ -380,6 +406,7 @@ private:
     QWidget* popup_;
     bool ownPaint_;
     QPixmap backdrop_;
+    qreal veil_{};
 };
 
 // Turns one application-wide popup effect off for its lifetime and restores it, whatever leaves the scope.
@@ -399,6 +426,16 @@ void makeTranslucent(QWidget* popup) {
 }
 }
 
+qreal glassVeilOpacity(const QImage& backdrop) {
+    if (backdrop.isNull()) return 0;
+    const QImage areas = backdrop.scaled(8, 8, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    int brightest = 0;
+    for (int y = 0; y < areas.height(); ++y)
+        for (int x = 0; x < areas.width(); ++x) brightest = std::max(brightest, qGray(areas.pixel(x, y)));
+    if (brightest <= glassBackdropLimit) return 0;
+    return qreal(brightest - glassBackdropLimit) / (brightest - qGray(glassVeil.rgb()));
+}
+
 void makeGlassPopup(QWidget* popup) {
     makeTranslucent(popup);
     new GlassPopupPainter(popup, false);
@@ -410,16 +447,25 @@ void makeGlassMenu(QMenu* menu) {
     // Items as in the glass lists: a full capsule in the application blue under the pointer.
     menu->setStyleSheet(QString("QMenu { background: transparent; border: 0; padding: 7px; }"
                                 "QMenu::item { padding: 7px 24px 7px 14px; border-radius: 15px; }"
-                                "QMenu::item:selected { background: %1; color: white; }").arg(t::accent));
+                                "QMenu::item:selected { background: %1; color: white; }"
+                                "QMenu::item:disabled { background: transparent; color: rgba(255,255,255,90); }"
+                                "QMenu::separator { height: 1px; background: rgba(255,255,255,40); margin: 5px 12px; }").arg(t::accent));
     // Qt rolls or fades a menu in from a snapshot, which the glass, taken from the screen behind the menu as it
     // appears, would then show instead of what lies behind. The menu decides while it opens, after aboutToShow.
     QObject::connect(menu, &QMenu::aboutToShow, menu, [menu] {
-        const bool roll = QApplication::isEffectEnabled(Qt::UI_AnimateMenu);
-        const bool fade = QApplication::isEffectEnabled(Qt::UI_FadeMenu);
+        // Menus of the menu bar can follow each other before the timer: only the first one saves the effects, and the
+        // last one brings them back.
+        static int opening = 0;
+        static bool roll = false, fade = false;
+        if (opening++ == 0) {
+            roll = QApplication::isEffectEnabled(Qt::UI_AnimateMenu);
+            fade = QApplication::isEffectEnabled(Qt::UI_FadeMenu);
+        }
         QApplication::setEffectEnabled(Qt::UI_AnimateMenu, false);
         QApplication::setEffectEnabled(Qt::UI_FadeMenu, false);
         // The application is the timer's context, so the effects come back even if the menu is destroyed first.
-        QTimer::singleShot(0, qApp, [roll, fade] {
+        QTimer::singleShot(0, qApp, [] {
+            if (--opening > 0) return;
             QApplication::setEffectEnabled(Qt::UI_AnimateMenu, roll);
             QApplication::setEffectEnabled(Qt::UI_FadeMenu, fade);
         });

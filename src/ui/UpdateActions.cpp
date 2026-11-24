@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 #include "AppLogging.h"
+#include "GlassDialog.h"
+#include "ToolbarControls.h"
 #include "UpdatePanel.h"
 #include "update/ReleaseCheck.h"
 #include "update/Updater.h"
@@ -119,7 +121,7 @@ void MainWindow::showUpdateNotice(const QString& version,const QString& running,
     for(auto* old:findChildren<QDialog*>("updateAvailableNotice")){old->setObjectName({});old->close();}
     auto* notice=new QDialog(this);notice->setObjectName("updateAvailableNotice");notice->setAttribute(Qt::WA_DeleteOnClose);
     notice->setWindowTitle("Update Available");notice->setWindowModality(Qt::NonModal);notice->setProperty("releaseVersion",version);
-    auto* layout=new QVBoxLayout(notice);
+    auto* layout=new QVBoxLayout(notice);layout->setContentsMargins(24,22,24,20);layout->setSpacing(16);
     auto* text=new QLabel(QString("Compositor %1 is available. You are running %2.\n\nInstallation stays manual: download the new MSI or portable package from the release page. Compositor does not verify the download itself.").arg(version,running));
     text->setObjectName("updateNoticeText");text->setWordWrap(true);layout->addWidget(text);
     auto* row=new QHBoxLayout;layout->addLayout(row);
@@ -136,6 +138,9 @@ void MainWindow::showUpdateNotice(const QString& version,const QString& running,
         QSettings settings;update::skipRelease(settings,update::Version::parse(version));notice->close();
     });
     connect(later,&QPushButton::clicked,notice,&QDialog::close);
+    for(auto* button:{download,skip,later})ui::markPill(button);
+    download->setProperty("primary",true);
+    ui::makeGlassDialog(notice);
     notice->show();
 }
 }
