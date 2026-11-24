@@ -20,6 +20,7 @@
 #include "ProjectLayerDrag.h"
 #include "ProjectLayerCopyJob.h"
 #include "ExportProgressDialog.h"
+#include "LayerExportNames.h"
 #include "LayerCopyCommit.h"
 #include <QDir>
 #include <QDialog>
@@ -236,7 +237,7 @@ QString withExportSuffix(QString path,ExportKind kind){
     const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":kind==ExportKind::Tiff?".tif":kind==ExportKind::Exr?".exr":kind==ExportKind::Gif?".gif":".png";
     return QDir::cleanPath(QDir(info.path()).filePath(stem+extension));
 }
-QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested){
+QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested,const wchar_t* title=L"Export Image"){
     static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
     static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
     static const wchar_t pdfFilter[]=L"PDF\0*.pdf\0All files\0*.*\0";
@@ -245,7 +246,7 @@ QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const Q
     static const wchar_t gifFilter[]=L"GIF\0*.gif\0All files\0*.*\0";
     const wchar_t* filter=kind==ExportKind::Gif?gifFilter:kind==ExportKind::Exr?exrFilter:kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:kind==ExportKind::Tiff?tiffFilter:pngFilter;
     const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":kind==ExportKind::Tiff?L"tif":kind==ExportKind::Exr?L"exr":kind==ExportKind::Gif?L"gif":L"png";
-    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,L"Export Image",defaultExtension);
+    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,title,defaultExtension);
     if(path.isEmpty())return {};
     return withExportSuffix(path,kind);
 }
@@ -257,17 +258,6 @@ QString chooseNativeProjectDestination(MainWindow* window,const QString& suggest
     if(path.isEmpty())return {};
     if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";
     return path;
-}
-// A file name for a layer: Windows-invalid characters become "-", trailing spaces and dots go, and a name that is empty,
-// starts with a dot or is a reserved device name gets a "Layer " prefix. The result is at most 120 characters.
-QString layerExportStem(QString name){
-    for(auto& character:name)if(character.unicode()<32||QStringLiteral("<>:\"/\\|?*").contains(character))character=QLatin1Char('-');
-    const auto trim=[](QString& value){while(!value.isEmpty()&&(value.endsWith(QLatin1Char(' '))||value.endsWith(QLatin1Char('.'))))value.chop(1);};
-    trim(name);
-    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),QRegularExpression::CaseInsensitiveOption);
-    if(name.isEmpty()||name.startsWith(QLatin1Char('.'))||reserved.match(name).hasMatch())name=name.isEmpty()?QStringLiteral("Layer"):QStringLiteral("Layer ")+name;
-    if(name.size()>120){name.truncate(120);trim(name);}
-    return name;
 }
 // The folder a multi-layer export writes into. Empty when cancelled or when no picker could be shown.
 QString chooseNativeExportFolder(MainWindow* window){
@@ -1079,7 +1069,7 @@ void MainWindow::exportLayers(){
         QSet<QString> used;
         for(auto layer=snapshot.layers.rbegin();layer!=snapshot.layers.rend();++layer){
             if(std::find(selected.begin(),selected.end(),layer->id)==selected.end())continue;
-            const auto stem=layerExportStem(QString::fromStdString(layer->name));
+            const auto stem=ui::layerExportStem(QString::fromStdString(layer->name));
             auto unique=stem;for(int number=2;used.contains(unique.toCaseFolded());++number)unique=stem+' '+QString::number(number);
             used.insert(unique.toCaseFolded());
             targets.push_back({layer->id,QString::fromStdString(layer->name),unique+".png",{}});
@@ -1087,7 +1077,7 @@ void MainWindow::exportLayers(){
     }
     if(targets.empty())return;
     if(targets.size()==1){
-        targets[0].path=chooseNativeExportDestination(this,ExportKind::Png,targets[0].file);
+        targets[0].path=chooseNativeExportDestination(this,ExportKind::Png,targets[0].file,L"Export Layer as PNG");
         if(targets[0].path.isEmpty())return;
     }else{
         const auto folder=chooseNativeExportFolder(this);if(folder.isEmpty())return;
@@ -1119,9 +1109,13 @@ void MainWindow::exportLayers(){
             QMetaObject::invokeMethod(dialog,[dialog,index,file=target.file]{dialog->setProgress(index,file);},Qt::QueuedConnection);
             imaging::ExportOptions options;options.cancelled=[cancelled]{return cancelled->load();};
             try{
-                if(exportLayerPngAtomic(snapshot,target.id,nativePath(target.path),options))++outcome.written;else outcome.empty.append(target.name);
+                if(exportLayerPngAtomic(snapshot,target.id,nativePath(target.path),options))++outcome.written;
+                else{outcome.empty.append(target.name);QMetaObject::invokeMethod(dialog,[dialog,index]{dialog->markSkipped(index);},Qt::QueuedConnection);}
             }catch(const imaging::ExportCancelled&){outcome.cancelled=true;break;}
-            catch(const std::exception& error){outcome.failed.append(QString("%1 (%2)").arg(target.name,QString::fromUtf8(error.what())));}
+            catch(const std::exception& error){
+                outcome.failed.append(QString("%1 (%2)").arg(target.name,QString::fromUtf8(error.what())));
+                QMetaObject::invokeMethod(dialog,[dialog,index]{dialog->markSkipped(index);},Qt::QueuedConnection);
+            }
         }
         return outcome;
     }));

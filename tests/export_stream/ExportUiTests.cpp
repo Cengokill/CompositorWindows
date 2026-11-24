@@ -1,5 +1,6 @@
 #include "ui/MainWindow.h"
 #include "ui/ExportProgressDialog.h"
+#include "ui/LayerExportNames.h"
 #include "imaging/cmyk.h"
 #include "../cmyk/Fixtures.h"
 #include "../cmyk/ProfileFixture.h"
@@ -311,6 +312,41 @@ int main(int argc,char**argv){
         for(int x=0;x<strip->width();++x)capsule=capsule||isBlue(image.pixelColor(inDialog(&dialog,strip,QPoint(x,row))));
         require(capsule,"The sliding capsule is not drawn");
         dialog.finish(1);require(!dialog.isVisible(),"A single export did not close at once");
+    });
+    test("export_progress_dialog_skipped",[]{
+        MainWindow window(true);
+        ui::ExportProgressDialog dialog(&window,"Export Layers as PNGs","Saving layer",4);
+        dialog.show();dialog.setProgress(0,"One.png");dialog.markSkipped(1);dialog.setProgress(3,"Four.png");settle(1000);
+        auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");require(strip,"The strip is missing");
+        const auto image=dialog.grab().toImage();
+        const auto sample=[&](int tile){return image.pixelColor(inDialog(&dialog,strip,QPoint(tile*52+7,strip->height()-9)));};
+        // Tiles 0 and 2 were written; tile 1 was handled without a file and must not look like a success.
+        require(isBlue(sample(0))&&isBlue(sample(2)),"Written tiles are not filled with the accent blue");
+        require(!isBlue(sample(1)),"A tile for a layer that wrote nothing is filled like a success");
+    });
+    test("export_progress_dialog_long",[]{
+        MainWindow window(true);
+        // More files than tiles can show: the strip fills like a bar, in proportion to the files written.
+        ui::ExportProgressDialog dialog(&window,"Export Layers as PNGs","Saving layer",200);
+        dialog.show();dialog.setProgress(100,"Layer 101.png");settle(300);
+        auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");require(strip,"The strip is missing");
+        const auto image=dialog.grab().toImage();const auto row=strip->height()/2;
+        const auto at=[&](double share){return image.pixelColor(inDialog(&dialog,strip,QPoint(int(strip->width()*share),row)));};
+        require(isBlue(at(0.2))&&isBlue(at(0.45)),"The first half of a long export is not filled");
+        require(!isBlue(at(0.6))&&!isBlue(at(0.95)),"A long export is filled beyond the files written");
+    });
+    test("layer_export_names",[]{
+        const auto stem=[](const QString& name){return ui::layerExportStem(name);};
+        require(stem("Logo / Dark: v2")=="Logo - Dark- v2","Invalid characters are not replaced");
+        require(stem("name. . ")=="name"&&stem("...")=="Layer"&&stem("   ")=="Layer"&&stem("")=="Layer","Trailing dots and spaces, or an empty name, are not handled");
+        require(stem(".hidden")=="Layer .hidden","A leading dot is kept");
+        require(stem("con")=="Layer con"&&stem("CON.txt")=="Layer CON.txt"&&stem("Lpt9")=="Layer Lpt9"&&stem("COM10")=="COM10"&&stem("Console")=="Console","Reserved device names are not prefixed exactly");
+        require(stem(QString("a\tb\nc"))=="a-b-c","Control characters are kept");
+        const auto longest=stem(QString(300,QLatin1Char('x')));require(longest.size()==120,"A long name is not cut to 120 characters");
+        require(stem(QString(119,QLatin1Char('x'))+" tail")==QString(119,QLatin1Char('x')),"The cut does not drop the space it leaves at the end");
+        // 119 characters then a surrogate pair: cutting at 120 would keep half of the pair.
+        const auto pair=stem(QString(119,QLatin1Char('x'))+QString(QChar(0xD83D))+QChar(0xDE00));
+        require(pair==QString(119,QLatin1Char('x')),"A surrogate pair is cut in half");
     });
     std::cout<<"Export UI "<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

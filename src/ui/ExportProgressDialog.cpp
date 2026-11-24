@@ -23,6 +23,8 @@ constexpr int dialogWidth = 380;
 constexpr int stripHeight = 44;
 constexpr qint64 fillMs = 520, checkDelayMs = 340, checkMs = 260;
 constexpr int denseTiles = 10;
+// Past this many files the tiles would be narrower than a pixel in the strip, so a bar that fills is drawn instead.
+constexpr int maxTiles = 84;
 // The last tile needs this long to fill and draw its check before the window goes.
 constexpr int settleMs = int(checkDelayMs + checkMs) + 120;
 double easeOut(double x) { x = std::clamp(x, 0., 1.); return 1 - std::pow(1 - x, 3); }
@@ -32,7 +34,7 @@ QColor white(int alpha) { return QColor(255, 255, 255, alpha); }
 // Paints the tiles, or the sliding bar. One 60 Hz timer runs only while something moves.
 class ExportProgressStrip final : public QWidget {
 public:
-    ExportProgressStrip(int count, QWidget* parent) : QWidget(parent), count_(count), doneAt_(size_t(std::max(count, 0)), -1) {
+    ExportProgressStrip(int count, QWidget* parent) : QWidget(parent), count_(count), doneAt_(size_t(std::max(count, 0)), -1), skipped_(size_t(std::max(count, 0)), false) {
         setObjectName("exportProgressStrip");
         setFixedHeight(stripHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -47,6 +49,8 @@ public:
         update();
     }
     int completed() const { return completed_; }
+    // A file that was handled without a PNG (nothing to export, or a failure) is not shown as a success.
+    void markSkipped(int index) { if (index >= 0 && index < count_) { skipped_[size_t(index)] = true; update(); } }
 protected:
     void showEvent(QShowEvent* event) override { timer_.start(); QWidget::showEvent(event); }
     void hideEvent(QHideEvent* event) override { timer_.stop(); QWidget::hideEvent(event); }
@@ -55,6 +59,7 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing);
         const auto now = clock_.elapsed();
         if (count_ < 2) paintBar(painter, now);
+        else if (count_ > maxTiles) paintFill(painter);
         else paintTiles(painter, now);
     }
 private:
@@ -134,7 +139,7 @@ private:
     }
     void paintTiles(QPainter& painter, qint64 now) const {
         const bool dense = count_ > denseTiles;
-        const double gap = dense ? (count_ > 120 ? 1. : 3.) : 8.;
+        const double gap = dense ? 3. : 8.;
         const double width = dense ? std::max(1., (this->width() - gap * (count_ - 1)) / count_) : std::min<double>(stripHeight, (this->width() - gap * (count_ - 1)) / count_);
         const double height = dense ? 20. : stripHeight;
         const double top = (this->height() - height) / 2;
@@ -143,6 +148,14 @@ private:
             const QRectF box(i * (width + gap), top, width, height);
             glass(painter, box, radius);
             double level = 0, wave = 0, checkProgress = 0;
+            if (doneAt_[size_t(i)] >= 0 && skipped_[size_t(i)]) {
+                // Handled, but no file: a quiet glass tile with a dash, never the liquid and the check of a success.
+                if (width >= 18) {
+                    painter.setPen(QPen(white(150), std::max(1.6, std::min(box.width(), box.height()) * 0.075), Qt::SolidLine, Qt::RoundCap));
+                    painter.drawLine(QPointF(box.center().x() - box.width() * 0.2, box.center().y()), QPointF(box.center().x() + box.width() * 0.2, box.center().y()));
+                }
+                continue;
+            }
             if (doneAt_[size_t(i)] >= 0) {
                 const auto elapsed = now - doneAt_[size_t(i)];
                 const double rise = easeOut(double(elapsed) / fillMs);
@@ -179,6 +192,18 @@ private:
         // Ping-pong with ease in and out, so the capsule slows at each end like a liquid settling.
         const double sweep = 0.5 - 0.5 * std::cos(double(now) / 1300. * std::numbers::pi);
         const QRectF capsule(track.left() + sweep * (track.width() - span), track.top(), span, track.height());
+        accentCapsule(painter, capsule);
+    }
+    // The bar of a long export: the share of files written so far.
+    void paintFill(QPainter& painter) const {
+        const double height = 10;
+        const QRectF track(0, (this->height() - height) / 2, this->width(), height);
+        glass(painter, track, height / 2);
+        if (completed_ <= 0) return;
+        accentCapsule(painter, QRectF(track.left(), track.top(), std::max(height, track.width() * completed_ / count_), height));
+    }
+    static void accentCapsule(QPainter& painter, const QRectF& capsule) {
+        const double height = capsule.height();
         QPainterPath clip;
         clip.addRoundedRect(capsule, height / 2, height / 2);
         const QColor accent(t::accent);
@@ -202,12 +227,13 @@ private:
     const int count_;
     int completed_{};
     std::vector<qint64> doneAt_;
+    std::vector<bool> skipped_;
     QElapsedTimer clock_;
     QTimer timer_;
 };
 
 ExportProgressDialog::ExportProgressDialog(QWidget* parent, const QString& title, const QString& heading, int count)
-    : QDialog(parent), count_(count), heading_(heading) {
+    : QDialog(parent), count_(count) {
     setWindowTitle(title);
     setModal(true);
     setWindowModality(Qt::ApplicationModal);
@@ -260,6 +286,7 @@ void ExportProgressDialog::setProgress(int completed, const QString& current) {
     currentLabel_->setToolTip(current);
     strip_->setAccessibleName(headingLabel_->text());
 }
+void ExportProgressDialog::markSkipped(int index) { strip_->markSkipped(index); }
 void ExportProgressDialog::finish(int completed) {
     if (completed < 0 || count_ < 2 || cancelRequested_) { accept(); return; }
     setProgress(completed, {});

@@ -286,7 +286,8 @@ std::optional<imaging::StreamingExportResult> exportLayerPngAtomic(const Documen
         result.encodedBytes = std::filesystem::file_size(path);
         result.preview = deepPreview(*cropped, limits.previewWidth, limits.previewHeight);
         result.stripeRows = limits.stripeRows;
-        result.maxRenderPixelBytes = flat->samples.size() * sizeof(std::uint16_t);
+        // The full-canvas buffer and the trimmed copy are alive together.
+        result.maxRenderPixelBytes = (flat->samples.size() + cropped->samples.size()) * sizeof(std::uint16_t);
         return result;
     }
     StackRowRenderer stack(isolated, options);
