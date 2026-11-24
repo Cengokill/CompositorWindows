@@ -51,6 +51,7 @@
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QSettings>
+#include <QSet>
 #include <QScopedValueRollback>
 #include <QScopeGuard>
 #include <QTabBar>
@@ -67,6 +68,7 @@
 #include <commdlg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <wrl/client.h>
 #include <algorithm>
 #include <limits>
 #include <atomic>
@@ -254,6 +256,59 @@ QString chooseNativeProjectDestination(MainWindow* window,const QString& suggest
     if(path.isEmpty())return {};
     if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";
     return path;
+}
+// A file name for a layer: Windows-invalid characters become "-", trailing spaces and dots go, and a name that is empty,
+// starts with a dot or is a reserved device name gets a "Layer " prefix. The result is at most 120 characters.
+QString layerExportStem(QString name){
+    for(auto& character:name)if(character.unicode()<32||QStringLiteral("<>:\"/\\|?*").contains(character))character=QLatin1Char('-');
+    const auto trim=[](QString& value){while(!value.isEmpty()&&(value.endsWith(QLatin1Char(' '))||value.endsWith(QLatin1Char('.'))))value.chop(1);};
+    trim(name);
+    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),QRegularExpression::CaseInsensitiveOption);
+    if(name.isEmpty()||name.startsWith(QLatin1Char('.'))||reserved.match(name).hasMatch())name=name.isEmpty()?QStringLiteral("Layer"):QStringLiteral("Layer ")+name;
+    if(name.size()>120){name.truncate(120);trim(name);}
+    return name;
+}
+// The folder a multi-layer export writes into. Empty when cancelled or when no picker could be shown.
+QString chooseNativeExportFolder(MainWindow* window){
+    const auto override=window->property("testNativeExportFolder").toString();
+    if(!override.isEmpty())return override;
+    if(window->property("nativePickerInProgress").toBool()){
+        reportPickerBusy(window);
+        return {};
+    }
+    QPointer<MainWindow> guard(window);
+    window->setProperty("nativePickerInProgress",true);
+    const auto clearBusy=qScopeGuard([&]{if(guard)guard->setProperty("nativePickerInProgress",false);});
+    const auto owner=reinterpret_cast<HWND>(window->winId());
+    const auto start=MainWindow::userDownloadsDirectory().toStdWString();
+    auto folder=std::make_shared<QString>();
+    try{
+        ui::runOnStaThread([folder,owner,start]{
+            using Microsoft::WRL::ComPtr;
+            ComPtr<IFileOpenDialog> dialog;
+            if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))throw std::runtime_error("Cannot create the folder picker");
+            FILEOPENDIALOGOPTIONS options{};
+            if(FAILED(dialog->GetOptions(&options))||FAILED(dialog->SetOptions(options|FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST)))throw std::runtime_error("Cannot configure the folder picker");
+            dialog->SetTitle(L"Export Layers as PNGs");
+            dialog->SetOkButtonLabel(L"Export");
+            ComPtr<IShellItem> initial;
+            if(SUCCEEDED(SHCreateItemFromParsingName(start.c_str(),nullptr,IID_PPV_ARGS(&initial))))dialog->SetFolder(initial.Get());
+            const auto shown=dialog->Show(owner);
+            if(shown==HRESULT_FROM_WIN32(ERROR_CANCELLED))return;
+            if(FAILED(shown))throw std::runtime_error("Cannot show the folder picker");
+            ComPtr<IShellItem> item;
+            PWSTR text=nullptr;
+            if(FAILED(dialog->GetResult(&item))||FAILED(item->GetDisplayName(SIGDN_FILESYSPATH,&text)))throw std::runtime_error("Cannot read the chosen folder");
+            *folder=QDir::cleanPath(QString::fromWCharArray(text));
+            CoTaskMemFree(text);
+        });
+    }catch(const std::runtime_error& error){
+        logging::trace(QString("native folder picker failed: %1").arg(QString::fromUtf8(error.what())));
+        if(guard)guard->statusBar()->showMessage("The folder picker could not be opened",5000);
+        return {};
+    }
+    if(!guard)return {};
+    return *folder;
 }
 }
 ui::ImportQueue* MainWindow::ensureImportQueue(){
@@ -1010,5 +1065,75 @@ void MainWindow::exportImage(){
     saving.exec();copy.waitForFinished();if(!copy.result().isEmpty())throw std::runtime_error(copy.result().toStdString());
     if(chosen==ExportKind::Jpeg&&!copyCancelled->load()){settings.setValue("jpegExportQuality",quality.value()/100.);settings.setValue("jpegExportMode",jpegMode.currentText());}
     // The file that produced the encoded preview is copied exactly. No project/history mutation.
+}
+void MainWindow::exportLayers(){
+    auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;
+    imaging::validateExportExtent(uint32_t(p->document->width),uint32_t(p->document->height));
+    const Document snapshot=*p->document;
+    const auto selected=layerSelection().ids;
+    struct Target{std::string id;QString name,file,path;};
+    std::vector<Target> targets;
+    {
+        // Front to back, so that when two layers share a name the upper one keeps it.
+        QSet<QString> used;
+        for(auto layer=snapshot.layers.rbegin();layer!=snapshot.layers.rend();++layer){
+            if(std::find(selected.begin(),selected.end(),layer->id)==selected.end())continue;
+            const auto stem=layerExportStem(QString::fromStdString(layer->name));
+            auto unique=stem;for(int number=2;used.contains(unique.toCaseFolded());++number)unique=stem+' '+QString::number(number);
+            used.insert(unique.toCaseFolded());
+            targets.push_back({layer->id,QString::fromStdString(layer->name),unique+".png",{}});
+        }
+    }
+    if(targets.empty())return;
+    if(targets.size()==1){
+        targets[0].path=chooseNativeExportDestination(this,ExportKind::Png,targets[0].file);
+        if(targets[0].path.isEmpty())return;
+    }else{
+        const auto folder=chooseNativeExportFolder(this);if(folder.isEmpty())return;
+        QStringList existing;
+        for(auto& target:targets){target.path=QDir(folder).filePath(target.file);if(QFileInfo::exists(target.path))existing.append(target.file);}
+        if(!existing.isEmpty()){
+            const auto listed=existing.mid(0,8).join('\n')+(existing.size()>8?QString("\n… and %1 more").arg(existing.size()-8):QString());
+            QMessageBox box(QMessageBox::Warning,"Export Layers as PNGs",QString("%1 of the files already exist in this folder:\n\n%2\n\nReplace them?").arg(existing.size()).arg(listed),QMessageBox::NoButton,this);
+            box.setObjectName("layerExportReplace");box.setProperty("studioChrome",true);
+            auto* replace=box.addButton("Replace",QMessageBox::AcceptRole);auto* cancel=box.addButton("Cancel",QMessageBox::RejectRole);
+            box.setDefaultButton(cancel);box.setEscapeButton(cancel);box.exec();
+            if(box.clickedButton()!=replace)return;
+        }
+    }
+    struct Outcome{int written{};QStringList empty,failed;bool cancelled{};};
+    const int total=int(targets.size());
+    const auto label=[total](int index){return QString("Exporting layer %1 of %2…").arg(index+1).arg(total);};
+    p->projectBusy=true;refresh(false,false);
+    struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
+    QProgressDialog progress(label(0),"Cancel",0,total,this);progress.setObjectName("layerExportProgress");progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);progress.setAutoClose(false);progress.setAutoReset(false);
+    auto cancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<Outcome> watcher;
+    connect(&progress,&QProgressDialog::canceled,&progress,[cancelled]{cancelled->store(true);});
+    connect(&watcher,&QFutureWatcher<Outcome>::finished,&progress,&QDialog::accept);
+    auto* dialog=&progress;
+    watcher.setFuture(QtConcurrent::run([snapshot,targets,cancelled,dialog,label,total]{
+        Outcome outcome;
+        for(int index=0;index<total;++index){
+            const auto& target=targets[size_t(index)];
+            if(cancelled->load()){outcome.cancelled=true;break;}
+            QMetaObject::invokeMethod(dialog,[dialog,label,index]{dialog->setValue(index);dialog->setLabelText(label(index));},Qt::QueuedConnection);
+            imaging::ExportOptions options;options.cancelled=[cancelled]{return cancelled->load();};
+            try{
+                if(exportLayerPngAtomic(snapshot,target.id,nativePath(target.path),options))++outcome.written;else outcome.empty.append(target.name);
+            }catch(const imaging::ExportCancelled&){outcome.cancelled=true;break;}
+            catch(const std::exception& error){outcome.failed.append(QString("%1 (%2)").arg(target.name,QString::fromUtf8(error.what())));}
+        }
+        return outcome;
+    }));
+    progress.exec();watcher.waitForFinished();
+    const auto outcome=watcher.result();
+    // Only an export that wrote every layer is announced as done; anything else says exactly how many files exist.
+    QStringList lines;
+    if(outcome.cancelled||!outcome.failed.isEmpty()||!outcome.empty.isEmpty())lines.append(QString(outcome.cancelled?"Export cancelled. %1 of %2 PNG file(s) written.":"%1 of %2 PNG file(s) written.").arg(outcome.written).arg(total));
+    if(!outcome.failed.isEmpty())lines.append("Could not write:\n"+outcome.failed.join('\n'));
+    if(!outcome.empty.isEmpty())lines.append("Nothing to export, no visible pixels:\n"+outcome.empty.join('\n'));
+    if(lines.isEmpty()){statusBar()->showMessage(total==1?QString("Exported %1").arg(QDir::toNativeSeparators(targets[0].path)):QString("Exported %1 layers as PNG files").arg(outcome.written),8000);return;}
+    QMessageBox summary(outcome.cancelled||!outcome.failed.isEmpty()?QMessageBox::Warning:QMessageBox::Information,"Export Layers as PNGs",lines.join("\n\n"),QMessageBox::Ok,this);
+    summary.setObjectName("layerExportSummary");summary.setProperty("studioChrome",true);summary.exec();
 }
 }

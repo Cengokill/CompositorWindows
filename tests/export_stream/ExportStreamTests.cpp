@@ -301,4 +301,106 @@ void vignette_partition(){
     }
 }
 
-int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"sharpen_partition",sharpen_partition},{"lens_inactive_large",lens_inactive_large},{"lens_partition",lens_partition},{"tonal_partition",tonal_partition},{"vignette_partition",vignette_partition},{"channel_pack",channel_pack},{"extent_guard",extent_guard},{"row_png",row_png},{"png_options",png_options},{"large_png_interlaced",large_png_interlaced},{"deep_png_interlaced",deep_png_interlaced},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"jpeg_modes",jpeg_modes},{"jpeg_large_standard",[]{large_jpeg_mode(JpegMode::Standard);}},{"jpeg_large_optimized",[]{large_jpeg_mode(JpegMode::Optimized);}},{"jpeg_large_progressive",[]{large_jpeg_mode(JpegMode::Progressive);}},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_scale_stripes",pdf_scale_stripes},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
+// Layer exports use one pixel per document unit, so expected bounds and colors are exact.
+Transform exact(double x,double y,double width,double height){Transform t{x,y,width,height};t.sampling=Transform::Sampling::Nearest;return t;}
+Layer solid(const char* name,Transform transform,Pixel color){Layer layer;layer.id=newId();layer.name=name;layer.transform=transform;layer.raster=Raster::filled(int(transform.width),int(transform.height),color);return layer;}
+// Exports `id` at three stripe heights: every height must give the same optionality and the same decoded image.
+// Nothing is written when there is nothing to export.
+std::optional<RgbaImage> exportedLayer(const Document& d,const std::string& id){
+    QTemporaryDir temp;const auto before=d;std::optional<RgbaImage> image;bool first=true;
+    for(uint32_t rows:{1U,7U,64U}){
+        StreamExportLimits limits;limits.stripeRows=rows;const auto target=path(temp,("layer-"+std::to_string(rows)+".png").c_str());
+        const auto result=exportLayerPngAtomic(d,id,target,{},limits);REQUIRE(d==before&&bool(result)==std::filesystem::exists(target));
+        std::optional<RgbaImage> decoded;if(result)decoded=WicCodec::decode(target).image;
+        if(first)image=decoded;else REQUIRE(bool(decoded)==bool(image)&&(!image||(decoded->width==image->width&&decoded->height==image->height&&decoded->pixels==image->pixels)));
+        first=false;
+    }
+    only(temp,image?3:0);return image;
+}
+void requireSolid(const std::optional<RgbaImage>& image,uint32_t width,uint32_t height,Pixel color){
+    REQUIRE(image&&image->width==width&&image->height==height);
+    for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x)REQUIRE(pixel(*image,int(x),int(y))==color);
+}
+void layer_png_isolation(){
+    auto d=blank(8,12);
+    auto red=solid("Red",exact(1,1,2,3),{255,0,0,255});
+    auto green=solid("Green",exact(0,0,2,10),{0,255,0,255});green.maskSourceId=red.id;
+    Layer half;half.id=newId();half.name="Half";half.group=true;half.opacity=.5;half.transform=exact(0,0,8,12);
+    auto blue=solid("Blue",exact(2,6,6,1),{0,0,255,255});blue.parentId=half.id;blue.visible=false;
+    Layer ghost;ghost.id=newId();ghost.name="Ghost";ghost.group=true;ghost.transform=exact(0,0,8,12);
+    auto hiddenChild=solid("Hidden child",exact(0,0,8,12),{255,255,0,255});hiddenChild.parentId=ghost.id;hiddenChild.visible=false;
+    auto clear=solid("Clear",exact(0,0,8,12),{0,0,0,0});
+    Layer empty;empty.id=newId();empty.name="Empty";
+    Layer masked;masked.id=newId();masked.name="Masked";masked.group=true;masked.transform=exact(0,0,8,12);masked.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{2,1,{255,0}})};
+    auto yellow=solid("Yellow",exact(0,0,8,12),{255,255,0,255});yellow.parentId=masked.id;
+    Layer grain;grain.id=newId();grain.name="Grain";grain.transform=exact(0,0,8,12);grain.adjustmentJson=effects::defaultAdjustmentJson("Grain");
+    auto object=QJsonDocument::fromJson(QByteArray::fromStdString(grain.adjustmentJson)).object();object["grainSettings"]=QJsonObject{{"amount",65},{"size",2.5},{"roughness",40},{"seed",917}};grain.adjustmentJson=QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString();
+    d.layers={red,green,half,blue,ghost,hiddenChild,clear,empty,masked,yellow,grain};
+    // The grain above would change the red pixels if the export did not leave it out.
+    const auto canvas=SoftwareRenderer().render(d,0,0,d.width,d.height);
+    REQUIRE(canvas->pixel(1,1)!=Pixel{255,0,0,255}||canvas->pixel(2,2)!=Pixel{255,0,0,255}||canvas->pixel(1,3)!=Pixel{255,0,0,255});
+    // A clipping base exports alone; the layer clipped to it is not drawn on it.
+    requireSolid(exportedLayer(d,red.id),2,3,{255,0,0,255});
+    // A clipped layer is cut by its base and does not draw the base: 2x10 clipped to the 2x3 base leaves one column of 3.
+    requireSolid(exportedLayer(d,green.id),1,3,{0,255,0,255});
+    // A hidden layer is shown inside its folder, whose 50% opacity applies.
+    const auto bluePng=exportedLayer(d,blue.id);REQUIRE(bluePng&&bluePng->width==6&&bluePng->height==1);
+    for(int x=0;x<6;++x){const auto p=pixel(*bluePng,x,0);REQUIRE(p.a>=126&&p.a<=129&&p.r==0&&p.g==0&&p.b==p.a);}
+    // The folder mask cuts the layer inside it and the folder itself: the left four of eight columns remain.
+    requireSolid(exportedLayer(d,yellow.id),4,12,{255,255,0,255});
+    requireSolid(exportedLayer(d,masked.id),4,12,{255,255,0,255});
+    // Nothing visible, whatever the reason: a folder with only hidden contents, a hidden-contents folder with an opaque
+    // sibling, a fully transparent raster, a layer with no raster and an adjustment.
+    for(const auto& id:{ghost.id,half.id,clear.id,empty.id,grain.id})REQUIRE(!exportedLayer(d,id));
+    rejects([&]{exportedLayer(d,"missing");});
+    // The isolated document keeps only what the export needs. Hidden clipping sources stay, hidden and clipping.
+    const auto isolated=isolateLayerForExport(d,green.id);
+    REQUIRE(isolated.layers.size()==2&&isolated.layers[0].id==red.id&&!isolated.layers[0].visible&&isolated.layers[1].id==green.id&&isolated.layers[1].visible&&isolated.layers[1].maskSourceId==red.id);
+    const auto folderOnly=isolateLayerForExport(d,blue.id);
+    REQUIRE(folderOnly.layers.size()==2&&folderOnly.layers[0].id==half.id&&folderOnly.layers[0].visible&&folderOnly.layers[1].id==blue.id&&folderOnly.layers[1].visible);
+}
+void layer_png_trim_deep(){
+    QTemporaryDir temp;
+    // Partly off the canvas: only the part inside it is exported.
+    auto d=blank(6,6);auto offCanvas=solid("Off canvas",exact(-2,2,5,3),{10,20,30,255});d.layers.push_back(offCanvas);
+    requireSolid(exportedLayer(d,offCanvas.id),3,3,{10,20,30,255});
+    // A transparent border is trimmed away.
+    auto bordered=blank(8,8);Layer ring;ring.id=newId();ring.name="Ring";ring.transform=exact(1,1,4,4);
+    std::vector<uint8_t> ringPixels(4*4*4,0);for(int y=1;y<3;++y)for(int x=1;x<3;++x){auto*p=ringPixels.data()+(y*4+x)*4;p[0]=200;p[1]=100;p[2]=50;p[3]=255;}
+    ring.raster=Raster::fromRgba(4,4,ringPixels.data(),16);bordered.layers.push_back(ring);
+    requireSolid(exportedLayer(bordered,ring.id),2,2,{200,100,50,255});
+    // The base's opacity and mask cut a clipped layer: one column of two rows at half coverage, none of the base's own color.
+    auto clipped=blank(6,6);auto base=solid("Base",exact(0,0,2,2),{255,255,255,255});base.opacity=.5;base.mask=Mask{std::make_shared<GrayRaster>(GrayRaster{2,1,{255,0}})};
+    auto top=solid("Top",exact(0,0,4,4),{0,255,0,255});top.maskSourceId=base.id;clipped.layers={base,top};
+    const auto cut=exportedLayer(clipped,top.id);REQUIRE(cut&&cut->width==1&&cut->height==2);
+    for(int y=0;y<2;++y){const auto p=pixel(*cut,0,y);REQUIRE(p.a>=126&&p.a<=129&&p.r==0&&p.b==0&&p.g==p.a);}
+    // A root layer that is only 16-bit raster stays 16-bit and trimmed, even beside another visible layer.
+    auto deepDocument=blank(4,3);Layer deepLayer;deepLayer.id=newId();deepLayer.name="Deep";deepLayer.transform=exact(0,0,4,3);
+    auto deep=std::make_shared<DeepImage>();deep->width=4;deep->height=3;deep->samples.assign(4*3*4,0);
+    const uint16_t first[]{10000,20000,30000,65535},second[]{1000,2000,3000,65535};std::copy_n(first,4,deep->at(1,1));std::copy_n(second,4,deep->at(2,1));
+    deepLayer.deep=deep;deepLayer.raster=rasterFromDeep(*deep);auto plain=solid("Plain",exact(0,0,4,3),{9,9,9,255});deepDocument.layers={plain,deepLayer};
+    const auto deepTarget=path(temp,"deep-layer.png");const auto deepResult=exportLayerPngAtomic(deepDocument,deepLayer.id,deepTarget);REQUIRE(deepResult);
+    const auto deepBytes=bytes(deepTarget);REQUIRE(deepBytes.size()>29&&deepBytes[24]==16);
+    const auto decoded=WicCodec::decodeProjectDeepPng(deepTarget);REQUIRE(decoded->width==2&&decoded->height==1);
+    for(int c=0;c<4;++c)REQUIRE(decoded->samples[size_t(c)]==first[c]&&decoded->samples[size_t(4+c)]==second[c]);
+    // Inside a folder it is an 8-bit export of the same bounds.
+    Layer folder;folder.id=newId();folder.name="Folder";folder.group=true;folder.transform=exact(0,0,4,3);deepLayer.parentId=folder.id;deepDocument.layers={folder,deepLayer};
+    const auto eightTarget=path(temp,"folder-layer.png");REQUIRE(exportLayerPngAtomic(deepDocument,deepLayer.id,eightTarget));
+    const auto eightBytes=bytes(eightTarget);REQUIRE(eightBytes.size()>29&&eightBytes[24]==8);const auto eight=WicCodec::decode(eightTarget).image;REQUIRE(eight.width==2&&eight.height==1);
+    // A folder whose only content is hidden writes nothing.
+    auto onlyHidden=deepDocument;onlyHidden.layers[1].visible=false;const auto none=path(temp,"none.png");REQUIRE(!exportLayerPngAtomic(onlyHidden,folder.id,none)&&!std::filesystem::exists(none));
+}
+void layer_png_cancel_atomic(){
+    QTemporaryDir temp;auto d=blank(8,12);auto red=solid("Red",exact(1,1,2,3),{255,0,0,255});d.layers.push_back(red);
+    auto target=path(temp,"keep.png");original(target);const auto saved=bytes(target);const auto before=d;
+    ExportOptions stopped;stopped.cancelled=[]{return true;};
+    rejects([&]{exportLayerPngAtomic(d,red.id,target,stopped);});REQUIRE(bytes(target)==saved&&d==before);
+    bool stop=false;ExportOptions during;during.cancelled=[&]{return stop;};StreamExportLimits one;one.stripeRows=1;
+    rejects([&]{exportLayerPngAtomic(d,red.id,target,during,one,[&](uint32_t,uint32_t){stop=true;});});REQUIRE(stop&&bytes(target)==saved&&d==before);
+    auto directory=path(temp,"directory");std::filesystem::create_directory(directory);original(directory/"project.comp");const auto protectedBytes=bytes(directory/"project.comp");
+    rejects([&]{exportLayerPngAtomic(d,red.id,directory);});REQUIRE(std::filesystem::is_directory(directory)&&bytes(directory/"project.comp")==protectedBytes&&bytes(target)==saved&&d==before);
+    rejects([&]{exportLayerPngAtomic(d,"missing",target);});REQUIRE(bytes(target)==saved);
+    only(temp,2);
+}
+
+int main(int argc,char**argv){QCoreApplication app(argc,argv);const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);try{REQUIRE(SUCCEEDED(hr));std::map<std::string,void(*)()> tests{{"layer_png_isolation",layer_png_isolation},{"layer_png_trim_deep",layer_png_trim_deep},{"layer_png_cancel_atomic",layer_png_cancel_atomic},{"sharpen_partition",sharpen_partition},{"lens_inactive_large",lens_inactive_large},{"lens_partition",lens_partition},{"tonal_partition",tonal_partition},{"vignette_partition",vignette_partition},{"channel_pack",channel_pack},{"extent_guard",extent_guard},{"row_png",row_png},{"png_options",png_options},{"large_png_interlaced",large_png_interlaced},{"deep_png_interlaced",deep_png_interlaced},{"canonical_partition",canonical_partition},{"jpeg_matte_preview",jpeg_matte_preview},{"jpeg_modes",jpeg_modes},{"jpeg_large_standard",[]{large_jpeg_mode(JpegMode::Standard);}},{"jpeg_large_optimized",[]{large_jpeg_mode(JpegMode::Optimized);}},{"jpeg_large_progressive",[]{large_jpeg_mode(JpegMode::Progressive);}},{"cancel_atomic",cancel_atomic},{"row_failure_atomic",row_failure_atomic},{"copy_atomic",copy_atomic},{"pdf_page_size",pdf_page_size},{"pdf_scale_background",pdf_scale_background},{"pdf_scale_stripes",pdf_scale_stripes},{"pdf_cancel_atomic",pdf_cancel_atomic},{"large_pdf",large_pdf},{"large_blank",[]{large(false);}},{"large_narrow",[]{large(true);}}};REQUIRE(argc==2&&tests.contains(argv[1]));tests.at(argv[1])();std::cout<<"PASS "<<argv[1]<<"\n";CoUninitialize();return 0;}catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<"\n";if(SUCCEEDED(hr))CoUninitialize();return 1;}}
