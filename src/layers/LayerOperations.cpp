@@ -64,7 +64,7 @@ bool canToggleClipping(const Document& d,const std::string& id){try{validateDocu
 EditResult toggleClipping(const Document& d,SelectionState selected,const std::string& id){if(!canToggleClipping(d,id))return result(d,d,std::move(selected),"Create Clipping Mask");auto l=find(d,id);if(!l->maskSourceId.empty())return releaseClipping(d,std::move(selected),id);auto stack=siblings(d,l->parentId);auto below=find(d,*(std::find(stack.begin(),stack.end(),id)-1));return link(d,std::move(selected),below->maskSourceId.empty()?below->id:below->maskSourceId,id);}
 
 namespace {
-// The layers the menu commands work on: the selection plus the active layer, in document order.
+// The layers the menu commands work on: the selection plus the active layer, as an unordered set.
 IDs commandTargets(const Document& d,SelectionState selected){if(!selected.primary.empty())selected.ids.push_back(selected.primary);const auto normal=normalizeSelection(d,std::move(selected));return IDs(normal.ids.begin(),normal.ids.end());}
 }
 bool releasesSelectedClipping(const Document& d,SelectionState selected){auto targets=commandTargets(d,std::move(selected));return !targets.empty()&&std::all_of(d.layers.begin(),d.layers.end(),[&](const Layer& l){return !targets.contains(l.id)||!l.maskSourceId.empty();});}
