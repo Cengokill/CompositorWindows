@@ -32,6 +32,11 @@ public:
     void move(Point, bool shift = false);
     void moveCursor(std::optional<Point>);
     void modifiersChanged(bool shift);
+    // Space held mid-drag. Until endMarqueeMove(), move() takes unsnapped pointers and
+    // translates the Marquee by their whole-pixel offset from this one, keeping its size.
+    void beginMarqueeMove(Point pointer);
+    void endMarqueeMove() { marqueeMove_.reset(); }
+    bool movingMarquee() const { return marqueeMove_.has_value(); }
     // Use VIEW-space distance from the mapped first point, in logical points.
     // A click within 8 points of the first corner closes only when the polygon has
     // three corners and an earlier corner lay outside that radius, so dense corners
@@ -52,8 +57,16 @@ public:
     std::optional<SelectionGestureResult> finish(const std::optional<SelectionOutline>& current,
         int canvasWidth, int canvasHeight, bool antialiased = true);
 private:
+    // The Marquee as it was when the move began; each move offsets from it so no fraction accumulates.
+    struct MarqueeMove {
+        Point pointer;
+        Point anchor;
+        std::vector<Point> points;
+        std::optional<Point> dragPoint;
+    };
     std::optional<LassoDraft> draft_;
     std::optional<Point> marqueeDragPoint_;
+    std::optional<MarqueeMove> marqueeMove_;
     // View distance from the first corner at which each polygon corner was placed.
     std::vector<double> viewDistances_;
     bool constrainArmed_{};

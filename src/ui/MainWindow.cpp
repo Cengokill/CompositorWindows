@@ -238,6 +238,8 @@ void MainWindow::restoreHistorySnapshot(Snapshot snapshot){
     const bool scrolling=selectionScrollTimer_&&selectionScrollTimer_->isActive();
     pointerCancel();project->document=std::move(snapshot.document);project->active=std::move(snapshot.activeLayer);
     if(draft){selectionGesture_=std::move(*draft);selectionOwner_=project;if(pointer==project)pointerOwner_=project;
+        // pointerCancel() above released Space, so the restored draft resizes again.
+        selectionGesture_.endMarqueeMove();
         selectionScrollPoint_=scrollPoint;if(scrolling&&project->document)selectionScrollTimer_->start();}
     refresh();
 }

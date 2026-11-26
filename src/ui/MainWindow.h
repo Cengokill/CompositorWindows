@@ -223,6 +223,8 @@ private:
     EditorProject* selectionOwner_{};
     QChronoTimer* selectionScrollTimer_{};
     std::optional<Point> selectionScrollPoint_;
+    // Latest unsnapped document pointer of a selection drag, where a Space move starts from.
+    Point selectionPointer_{};
     Qt::KeyboardModifiers selectionModifiers_{};
     // Bounds of the selection when a move began; the snapped move reads them each event.
     std::optional<editing::Rect> selectionMoveBox_;

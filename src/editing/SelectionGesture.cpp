@@ -24,7 +24,7 @@ void SelectionGesture::begin(Point point,LassoKind kind,SelectionMode mode,bool 
     if(box)point={std::round(point.x),std::round(point.y)};
     LassoDraft draft;draft.kind=kind;draft.mode=mode;if(box)draft.anchor=point;
     appendLassoPoint(draft.points,point);draft_=std::move(draft);viewDistances_.assign(1,0);
-    constrainArmed_=!shift;marqueeDragPoint_.reset();
+    constrainArmed_=!shift;marqueeDragPoint_.reset();marqueeMove_.reset();
 }
 bool SelectionGesture::marquee()const{return draft_&&(draft_->kind==LassoKind::Rectangle||draft_->kind==LassoKind::Ellipse);}
 SelectionMode SelectionGesture::cursorMode(bool shift,bool option,SelectionMode choice)const{return draft_?draft_->mode:selectionMode(shift,option,choice);}
@@ -32,12 +32,29 @@ void SelectionGesture::move(Point point,bool shift){
     if(!draft_||!finite(point))return;
     if(marquee()){
         if(!shift)constrainArmed_=true;
+        if(marqueeMove_){
+            const Point step{std::round(point.x-marqueeMove_->pointer.x),std::round(point.y-marqueeMove_->pointer.y)};
+            const auto moved=[step](Point p){return Point{p.x+step.x,p.y+step.y};};
+            draft_->anchor=moved(marqueeMove_->anchor);draft_->points=marqueeMove_->points;
+            for(auto& corner:draft_->points)corner=moved(corner);
+            // A later Shift change reshapes from the moved corner, not from where it was drawn.
+            if(marqueeMove_->dragPoint)marqueeDragPoint_=moved(*marqueeMove_->dragPoint);
+            return;
+        }
         marqueeDragPoint_=point;dragMarquee(point,constrainArmed_&&shift,false);
     }else if(draft_->kind==LassoKind::Polygonal)moveCursor(point);
     else extend(point);
 }
 void SelectionGesture::moveCursor(std::optional<Point> point){if(draft_&&(!point||finite(*point)))draft_->cursor=point;}
-void SelectionGesture::modifiersChanged(bool shift){if(marquee()&&marqueeDragPoint_)move(*marqueeDragPoint_,shift);}
+void SelectionGesture::modifiersChanged(bool shift){
+    if(!marquee()||!marqueeDragPoint_)return;
+    // The stored corner is not a pointer position, so a moving box keeps its shape.
+    if(marqueeMove_){if(!shift)constrainArmed_=true;}else move(*marqueeDragPoint_,shift);
+}
+void SelectionGesture::beginMarqueeMove(Point pointer){
+    if(!marquee()||!draft_->anchor||marqueeMove_||!finite(pointer))return;
+    marqueeMove_=MarqueeMove{pointer,*draft_->anchor,draft_->points,marqueeDragPoint_};
+}
 PolygonPressResult SelectionGesture::polygonPress(Point point,double distance){
     if(!draft_||draft_->kind!=LassoKind::Polygonal||!finite(point))return PolygonPressResult::Ignored;
     const bool valid=std::isfinite(distance)&&distance>=0;
@@ -54,7 +71,7 @@ void SelectionGesture::dragMarquee(Point point,bool square,bool fromCenter){
     draft_->points={{r.x,r.y},{r.x+r.width,r.y},{r.x+r.width,r.y+r.height},{r.x,r.y+r.height}};
 }
 void SelectionGesture::removeLast(){if(!draft_)return;draft_->points.pop_back();if(viewDistances_.size()>draft_->points.size())viewDistances_.resize(draft_->points.size());if(draft_->points.empty())cancel();}
-void SelectionGesture::cancel(){draft_.reset();marqueeDragPoint_.reset();constrainArmed_=false;viewDistances_.clear();}
+void SelectionGesture::cancel(){draft_.reset();marqueeDragPoint_.reset();marqueeMove_.reset();constrainArmed_=false;viewDistances_.clear();}
 void SelectionGesture::interrupt(){if(draft_&&draft_->kind!=LassoKind::Polygonal)cancel();}
 SelectionOutline SelectionGesture::outline(bool aa)const{return draft_?draftOutline(*draft_,aa):SelectionOutline();}
 std::optional<SelectionGestureResult> SelectionGesture::finish(const std::optional<SelectionOutline>& current,int width,int height,bool aa){
