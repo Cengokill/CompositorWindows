@@ -1,6 +1,7 @@
 // Based on RimLight.swift and MetalRimLight.swift at upstream 97c3b3f.
 // Copyright (c) 2026 Wonder Assembly LLC. MIT; see Compositor-MIT.txt.
 #include "RimLight.h"
+#include "FastBlur.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -12,19 +13,8 @@ namespace {
 double bounded(double v,double low,double high,double fallback){return std::isfinite(v)?std::clamp(v,low,high):fallback;}
 void check(const std::function<bool()>& cancelled){if(cancelled&&cancelled())throw std::runtime_error("Filter cancelled");}
 float smooth(float a,float b,float x){const float t=std::clamp((x-a)/(b-a),0.f,1.f);return t*t*(3-2*t);}
-// Three sliding box passes approximate a Gaussian without a radius-dependent cost.
 std::vector<float> blur(std::vector<float> image,int w,int h,double sigma,const std::function<bool()>& cancelled){
-    if(sigma<.15)return image;
-    const int radius=std::max(1,int(std::round((std::sqrt(4*sigma*sigma+1)-1)/2)));
-    std::vector<float> scratch(image.size());
-    const double inv=1.0/(2*radius+1);
-    for(int pass=0;pass<3;++pass){
-        for(int y=0;y<h;++y){check(cancelled);double sum=0;for(int x=-radius;x<=radius;++x)sum+=image[size_t(y)*w+std::clamp(x,0,w-1)];
-            for(int x=0;x<w;++x){scratch[size_t(y)*w+x]=float(sum*inv);sum-=image[size_t(y)*w+std::clamp(x-radius,0,w-1)];sum+=image[size_t(y)*w+std::clamp(x+radius+1,0,w-1)];}}
-        for(int x=0;x<w;++x){check(cancelled);double sum=0;for(int y=-radius;y<=radius;++y)sum+=scratch[size_t(std::clamp(y,0,h-1))*w+x];
-            for(int y=0;y<h;++y){image[size_t(y)*w+x]=float(sum*inv);sum-=scratch[size_t(std::clamp(y-radius,0,h-1))*w+x];sum+=scratch[size_t(std::clamp(y+radius+1,0,h-1))*w+x];}}
-    }
-    return image;
+    return detail::boxGaussian(std::move(image),w,h,sigma,cancelled);
 }
 float inverseError(float x){
     float w=-std::log((1-x)*(1+x)),p;

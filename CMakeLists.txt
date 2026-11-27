@@ -61,7 +61,7 @@ set_source_files_properties(src/graphics/CompositeRowsAvx2.cpp PROPERTIES COMPIL
 target_sources(compositor_graphics PRIVATE src/graphics/Downsample.cpp src/graphics/SamplingSource.cpp)
 target_sources(compositor_graphics PRIVATE src/graphics/ParallelBatch.cpp)
 target_link_libraries(compositor_graphics PUBLIC compositor_core)
-add_library(compositor_filters src/filters/PixelFilters.cpp src/filters/RimLight.cpp src/filters/CameraRaw.cpp src/filters/CameraRawShadows.cpp)
+add_library(compositor_filters src/filters/PixelFilters.cpp src/filters/RimLight.cpp src/filters/VolumetricLight.cpp src/filters/CameraRaw.cpp src/filters/CameraRawShadows.cpp)
 add_library(compositor_layers src/layers/LayerOperations.cpp)
 target_link_libraries(compositor_layers PUBLIC compositor_core compositor_graphics)
 target_compile_options(compositor_layers PRIVATE /W4 /utf-8)

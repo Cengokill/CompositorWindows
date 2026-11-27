@@ -51,6 +51,74 @@ void testRimLightKernel(){
     for(int y=0;y<96;++y)for(int x=48;x<96;++x)require(applied.raster->pixel(x,y)==src->pixel(x,y),"rim respects selection");
     job.subjectMask.reset();fails([&]{apply(job);},"rim requires subject mask");
 }
+void testVolumetricLight(){
+    const std::uint64_t budget=4000000000ULL;
+    VolumetricLightSettings raw;raw.center=Point{std::nan(""),3};raw.haze=400;raw.intensity=-5;raw.color={2,-1,std::nan("")};
+    const auto normal=raw.normalized();require(!normal.center&&normal.haze==100&&normal.intensity==0&&normal.color==std::array<double,3>{1,0,1},"volumetric normalization");
+    VolumetricLightSettings none;none.haze=0;none.intensity=0;require(none.isIdentity()&&!VolumetricLightSettings{}.isIdentity(),"volumetric identity rule");
+    auto gray=image(64,48,[](int,int){return Pixel{90,90,90,255};});
+    const VolumetricLightInputs empty;
+    require(renderVolumetricLight(*gray,empty,{32,8},none,budget)->rgba()==gray->rgba(),"volumetric identity leaves pixels");
+    // A wide bright area wins over a smaller, hotter patch.
+    auto scene=image(128,96,[](int x,int y){if(x>=8&&x<56&&y>=8&&y<40)return Pixel{220,220,220,255};if(x>=100&&x<108&&y>=70&&y<78)return Pixel{255,255,255,255};return Pixel{20,20,20,255};});
+    const auto start=volumetricBrightestPoint(*scene);require(start.x>=8&&start.x<56&&start.y>=8&&start.y<40,"light starts in the largest bright area");
+    require(volumetricBrightestPoint(*image(10,10,[](int,int){return Pixel{0,0,0,255};})).x==5,"black image starts at its center");
+    // A bar of subject between the light and the lower half casts a shadow through the beams.
+    VolumetricLightSettings beams;beams.haze=0;beams.intensity=100;beams.length=100;beams.size=10;
+    VolumetricLightInputs bar;bar.subject=mask(96,96,[](int x,int y){return std::uint8_t(x>=20&&x<44&&y>=44&&y<52?255:0);});
+    auto dark=image(96,96,[](int,int){return Pixel{40,40,40,255};});
+    auto lit=renderVolumetricLight(*dark,bar,{48,20},beams,budget),open=renderVolumetricLight(*dark,empty,{48,20},beams,budget);
+    require(lit->pixel(28,80).r<open->pixel(28,80).r&&lit->pixel(68,80).r==open->pixel(68,80).r,"subject casts a shadow in the beams");
+    require(open->pixel(48,24).r>open->pixel(48,90).r&&open->pixel(48,24).r>dark->pixel(48,24).r,"beams brightest near the light");
+    // Near depth is hazed less than far depth.
+    VolumetricLightSettings fog;fog.intensity=0;fog.haze=100;fog.distance=0;
+    auto depth=std::make_shared<DepthMap>();depth->width=32;depth->height=32;depth->values.resize(32*32);for(int y=0;y<32;++y)for(int x=0;x<32;++x)depth->values[size_t(y)*32+x]=x<16?1.f:0.f;
+    VolumetricLightInputs deep;deep.depth=depth;
+    auto colored=image(96,96,[](int,int){return Pixel{20,120,200,255};});auto hazed=renderVolumetricLight(*colored,deep,{48,48},fog,budget);
+    auto change=[&](int x,int y){auto a=hazed->pixel(x,y),b=colored->pixel(x,y);return std::abs(a.r-b.r)+std::abs(a.g-b.g)+std::abs(a.b-b.b);};
+    require(change(10,48)<change(86,48)&&change(10,48)>0,"near depth is hazed less than far");
+    // Composed depth: the model's own map without a subject; held near with Keep Subject Clear, at its own depth without.
+    auto farMap=std::make_shared<DepthMap>();farMap->width=48;farMap->height=48;farMap->values.assign(48*48,.1f);
+    const auto plain=composedDepth(*farMap,nullptr,96,96,true);require(std::abs(plain[size_t(48)*96+48]-.1f)<1e-4f,"composed depth without subject");
+    auto figure=mask(96,96,[](int x,int y){return std::uint8_t(x>=36&&x<60&&y>=24&&y<84?255:0);});
+    const auto clear=composedDepth(*farMap,figure.get(),96,96,true),own=composedDepth(*farMap,figure.get(),96,96,false);
+    require(clear[size_t(50)*96+48]>=.89f&&own[size_t(50)*96+48]<.3f&&std::abs(clear[size_t(5)*96+5]-.1f)<.02f,"subject depth follows Keep Subject Clear");
+    // Equalized depths keep their order and spread out.
+    DepthMap bunch{4,1,{.5f,.52f,.51f,.53f}};const auto spread=bunch.equalized(1);
+    require(spread.values[0]<spread.values[2]&&spread.values[2]<spread.values[1]&&spread.values[1]<spread.values[3]&&std::abs(spread.values[3]-1)<1e-6f,"equalized keeps order");
+    require(bunch.equalized(0).values==bunch.values,"zero depth contrast keeps depth");
+    const auto guess=volumetricRamp(50,{});require(std::abs(guess.first-.3f)<1e-6f&&std::abs(guess.second-.8f)<1e-6f,"ramp without depth");
+    // Same output every run and for any number of workers.
+    VolumetricLightSettings all;all.length=60;all.shafts=70;all.depthContrast=40;
+    VolumetricLightInputs full;full.depth=depth;full.subject=figure;full.outline=figure;
+    auto once=renderVolumetricLight(*colored,full,{20,10},all,budget,{},nullptr,{},1),again=renderVolumetricLight(*colored,full,{20,10},all,budget,{},nullptr,{},0);
+    require(once->rgba()==again->rgba()&&once->rgba()==renderVolumetricLight(*colored,full,{20,10},all,budget)->rgba(),"volumetric deterministic across workers");
+    auto clearBack=image(96,96,[](int x,int){return x<48?Pixel{30,40,50,100}:Pixel{};});auto alpha=renderVolumetricLight(*clearBack,full,{20,10},all,budget);
+    for(int y=0;y<96;++y)for(int x=0;x<96;++x){auto p=alpha->pixel(x,y);require(p.a==clearBack->pixel(x,y).a&&p.r<=p.a&&p.g<=p.a&&p.b<=p.a,"volumetric preserves premultiplied transparency");}
+    fails([&]{renderVolumetricLight(*colored,full,{20,10},all,1);},"volumetric memory budget");
+    fails([&]{renderVolumetricLight(*colored,full,{20,10},all,budget,[]{return true;});},"volumetric cancellation");
+    auto broken=std::make_shared<GrayRaster>(*figure);broken->pixels.pop_back();VolumetricLightInputs bad;bad.subject=broken;
+    fails([&]{renderVolumetricLight(*colored,bad,{20,10},all,budget);},"volumetric malformed mask");
+    // The cache reuses each level and gives the same pixels as a fresh render.
+    VolumetricLightCache cache;const std::shared_ptr<const void> key=colored;
+    auto cached=renderVolumetricLight(*colored,full,{20,10},all,budget,{},&cache,key);require(cached->rgba()==once->rgba(),"cached render matches");
+    auto hazier=all;hazier.haze=90;hazier.intensity=70;hazier.color={.5,.7,1};renderVolumetricLight(*colored,full,{20,10},hazier,budget,{},&cache,key);
+    require(cache.sceneBuilds==1&&cache.depthBuilds==1&&cache.beamBuilds==1,"haze, intensity and color reuse the cache");
+    auto bigger=hazier;bigger.size=60;require(renderVolumetricLight(*colored,full,{20,10},bigger,budget,{},&cache,key)->rgba()==renderVolumetricLight(*colored,full,{20,10},bigger,budget)->rgba(),"rebuilt beams match");
+    require(cache.beamBuilds==2&&cache.sceneBuilds==1,"size rebuilds only the beams");
+    renderVolumetricLight(*colored,full,{40,10},bigger,budget,{},&cache,key);require(cache.beamBuilds==3,"moving the light rebuilds the beams");
+    bigger.depthContrast=0;renderVolumetricLight(*colored,full,{40,10},bigger,budget,{},&cache,key);require(cache.depthBuilds==2&&cache.beamBuilds==3,"depth contrast rebuilds only the depth");
+    const std::shared_ptr<const void> other=gray;renderVolumetricLight(*colored,full,{40,10},bigger,budget,{},&cache,other);require(cache.sceneBuilds==2&&cache.depthBuilds==3,"another image empties the cache");
+    // Through the filter boundary: preview equals Apply on a small image, and the selection limits changed pixels.
+    auto job=request(Kind::VolumetricLight,colored);job.settings.volumetric=all;job.settings.volumetric.center=Point{30,30};job.volumetric=std::make_shared<VolumetricLightInputs>(full);
+    job.selection=SourceSelection{mask(96,96,[](int x,int){return std::uint8_t(x<48?255:0);})};
+    auto applied=apply(job);job.preview=true;job.previewMaxEdge=1024;job.volumetricCache=std::make_shared<VolumetricLightCache>();auto draft=apply(job);
+    require(applied.changed&&applied.raster->rgba()==draft.raster->rgba(),"volumetric preview matches apply");
+    for(int y=0;y<96;++y)for(int x=48;x<96;++x)require(applied.raster->pixel(x,y)==colored->pixel(x,y),"volumetric respects selection");
+    job.previewMaxEdge=48;auto reduced=apply(job);require(reduced.raster->width==48&&reduced.previewScale==.5,"volumetric reduced preview");
+    job.volumetric.reset();fails([&]{apply(job);},"volumetric requires prepared inputs");
+    require(!supportsHdr(Kind::VolumetricLight),"volumetric is SDR only");
+}
 void testSettings(){
     LensEffectSettings lens;lens.threshold=std::numeric_limits<double>::quiet_NaN();lens.starPoints=7;lens.prismCopies=12;lens.bokehRadius=-1;
     auto normalizedLens=lens.normalized();require(normalizedLens.threshold==90&&normalizedLens.starPoints==6&&normalizedLens.prismCopies==8&&normalizedLens.bokehRadius==.5,"lens effect settings normalization");
@@ -417,5 +485,5 @@ int benchmarkCameraRaw() {
     return 0;
 }
 }
-int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-rim")return benchmarkRim();if(argc==2&&std::string(argv[1])=="--benchmark-sharpen")return benchmarkSharpen();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testRimLightKernel();testSettings();testSharpen();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{if(argc==2&&std::string(argv[1])=="--source-parity")return sourceParity();if(argc==2&&std::string(argv[1])=="--benchmark")return benchmark();if(argc==2&&std::string(argv[1])=="--benchmark-rim")return benchmarkRim();if(argc==2&&std::string(argv[1])=="--benchmark-sharpen")return benchmarkSharpen();if(argc==2&&std::string(argv[1])=="--benchmark-lens")return benchmarkLens();if(argc==2&&std::string(argv[1])=="--benchmark-camera-raw")return benchmarkCameraRaw();testRimLightKernel();testVolumetricLight();testSettings();testSharpen();testLensEffects();testDither();testMotion();testProgressive();testDeepBlur();testRgbSplit();testNoise();testLens();testFill();testCoverageAndPlacement();testPreviewAndFailure();std::cout<<"PASS filters: volumetric light, source settings, motion geometry, RGB Split, Bloom / Glow, exact C noise/lens, fill, selection, immutable placement, preview, budgets, cancellation\n";return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<"\n";return 1;}}
 
