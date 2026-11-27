@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "LayerPanel.h"
+#include "LocalizedText.h"
 #include "PropertyControls.h"
 #include "LayerPanelTokens.h"
 #include "ToolbarControls.h"
@@ -239,7 +240,7 @@ void MainWindow::setupTransformActions(){
     gap();
     ui::addToolbarCaption(bar,"Sampling","transformSamplingCaption");
     auto*sampling=ui::addDropdown(bar,"transformSampling","Transform sampling",{"Nearest","Smooth","High quality"});sampling->useGlassPopup();sampling->setCurrentIndex(2);connect(sampling,&QComboBox::currentIndexChanged,this,[this](int i){if(i>=0&&i<=2)changeTransformDraft([&](Transform& draft){draft.sampling=Transform::Sampling(i);});});
-    for(bool horizontal:{true,false}){auto*flip=bar->addAction(horizontal?"Flip H":"Flip V");flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",horizontal?"Flip H":"Flip V",[this,horizontal]{changeTransformDraft([&](Transform& draft){draft=editing_transform::flippedLocal(draft,horizontal);});});ui::markPillButton(bar,flip);}
+    for(bool horizontal:{true,false}){const QString label=horizontal?"Flip H":"Flip V";auto*flip=bar->addAction(ui::localizedText(label));flip->setData(label);flip->setObjectName(horizontal?"transformFlipH":"transformFlipV");bindCommand(flip,"Transform Options",label,[this,horizontal]{changeTransformDraft([&](Transform& draft){draft=editing_transform::flippedLocal(draft,horizontal);});});ui::markPillButton(bar,flip);}
     // Windows keeps snapping, alignment and the Apply/Cancel pair of a persistent session in this bar as well.
     bar->addSeparator();
     auto*snap=ui::addOptionCheck(bar,"Snap","transformSnapping",true);snap->setToolTip("Snap to edges and centers");connect(snap,&QCheckBox::toggled,this,[this](bool v){auto policy=snapPolicy_;policy.enabled=v;setSnapPolicy(policy);});
