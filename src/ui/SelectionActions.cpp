@@ -35,6 +35,7 @@ std::optional<editing::SelectionOutline> outlineOf(const std::optional<Selection
 }
 void MainWindow::setupSelectionActions(){
     qApp->installEventFilter(this);
+    qApp->installNativeEventFilter(this);
     selectionScrollTimer_=new QChronoTimer(this);selectionScrollTimer_->setTimerType(Qt::PreciseTimer);selectionScrollTimer_->setInterval(std::chrono::nanoseconds(16666667));
     connect(selectionScrollTimer_,&QChronoTimer::timeout,this,[this]{try{stepSelectionAutoscroll();}catch(const std::exception& error){pointerCancel();statusBar()->showMessage(error.what());}});
     auto*menu=menuBar()->addMenu("&Select");
