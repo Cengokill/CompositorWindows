@@ -1,4 +1,4 @@
-#include "UxpNativeHost.h"
+﻿#include "UxpNativeHost.h"
 #include "PluginRuntime.h"
 #include "ScriptRuntime.h"
 #include "core/Document.h"
@@ -195,51 +195,25 @@ int UxpNativeHost::applyMutations(const QString& mutationsJson, QString& error) 
     return applied;
 }
 
-bool UxpNativeHost::ensureRuntime(const UxpPlugin& plugin, QString& error) {
-    if (script_ && preparedRoot_ == plugin.root) return true;
-    script_ = std::make_unique<ScriptRuntime>();
-    preparedRoot_.clear();
-    if (!script_->evaluate(uxpShimSource(), QStringLiteral("compositor-uxp-shim.js"), error)) return false;
-    preparedRoot_ = plugin.root;
-    return true;
-}
-
 compositor_result UxpNativeHost::run(const UxpPlugin& plugin, QString& error) {
     if (!runtime_) {
         error = QStringLiteral("插件运行时未初始化。");
         return COMPOSITOR_ERROR_UNKNOWN;
     }
-    if (!ensureRuntime(plugin, error)) return COMPOSITOR_ERROR_UNKNOWN;
-
-    // Fresh snapshot and an empty mutation log for every run.
-    if (!script_->setGlobalJson(uxpSnapshotGlobal(), snapshotJson(), error)) return COMPOSITOR_ERROR_UNKNOWN;
-    if (!script_->evaluate(QStringLiteral("this.%1 = [];").arg(uxpMutationsGlobal()),
-                           QStringLiteral("compositor-reset.js"), error)) {
+    // The plugin runs in a separate engine process: the host hands it a document
+    // snapshot and reads back the mutations it recorded.
+    QString shim = uxpShimSource();
+    shim.replace(QStringLiteral("})(this);"), QStringLiteral("})(globalThis);"));
+    const auto result = ScriptRuntime::runBundle(shim, snapshotJson(), plugin.source, plugin.entryPath);
+    if (!result.ok) {
+        error = result.error;
         return COMPOSITOR_ERROR_UNKNOWN;
     }
-    if (!script_->evaluate(plugin.source, plugin.entryPath, error)) return COMPOSITOR_ERROR_UNKNOWN;
-
-    if (script_->hasGlobalFunction(QStringLiteral("run"))) {
-        if (!script_->callGlobal(QStringLiteral("run"), error)) return COMPOSITOR_ERROR_UNKNOWN;
-    } else {
-        if (!script_->evaluate(QStringLiteral(
-                                   "typeof module!=='undefined'&&module.exports&&typeof module.exports.run==='function'"
-                                   "?(module.exports.run(),0):(typeof onLoad==='function'?(onLoad(),0):0)"),
-                               QStringLiteral("compositor-entry.js"), error)) {
-            return COMPOSITOR_ERROR_UNKNOWN;
-        }
-    }
-
-    QString mutations;
-    if (!script_->evaluateToString(QStringLiteral("JSON.stringify(this.%1||[])").arg(uxpMutationsGlobal()),
-                                   mutations, error)) {
-        return COMPOSITOR_ERROR_UNKNOWN;
-    }
-    const int applied = applyMutations(mutations, error);
-    if (!error.isEmpty() && applied == 0) return COMPOSITOR_ERROR_UNKNOWN;
+    const int applied = applyMutations(result.mutationsJson, error);
+    Q_UNUSED(applied);
+    if (!error.isEmpty()) return COMPOSITOR_ERROR_UNKNOWN;
     return COMPOSITOR_OK;
 }
-
 QString uxpShimSource() {
     return QStringLiteral(R"JS(
 // Compositor's Photoshop UXP host shim.

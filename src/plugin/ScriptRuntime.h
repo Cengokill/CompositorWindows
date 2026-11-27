@@ -1,42 +1,36 @@
 #pragma once
 #include <QString>
-#include <QStringList>
-#include <memory>
 
 namespace compositor::plugin {
 
-// Wrapper over the JavaScript engine that ships with Windows (Chakra).
+// Runs a UXP plugin's JavaScript in an external JavaScript engine process.
 //
-// Design note: the host never registers a native callback. Chakra's native
-// function ABI differs between engine builds and a wrong guess crashes the
-// process, so all host data is injected as JSON globals before the script runs
-// and the script records its edits in a JSON array the host reads afterwards.
+// The engine is a separate process because the JavaScript engines that could be
+// embedded here are not usable on this build: the Windows Chakra DLL lacks the JsRT
+// entry points this build needs, and a vendored QuickJS still requires its code
+// generation step. Running the script through a Node.js executable that is already
+// on the machine keeps the plugin's own code, the photoshop shim and the recorded
+// mutations identical, and a plugin crash cannot take the editor down.
+//
+// The host passes a document snapshot in and receives the plugin's recorded
+// mutations out, so no callback crosses the process boundary.
 class ScriptRuntime {
 public:
-    ScriptRuntime();
-    ~ScriptRuntime();
-    ScriptRuntime(const ScriptRuntime&) = delete;
-    ScriptRuntime& operator=(const ScriptRuntime&) = delete;
+    struct Result {
+        bool ok{};
+        QString mutationsJson;  // JSON array the plugin recorded.
+        QString output;         // Engine stdout/stderr, for diagnostics.
+        QString error;
+    };
 
-    // Creates the engine context on first use.
-    bool available(QString& error);
+    // Locates the JavaScript engine. Empty when none is installed.
+    static QString findEngine();
 
-    // Sets a global whose value is the given JSON text, parsed by the engine.
-    bool setGlobalJson(const QString& name, const QString& json, QString& error);
-
-    // Evaluates a script. `sourceName` appears in engine error messages.
-    bool evaluate(const QString& source, const QString& sourceName, QString& error);
-
-    // Evaluates an expression and returns its string form.
-    bool evaluateToString(const QString& expression, QString& out, QString& error);
-
-    // True when the global exists and is a function.
-    bool hasGlobalFunction(const QString& name);
-    bool callGlobal(const QString& functionName, QString& error);
-
-private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    // Runs one bundle: shim, snapshot, plugin source, entry invocation, then prints
+    // the recorded mutations as the last stdout line.
+    static Result runBundle(const QString& shimSource, const QString& snapshotJson,
+                            const QString& pluginSource, const QString& entryPath,
+                            int timeoutMs = 60000);
 };
 
 }  // namespace compositor::plugin

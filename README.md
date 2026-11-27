@@ -135,6 +135,28 @@ Photoshop 太贵，GIMP 的交互又很难让人保持"心流"。Compositor 就�
 
 ---
 
+## 🧩 插件
+
+程序支持两种插件，都放在 `Compositor.exe` 同目录的 `plugins/` 下。
+
+**原生插件（C ABI）**——稳定可用。第三方用 `include/compositor_plugin.h` 编写 DLL，导出 `CompositorPluginEntry` 即可。可读写文档与图层、修改不透明度/可见性/混合模式、执行内置命令。所有修改都会进入撤销栈。示例见 `examples/plugins/example_stats.c`，文档见 `docs/plugins-zh.md`。
+
+```powershell
+cl /LD /utf-8 /I<仓库>\include my_plugin.c /link /OUT:my_plugin.compositor-plugin.dll
+```
+
+**UXP 插件**——实验性。程序会尝试用 Windows 自带的 Chakra 引擎运行插件自带的 JavaScript，`photoshop.*` 由本程序实现。**当前版本在多数机器上无法启用**：如果引擎加载失败，“插件”菜单里的导入项会置灰并给出具体原因，不会崩溃或静默失败。`batchPlay`（PS 的动作描述符系统）没有实现。
+
+另附命令行转译工具 `tools/uxp-translate/`，可把 UXP 插件静态翻译成原生插件骨架，并列出无法翻译的 API。
+
+排查用参数（结果写入插件目录下的 txt）：
+
+```powershell
+Compositor.exe --uxp-analyse "插件目录"
+Compositor.exe --uxp-build   "插件目录"
+Compositor.exe --uxp-run     "插件目录"
+Compositor.exe --js-selftest
+```
 ## ⚙️ 系统要求
 
 | 项目 | 要求 |

@@ -8,7 +8,6 @@
 namespace compositor::plugin {
 
 class PluginRuntime;
-class ScriptRuntime;
 
 // One Photoshop UXP plugin loaded as-is (no translation).
 struct UxpPlugin {
@@ -47,12 +46,9 @@ public:
     int applyMutations(const QString& mutationsJson, QString& error);
 
 private:
-    bool ensureRuntime(const UxpPlugin& plugin, QString& error);
 
     PluginRuntime* runtime_{};
-    std::unique_ptr<ScriptRuntime> script_;
     std::vector<UxpPlugin> plugins_;
-    QString preparedRoot_;
 };
 
 // The JavaScript that implements the UXP surface over the injected snapshot.

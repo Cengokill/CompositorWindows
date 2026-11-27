@@ -117,12 +117,10 @@ void MainWindow::rebuildPluginsMenu() {
     auto* bar = menuBar();
     // The UXP importer needs the embedded engine; probe once so the menu can say
     // why it is unavailable instead of failing after the user picks a folder.
-    QString engineError;
-    {
-        plugin::ScriptRuntime probe;
-        if (!probe.available(engineError)) uxpEngineError_ = engineError;
-        else uxpEngineError_.clear();
-    }
+    const QString engine = plugin::ScriptRuntime::findEngine();
+    uxpEngineError_ = engine.isEmpty()
+        ? QStringLiteral("未找到可用的 JavaScript 引擎（node.exe），无法运行 UXP 插件。")
+        : QString();
     if (!pluginsMenu_) {
         pluginsMenu_ = new QMenu(ui::localizedText("Plugins"), this);
         pluginsMenu_->setObjectName("pluginsMenu");

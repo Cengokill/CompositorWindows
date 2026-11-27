@@ -82,6 +82,21 @@ int main(int argc,char**argv){
             if(report.open(QIODevice::WriteOnly|QIODevice::Text))report.write(e.what());
             return 2;
         }
+    }    if(args.contains("--js-selftest")){
+        // Diagnostics: proves the JavaScript engine process runs a plugin bundle and
+        // returns the mutations the plugin recorded.
+        QFile file(QDir(QCoreApplication::applicationDirPath()).filePath("js-selftest.txt"));
+        file.open(QIODevice::WriteOnly|QIODevice::Text);
+        QTextStream out(&file);
+        const QString engine=compositor::plugin::ScriptRuntime::findEngine();
+        out<<"engine="<<(engine.isEmpty()?QStringLiteral("(none)"):engine)<<"\n";
+        const QString shim=QStringLiteral("function record(op,index,value){__compositorMutations.push({op:op,index:index,value:value});}");
+        const QString snapshot=QStringLiteral("{\"hasDocument\":true,\"doc\":{\"width\":64},\"layers\":[{\"opacity\":1}]}");
+        const QString plugin=QStringLiteral("function run(){ record('opacity',0,0.5); }");
+        const auto result=compositor::plugin::ScriptRuntime::runBundle(shim,snapshot,plugin,QStringLiteral("selftest.js"));
+        out<<"ok="<<result.ok<<"\nmutations="<<result.mutationsJson<<"\nerror="<<result.error<<"\noutput="<<result.output<<"\n";
+        out.flush();
+        return result.ok?0:2;
     }    if(args.contains("--uxp-run")){
         // Diagnostics: load one UXP plugin and run it against a scratch document.
         try{
@@ -114,19 +129,20 @@ int main(int argc,char**argv){
             return 2;
         }
     }    if(args.contains("--js-selftest")){
-        // Diagnostics: proves the embedded engine, JSON injection and expression
-        // read-back all work without relying on native callbacks.
-        compositor::plugin::ScriptRuntime runtime;QString error,text;
-        bool ok=runtime.setGlobalJson(QStringLiteral("__probe"),QStringLiteral("{\"n\":7,\"list\":[1,2]}"),error);
-        const bool evaluated=ok&&runtime.evaluate(QStringLiteral("this.__probe.list.push(3);this.__probe.n+=1;"),
-                                                 QStringLiteral("selftest.js"),error);
-        const bool readBack=evaluated&&runtime.evaluateToString(QStringLiteral("JSON.stringify(this.__probe)"),text,error);
+        // Diagnostics: proves the JavaScript engine process runs a plugin bundle and
+        // returns the mutations the plugin recorded.
         QFile file(QDir(QCoreApplication::applicationDirPath()).filePath("js-selftest.txt"));
-        if(file.open(QIODevice::WriteOnly|QIODevice::Text)){
-            file.write(QStringLiteral("inject=%1 evaluate=%2 read=%3\nerror=%4\nvalue=%5\n")
-                           .arg(ok).arg(evaluated).arg(readBack).arg(error,text).toUtf8());
-        }
-        return readBack?0:2;
+        file.open(QIODevice::WriteOnly|QIODevice::Text);
+        QTextStream out(&file);
+        const QString engine=compositor::plugin::ScriptRuntime::findEngine();
+        out<<"engine="<<(engine.isEmpty()?QStringLiteral("(none)"):engine)<<"\n";
+        const QString shim=QStringLiteral("function record(op,index,value){__compositorMutations.push({op:op,index:index,value:value});}");
+        const QString snapshot=QStringLiteral("{\"hasDocument\":true,\"doc\":{\"width\":64},\"layers\":[{\"opacity\":1}]}");
+        const QString plugin=QStringLiteral("function run(){ record('opacity',0,0.5); }");
+        const auto result=compositor::plugin::ScriptRuntime::runBundle(shim,snapshot,plugin,QStringLiteral("selftest.js"));
+        out<<"ok="<<result.ok<<"\nmutations="<<result.mutationsJson<<"\nerror="<<result.error<<"\noutput="<<result.output<<"\n";
+        out.flush();
+        return result.ok?0:2;
     }    if(args.contains("--uxp-run")){
         // Diagnostics: load one UXP plugin and run it against a scratch document.
         try{

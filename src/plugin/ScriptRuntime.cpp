@@ -1,259 +1,117 @@
 ﻿#include "ScriptRuntime.h"
-#include <QLibrary>
 #include <QDir>
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <QByteArray>
-#include <vector>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 
-// Chakra is the JavaScript engine shipped with Windows. Every entry point is
-// resolved by name so the application still starts when the engine is absent.
 namespace compositor::plugin {
 namespace {
 
-using JsValueRef = void*;
-using JsPropertyIdRef = void*;
-using JsContextRef = void*;
-using JsRuntimeHandle = void*;
+// The engine is a plain JavaScript program: the shim, the snapshot, the plugin and a
+// small epilogue that prints what the plugin recorded.
+QString buildProgram(const QString& shim, const QString& snapshot, const QString& plugin,
+                     const QString& entryPath) {
+    QString program;
+    program += QStringLiteral("var __compositorSnapshot = (%1);\n")
+                   .arg(snapshot.isEmpty() ? QStringLiteral("{}") : snapshot);
+    program += QStringLiteral("var __compositorMutations = [];\n");
+    // The plugin's console output is discarded: it cannot be shown while the editor
+    // is running another process.
+    program += QStringLiteral(
+        "var console = { log: function(){}, info: function(){}, warn: function(){}, error: function(){} };\n");
+    // Node's CommonJS wrapper binds a local `require` that hides the shim's version,
+    // so route lookups through the global the shim installs.
+    program += QStringLiteral("var require = function(name){ return globalThis.require ? globalThis.require(name) : {}; };\n");    program += shim;
+    // The plugin is evaluated at module scope so its top-level declarations, such as
+    // `function run()`, stay visible to the entry call below.
+    program += QStringLiteral("\n");
+    program += plugin;
+    program += QStringLiteral("\n");
+    // Entry points: a global run(), an exported run, or onLoad().
+    program += QStringLiteral(
+        "try{ if(typeof run==='function'){ run(); }"
+        " else if(typeof module!=='undefined'&&module.exports&&typeof module.exports.run==='function'){ module.exports.run(); }"
+        " else if(typeof onLoad==='function'){ onLoad(); } }"
+        "catch(e){ process.stderr.write(String(e && e.stack || e) + '\\n'); process.exit(3); }\n");
+    program += QStringLiteral("process.stdout.write('__MUTATIONS__'+JSON.stringify(__compositorMutations)+'\\n');\n");
+    Q_UNUSED(entryPath);
+    return program;
+}
 
-enum JsValueType {
-    JsUndefined = 0, JsNull = 1, JsNumber = 2, JsString = 3, JsBoolean = 4,
-    JsObject = 5, JsFunction = 6, JsError = 7,
-};
-
-struct EngineApi {
-    HMODULE module{};
-    QString error;
-
-    int (*createRuntime)(int attributes, unsigned flags, JsRuntimeHandle* runtime){};
-    int (*createContext)(JsRuntimeHandle runtime, JsContextRef* context){};
-    int (*setCurrentContext)(JsContextRef context){};
-    int (*getGlobalObject)(JsValueRef* value){};
-    int (*runScript)(JsContextRef context, void* sourceContext, const wchar_t* script,
-                     const wchar_t* name, JsValueRef* result){};
-    int (*createString)(const char* content, size_t length, JsValueRef* value){};
-    int (*convertToString)(JsValueRef value, JsValueRef* stringValue){};
-    int (*stringToPointer)(JsValueRef value, const wchar_t** buffer){};
-    int (*getStringLength)(JsValueRef value, size_t* length){};
-    int (*getProperty)(JsValueRef object, JsPropertyIdRef id, JsValueRef* value){};
-    int (*setProperty)(JsValueRef object, JsPropertyIdRef id, JsValueRef value, bool strict){};
-    int (*hasProperty)(JsValueRef object, JsPropertyIdRef id, bool* has){};
-    int (*propertyIdFromName)(const wchar_t* name, JsPropertyIdRef* id){};
-    int (*callFunction)(JsValueRef function, JsValueRef* result, unsigned short argc, JsValueRef* argv){};
-    int (*getValueType)(JsValueRef value, JsValueType* type){};
-    int (*getAndClearException)(JsValueRef* exception){};
-    int (*disposeRuntime)(JsRuntimeHandle runtime){};
-
-    template <typename T>
-    T resolve(const char* name) {
-        return reinterpret_cast<T>(::GetProcAddress(module, name));
-    }
-
-    bool open() {
-        if (module) return true;
-        // The engine lives in the system directory; a bare name is not always found.
-        wchar_t systemDirectory[MAX_PATH]{};
-        QString path = QStringLiteral("Chakra.dll");
-        if (::GetSystemDirectoryW(systemDirectory, MAX_PATH) > 0) {
-            path = QDir(QString::fromWCharArray(systemDirectory)).filePath(QStringLiteral("Chakra.dll"));
-        }
-        module = ::LoadLibraryW(reinterpret_cast<LPCWSTR>(path.utf16()));
-        if (!module) {
-            const DWORD code = ::GetLastError();
-            module = ::LoadLibraryW(L"Chakra.dll");
-            if (!module) {
-                error = QStringLiteral("LoadLibraryW 失败，错误码 %1").arg(code);
-                return false;
-            }
-        }
-        createRuntime = resolve<decltype(createRuntime)>("JsCreateRuntime");
-        createContext = resolve<decltype(createContext)>("JsCreateContext");
-        setCurrentContext = resolve<decltype(setCurrentContext)>("JsSetCurrentContext");
-        getGlobalObject = resolve<decltype(getGlobalObject)>("JsGetGlobalObject");
-        runScript = resolve<decltype(runScript)>("JsRunScript");
-        createString = resolve<decltype(createString)>("JsCreateString");
-        convertToString = resolve<decltype(convertToString)>("JsConvertValueToString");
-        stringToPointer = resolve<decltype(stringToPointer)>("JsStringToPointer");
-        getStringLength = resolve<decltype(getStringLength)>("JsGetStringLength");
-        getProperty = resolve<decltype(getProperty)>("JsGetProperty");
-        setProperty = resolve<decltype(setProperty)>("JsSetProperty");
-        hasProperty = resolve<decltype(hasProperty)>("JsHasProperty");
-        propertyIdFromName = resolve<decltype(propertyIdFromName)>("JsGetPropertyIdFromName");
-        callFunction = resolve<decltype(callFunction)>("JsCallFunction");
-        getValueType = resolve<decltype(getValueType)>("JsGetValueType");
-        getAndClearException = resolve<decltype(getAndClearException)>("JsGetAndClearException");
-        disposeRuntime = resolve<decltype(disposeRuntime)>("JsDisposeRuntime");
-        if (!createRuntime || !createContext || !runScript || !createString || !propertyIdFromName) {
-            error = QStringLiteral("Chakra.dll 缺少所需导出。");
-            return false;
-        }
-        return true;
-    }
-};
 }  // namespace
 
-struct ScriptRuntime::Impl {
-    EngineApi api;
-    JsRuntimeHandle runtime{};
-    JsContextRef context{};
-    bool ready{};
-
-    QString stringOf(JsValueRef value) {
-        if (!value || !api.convertToString) return {};
-        JsValueRef text = nullptr;
-        if (api.convertToString(value, &text) != 0) return {};
-        const wchar_t* buffer = nullptr;
-        if (!api.stringToPointer || api.stringToPointer(text, &buffer) != 0) return {};
-        size_t length = 0;
-        if (api.getStringLength && api.getStringLength(text, &length) != 0) return {};
-        if (!buffer) return {};
-        return QString::fromWCharArray(buffer, int(length));
+QString ScriptRuntime::findEngine() {
+    const QString fromPath = QStandardPaths::findExecutable(QStringLiteral("node"));
+    if (!fromPath.isEmpty()) return fromPath;
+    const QStringList candidates{
+        QStringLiteral("C:/Program Files/nodejs/node.exe"),
+        QStringLiteral("C:/Program Files (x86)/nodejs/node.exe"),
+    };
+    for (const auto& candidate : candidates) {
+        if (QFileInfo::exists(candidate)) return candidate;
     }
-
-    QString takeException() {
-        if (!api.getAndClearException) return {};
-        JsValueRef exception = nullptr;
-        if (api.getAndClearException(&exception) != 0) return {};
-        return stringOf(exception);
-    }
-};
-
-ScriptRuntime::ScriptRuntime() : impl_(std::make_unique<Impl>()) {}
-
-ScriptRuntime::~ScriptRuntime() {
-    if (impl_->ready && impl_->api.module) {
-        if (impl_->api.setCurrentContext) impl_->api.setCurrentContext(nullptr);
-        if (impl_->runtime && impl_->api.disposeRuntime) impl_->api.disposeRuntime(impl_->runtime);
-    }
+    return {};
 }
 
-bool ScriptRuntime::available(QString& error) {
-    if (!impl_->api.open()) {
-            error = QStringLiteral("无法加载系统 JavaScript 引擎：%1").arg(impl_->api.error);
-        return false;
+ScriptRuntime::Result ScriptRuntime::runBundle(const QString& shimSource, const QString& snapshotJson,
+                                               const QString& pluginSource, const QString& entryPath,
+                                               int timeoutMs) {
+    Result result;
+    const QString engine = findEngine();
+    if (engine.isEmpty()) {
+        result.error = QStringLiteral(
+            "未找到可用的 JavaScript 引擎（node.exe），无法运行 UXP 插件。原生 C 插件不受影响。");
+        return result;
     }
-    if (!impl_->ready) {
-        if (impl_->api.createRuntime(0, 0x2 /* disable background work */, &impl_->runtime) != 0) {
-            error = QStringLiteral("无法创建 JS 运行时。");
-            return false;
-        }
-        if (impl_->api.createContext(impl_->runtime, &impl_->context) != 0) {
-            error = QStringLiteral("无法创建 JS 上下文。");
-            return false;
-        }
-        impl_->api.setCurrentContext(impl_->context);
-        impl_->ready = true;
-    }
-    error.clear();
-    return true;
-}
 
-bool ScriptRuntime::setGlobalJson(const QString& name, const QString& json, QString& error) {
-    if (!available(error)) return false;
-    JsValueRef global = nullptr;
-    if (impl_->api.getGlobalObject(&global) != 0) {
-        error = QStringLiteral("无法获取全局对象。");
-        return false;
+    QTemporaryDir workspace;
+    if (!workspace.isValid()) {
+        result.error = QStringLiteral("无法创建临时目录。");
+        return result;
     }
-    // Parse the JSON inside the engine so the value is a real object, not a string.
-    QByteArray utf8 = json.toUtf8();
-    JsValueRef text = nullptr;
-    if (impl_->api.createString(utf8.constData(), size_t(utf8.size()), &text) != 0 || !text) {
-        error = QStringLiteral("无法创建 JSON 字符串。");
-        return false;
+    const QString scriptPath = QDir(workspace.path()).filePath(QStringLiteral("plugin-run.js"));
+    QFile script(scriptPath);
+    if (!script.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        result.error = QStringLiteral("无法写入运行脚本。");
+        return result;
     }
-    const auto wideName = name.toStdWString();
-    JsPropertyIdRef nameId = nullptr;
-    if (impl_->api.propertyIdFromName(wideName.c_str(), &nameId) != 0) {
-        error = QStringLiteral("无法解析全局名 %1。").arg(name);
-        return false;
-    }
-    if (impl_->api.setProperty(global, nameId, text, false) != 0) {
-        error = QStringLiteral("无法设置全局 %1。").arg(name);
-        return false;
-    }
-    // Replace the string with JSON.parse(string) so plugins mutate real objects.
-    const QString assign = QStringLiteral("this.%1 = JSON.parse(this.%1);").arg(name);
-    return evaluate(assign, QStringLiteral("compositor-json.js"), error);
-}
+    script.write(buildProgram(shimSource, snapshotJson, pluginSource, entryPath).toUtf8());
+    script.close();
 
-bool ScriptRuntime::evaluate(const QString& source, const QString& sourceName, QString& error) {
-    if (!available(error)) return false;
-    JsValueRef result = nullptr;
-    const auto script = source.toStdWString();
-    const auto name = sourceName.toStdWString();
-    const int code = impl_->api.runScript(impl_->context, nullptr, script.c_str(), name.c_str(), &result);
-    if (code != 0) {
-        const QString message = impl_->takeException();
-        error = message.isEmpty()
-                    ? QStringLiteral("脚本执行失败（引擎错误码 %1）：%2").arg(code).arg(sourceName)
-                    : QStringLiteral("%1：%2").arg(sourceName, message);
-        return false;
+    QProcess process;
+    process.setWorkingDirectory(workspace.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(engine, {QStringLiteral("--no-warnings"), scriptPath});
+    if (!process.waitForStarted(10000)) {
+        result.error = QStringLiteral("无法启动 JavaScript 引擎：%1").arg(engine);
+        return result;
     }
-    error.clear();
-    return true;
-}
-
-bool ScriptRuntime::evaluateToString(const QString& expression, QString& out, QString& error) {
-    if (!available(error)) return false;
-    JsValueRef result = nullptr;
-    const auto script = expression.toStdWString();
-    const auto name = QStringLiteral("compositor-expr.js").toStdWString();
-    const int code = impl_->api.runScript(impl_->context, nullptr, script.c_str(), name.c_str(), &result);
-    if (code != 0) {
-        const QString message = impl_->takeException();
-        error = message.isEmpty() ? QStringLiteral("表达式求值失败（错误码 %1）").arg(code) : message;
-        return false;
+    if (!process.waitForFinished(timeoutMs)) {
+        process.kill();
+        process.waitForFinished(2000);
+        result.error = QStringLiteral("插件执行超时（%1 秒）。").arg(timeoutMs / 1000);
+        return result;
     }
-    out = impl_->stringOf(result);
-    error.clear();
-    return true;
-}
-
-bool ScriptRuntime::hasGlobalFunction(const QString& name) {
-    if (!impl_->ready) return false;
-    JsValueRef global = nullptr;
-    if (impl_->api.getGlobalObject(&global) != 0) return false;
-    const auto wide = name.toStdWString();
-    JsPropertyIdRef id = nullptr;
-    if (impl_->api.propertyIdFromName(wide.c_str(), &id) != 0) return false;
-    bool has = false;
-    if (impl_->api.hasProperty(global, id, &has) != 0 || !has) return false;
-    JsValueRef value = nullptr;
-    if (impl_->api.getProperty(global, id, &value) != 0) return false;
-    JsValueType type = JsUndefined;
-    if (impl_->api.getValueType(value, &type) != 0) return false;
-    return type == JsFunction;
-}
-
-bool ScriptRuntime::callGlobal(const QString& functionName, QString& error) {
-    if (!available(error)) return false;
-    JsValueRef global = nullptr;
-    if (impl_->api.getGlobalObject(&global) != 0) {
-        error = QStringLiteral("无法获取全局对象。");
-        return false;
+    result.output = QString::fromUtf8(process.readAll());
+    if (process.exitCode() != 0) {
+        result.error = result.output.trimmed().isEmpty()
+                           ? QStringLiteral("插件执行失败（退出码 %1）。").arg(process.exitCode())
+                           : QStringLiteral("插件执行失败：%1").arg(result.output.trimmed());
+        return result;
     }
-    const auto wide = functionName.toStdWString();
-    JsPropertyIdRef id = nullptr;
-    if (impl_->api.propertyIdFromName(wide.c_str(), &id) != 0) {
-        error = QStringLiteral("无法解析函数名 %1。").arg(functionName);
-        return false;
+    // The epilogue prints one marker line; everything before it is plugin output.
+    const int marker = result.output.lastIndexOf(QStringLiteral("__MUTATIONS__"));
+    if (marker < 0) {
+        result.error = QStringLiteral("插件未返回变更记录。");
+        return result;
     }
-    JsValueRef function = nullptr;
-    if (impl_->api.getProperty(global, id, &function) != 0) {
-        error = QStringLiteral("未找到入口函数 %1。").arg(functionName);
-        return false;
-    }
-    JsValueRef result = nullptr;
-    if (impl_->api.callFunction(function, &result, 0, nullptr) != 0) {
-        const QString message = impl_->takeException();
-        error = message.isEmpty() ? QStringLiteral("调用 %1 失败。").arg(functionName) : message;
-        return false;
-    }
-    error.clear();
-    return true;
+    const QString tail = result.output.mid(marker + int(QStringLiteral("__MUTATIONS__").size()));
+    result.mutationsJson = tail.section(QLatin1Char('\n'), 0, 0).trimmed();
+    if (result.mutationsJson.isEmpty()) result.mutationsJson = QStringLiteral("[]");
+    result.ok = true;
+    return result;
 }
 
 }  // namespace compositor::plugin
