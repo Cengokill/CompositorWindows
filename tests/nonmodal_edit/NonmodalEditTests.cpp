@@ -171,7 +171,12 @@ void volumetric_light_lifecycle(){
     const auto applied=f.project.document;require(applied->layers[1].raster->rgba()==expected,"volumetric preview equals Apply");require(applied->layers[1].mask==before.layers[1].mask,"volumetric keeps the layer mask");
     trigger(f.window,"edit.undo");require(f.project.document==before,"volumetric undo");trigger(f.window,"edit.redo");require(f.project.document==applied,"volumetric redo");
     // Last Filter repeats it as one more step.
-    trigger(f.window,"filter.last");wait([&]{return !f.project.projectBusy;},"volumetric Last Filter did not finish",120000);
+    trigger(f.window,"filter.last");
+    // The progress window shows what it is doing and its moving bar, not an empty frame.
+    wait([&]{auto* box=f.window.findChild<QDialog*>("lastFilterProgress");return box&&box->isVisible();},"Last Filter progress window did not appear",120000);
+    {auto* box=f.window.findChild<QDialog*>("lastFilterProgress");auto* heading=box->findChild<QLabel*>("exportProgressHeading");auto* strip=box->findChild<QWidget*>("exportProgressStrip");
+     require(heading&&heading->isVisible()&&heading->text()=="Applying the last filter"&&strip&&strip->isVisible()&&strip->width()>100&&box->findChild<QPushButton*>("exportProgressCancel")->isVisible(),"Last Filter progress window shows its heading, bar and Cancel");}
+    wait([&]{return !f.project.projectBusy;},"volumetric Last Filter did not finish",120000);
     require(f.project.history.undoCount()==2,"volumetric Last Filter adds one step");trigger(f.window,"edit.undo");require(f.project.document==applied,"volumetric Last Filter undo");
     trigger(f.window,"edit.undo");require(f.project.document==before,"back to the original");
     // A changed source is not extracted.
