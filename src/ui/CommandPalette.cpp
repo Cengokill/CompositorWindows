@@ -1,6 +1,7 @@
 #include "CommandPalette.h"
 #include "LayerPanelTokens.h"
 #include "LayerPanelWidgets.h"
+#include "LocalizedText.h"
 #include <QApplication>
 #include <QColor>
 #include <QEvent>
@@ -26,10 +27,10 @@ constexpr int kShortcutRole=Qt::UserRole+4;
 constexpr int kRowHeight=34;
 constexpr int kRowInset=14;
 constexpr int kRowGap=12;
-QString labelText(const CommandListItem& item){return item.checked?QString::fromUtf8("\xE2\x9C\x93 ")+item.label:item.label;}
+QString labelText(const CommandListItem& item){const auto label=localizedText(item.label);return item.checked?QString::fromUtf8("\xE2\x9C\x93 ")+label:label;}
 QString rowText(const CommandListItem& item){
     QString text=labelText(item);
-    if(!item.menu.isEmpty())text+="    "+item.menu;
+    if(!item.menu.isEmpty())text+="    "+localizedText(item.menu);
     if(!item.shortcut.isEmpty())text+="    "+item.shortcut;
     return text;
 }

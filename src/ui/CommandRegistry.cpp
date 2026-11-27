@@ -1,6 +1,7 @@
 // Command contracts from a19db9011282399785dc18efcfded904627bdcc2.
 // Source predicates deliberately remain separate from Qt focus/modal policy.
 #include "CommandRegistry.h"
+#include "LocalizedText.h"
 #include <QAction>
 #include <QApplication>
 #include <QAbstractSpinBox>
@@ -256,9 +257,13 @@ std::vector<CommandListItem> filterCommands(const std::vector<CommandListItem>& 
     for(const auto& item:items){
         if(item.id=="help.command_palette")continue;
         if(!needle.isEmpty()){
-            const bool matches=item.label.contains(needle,Qt::CaseInsensitive)||item.menu.contains(needle,Qt::CaseInsensitive)||item.id.contains(needle,Qt::CaseInsensitive);
+            // Match the English catalog entry and its translation so the palette is
+            // searchable in either language.
+            const QString labelZh=localizedText(item.label),menuZh=localizedText(item.menu);
+            const bool matches=item.label.contains(needle,Qt::CaseInsensitive)||item.menu.contains(needle,Qt::CaseInsensitive)||item.id.contains(needle,Qt::CaseInsensitive)
+                ||labelZh.contains(needle,Qt::CaseInsensitive)||menuZh.contains(needle,Qt::CaseInsensitive);
             if(!matches)continue;
-            if(item.label.startsWith(needle,Qt::CaseInsensitive)){prefix.push_back(item);continue;}
+            if(item.label.startsWith(needle,Qt::CaseInsensitive)||labelZh.startsWith(needle,Qt::CaseInsensitive)){prefix.push_back(item);continue;}
         }
         rest.push_back(item);
     }
@@ -422,7 +427,12 @@ void CommandRegistry::refreshShortcutHints(){
     for(const auto& e:entries_){
         if(!e.action)continue;
         auto* action=e.action.data();
-        std::vector<Hint> hints{{action,"shortcutHintText",[action]{return action->text();},[action](const QString& text){action->setText(text);}},
+        // With a localized caption the English shortcut suffix that hinted() matches
+        // is gone, so the hint is rebuilt from the shipped English label and the
+        // translated caption is reapplied around the native shortcut text.
+        const QString englishLabel=action->data().toString();
+        QAction* bound=action;
+        std::vector<Hint> hints{{action,"shortcutHintText",[bound,englishLabel]{return englishLabel.isEmpty()?bound->text():englishLabel;},[bound,englishLabel](const QString& text){bound->setText(englishLabel.isEmpty()?text:localizedText(QString(text).remove('&')));}},
             {action,"shortcutHintTip",[action]{return action->toolTip();},[action](const QString& text){action->setToolTip(text);}}};
         for(auto* object:action->associatedObjects())if(auto* widget=qobject_cast<QWidget*>(object)){
             hints.push_back({widget,"shortcutHintTip",[widget]{return widget->toolTip();},[widget](const QString& text){widget->setToolTip(text);}});

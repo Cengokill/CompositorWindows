@@ -5,6 +5,7 @@
 #include "GlassDialog.h"
 #include "LayerPanelTokens.h"
 #include "LayerPanelWidgets.h"
+#include "LocalizedText.h"
 #include "ToolbarControls.h"
 #include <QApplication>
 #include <QAbstractButton>
@@ -354,6 +355,10 @@ void styleWorkspace(QMainWindow* window) {
     for(const auto& pair:{std::pair{"Clipboard","Edit"},std::pair{"Adjustments","Image"},std::pair{"Canvas","Image"},std::pair{"Transform","Layer"}})
         if(auto* child=findMenu(pair.first))if(auto* parent=findMenu(pair.second)){menu->removeAction(child->menuAction());parent->addSeparator();parent->addMenu(child);}
     for(const auto* title:{"File","Edit","View","Select","Image","Filters","Layer","Help"})if(auto* item=findMenu(title)){menu->removeAction(item->menuAction());menu->addMenu(item);}
-    for(auto* child:menu->findChildren<QMenu*>())makeGlassMenu(child);
+    // Localize after the menus are built and ordered: both the ordering above and
+    // the command catalog look menus up by their English titles.
+    auto* macItem=window->findChild<QAction*>("macTitleBarAction");
+    if(macItem){macItem->setText(localizedText("Mac-style title bar"));macItem->setToolTip(localizedText("Use colored window controls on the left. Turn off for the native Windows title bar."));}
+    for(auto* child:menu->findChildren<QMenu*>()){applyLocalizedMenuTitle(child);makeGlassMenu(child);}
 }
 }

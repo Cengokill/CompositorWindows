@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "ui/LocalizedText.h"
 #include "ui/WhatsNew.h"
 #include "AppLogging.h"
 #include "persistence/ProjectStore.h"
@@ -14,9 +15,13 @@
 #include <QDir>
 #include <QMessageBox>
 #include <QTextStream>
+#include <QTranslator>
 
 int main(int argc,char**argv){
     QApplication app(argc,argv);app.setApplicationName("Compositor");app.setOrganizationName("Compositor Windows");app.setApplicationVersion(COMPOSITOR_VERSION_STRING);
+    // The command catalog and shortcut settings key off English text; the translator
+    // only changes what the interface displays.
+    QTranslator translator;compositor::ui::installChineseTranslation(translator);
     compositor::logging::install();
     compositor::logging::trace(QString("startup executable=%1 arguments=%2")
         .arg(QCoreApplication::applicationFilePath(),app.arguments().join(" | ")));

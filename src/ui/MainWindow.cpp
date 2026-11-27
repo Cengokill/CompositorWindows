@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "AboutDialog.h"
+#include "LocalizedText.h"
 #include "ToolFlyoutButton.h"
 #include "NumberScrub.h"
 #include "LastFilterJob.h"
@@ -133,7 +134,9 @@ Layer* MainWindow::active(){auto*p=current();if(!p||!p->document)return nullptr;
 bool MainWindow::canEditLayers(){const auto state=commandState();return !state.modalDialog&&ui::canEditLayers(state)&&shapeDraftId_.empty();}
 bool MainWindow::canEditAppearance(){return canEditLayers()&&active()&&!active()->group&&current()->selected.size()==1;}
 QAction* MainWindow::action(QMenu* menu,const QString& name,const QKeySequence& key,std::function<void()> invoke){
-    auto* item=menu->addAction(name);if(!key.isEmpty())item->setShortcut(key);
+    // The visible text is translated, but command lookup keeps the English label.
+    auto* item=menu->addAction(ui::localizedText(QString(name).remove('&')));if(!key.isEmpty())item->setShortcut(key);
+    item->setData(name);
     bindCommand(item,menu->title(),name,std::move(invoke));return item;
 }
 MainWindow::MainWindow(bool warp):warp_(warp){movePreviewJob_=new ui::MovePreviewJob([this](ui::MovePreviewJob::Result result){applyMovePreview(std::move(result));},this);viewportComposite_=new ui::ViewportCompositeJob([this](ui::ViewportCompositeJob::Result result){applyViewportComposite(std::move(result));},this);ui::installVisualStyle();setWindowTitle("Compositor");resize(1280,820);setAcceptDrops(true);tabs_=new QTabWidget;tabs_->setTabsClosable(true);tabs_->setDocumentMode(true);setCentralWidget(tabs_);tabs_->setMovable(true);tabs_->tabBar()->setAcceptDrops(true);connect(tabs_,&QTabWidget::currentChanged,this,[this]{switchProject();});connect(tabs_,&QTabWidget::tabCloseRequested,this,[this](int i){closeProject(i);});
@@ -225,7 +228,7 @@ setupPaletteControls(rail);
 rail->setPalette(paletteSwatches_);
 setupGifTimeline();
 auto*dock=setupLayersDock();
-auto*inspector=new QDockWidget("Transform",this);inspector->setObjectName("transformDock");inspector->setStyleSheet(QString("QDockWidget#transformDock, QWidget#sectionTitle, QWidget#transformContent { background: %1; }").arg(ui::layer_panel::background));auto*formWidget=new QWidget;formWidget->setObjectName("transformContent");auto*form=new QFormLayout(formWidget);const char*names[]{"X","Y","Width","Height","Angle"};for(int i=0;i<5;++i){auto*spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};spin->setCompactDisplay(true);spin->setDecimals(3);spin->setRange(i==2||i==3?1:-1000000,i==2||i==3?300000:1000000);spin->setAccessibleName(names[i]);geometry_[i]=spin;form->addRow(names[i],spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){if(!refreshing_)editTransformGeometry(i,value);});}inspector->setWidget(formWidget);addDockWidget(Qt::RightDockWidgetArea,inspector);setupBrushControls();setupAdjustmentActions();setupSelectionActions();setupLayerActions();setupTransformActions();setupDrawingActions();setupTypeControls();setupRetouchActions();ui::installNumberScrubbing(this,{[this]{auto* project=current();return project?int(project->history.undoCount()):-1;},[this]{if(undo_)undo_->trigger();}});{QSettings settings;commands_->restoreShortcuts(settings);}setupStatusInfo();ui::installProjectChrome(this,tabs_,dock,layers_);ui::styleWorkspace(this);refresh(false);addEmptyProject(false);}
+auto*inspector=new QDockWidget("Transform",this);inspector->setObjectName("transformDock");inspector->setStyleSheet(QString("QDockWidget#transformDock, QWidget#sectionTitle, QWidget#transformContent { background: %1; }").arg(ui::layer_panel::background));auto*formWidget=new QWidget;formWidget->setObjectName("transformContent");auto*form=new QFormLayout(formWidget);const char*names[]{"X","Y","Width","Height","Angle"};for(int i=0;i<5;++i){auto*spin=new ui::PropertyNumber;spin->releaseFocus=[this]{if(canvas())canvas()->setFocus();};spin->setCompactDisplay(true);spin->setDecimals(3);spin->setRange(i==2||i==3?1:-1000000,i==2||i==3?300000:1000000);spin->setAccessibleName(names[i]);geometry_[i]=spin;form->addRow(names[i],spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){if(!refreshing_)editTransformGeometry(i,value);});}inspector->setWidget(formWidget);addDockWidget(Qt::RightDockWidgetArea,inspector);setupBrushControls();setupAdjustmentActions();setupSelectionActions();setupLayerActions();setupTransformActions();setupDrawingActions();setupTypeControls();setupRetouchActions();ui::installNumberScrubbing(this,{[this]{auto* project=current();return project?int(project->history.undoCount()):-1;},[this]{if(undo_)undo_->trigger();}});{QSettings settings;commands_->restoreShortcuts(settings);}setupStatusInfo();ui::installProjectChrome(this,tabs_,dock,layers_);ui::styleWorkspace(this);ui::localizeWidgetTree(this);refresh(false);addEmptyProject(false);}
 void MainWindow::restoreHistorySnapshot(Snapshot snapshot){
     stopGifPlayback();
     beginPreviewGesture();
