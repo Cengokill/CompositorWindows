@@ -16,6 +16,8 @@
 #include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QToolButton>
 #include <QImage>
@@ -25,6 +27,11 @@
 #include <QTest>
 #include <QTemporaryDir>
 #include <QTimer>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -122,6 +129,107 @@ void rim_light_lifecycle(){
     require(f.project.history.undoCount()==1&&f.project.toolState.lastFilterKind==filters::Kind::RimLight&&!f.project.effectPreview,"rim Apply history and overlay");require(f.project.toolState.filterSettings.pixels.rimLight.count==2&&f.project.toolState.filterSettings.pixels.rimLight.lights[1].strength==75&&QColor::fromRgbF(f.project.toolState.filterSettings.pixels.rimLight.lights[1].color[0],f.project.toolState.filterSettings.pixels.rimLight.lights[1].color[1],f.project.toolState.filterSettings.pixels.rimLight.lights[1].color[2])==QColor("#2288cc"),"rim remembers settings after Apply");const auto applied=f.project.document;require(applied->layers[0].raster->rgba()==expected,"rim preview equals Apply");require(applied->layers[0].mask==layer.mask,"rim keeps placed mask");trigger(f.window,"edit.undo");f.unchanged();trigger(f.window,"edit.redo");require(f.project.document==applied,"rim redo");
     QTemporaryDir temp;require(temp.isValid(),"rim temporary directory");const auto root=std::filesystem::path(temp.path().toStdWString());ProjectStore store(makeWicProjectCodec());store.save(root/L"rim.comp",*applied,f.project.active);auto reopened=store.load(root/L"rim.comp");require(reopened.document.layers[0].raster->rgba()==expected,"rim save reopen pixels");auto rendered=SoftwareRenderer().render(reopened.document,0,0,d.width,d.height)->rgba();exportDocumentAtomic(reopened.document,root/L"rim.png");require(imaging::WicCodec::decode(root/L"rim.png").image.pixels==rendered,"rim PNG export pixels");
     trigger(f.window,"filter.last");wait([&]{return !f.project.projectBusy;},"rim Last Filter did not finish",120000);require(f.project.history.undoCount()==2,"rim Last Filter adds one history step");trigger(f.window,"edit.undo");require(f.project.document==applied,"rim Last Filter undo");
+}
+// A photo in a folder with a layer clipped to it and a layer above the folder.
+Document volumetricFixture(){
+    QImage input(QStringLiteral(COMPOSITOR_RIM_FIXTURE));require(!input.isNull(),"volumetric photo fixture");input=input.scaled(160,160,Qt::KeepAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+    Document d;d.id=newId();d.width=input.width();d.height=input.height();
+    Layer folder;folder.id=newId();folder.name="Folder";folder.group=true;
+    Layer photo;photo.id=newId();photo.name="Photo";photo.parentId=folder.id;photo.transform={4,6,double(d.width-8),double(d.height-12)};
+    photo.raster=Raster::fromRgba(input.width(),input.height(),input.constBits(),size_t(input.bytesPerLine()));
+    auto layerMask=std::make_shared<GrayRaster>();layerMask->width=2;layerMask->height=2;layerMask->pixels={0,64,128,255};photo.mask=Mask{layerMask,false,false,Transform{2,3,40,40}};
+    Layer tint;tint.id=newId();tint.name="Tint";tint.parentId=folder.id;tint.maskSourceId=photo.id;tint.transform=photo.transform;tint.raster=Raster::filled(8,8,{120,30,30,120});
+    Layer top;top.id=newId();top.name="Top";top.transform={0,0,8,8};top.raster=Raster::filled(8,8,{0,0,255,255});
+    d.layers={folder,photo,tint,top};return d;
+}
+void selectLayer(MainWindow& window,EditorProject& project,const std::string& id){project.active=id;project.selected={id};trigger(window,"tool.move");}
+QPushButton* buttonsCancel(QDialog& p){auto* buttons=p.findChild<QDialogButtonBox*>();require(buttons,"panel buttons");return buttons->button(QDialogButtonBox::Cancel);}
+QLabel* volumetricStatus(QDialog& p){return control<QLabel>(p,"filterPreviewStatus");}
+void volumetric_light_lifecycle(){
+    auto d=volumetricFixture();const auto photoId=d.layers[1].id;Fixture f(d);selectLayer(f.window,f.project,photoId);const auto before=*f.project.document;
+    auto unchanged=[&]{require(f.project.document==before&&f.project.history.undoCount()==0,"volumetric draft changed the document or history");};
+    // Cancel while the depth is being prepared: nothing partial is kept.
+    panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+        require(volumetricStatus(p)->text()=="Preparing depth…"&&!apply(p)->isEnabled()&&!control<QPushButton>(p,"volumetricExtractDepth")->isEnabled(),"preparation disables Apply and Extract Depth");
+        require(buttonsCancel(p)->isEnabled(),"Cancel stays available while preparing");p.reject();});
+    unchanged();require(!f.project.effectPreview,"Cancel during preparation leaves no preview");
+    // A setting moved during the preparation is used once it finishes; clicking moves the light.
+    std::vector<std::uint8_t> expected;
+    panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+        field(p,"Haze")->setValue(80);field(p,"Length")->setValue(60);
+        require(volumetricStatus(p)->text()=="Preparing depth…","a setting does not restart the preparation");
+        wait([&]{return apply(p)->isEnabled();},"volumetric preview did not finish",120000);
+        require(control<QPushButton>(p,"volumetricExtractDepth")->isEnabled(),"Extract Depth ready with the depth model");
+        const auto first=f.project.effectPreview;require(bool(first),"volumetric preview installed");unchanged();
+        f.click({30,40});wait([&]{return apply(p)->isEnabled()&&f.project.effectPreview!=first;},"moving the light did not update the preview",120000);
+        const auto& layer=*std::find_if(f.project.effectPreview->layers.begin(),f.project.effectPreview->layers.end(),[&](const Layer& l){return l.id==photoId;});
+        expected=layer.raster->rgba();require(expected!=before.layers[1].raster->rgba()&&expected!=std::find_if(first->layers.begin(),first->layers.end(),[&](const Layer& l){return l.id==photoId;})->raster->rgba(),"light position changes the preview");
+        unchanged();apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"volumetric Apply did not finish",120000);});
+    require(f.project.history.undoCount()==1&&f.project.history.undoName()=="Volumetric Light"&&!f.project.effectPreview,"volumetric Apply is one step");
+    const auto& remembered=f.project.toolState.filterSettings.pixels.volumetric;
+    require(remembered.haze==80&&remembered.length==60&&remembered.center&&std::abs(remembered.center->x-30)<1&&std::abs(remembered.center->y-40)<1&&f.project.toolState.lastFilterKind==filters::Kind::VolumetricLight,"volumetric settings remembered after Apply");
+    const auto applied=f.project.document;require(applied->layers[1].raster->rgba()==expected,"volumetric preview equals Apply");require(applied->layers[1].mask==before.layers[1].mask,"volumetric keeps the layer mask");
+    trigger(f.window,"edit.undo");require(f.project.document==before,"volumetric undo");trigger(f.window,"edit.redo");require(f.project.document==applied,"volumetric redo");
+    // Last Filter repeats it as one more step.
+    trigger(f.window,"filter.last");wait([&]{return !f.project.projectBusy;},"volumetric Last Filter did not finish",120000);
+    require(f.project.history.undoCount()==2,"volumetric Last Filter adds one step");trigger(f.window,"edit.undo");require(f.project.document==applied,"volumetric Last Filter undo");
+    trigger(f.window,"edit.undo");require(f.project.document==before,"back to the original");
+    // A changed source is not extracted.
+    panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+        wait([&]{return apply(p)->isEnabled();},"volumetric preview for stale source",120000);
+        auto changed=*f.project.document;changed.layers[1].raster=Raster::filled(4,4,{9,9,9,255});f.project.document=changed;
+        control<QPushButton>(p,"volumetricExtractDepth")->click();QApplication::processEvents();
+        require(p.isVisible()&&volumetricStatus(p)->text().startsWith("The source layer changed"),"changed source keeps the panel open");
+        require(f.project.document->layers.size()==4,"changed source inserts nothing");f.project.document=before;p.reject();});
+    // Extract Depth: one step, an opaque Depth layer above the clipped stack, at the source's size and place.
+    panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+        wait([&]{return control<QPushButton>(p,"volumetricExtractDepth")->isEnabled();},"Extract Depth did not become ready",120000);
+        control<QPushButton>(p,"volumetricExtractDepth")->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"Extract Depth did not close the panel",120000);});
+    const auto extracted=f.project.document;
+    require(extracted->layers.size()==5&&f.project.history.undoCount()==1&&f.project.history.undoName()=="Extract Depth","Extract Depth is one step");
+    const auto& depth=extracted->layers[3];
+    require(depth.name=="Depth"&&f.project.active==depth.id&&depth.parentId==before.layers[1].parentId&&depth.transform==before.layers[1].transform&&!depth.mask&&depth.maskSourceId.empty(),"Depth layer active, in the folder, at the source placement, without the mask");
+    require(depth.raster->width==before.layers[1].raster->width&&depth.raster->height==before.layers[1].raster->height,"Depth at the source resolution");
+    bool opaque=true,gray=true,varies=false;const auto first=depth.raster->pixel(0,0);
+    for(int y=0;y<depth.raster->height;++y)for(int x=0;x<depth.raster->width;++x){const auto q=depth.raster->pixel(x,y);opaque&=q.a==255;gray&=q.r==q.g&&q.g==q.b;varies|=q.r!=first.r;}
+    require(opaque&&gray&&varies,"Depth is an opaque gray map");
+    require(extracted->layers[1]==before.layers[1]&&extracted->layers[2]==before.layers[2]&&extracted->layers[2].maskSourceId==before.layers[1].id,"source and clipped stack unchanged");
+    require(extracted->layers[4]==before.layers[3],"layer above the folder unchanged");
+    trigger(f.window,"edit.undo");require(f.project.document==before&&f.project.active==photoId,"Extract Depth undo");trigger(f.window,"edit.redo");require(f.project.document==extracted,"Extract Depth redo");
+    QTemporaryDir temp;require(temp.isValid(),"volumetric temporary directory");const auto root=std::filesystem::path(temp.path().toStdWString());
+    ProjectStore store(makeWicProjectCodec());store.save(root/L"depth.comp",*extracted,f.project.active);auto reopened=store.load(root/L"depth.comp");
+    require(reopened.document.layers.size()==5&&reopened.document.layers[3].raster->rgba()==depth.raster->rgba()&&reopened.document.layers[3].name=="Depth"&&reopened.document.layers[2].maskSourceId==before.layers[1].id,"Depth save and reopen");
+    const auto rendered=SoftwareRenderer().render(reopened.document,0,0,d.width,d.height)->rgba();exportDocumentAtomic(reopened.document,root/L"depth.png");
+    require(imaging::WicCodec::decode(root/L"depth.png").image.pixels==rendered&&rendered==SoftwareRenderer().render(*extracted,0,0,d.width,d.height)->rgba(),"Depth export matches the document");
+}
+std::uint64_t peakWorkingSet(){PROCESS_MEMORY_COUNTERS counters{};counters.cb=sizeof(counters);return GetProcessMemoryInfo(GetCurrentProcess(),&counters,sizeof(counters))?counters.PeakWorkingSetSize:0;}
+void volumetric_light_large_image(){
+    // 24 megapixels, beyond BiRefNet's direct budget: the subject and depth use an analysis copy.
+    QImage input(QStringLiteral(COMPOSITOR_RIM_FIXTURE));require(!input.isNull(),"volumetric photo fixture");input=input.scaled(6000,4000,Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+    auto d=fixture();d.width=6000;d.height=4000;d.layers[0].transform={0,0,6000,4000};d.layers[0].raster=Raster::fromRgba(6000,4000,input.constBits(),size_t(input.bytesPerLine()));input=QImage();Fixture f(d);
+    QElapsedTimer timer;
+    panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+        timer.start();wait([&]{return apply(p)->isEnabled();},"large volumetric preview did not finish",300000);std::printf("24MP preparation+first preview ms=%lld\n",timer.elapsed());
+        timer.restart();field(p,"Haze")->setValue(30);wait([&]{return apply(p)->isEnabled();},"large slider preview",300000);std::printf("24MP haze slider preview ms=%lld\n",timer.elapsed());
+        timer.restart();f.click({1500,1000});wait([&]{return apply(p)->isEnabled();},"large light move preview",300000);std::printf("24MP light move preview ms=%lld\n",timer.elapsed());
+        timer.restart();apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"large volumetric Apply",300000);std::printf("24MP apply ms=%lld\n",timer.elapsed());});
+    require(f.project.history.undoCount()==1&&f.project.document->layers[0].raster->width==6000,"large volumetric Apply is one full-size step");
+    std::printf("24MP peak working set MiB=%.0f\n",double(peakWorkingSet())/(1024*1024));
+}void volumetric_light_panel_geometry(){
+    Fixture f;
+    panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+        QApplication::processEvents();
+        for(const auto& name:QStringList{"Haze","Distance","Depth Contrast","Size","Intensity","Length","Shafts"}){
+            auto* spin=field(p,name);spin->setValue(100);auto* editor=spin->findChild<QLineEdit*>();
+            require(spin->isVisible()&&editor&&editor->contentsRect().width()>=editor->fontMetrics().horizontalAdvance("100 %"),"volumetric value is clipped");
+            require(spin->mapTo(&p,QPoint(spin->width(),0)).x()<=p.width(),"volumetric field leaves the panel");
+        }
+        for(auto* widget:std::initializer_list<QWidget*>{control<QPushButton>(p,"volumetricExtractDepth"),control<QToolButton>(p,"volumetricLightColor"),control<QCheckBox>(p,"volumetricKeepSubjectClear"),control<QLabel>(p,"volumetricLightHint")}){
+            const auto box=QRect(widget->mapTo(&p,QPoint()),widget->size());require(widget->isVisible()&&p.rect().contains(box),"volumetric control outside the panel");
+        }
+        {const auto swatch=control<QToolButton>(p,"volumetricLightColor")->size();if(swatch!=QSize(36,22))std::fprintf(stderr,"swatch=%dx%d\n",swatch.width(),swatch.height());require(swatch==QSize(36,22),"volumetric color swatch size");}
+        f.unchanged();p.reject();});
+    f.unchanged();require(!f.project.effectPreview,"volumetric Cancel clears the preview");
 }
 void lens_effects_lifecycle(){
     auto d=fixture();d.id="11111111-1111-4111-8111-111111111111";d.layers[0].id="22222222-2222-4222-8222-222222222222";auto pixels=d.layers[0].raster->rgba();for(int y=8;y<14;++y)for(int x=8;x<14;++x)for(int c=0;c<4;++c)pixels[(y*32+x)*4+c]=255;d.layers[0].raster=Raster::fromRgba(32,24,pixels.data(),128);Fixture f(d);
@@ -514,4 +622,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"lens_large_adjustment_ui",lens_large_adjustment_ui},{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"rim_light_lifecycle",rim_light_lifecycle},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"lens_large_adjustment_ui",lens_large_adjustment_ui},{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"rim_light_lifecycle",rim_light_lifecycle},{"volumetric_light_lifecycle",volumetric_light_lifecycle},{"volumetric_light_large_image",volumetric_light_large_image},{"volumetric_light_panel_geometry",volumetric_light_panel_geometry},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}

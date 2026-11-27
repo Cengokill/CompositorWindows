@@ -71,19 +71,32 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
         if(target==owner->document->layers.end()||
             (!state->live&&(target->raster!=state->original.raster||target->deep!=state->original.deep||
             (editPanel_&&editPanel_->kind()!=ui::EditPanelSession::Kind::Hue&&target->transform!=state->original.transform)))){
-            if(inserting)throw std::runtime_error("The source layer changed before Split to Layers finished");
+            if(inserting)throw std::runtime_error("The source layer changed before "+value.insertName+" finished");
             return;
         }
         Document prepared=*owner->document;
         const auto index=target-owner->document->layers.begin();
         std::size_t channelBytes=0;
+        std::string activated;
         if(inserting){
             for(auto& layer:value.insertAfterTarget){
                 layer.parentId=target->parentId;
                 layer.transform=target->transform;
                 channelBytes+=layer.raster->retainedBytes();
             }
-            prepared.layers.insert(prepared.layers.begin()+index+1,std::make_move_iterator(value.insertAfterTarget.begin()),
+            if(value.activateInserted)activated=value.insertAfterTarget.front().id;
+            auto at=std::size_t(index)+1;
+            if(value.insertAboveClipping){
+                // Layers clipped to the same base follow it among its siblings.
+                const auto& base=target->maskSourceId.empty()?target->id:target->maskSourceId;
+                for(auto i=std::size_t(index)+1;i<prepared.layers.size();++i){
+                    const auto& layer=prepared.layers[i];
+                    if(layer.parentId!=target->parentId)continue;
+                    if(layer.maskSourceId!=base)break;
+                    at=i+1;
+                }
+            }
+            prepared.layers.insert(prepared.layers.begin()+std::ptrdiff_t(at),std::make_move_iterator(value.insertAfterTarget.begin()),
                                    std::make_move_iterator(value.insertAfterTarget.end()));
         }else{
             auto rendered=std::find_if(value.document.layers.begin(),value.document.layers.end(),[&](const Layer& l){return l.id==state->original.id;});
@@ -97,9 +110,9 @@ ui::EditPanelHost MainWindow::makeEditPanelHost(EditorProject& project,const Doc
         const auto previousMinimum=owner->history.minimumEntries;
         // The four new planes can exceed the soft history budget after Undo.
         if(channelBytes>owner->history.byteLimit)owner->history.minimumEntries=std::max(previousMinimum,std::size_t{1});
-        try{if(!state->live)owner->history.begin(inserting?"Split to Layers":action,owner->document,owner->active);}
+        try{if(!state->live)owner->history.begin(inserting?value.insertName:action,owner->document,owner->active);}
         catch(...){owner->history.minimumEntries=previousMinimum;throw;}
-        try{owner->document=std::move(prepared);owner->history.end(owner->document,owner->active);state->livePending=false;if(value.maskSelected)owner->maskSelected=true;}
+        try{owner->document=std::move(prepared);if(!activated.empty())owner->active=activated;owner->history.end(owner->document,owner->active);state->livePending=false;if(value.maskSelected)owner->maskSelected=true;}
         catch(...){owner->history.minimumEntries=previousMinimum;if(auto snapshot=owner->history.cancel()){owner->document=std::move(snapshot->document);owner->active=std::move(snapshot->activeLayer);}state->livePending=false;throw;}
     };
     host.closed=[this,owner,present,state]{
