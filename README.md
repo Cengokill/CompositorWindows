@@ -63,7 +63,7 @@ The [user guide](docs/user-guide.md) describes each workflow and its limits.
 ### Adjustments and filters
 
 - Levels, Curves, Hue/Saturation, Exposure, Gradient Map, Grain, Black & White, Color Balance and Invert, as destructive edits or as adjustment layers.
-- Camera Raw filter, Gaussian and Motion Blur, Progressive Blur, Sharpen, noise, Vignette, Bloom, Tonal Contrast, Lens Effects, Rim Light, Lens Correction, Dither and Scanlines.
+- Camera Raw filter, Gaussian and Motion Blur, Progressive Blur, Sharpen, noise, Vignette, Bloom, Tonal Contrast, Lens Effects, Rim Light, Volumetric Light (with Extract Depth), Lens Correction, Dither and Scanlines.
 - Remove Background, which runs offline on your machine.
 - Live previews with Apply and Cancel. **Filters → Last Filter** (**Ctrl+Alt+F**) repeats the last filter with the same settings.
 
