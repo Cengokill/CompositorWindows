@@ -48,4 +48,6 @@ inline std::uint8_t ditherChannel(std::uint16_t value, int x, int y) {
 }
 std::shared_ptr<const DeepImage> deepFromPlanes(int width, int height, const std::uint16_t* red, const std::uint16_t* green, const std::uint16_t* blue, const std::uint16_t* alpha);
 std::shared_ptr<const Raster> rasterFromDeep(const DeepImage& image,const std::function<bool()>& cancelled={});
+// Exact 16-bit copy of premultiplied 8-bit pixels; dithering it back returns the same pixels.
+std::shared_ptr<const DeepImage> deepFromRaster(const Raster&);
 }

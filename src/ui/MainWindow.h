@@ -446,6 +446,7 @@ private:
     void applyLayerEdit(layers::EditResult);
     void mergeLayers();
     void layerCommand(int);
+    void convertLayerDepth(layers::BitDepth);
     void editLayerEffect(int);
     void setupTransformActions();
     // View > Layout Grid, Grid Settings, and Snap To. LayoutGridActions.cpp owns these controls.

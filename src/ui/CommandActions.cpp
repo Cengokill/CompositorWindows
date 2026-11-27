@@ -41,6 +41,8 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.singleSelected=selected.ids.size()==1;
     state.canMerge=layers::mergePlan(document,selected).has_value();
     state.hasOtherProject=std::any_of(projects_.begin(),projects_.end(),[&](const auto& item){return item.get()!=project&&!item->importing&&!item->projectBusy;});
+    state.canConvertToSixteenBit=layers::canConvertDepth(document,selected,layers::BitDepth::Sixteen);
+    state.canConvertToEightBit=layers::canConvertDepth(document,selected,layers::BitDepth::Eight);
     if(found==document.layers.end())return state;
     const auto& layer=*found;state.activeLayer=true;state.group=layer.group;state.asset=bool(layer.raster);state.hdrLayer=layer.deep&&layer.deep->isHdr();
     state.mask=layer.mask.has_value();state.maskEnabled=layer.mask&&layer.mask->enabled;

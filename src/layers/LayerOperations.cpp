@@ -22,6 +22,7 @@ std::string folderName(const Document& d){std::unordered_set<std::string> names;
 Layer newGroup(const Document& d){Layer out;out.id=newId();out.name=folderName(d);out.group=true;out.transform={0,0,double(d.width),double(d.height)};return out;}
 void adoptClipping(Document& d,const std::string& id){auto at=indexOf(d,id);if(at==d.layers.size()||d.layers[at].group)return;auto stack=siblings(d,d.layers[at].parentId);auto it=std::find(stack.begin(),stack.end(),id);auto i=std::size_t(it-stack.begin());if(i==0||i+1>=stack.size())return;const auto& above=*find(d,stack[i+1]);const auto& below=*find(d,stack[i-1]);if(!above.maskSourceId.empty()&&above.maskSourceId!=id&&(below.id==above.maskSourceId||below.maskSourceId==above.maskSourceId))d.layers[at].maskSourceId=above.maskSourceId;}
 void releaseDetached(Document& d){std::unordered_map<std::string,std::string> bases;IDs release;for(const auto& l:d.layers){auto& base=bases[l.parentId];if(!l.maskSourceId.empty()){if(l.maskSourceId!=base){release.insert(l.id);base=l.id;}}else base=l.group?std::string{}:l.id;}for(auto& l:d.layers)if(release.contains(l.id))l.maskSourceId.clear();}
+bool changesDepth(const Layer& l,BitDepth depth){return depth==BitDepth::Sixteen?!l.deep:bool(l.deep);}
 std::uint8_t byte(double value){return std::uint8_t(std::clamp(std::lround(value),0L,255L));}
 struct Dependency {
     const Layer* layer{};double background{};
@@ -62,6 +63,45 @@ EditResult link(const Document& d,SelectionState selected,const std::string& sou
 EditResult releaseClipping(const Document& d,SelectionState selected,const std::string& target){validateDocument(d);auto t=find(d,target);if(!t||t->maskSourceId.empty())return result(d,d,std::move(selected),"Release Clipping Mask");auto stack=siblings(d,t->parentId);auto start=std::find(stack.begin(),stack.end(),target);auto next=d;for(auto it=start;it!=stack.end();++it){auto& layer=next.layers[indexOf(next,*it)];if(layer.id!=target&&layer.maskSourceId!=t->maskSourceId)break;layer.maskSourceId.clear();}return result(d,std::move(next),std::move(selected),"Release Clipping Mask");}
 bool canToggleClipping(const Document& d,const std::string& id){try{validateDocument(d);auto l=find(d,id);if(!l||l->group)return false;if(!l->maskSourceId.empty())return true;auto stack=siblings(d,l->parentId);auto at=std::find(stack.begin(),stack.end(),id);if(at==stack.begin())return false;auto below=find(d,*(at-1));return !below->group&&canLink(d,below->maskSourceId.empty()?below->id:below->maskSourceId,id);}catch(...){return false;}}
 EditResult toggleClipping(const Document& d,SelectionState selected,const std::string& id){if(!canToggleClipping(d,id))return result(d,d,std::move(selected),"Create Clipping Mask");auto l=find(d,id);if(!l->maskSourceId.empty())return releaseClipping(d,std::move(selected),id);auto stack=siblings(d,l->parentId);auto below=find(d,*(std::find(stack.begin(),stack.end(),id)-1));return link(d,std::move(selected),below->maskSourceId.empty()?below->id:below->maskSourceId,id);}
+
+std::vector<std::string> depthTargets(const Document& d,SelectionState selected){
+    selected=normalizeSelection(d,std::move(selected));IDs picked(selected.ids.begin(),selected.ids.end());
+    for(const auto& l:d.layers)if(l.group&&picked.contains(l.id)){auto inside=descendants(d,l.id);picked.insert(inside.begin(),inside.end());}
+    std::vector<std::string> out;
+    for(const auto& l:d.layers)if(picked.contains(l.id)&&!l.group&&l.adjustmentJson.empty()&&!l.text&&l.shapeJson.empty()&&!l.animation)out.push_back(l.id);
+    return out;
+}
+bool canConvertDepth(const Document& d,SelectionState selected,BitDepth depth){
+    const auto targets=depthTargets(d,std::move(selected));const IDs wanted(targets.begin(),targets.end());
+    return std::any_of(d.layers.begin(),d.layers.end(),[&](const Layer& l){return wanted.contains(l.id)&&changesDepth(l,depth);});
+}
+EditResult convertDepth(const Document& d,SelectionState selected,BitDepth depth){
+    validateDocument(d);selected=normalizeSelection(d,std::move(selected));
+    const auto targets=depthTargets(d,selected);const IDs wanted(targets.begin(),targets.end());
+    // Blank layers are the only targets that add image pixels, so check them before any allocation.
+    if(depth==BitDepth::Sixteen){
+        const auto canvas=std::uint64_t(d.width)*std::uint64_t(d.height);std::uint64_t pixels=0,blanks=0;
+        for(const auto& l:d.layers){
+            if(l.raster)pixels+=std::uint64_t(l.raster->width)*l.raster->height;
+            if(l.animation)for(std::size_t i=0;i<l.animation->frames.size();++i)if(i!=l.animation->selectedFrame)pixels+=std::uint64_t(l.animation->frames[i].raster->width)*l.animation->frames[i].raster->height;
+            if(wanted.contains(l.id)&&!l.raster)++blanks;
+        }
+        if(blanks&&(canvas>maxRasterPixels||blanks>(maxDocumentImagePixels-pixels)/canvas))throw std::runtime_error("Converting these blank layers would exceed the project pixel budget");
+    }
+    auto next=d;std::shared_ptr<const Raster> clear;std::shared_ptr<const DeepImage> clearDeep;
+    for(auto& l:next.layers){
+        if(!wanted.contains(l.id)||!changesDepth(l,depth))continue;
+        // The Raster already is the clipped, dithered 8-bit version of the deep pixels.
+        if(depth==BitDepth::Eight){l.deep.reset();continue;}
+        if(l.raster){l.deep=deepFromRaster(*l.raster);continue;}
+        // Immutable clear pixels are shared by every blank layer of this edit.
+        if(!clear){clearDeep=makeDeep(d.width,d.height,DeepImage::Format::Unorm16);clear=Raster::filled(d.width,d.height);}
+        const Transform canvas{0,0,double(d.width),double(d.height)};
+        if(l.mask&&!l.mask->placement&&l.transform!=canvas)l.mask->placement=l.transform;
+        l.transform=canvas;l.raster=clear;l.deep=clearDeep;
+    }
+    return result(d,std::move(next),std::move(selected),depth==BitDepth::Sixteen?"Convert to 16-Bit":"Convert to 8-Bit");
+}
 
 DeletePlan deletionPlan(const Document& d,SelectionState selected){validateDocument(d);selected=normalizeSelection(d,std::move(selected));DeletePlan plan;plan.roots=selected.ids.size()>1?selected.ids:single(selected.primary).ids;for(const auto& id:plan.roots){plan.removed.insert(id);auto inside=descendants(d,id);plan.removed.insert(inside.begin(),inside.end());}for(const auto& l:d.layers)if(!plan.removed.contains(l.id)&&plan.removed.contains(l.maskSourceId))plan.dependents.push_back(l.id);return plan;}
 std::shared_ptr<const Raster> bakeLiveMask(const Document& d,const std::string& target,const Limits& limits,std::shared_ptr<const DeepImage>* deep){

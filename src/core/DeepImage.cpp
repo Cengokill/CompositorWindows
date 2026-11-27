@@ -74,6 +74,20 @@ std::shared_ptr<const DeepImage> deepFromPlanes(int width, int height, const std
     }
     return image;
 }
+std::shared_ptr<const DeepImage> deepFromRaster(const Raster& source) {
+    auto image = makeDeep(source.width, source.height, DeepImage::Format::Unorm16);
+    for (int y = 0; y < source.height; ++y) {
+        for (int x = 0; x < source.width; ++x) {
+            const Pixel pixel = source.pixel(x, y);
+            auto* sample = image->at(x, y);
+            sample[0] = promote8(pixel.r);
+            sample[1] = promote8(pixel.g);
+            sample[2] = promote8(pixel.b);
+            sample[3] = promote8(pixel.a);
+        }
+    }
+    return image;
+}
 std::shared_ptr<const Raster> rasterFromDeep(const DeepImage& image,const std::function<bool()>& cancelled) {
     if (!image.valid()) throw std::runtime_error("Invalid 16-bit image");
     if(cancelled&&cancelled())throw std::runtime_error("Deep image conversion cancelled");

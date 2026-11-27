@@ -61,5 +61,53 @@ void merging(){
     auto clear=document({layer("a"),layer("b")},7,5);merged=merge(clear,selected({"b"}),renderer);check(merged.document.layers[0].raster->width==7&&merged.document.layers[0].raster->height==5,"transparent merge keeps canvas grid");
     struct Failure:IRasterBackend{std::shared_ptr<const Raster> render(const Document&,int,int,int,int)const override{throw std::runtime_error("injected renderer failure");}} failure;fails([&]{merge(clear,selected({"b"}),failure);},"renderer failure propagates atomically");check(clear.layers.size()==2,"failed merge leaves source unchanged");
 }
+void depth(){
+    std::vector<std::uint8_t> bytes{128,0,0,128,7,3,1,9,255,254,1,255,0,0,0,0};const auto pixels=Raster::fromRgba(2,2,bytes.data(),8);
+    auto folder=layer("folder",{},true),eight=layer("eight","folder"),text=layer("text","folder"),shape=layer("shape","folder"),adjustment=layer("adjustment","folder"),gif=layer("gif","folder"),blank=layer("blank","folder"),sixteen=layer("sixteen"),outside=layer("outside");
+    eight.raster=text.raster=shape.raster=gif.raster=sixteen.raster=outside.raster=pixels;sixteen.deep=deepFromRaster(*pixels);
+    text.text=TextContent{"Text"};shape.shapeJson="{}";adjustment.adjustmentJson="{}";gif.animation=GifAnimation{{{pixels,100}},0};
+    eight.opacity=.5;eight.blend=Blend::Multiply;eight.mask=solidMask(128);blank.transform={1,1,1,1};blank.mask=solidMask(255);
+    const auto d=document({folder,eight,text,shape,adjustment,gif,blank,sixteen,outside});
+    const auto chosen=selected({"eight","folder","sixteen"},"sixteen");
+    check(depthTargets(d,chosen)==std::vector<std::string>({"eight","blank","sixteen"}),"targets cover selected folders once and skip unsupported layers");
+    check(canConvertDepth(d,chosen,BitDepth::Sixteen)&&canConvertDepth(d,chosen,BitDepth::Eight),"a mixed selection can go either way");
+    check(!canConvertDepth(d,selected({"text","shape","adjustment","gif"}),BitDepth::Sixteen),"unsupported layers enable nothing");
+
+    const auto wide=convertDepth(d,chosen,BitDepth::Sixteen);
+    check(wide.changed&&wide.action=="Convert to 16-Bit"&&wide.selection.ids==normalizeSelection(d,chosen).ids&&wide.selection.primary=="sixteen","conversion keeps the selection");
+    const auto& converted=get(wide.document,"eight");
+    check(converted.deep&&converted.raster==pixels&&converted.opacity==.5&&converted.blend==Blend::Multiply&&converted.mask==eight.mask&&converted.transform==eight.transform,"8-bit layer keeps pixels and appearance");
+    for(std::size_t i=0;i<bytes.size();++i)check(converted.deep->samples[i]==promote8(bytes[i]),"16-bit samples are the exact 8-bit equivalents");
+    const auto& filled=get(wide.document,"blank");
+    check(filled.deep&&filled.raster&&filled.raster->width==2&&filled.raster->height==2&&std::all_of(filled.deep->samples.begin(),filled.deep->samples.end(),[](std::uint16_t v){return v==0;}),"blank layer gets clear canvas pixels");
+    check(filled.transform.x==0&&filled.transform.y==0&&filled.transform.width==2&&filled.transform.height==2&&filled.mask&&filled.mask->placement==blank.transform,"blank layer covers the canvas and its mask stays in place");
+    for(const char* id:{"folder","text","shape","adjustment","gif","sixteen","outside"})check(get(wide.document,id)==get(d,id),"excluded, unselected and already 16-bit layers are untouched");
+    check(!canConvertDepth(wide.document,chosen,BitDepth::Sixteen)&&!convertDepth(wide.document,chosen,BitDepth::Sixteen).changed,"nothing left to widen");
+
+    const auto narrow=convertDepth(wide.document,chosen,BitDepth::Eight);
+    check(narrow.action=="Convert to 8-Bit"&&!get(narrow.document,"eight").deep&&!get(narrow.document,"blank").deep&&!get(narrow.document,"sixteen").deep,"every selected deep layer narrows");
+    check(get(narrow.document,"eight")==get(d,"eight"),"8 to 16 to 8 restores the layer exactly");
+    check(rasterFromDeep(*converted.deep)->rgba()==pixels->rgba(),"dithering promoted pixels returns the same bytes");
+    std::vector<std::uint8_t> ramp;for(int a=0;a<256;++a)for(int v=0;v<256;++v){const auto value=std::uint8_t(std::min(v,a));ramp.insert(ramp.end(),{value,value,value,std::uint8_t(a)});}
+    const auto every=Raster::fromRgba(256,256,ramp.data(),1024);check(rasterFromDeep(*deepFromRaster(*every))->rgba()==ramp,"every premultiplied 8-bit value survives the round trip");
+
+    History history;std::optional<Document> current=d;history.begin(wide.action,current,chosen.primary);current=wide.document;history.end(current,wide.selection.primary);
+    check(history.undoCount()==1,"one history step");const auto undone=history.undo();check(undone&&undone->document==d&&!history.canUndo(),"one undo restores every layer");const auto redone=history.redo();check(redone&&redone->document==wide.document,"one redo converts every layer again");
+
+    auto linked=layer("linked"),placed=layer("placed");linked.mask=solidMask(255);placed.transform={1,0,1,1};placed.mask=solidMask(255);placed.mask->placement=Transform{5,6,2,2};
+    const auto masks=document({linked,placed});const auto masked=convertDepth(masks,selected({"linked","placed"}),BitDepth::Sixteen);
+    check(get(masked.document,"placed").mask==placed.mask,"a placed mask keeps its placement");
+    check(!get(masked.document,"linked").mask->placement||get(masked.document,"linked").transform!=linked.transform,"a mask on a canvas-sized blank layer is not moved");
+
+    auto hdr=layer("hdr");auto samples=makeDeep(2,2,DeepImage::Format::HalfFloat);samples->setPixel(0,0,{2,.5f,0,1});hdr.deep=samples;hdr.raster=rasterFromDeep(*samples);
+    const auto bright=document({hdr});
+    check(!canConvertDepth(bright,selected({"hdr"}),BitDepth::Sixteen)&&canConvertDepth(bright,selected({"hdr"}),BitDepth::Eight),"HDR only goes to 8 bits here");
+    const auto clipped=convertDepth(bright,selected({"hdr"}),BitDepth::Eight);check(!clipped.document.layers[0].deep&&clipped.document.layers[0].raster==hdr.raster,"HDR keeps its clipped 8-bit presentation");
+
+    std::vector<Layer> blanks;SelectionState all;for(int i=0;i<6;++i){blanks.push_back(layer("blank"+std::to_string(i)));all.ids.push_back(blanks.back().id);}all.primary=all.ids.front();
+    const auto large=document(std::move(blanks),10000,10000);const auto before=large;
+    check(canConvertDepth(large,all,BitDepth::Sixteen),"oversized request is still offered");
+    fails([&]{convertDepth(large,all,BitDepth::Sixteen);},"six 100 MP blank layers exceed the project pixel budget");check(large==before,"rejected conversion changes nothing");
 }
-int main(int argc,char** argv){try{const std::vector<std::pair<std::string,void(*)()>> cases{{"hierarchy",hierarchy},{"grouping",grouping},{"moves_duplicate",movesAndDuplicate},{"clipping",clipping},{"bake_delete",bakeAndDelete},{"multi_history",multiDeleteAndHistory},{"copy_graph",copyGraph},{"merge",merging}};bool ran=false;for(const auto& [name,run]:cases)if(argc==1||name==argv[1]){run();std::cout<<"PASS layers."<<name<<'\n';ran=true;}check(ran,"Unknown test case");return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+}
+int main(int argc,char** argv){try{const std::vector<std::pair<std::string,void(*)()>> cases{{"hierarchy",hierarchy},{"grouping",grouping},{"moves_duplicate",movesAndDuplicate},{"depth",depth},{"clipping",clipping},{"bake_delete",bakeAndDelete},{"multi_history",multiDeleteAndHistory},{"copy_graph",copyGraph},{"merge",merging}};bool ran=false;for(const auto& [name,run]:cases)if(argc==1||name==argv[1]){run();std::cout<<"PASS layers."<<name<<'\n';ran=true;}check(ran,"Unknown test case");return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

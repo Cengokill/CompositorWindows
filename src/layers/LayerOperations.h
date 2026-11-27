@@ -34,6 +34,15 @@ bool canToggleClipping(const Document&,const std::string&);
 EditResult link(const Document&,SelectionState,const std::string& source,const std::string& target);
 EditResult releaseClipping(const Document&,SelectionState,const std::string& target);
 EditResult toggleClipping(const Document&,SelectionState,const std::string& target);
+// 8/16-bit conversion covers the selected layers and the contents of selected folders. Folders,
+// adjustments, text, shapes and animated GIF layers are never targets.
+enum class BitDepth {Eight,Sixteen};
+std::vector<std::string> depthTargets(const Document&,SelectionState);
+// True when at least one target would change. A layer already holding deep pixels, HDR included, is left to
+// Convert HDR to 16-Bit in the 16-bit direction.
+bool canConvertDepth(const Document&,SelectionState,BitDepth);
+// One edit. A blank layer gets clear 16-bit pixels over the canvas; the project pixel budget is checked first.
+EditResult convertDepth(const Document&,SelectionState,BitDepth);
 struct DeletePlan {std::vector<std::string> roots,dependents;std::unordered_set<std::string> removed;};
 DeletePlan deletionPlan(const Document&,SelectionState);
 enum class DeleteMode {Cancel,Bake,RemoveLinks};
