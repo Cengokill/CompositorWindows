@@ -6,6 +6,10 @@
 #include "imaging/wic_codec.h"
 #include "imaging/onnx_subject_provider.h"
 #include "core/DocumentExport.h"
+#include "plugin/UxpTranslator.h"
+#include "plugin/UxpNativeHost.h"
+#include "plugin/PluginRuntime.h"
+#include "plugin/ScriptRuntime.h"
 #include "CompositorVersion.h"
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -40,7 +44,121 @@ int main(int argc,char**argv){
             return 0;
         }catch(const std::exception&e){QTextStream(stderr)<<e.what()<<Qt::endl;return 2;}
     }
-    if(args.contains("--render-project")){
+    if(args.contains("--uxp-analyse")){
+        // Diagnostics: analyse a UXP plugin directory without opening a window.
+        try{
+            const int index=args.indexOf("--uxp-analyse");
+            if(index+1>=args.size())throw std::runtime_error("Usage: Compositor --uxp-analyse <plugin-directory>");
+            compositor::plugin::UxpImportResult result;QString error;
+            if(!compositor::plugin::UxpTranslator::analyse(args[index+1],result,error))throw std::runtime_error(error.toStdString());
+            // A WIN32 application has no console, so the report goes beside the plugin.
+            const QString report=QDir(args[index+1]).filePath("compositor-analyse.txt");
+            QFile file(report);
+            if(!file.open(QIODevice::WriteOnly|QIODevice::Text))throw std::runtime_error("Cannot write analyse report");
+            QTextStream out(&file);
+            out<<"id="<<result.id<<"\nname="<<result.name<<"\nentry="<<result.entryFile<<"\n";
+            out<<"mapped="<<result.mapped.size()<<"\nunsupported="<<result.unsupported.join("|")<<"\n";
+            out<<"notes="<<result.manifestNotes.join("|")<<"\n";
+            return result.mapped.isEmpty()&&result.entryFile.isEmpty()?3:0;
+        }catch(const std::exception&e){QTextStream(stderr)<<e.what()<<Qt::endl;return 2;}
+    }    if(args.contains("--uxp-build")){
+        // Diagnostics: translate, write and compile a UXP plugin without the UI.
+        try{
+            const int index=args.indexOf("--uxp-build");
+            if(index+1>=args.size())throw std::runtime_error("Usage: Compositor --uxp-build <plugin-directory>");
+            const QString source=args[index+1];
+            compositor::plugin::UxpImportResult result;QString error;
+            if(!compositor::plugin::UxpTranslator::analyse(source,result,error))throw std::runtime_error(error.toStdString());
+            const QString output=QDir(QCoreApplication::applicationDirPath()).filePath("plugins/"+result.id);
+            if(!compositor::plugin::UxpTranslator::writeFiles(result,output,error))throw std::runtime_error(error.toStdString());
+            const QString binary=QDir(output).filePath(result.id+".compositor-plugin.dll");
+            const QString sdk=QDir(QCoreApplication::applicationDirPath()).filePath("sdk");
+            if(!compositor::plugin::UxpTranslator::compile(result,output,sdk,binary,error))throw std::runtime_error(error.toStdString());
+            QFile report(QDir(source).filePath("compositor-build.txt"));
+            if(report.open(QIODevice::WriteOnly|QIODevice::Text))report.write(binary.toUtf8());
+            return 0;
+        }catch(const std::exception&e){
+            QFile report(QDir(args[args.indexOf("--uxp-build")+1]).filePath("compositor-build.txt"));
+            if(report.open(QIODevice::WriteOnly|QIODevice::Text))report.write(e.what());
+            return 2;
+        }
+    }    if(args.contains("--uxp-run")){
+        // Diagnostics: load one UXP plugin and run it against a scratch document.
+        try{
+            const int index=args.indexOf("--uxp-run");
+            if(index+1>=args.size())throw std::runtime_error("Usage: Compositor --uxp-run <plugin-directory>");
+            compositor::plugin::UxpPlugin plugin;QString error;
+            if(!compositor::plugin::UxpNativeHost::discover(args[index+1],plugin,error))throw std::runtime_error(error.toStdString());
+            compositor::plugin::PluginRuntime runtime;
+            compositor::Document document;document.id="uxp-diagnostic";document.width=64;document.height=64;
+            compositor::Layer layer;layer.id="base";layer.name="Background";
+            layer.raster=compositor::Raster::filled(document.width,document.height,{0,0,0,255});
+            document.layers.push_back(layer);
+            std::optional<compositor::Document> storage=std::move(document);
+            runtime.setDocumentProvider([&storage]()->compositor::Document*{return &*storage;});
+            runtime.setActiveLayerProvider([]{return int32_t(0);});
+            runtime.setEditInvoker([&storage](const char*,const compositor::plugin::PluginRuntime::EditOperation&operation){operation(*storage);return true;});
+            runtime.setLogSink([](const QString&message){compositor::logging::trace(QStringLiteral("uxp: ")+message);});
+            runtime.setTitleProvider([]{return QStringLiteral("Diagnostic");});
+            compositor::plugin::UxpNativeHost host(&runtime);
+            const auto result=host.run(plugin,error);
+            QFile report(QDir(args[index+1]).filePath("compositor-uxp-run.txt"));
+            if(report.open(QIODevice::WriteOnly|QIODevice::Text)){
+                QTextStream out(&report);
+                out<<"plugin="<<plugin.id<<"\nentry="<<plugin.entryPath<<"\nresult="<<int(result)<<"\nerror="<<error<<"\n";
+            }
+            return result==COMPOSITOR_OK?0:2;
+        }catch(const std::exception&e){
+            QFile report(QDir(args[args.indexOf("--uxp-run")+1]).filePath("compositor-uxp-run.txt"));
+            if(report.open(QIODevice::WriteOnly|QIODevice::Text))report.write(e.what());
+            return 2;
+        }
+    }    if(args.contains("--js-selftest")){
+        // Diagnostics: proves the embedded engine, JSON injection and expression
+        // read-back all work without relying on native callbacks.
+        compositor::plugin::ScriptRuntime runtime;QString error,text;
+        bool ok=runtime.setGlobalJson(QStringLiteral("__probe"),QStringLiteral("{\"n\":7,\"list\":[1,2]}"),error);
+        const bool evaluated=ok&&runtime.evaluate(QStringLiteral("this.__probe.list.push(3);this.__probe.n+=1;"),
+                                                 QStringLiteral("selftest.js"),error);
+        const bool readBack=evaluated&&runtime.evaluateToString(QStringLiteral("JSON.stringify(this.__probe)"),text,error);
+        QFile file(QDir(QCoreApplication::applicationDirPath()).filePath("js-selftest.txt"));
+        if(file.open(QIODevice::WriteOnly|QIODevice::Text)){
+            file.write(QStringLiteral("inject=%1 evaluate=%2 read=%3\nerror=%4\nvalue=%5\n")
+                           .arg(ok).arg(evaluated).arg(readBack).arg(error,text).toUtf8());
+        }
+        return readBack?0:2;
+    }    if(args.contains("--uxp-run")){
+        // Diagnostics: load one UXP plugin and run it against a scratch document.
+        try{
+            const int index=args.indexOf("--uxp-run");
+            if(index+1>=args.size())throw std::runtime_error("Usage: Compositor --uxp-run <plugin-directory>");
+            compositor::plugin::UxpPlugin plugin;QString error;
+            if(!compositor::plugin::UxpNativeHost::discover(args[index+1],plugin,error))throw std::runtime_error(error.toStdString());
+            compositor::plugin::PluginRuntime runtime;
+            compositor::Document document;document.id="uxp-diagnostic";document.width=64;document.height=64;
+            compositor::Layer layer;layer.id="base";layer.name="Background";
+            layer.raster=compositor::Raster::filled(document.width,document.height,{0,0,0,255});
+            document.layers.push_back(layer);
+            std::optional<compositor::Document> storage=std::move(document);
+            runtime.setDocumentProvider([&storage]()->compositor::Document*{return &*storage;});
+            runtime.setActiveLayerProvider([]{return int32_t(0);});
+            runtime.setEditInvoker([&storage](const char*,const compositor::plugin::PluginRuntime::EditOperation&operation){operation(*storage);return true;});
+            runtime.setLogSink([](const QString&message){compositor::logging::trace(QStringLiteral("uxp: ")+message);});
+            runtime.setTitleProvider([]{return QStringLiteral("Diagnostic");});
+            compositor::plugin::UxpNativeHost host(&runtime);
+            const auto result=host.run(plugin,error);
+            QFile report(QDir(args[index+1]).filePath("compositor-uxp-run.txt"));
+            if(report.open(QIODevice::WriteOnly|QIODevice::Text)){
+                QTextStream out(&report);
+                out<<"plugin="<<plugin.id<<"\nentry="<<plugin.entryPath<<"\nresult="<<int(result)<<"\nerror="<<error<<"\n";
+            }
+            return result==COMPOSITOR_OK?0:2;
+        }catch(const std::exception&e){
+            QFile report(QDir(args[args.indexOf("--uxp-run")+1]).filePath("compositor-uxp-run.txt"));
+            if(report.open(QIODevice::WriteOnly|QIODevice::Text))report.write(e.what());
+            return 2;
+        }
+    }    if(args.contains("--render-project")){
         try{
             int input=args.indexOf("--render-project"),output=args.indexOf("--output");
             if(input+1>=args.size()||output<0||output+1>=args.size())throw std::runtime_error("Usage: Compositor --render-project project.comp --output result.png");

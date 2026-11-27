@@ -149,6 +149,9 @@ target_compile_definitions(compositor_platform PUBLIC NOMINMAX WIN32_LEAN_AND_ME
 target_compile_options(compositor_platform PRIVATE /W4 /WX /utf-8)
 target_link_libraries(compositor_platform PUBLIC d2d1 d3d11 dxgi dxguid mscms bcrypt gdi32 user32 advapi32 Qt6::Core)
 add_library(compositor_ui src/ui/NativeCanvas.cpp src/ui/MainWindow.cpp src/ui/FileActions.cpp src/ui/BrushActions.cpp)
+# Native plugin SDK: the public header is what third-party plugins compile against.
+target_include_directories(compositor_ui PUBLIC "${CMAKE_SOURCE_DIR}/include")
+target_sources(compositor_ui PRIVATE src/plugin/PluginHost.cpp src/plugin/PluginHostApi.cpp src/plugin/PluginRuntime.cpp src/plugin/UxpTranslator.cpp src/plugin/ScriptRuntime.cpp src/plugin/UxpNativeHost.cpp src/ui/PluginActions.cpp)
 # Simplified Chinese interface catalog. The compiled .qm is embedded so a portable copy stays self-contained.
 qt_add_resources(compositor_ui chinese_translation PREFIX "/i18n" BASE i18n FILES i18n/compositor_zh_CN.qm)
 target_sources(compositor_ui PRIVATE src/ui/LocalizedText.cpp)

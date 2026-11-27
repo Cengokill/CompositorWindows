@@ -1,4 +1,5 @@
 #include "LayerPanelWidgets.h"
+#include "LocalizedText.h"
 #include "LayerPanelTokens.h"
 #include <QAbstractItemView>
 #include <QApplication>
@@ -639,7 +640,7 @@ EmptyState::EmptyState(QWidget* parent) : QWidget(parent) {
     setDetail("Create a canvas or import a file.");
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
-void EmptyState::setDetail(const QString& detail) { detail_ = detail; update(); }
+void EmptyState::setDetail(const QString& detail) { detail_ = localizedText(detail); update(); }
 void EmptyState::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
@@ -648,7 +649,7 @@ void EmptyState::paintEvent(QPaintEvent*) {
     painter.setPen(QColor(t::secondary));
     painter.setFont(panelFont(t::calloutFont, QFont::Medium));
     painter.drawText(QRect(t::emptyPadding, iconTop + t::emptyIcon + t::emptySpacing,
-                           width() - 2 * t::emptyPadding, 18), Qt::AlignCenter, "No layers yet");
+                           width() - 2 * t::emptyPadding, 18), Qt::AlignCenter, localizedText("No layers yet"));
     painter.setFont(panelFont(t::captionFont));
     painter.drawText(QRect(t::emptyPadding, iconTop + t::emptyIcon + t::emptySpacing + 24,
                            width() - 2 * t::emptyPadding, 40), Qt::AlignHCenter | Qt::TextWordWrap, detail_);

@@ -155,7 +155,17 @@ void validateSettings(const RawAdjustments& raw) {
 bool isRawFileExtension(const std::filesystem::path& path) {
     auto extension = path.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
-    return extension == L".cr2" || extension == L".nef" || extension == L".arw" || extension == L".dng" || extension == L".raw" || extension == L".rw2";
+    // LibRaw recognises far more containers than were listed here. The extension gate
+    // only decides which files reach LibRaw, so accept the common camera and DNG
+    // extensions and let LibRaw reject anything it cannot decode.
+    static constexpr const wchar_t* extensions[]{
+        L".cr2", L".cr3", L".crw", L".nef", L".nrw", L".arw", L".srf", L".sr2",
+        L".dng", L".raw", L".rw2", L".raf", L".orf", L".pef", L".srw", L".raws",
+        L".3fr", L".ari", L".bay", L".cap", L".dcs", L".dcr", L".drf", L".eip",
+        L".erf", L".fff", L".iiq", L".k25", L".kdc", L".mdc", L".mef", L".mos",
+        L".mrw", L".pxn", L".r3d", L".rwl", L".rwz", L".x3f"};
+    return std::any_of(std::begin(extensions), std::end(extensions),
+        [&extension](const wchar_t* candidate) { return extension == candidate; });
 }
 
 RawDevelopment developRaw(const std::filesystem::path& path, const ImportOptions& options, std::uint32_t previewMaxSide) {

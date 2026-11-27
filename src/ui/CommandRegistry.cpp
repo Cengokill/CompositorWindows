@@ -287,6 +287,10 @@ void CommandRegistry::bind(QAction*action,const CommandSpec&spec,std::function<v
     if(!action||spec.id.isEmpty()||!invoke)throw std::invalid_argument("Invalid command binding");
     if(std::any_of(entries_.begin(),entries_.end(),[&](const Entry&e){return e.action==action;}))throw std::invalid_argument("Action already registered");
     action->setProperty("commandId",spec.id);action->setProperty("commandSource",spec.source);if(action->objectName().isEmpty())action->setObjectName("command."+spec.id);
+    // Menus built straight from the catalog would otherwise keep English captions.
+    // The English label stays in the action data for command lookup and hints.
+    if(action->data().toString().isEmpty())action->setData(spec.label);
+    action->setText(localizedText(QString(spec.label).remove('&')));
     if(!spec.windowsShortcut.isEmpty())action->setShortcut(QKeySequence(spec.windowsShortcut));
     if(spec.id=="edit.redo")action->setShortcuts({QKeySequence("Ctrl+Shift+Z"),QKeySequence("Ctrl+Y")});
     if(defaults_[spec.id].isEmpty())defaults_[spec.id]=action->shortcuts();

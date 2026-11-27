@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LocalizedText.h"
 #include "PaletteSwatches.h"
 #include "ToolbarControls.h"
 #include <QCheckBox>
@@ -72,7 +73,7 @@ void MainWindow::refreshStatusInfo(){
     zoom->setVisible(document);dimensions->setVisible(document);
     zoom->setText(document?QString("%1 %").arg(std::lround(canvas()->zoom*100)):QString());
     dimensions->setText(document?QString::fromUtf8("%1 × %2 px").arg(p->document->width).arg(p->document->height):QString());
-    profile->setText(document?"sRGB · Transparent":"Ready when you are");
+    profile->setText(document?"sRGB · Transparent":ui::localizedText("Ready when you are"));
     const auto message=statusBar()->currentMessage();
     hint->setText(!message.isEmpty()?message:document?toolHint():QString());
 }

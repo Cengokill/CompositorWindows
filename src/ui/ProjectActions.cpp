@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LocalizedText.h"
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -171,6 +172,7 @@ void detach(NativeCanvas*canvas){
 }
 }
 MainWindow::~MainWindow(){
+    delete plugins_;plugins_=nullptr;
     delete textFontPopup_.data();
     if(movePreviewJob_)movePreviewJob_->shutdown();
     if(viewportComposite_)viewportComposite_->shutdown();
@@ -307,7 +309,7 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
     auto*summary=new QLabel;summary->setObjectName("newCanvasSummary");
     if(!first){const auto image=QApplication::clipboard()->image();if(!image.isNull()&&image.width()<=30000&&image.height()<=30000){draft->width=image.width();draft->height=image.height();preset->setCurrentIndex(0);}}
     form->addRow("Preset",preset);form->addRow("Units",unit);form->addRow("Width",width);form->addRow("Height",height);form->addRow("Resolution",resolution);form->addRow("Background",background);form->addRow(summary);
-    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton("Open project",QDialogButtonBox::ActionRole);auto*import=buttons->addButton("Import image",QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton("Create canvas",QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);for(auto*button:{open,import,create})button->setProperty("pill",true);create->setProperty("primary",true);form->addRow(buttons);
+    auto*buttons=new QDialogButtonBox;auto*open=buttons->addButton(ui::localizedText("Open project"),QDialogButtonBox::ActionRole);auto*import=buttons->addButton(ui::localizedText("Import image"),QDialogButtonBox::ActionRole);import->setObjectName("welcomeImportImage");auto*create=buttons->addButton(ui::localizedText("Create canvas"),QDialogButtonBox::AcceptRole);create->setObjectName("createCanvas");create->setDefault(true);for(auto*button:{open,import,create})button->setProperty("pill",true);create->setProperty("primary",true);form->addRow(buttons);
     connect(open,&QPushButton::clicked,this,[this]{openProjectDialog();});connect(import,&QPushButton::clicked,this,[this]{importWelcomeImage();});
     // Shows the draft in every control. Typed spin text is rewritten only when requested, so a value being typed is not moved under the caret.
     auto syncNewCanvas=[draft,width,height,summary,background,create](bool rewriteSizes){
@@ -355,6 +357,8 @@ EditorProject& MainWindow::addEmptyProject(bool reuseEmpty){
         raw->history.begin("New Canvas",std::nullopt,{});raw->document=std::move(document);raw->active=layer.id;raw->selected={layer.id};raw->history.end(raw->document,raw->active);refresh();raw->canvas->fit();raw->canvas->setFocus();
     });
     row->addWidget(panel);row->addStretch();outer->addLayout(row);outer->addStretch();raw->page->addWidget(raw->welcome);raw->page->addWidget(raw->canvas);
+    // The welcome panel is assembled here, after MainWindow's own localization pass.
+    ui::localizeWidgetTree(panel);
     projects_.push_back(std::move(project));const auto index=tabs_->addTab(raw->page,raw->defaultTitle);tabs_->setCurrentIndex(index);switchProject();width->setFocus();return *raw;
 }
 EditorProject& MainWindow::addProject(Document document,QString title,bool reuseEmpty){

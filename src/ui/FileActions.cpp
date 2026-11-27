@@ -132,8 +132,12 @@ QStringList nativeImportPaths(HWND owner,const QString& directory,bool includePd
     // This function runs outside Qt's GUI thread. Keeping the native modal
     // loop away from Qt prevents qwindows/comdlg re-entry from corrupting
     // Qt's object tree.
+    // The filter must list every extension isRawFileExtension accepts, otherwise a
+    // supported RAW file (CR3, RAF, ORF, ...) is hidden from the picker.
     static constexpr wchar_t imageFilter[] =
-        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.gif;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;*.cr2;*.nef;*.arw;*.dng;*.raw";
+        L"Images\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.gif;*.exr;*.hdr;*.heic;*.heif;*.psd;*.psb;*.svg;"
+        L"*.cr2;*.cr3;*.crw;*.nef;*.nrw;*.arw;*.srf;*.sr2;*.dng;*.raw;*.rw2;*.raf;*.orf;*.pef;*.srw;"
+        L"*.3fr;*.ari;*.dcr;*.erf;*.fff;*.iiq;*.k25;*.kdc;*.mef;*.mos;*.mrw;*.pxn;*.r3d;*.rwl;*.x3f";
     static constexpr wchar_t allFilesFilter[] = L"\0All files\0*.*\0";
     std::wstring filter(imageFilter, std::size(imageFilter) - 1);
     if (includePdfs) filter += L";*.pdf";

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "NativeCanvas.h"
 #include "CropViewport.h"
 #include "graphics/BrushSession.h"
@@ -52,6 +52,7 @@ class QSpinBox;
 class QToolButton;
 
 namespace compositor {
+namespace plugin {class PluginHost;}
 namespace ui {class SegmentedControl;class ImportQueue;class WorkspaceDropQueue;class LayerOpacityField;class PaletteSwatches;}
 struct EditorProject {
     std::optional<Document> document;
@@ -119,6 +120,10 @@ private:
     ui::ImportQueue* importQueue_{};
     ui::WorkspaceDropQueue* workspaceDrops_{};
     ui::CommandRegistry* commands_{};
+    // Owned raw pointer: PluginHost is incomplete here, and PluginActions.cpp deletes it.
+    plugin::PluginHost* plugins_{};
+    QMenu* pluginsMenu_{};
+    QString uxpEngineError_;  // Non-empty when the embedded JavaScript engine is unavailable.
     bool closingWindow_{};
     // Snapshot of the window placement and the chrome hidden by canvas-only full screen.
     struct CanvasOnlyState {
@@ -280,6 +285,10 @@ private:
     bool canSwitchProjects();
     ui::CommandState commandState(EditorProject* owner=nullptr);
     void initializeCommands();
+    // Native plugin host: loads libraries from ./plugins and adds a Plugins menu.
+    void initializePlugins();
+    void rebuildPluginsMenu();
+    void importUxpPlugin();
     void openCommandPalette();
     void openShortcutEditor();
     void bindCommand(QAction*,const QString& menu,const QString& label,std::function<void()>);

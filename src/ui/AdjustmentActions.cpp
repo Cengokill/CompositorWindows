@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LocalizedText.h"
 #include "AdjustmentDialog.h"
 #include "SubjectPanel.h"
 #include "effects/Adjustments.h"
@@ -79,8 +80,10 @@ void MainWindow::setupAdjustmentActions(){
     lastFilterAction_=action(filters,"Last Filter",{},[this]{repeatLastFilter();});
     connect(filters,&QMenu::aboutToShow,this,[this]{
         auto* project=current();
-        if(!project||!project->toolState.lastFilterKind)lastFilterAction_->setText("Last Filter");
-        else lastFilterAction_->setText("Last Filter: "+filterKindDisplayName(*project->toolState.lastFilterKind));
+        // The command carries the English label; the menu shows the translation.
+        const QString base=ui::localizedText("Last Filter");
+        if(!project||!project->toolState.lastFilterKind)lastFilterAction_->setText(base);
+        else lastFilterAction_->setText(base+QStringLiteral(": ")+filterKindDisplayName(*project->toolState.lastFilterKind));
     });
     filters->addSeparator();
     const struct {const char* name;int kind;} filterItems[]{{"Gaussian Blur",0},{"Progressive Blur",11},{"Motion Blur",1},{"Add Noise",2},{"Lens Correction",3},{"Camera Raw Filter",10},{"Content-Aware Fill",4},{"Vignette",5},{"Bloom",6},{"Tonal Contrast",7},{"Dither",8},{"Scanlines",9},{"RGB Split",12},{"Lens Effects",13},{"Sharpen",14},{"Rim Light",15}};

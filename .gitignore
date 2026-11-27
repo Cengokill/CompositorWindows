@@ -67,3 +67,16 @@ CMakeFiles/
 *.idb
 *.tlog
 *.VC.db
+
+# Plugin build products and diagnostic reports written next to the executable.
+/plugins/
+/sdk/
+js-selftest.txt
+compositor-analyse.txt
+compositor-build.txt
+compositor-uxp-run.txt
+build-*.bat
+*.compositor-plugin.dll
+
+# UXP import scratch directories
+/tools/uxp-translate/**/compositor-port/

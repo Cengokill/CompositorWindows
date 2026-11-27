@@ -1,4 +1,5 @@
 #include "RawImportDialog.h"
+#include "LocalizedText.h"
 #include "PropertyControls.h"
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -242,6 +243,8 @@ bool reviewRawImports(QWidget* parent, const std::vector<std::filesystem::path>&
     for (const auto& file : files) {
         if (!imaging::isRawFileExtension(file)) continue;
         RawImportDialog dialog(file, developer, parent, !settings.openCameraRaw.has_value());
+        // The dialog builds its own labels, so translate them before it is shown.
+        localizeWidgetTree(&dialog);
         if (dialog.exec() != QDialog::Accepted) return false;
         settings[file] = dialog.settings();
         if (dialog.opensCameraRaw()) settings.openCameraRaw = file;
