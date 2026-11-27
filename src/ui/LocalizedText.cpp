@@ -1,4 +1,4 @@
-#include "LocalizedText.h"
+﻿#include "LocalizedText.h"
 #include <QAbstractButton>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -12,6 +12,9 @@
 #include <QTabBar>
 #include <QTextEdit>
 #include <QWidget>
+#include <QEvent>
+#include <QObject>
+#include <QApplication>
 
 namespace compositor::ui {
 namespace {
@@ -78,6 +81,31 @@ QString localizedWidgetText(const QString& english){
     return translateAgainst(plain(english));
 }
 
+namespace {
+// Localizes a window the first time it becomes visible. Filter panels and dialogs
+// are constructed on demand, long after the main window's own localization pass.
+class DialogLocalizer final : public QObject {
+public:
+    explicit DialogLocalizer(QWidget* owner) : QObject(owner) {
+        // Only an application-level filter sees events for dialogs created later.
+        if (qApp) qApp->installEventFilter(this);
+    }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Show) {
+            auto* widget = qobject_cast<QWidget*>(watched);
+            if (widget && widget->isWindow() && widget->windowType() == Qt::Dialog) {
+                localizeWidgetTree(widget);
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+}  // namespace
+
+void installDialogLocalizer(QWidget* owner) {
+    if (owner) new DialogLocalizer(owner);
+}
 void localizeWidgetTree(QWidget* root){
     if(!root)return;
     QList<QWidget*> widgets{root};

@@ -7,6 +7,7 @@
 #include "imaging/onnx_subject_provider.h"
 #include "core/DocumentExport.h"
 #include "plugin/UxpTranslator.h"
+#include "plugin/PluginHost.h"
 #include "plugin/UxpNativeHost.h"
 #include "plugin/PluginRuntime.h"
 #include "plugin/ScriptRuntime.h"
@@ -97,6 +98,23 @@ int main(int argc,char**argv){
         out<<"ok="<<result.ok<<"\nmutations="<<result.mutationsJson<<"\nerror="<<result.error<<"\noutput="<<result.output<<"\n";
         out.flush();
         return result.ok?0:2;
+    }    if(args.contains("--uxp-list")){
+        // Diagnostics: report what the plugin scan finds beside the executable.
+        QFile file(QDir(QCoreApplication::applicationDirPath()).filePath("uxp-list.txt"));
+        file.open(QIODevice::WriteOnly|QIODevice::Text);
+        QTextStream out(&file);
+        const int rootIndex=args.indexOf("--uxp-list");
+        const QString root=rootIndex+1<args.size()&&!args[rootIndex+1].startsWith("--")
+            ? args[rootIndex+1] : compositor::plugin::defaultPluginDirectory();
+        out<<"directory="<<root<<"\nexists="<<QDir(root).exists()<<"\n";
+        for(const auto& info : QDir(root).entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot,QDir::Name)){
+            compositor::plugin::UxpPlugin plugin;QString error;
+            const bool ok=compositor::plugin::UxpNativeHost::discover(info.absoluteFilePath(),plugin,error);
+            out<<"folder="<<info.fileName()<<" ok="<<ok<<" id="<<plugin.id<<" entry="<<plugin.entryPath
+               <<" scripts="<<plugin.scriptPaths.size()<<" err="<<error<<"\n";
+        }
+        out.flush();
+        return 0;
     }    if(args.contains("--uxp-run")){
         // Diagnostics: load one UXP plugin and run it against a scratch document.
         try{
@@ -143,6 +161,23 @@ int main(int argc,char**argv){
         out<<"ok="<<result.ok<<"\nmutations="<<result.mutationsJson<<"\nerror="<<result.error<<"\noutput="<<result.output<<"\n";
         out.flush();
         return result.ok?0:2;
+    }    if(args.contains("--uxp-list")){
+        // Diagnostics: report what the plugin scan finds beside the executable.
+        QFile file(QDir(QCoreApplication::applicationDirPath()).filePath("uxp-list.txt"));
+        file.open(QIODevice::WriteOnly|QIODevice::Text);
+        QTextStream out(&file);
+        const int rootIndex=args.indexOf("--uxp-list");
+        const QString root=rootIndex+1<args.size()&&!args[rootIndex+1].startsWith("--")
+            ? args[rootIndex+1] : compositor::plugin::defaultPluginDirectory();
+        out<<"directory="<<root<<"\nexists="<<QDir(root).exists()<<"\n";
+        for(const auto& info : QDir(root).entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot,QDir::Name)){
+            compositor::plugin::UxpPlugin plugin;QString error;
+            const bool ok=compositor::plugin::UxpNativeHost::discover(info.absoluteFilePath(),plugin,error);
+            out<<"folder="<<info.fileName()<<" ok="<<ok<<" id="<<plugin.id<<" entry="<<plugin.entryPath
+               <<" scripts="<<plugin.scriptPaths.size()<<" err="<<error<<"\n";
+        }
+        out.flush();
+        return 0;
     }    if(args.contains("--uxp-run")){
         // Diagnostics: load one UXP plugin and run it against a scratch document.
         try{
@@ -184,7 +219,7 @@ int main(int argc,char**argv){
             compositor::exportDocumentAtomic(d,std::filesystem::path(args[output+1].toStdWString()),options,limits);return 0;
         }catch(const std::exception&e){QTextStream(stderr)<<e.what()<<Qt::endl;return 2;}
     }
-    compositor::MainWindow window(args.contains("--warp"));window.show();
+    compositor::ui::installDialogLocalizer(nullptr);compositor::MainWindow window(args.contains("--warp"));window.show();
     if(args.contains("--feasibility")||args.contains("--ui-test"))window.addFeasibilityDocument();
     if(args.contains("--ui-test")){
         int i=args.indexOf("--evidence");QString dir=i>=0&&i+1<args.size()?args[i+1]:"evidence/native-ui";QDir().mkpath(dir);

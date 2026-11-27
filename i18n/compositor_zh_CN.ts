@@ -2075,5 +2075,29 @@
         <source>Noise reduction</source>
         <translation>降噪</translation>
     </message>
+    <message>
+        <source>To</source>
+        <translation>结束</translation>
+    </message>
+    <message>
+        <source>OK</source>
+        <translation>确定</translation>
+    </message>
+    <message>
+        <source>White Balance</source>
+        <translation>白平衡</translation>
+    </message>
+    <message>
+        <source>Mixer Target</source>
+        <translation>混色目标</translation>
+    </message>
+    <message>
+        <source>Color Grading</source>
+        <translation>颜色分级</translation>
+    </message>
+    <message>
+        <source>Three-Way</source>
+        <translation>三向</translation>
+    </message>
 </context>
 </TS>

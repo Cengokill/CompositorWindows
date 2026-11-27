@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <QAction>
 #include <QString>
 #include <QTranslator>
@@ -35,6 +35,10 @@ void applyLocalizedWindowTitle(QWidget* widget,const QString& english);
 // "localizedSourceText", "localizedSourceTitle", "localizedSourceTip" and
 // "localizedSourcePlaceholder" properties so a later refresh can re-apply it.
 void localizeWidgetTree(QWidget* root);
+
+// Installs an application-wide filter so dialogs built after startup (filter panels,
+// RAW panels, importers) are localized the moment they are shown.
+void installDialogLocalizer(QWidget* owner);
 
 // Translates text a widget is about to display; returns the English text when no
 // translation exists so callers can keep updating captions safely.

@@ -145,8 +145,16 @@ Photoshop 太贵，GIMP 的交互又很难让人保持"心流"。Compositor 就�
 cl /LD /utf-8 /I<仓库>\include my_plugin.c /link /OUT:my_plugin.compositor-plugin.dll
 ```
 
-**UXP 插件**——实验性。程序会尝试用 Windows 自带的 Chakra 引擎运行插件自带的 JavaScript，`photoshop.*` 由本程序实现。**当前版本在多数机器上无法启用**：如果引擎加载失败，“插件”菜单里的导入项会置灰并给出具体原因，不会崩溃或静默失败。`batchPlay`（PS 的动作描述符系统）没有实现。
+**UXP 插件**——原生执行，不转译。程序会读取插件目录下的 `manifest.json`，按 `index.html` 里 `<script src>` 的文档顺序加载全部脚本，连同 `require('photoshop')` 一起交给 JavaScript 引擎进程运行。插件记录的图层修改（不透明度、可见性、混合模式）会在脚本结束后通过编辑器自身的编辑路径应用，因此可以撤销。
 
+运行条件与限制：
+
+- 需要本机存在 `node.exe`（PATH 或常见安装目录）。找不到时“插件”菜单里的导入项会置灰并写明原因。
+- 引擎是独立进程：插件崩溃不会带崩编辑器，但插件里的 `console` 输出不会显示在主界面。
+- **插件自己的界面不会显示。** 面板依赖的 DOM 是桩实现——足以让它初始化、发请求、改图层，但不会真正绘制出它的窗口。
+- `batchPlay`（Photoshop 的动作描述符系统）没有实现，调用会明确报错。
+
+插件放在 `Compositor.exe` 同目录的 `plugins/` 下，每个插件一个文件夹。
 另附命令行转译工具 `tools/uxp-translate/`，可把 UXP 插件静态翻译成原生插件骨架，并列出无法翻译的 API。
 
 排查用参数（结果写入插件目录下的 txt）：
