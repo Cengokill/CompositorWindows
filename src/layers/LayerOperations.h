@@ -38,6 +38,9 @@ EditResult toggleClipping(const Document&,SelectionState,const std::string& targ
 // adjustments, text, shapes and animated GIF layers are never targets.
 enum class BitDepth {Eight,Sixteen};
 std::vector<std::string> depthTargets(const Document&,SelectionState);
+// Which directions would change at least one target.
+struct DepthChoices {bool eight{},sixteen{};};
+DepthChoices depthChoices(const Document&,SelectionState);
 // True when at least one target would change. A layer already holding deep pixels, HDR included, is left to
 // Convert HDR to 16-Bit in the 16-bit direction.
 bool canConvertDepth(const Document&,SelectionState,BitDepth);

@@ -163,4 +163,27 @@ void layer_depth(){
     bool accepted=false;answer(QMessageBox::Ok,accepted);command(bright,"layer.convert_8bit")->trigger();
     check(accepted&&!hdr.document->layers[0].deep&&hdr.history.undoCount()==1,"accepted HDR warning should convert in one step");
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="about_restores_commands")about_restores_commands();else if(name=="about_opaque_surface")about_opaque_surface();else if(name=="palette_contrast")palette_contrast();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else if(name=="layer_depth")layer_depth();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+// Above about 33.5 MP, the 16-bit samples that only history holds exceed its normal byte budget.
+void layer_depth_history(){
+    const auto large=[](bool hdr){Document d;d.id=newId();d.width=d.height=6000;Layer layer;layer.id=newId();layer.name="Large";layer.transform={0,0,6000,6000};layer.raster=Raster::filled(6000,6000,{140,70,35,255});if(hdr)layer.deep=makeDeep(6000,6000,DeepImage::Format::HalfFloat);d.layers.push_back(layer);return d;};
+    const auto rename=[](EditorProject& p,const char* name){p.history.begin("Rename",p.document,p.active);p.document->layers[0].name=name;p.history.end(p.document,p.active);};
+    {
+        MainWindow w(true);auto&p=w.addProject(large(false));rename(p,"One");rename(p,"Two");
+        const auto trigger=[&](const char* id){registry(w).refresh();check(command(w,id)->isEnabled(),"large history command is disabled");command(w,id)->trigger();};
+        trigger("layer.convert_16bit");check(p.history.undoCount()==3,"widening a large layer dropped history");
+        trigger("edit.undo");check(p.history.undoCount()==2&&p.history.canRedo()&&!p.document->layers[0].deep,"undoing a large widening dropped history");
+        trigger("edit.redo");check(p.history.undoCount()==3&&p.document->layers[0].deep,"redoing a large widening dropped history");
+        trigger("layer.convert_8bit");check(p.history.undoCount()==4&&!p.document->layers[0].deep,"narrowing a large layer dropped history");
+        trigger("edit.undo");check(p.history.undoCount()==3&&p.history.canRedo()&&p.document->layers[0].deep,"undo must restore the large 16-bit pixels");
+        trigger("edit.redo");check(p.history.undoCount()==4&&!p.document->layers[0].deep,"redo must narrow the large layer again");
+        for(int i=0;i<4;++i)trigger("edit.undo");
+        check(p.document->layers[0].name=="Large"&&!p.document->layers[0].deep,"older steps must stay reachable");
+    }
+    MainWindow w(true);auto&p=w.addProject(large(true));rename(p,"One");const auto samples=p.document->layers[0].deep;
+    QTimer::singleShot(0,&w,[]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))box->button(QMessageBox::Ok)->click();});
+    registry(w).refresh();command(w,"layer.convert_8bit")->trigger();
+    check(p.history.undoCount()==2&&!p.document->layers[0].deep,"narrowing large HDR pixels dropped history");
+    registry(w).refresh();command(w,"edit.undo")->trigger();
+    check(p.history.undoCount()==1&&p.history.canRedo()&&p.document->layers[0].deep==samples,"undo must restore the large HDR pixels");
+}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="about_restores_commands")about_restores_commands();else if(name=="about_opaque_surface")about_opaque_surface();else if(name=="palette_contrast")palette_contrast();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else if(name=="layer_depth")layer_depth();else if(name=="layer_depth_history")layer_depth_history();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

@@ -104,6 +104,10 @@ void depth(){
     check(!canConvertDepth(bright,selected({"hdr"}),BitDepth::Sixteen)&&canConvertDepth(bright,selected({"hdr"}),BitDepth::Eight),"HDR only goes to 8 bits here");
     const auto clipped=convertDepth(bright,selected({"hdr"}),BitDepth::Eight);check(!clipped.document.layers[0].deep&&clipped.document.layers[0].raster==hdr.raster,"HDR keeps its clipped 8-bit presentation");
 
+    const auto nested=document({layer("deepest","inner"),layer("outer",{},true),layer("inner","outer",true),layer("loose")});
+    check(depthTargets(nested,selected({"outer"}))==std::vector<std::string>({"deepest"}),"a selected folder covers every level below it, whatever the list order");
+    check(!depthChoices(nested,selected({"missing"})).sixteen&&depthChoices(nested,selected({"inner"})).sixteen,"choices follow the selected targets");
+
     std::vector<Layer> blanks;SelectionState all;for(int i=0;i<6;++i){blanks.push_back(layer("blank"+std::to_string(i)));all.ids.push_back(blanks.back().id);}all.primary=all.ids.front();
     const auto large=document(std::move(blanks),10000,10000);const auto before=large;
     check(canConvertDepth(large,all,BitDepth::Sixteen),"oversized request is still offered");

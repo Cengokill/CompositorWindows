@@ -26,6 +26,8 @@
 #include <QMenu>
 #include <QStackedWidget>
 #include <algorithm>
+#include <new>
+#include <unordered_set>
 
 namespace compositor {
 layers::SelectionState MainWindow::layerSelection()const{
@@ -121,7 +123,20 @@ void MainWindow::convertLayerDepth(layers::BitDepth depth){
     }
     finishOpacityEdit();if(textSession_)finishText();pointerCancel();
     if(!available())return;
-    try{applyLayerEdit(layers::convertDepth(*project->document,layerSelection(),depth));}
+    try{
+        auto result=layers::convertDepth(*project->document,layerSelection(),depth);
+        // The 16-bit samples this edit drops, or adds and then undoes, are held by history alone. Allow one
+        // conversion above the normal budget so trimming keeps this step and the ones before it.
+        std::unordered_set<const DeepImage*> counted;std::size_t bytes=0;
+        for(std::size_t i=0;i<result.document.layers.size();++i){
+            const auto& before=project->document->layers[i].deep;const auto& after=result.document.layers[i].deep;
+            if(before!=after)for(const auto* deep:{before.get(),after.get()})
+                if(deep&&counted.insert(deep).second)bytes+=deep->samples.size()*sizeof(std::uint16_t);
+        }
+        project->history.byteLimit=std::max(project->history.byteLimit,History::defaultByteLimit+bytes);
+        applyLayerEdit(std::move(result));
+    }
+    catch(const std::bad_alloc&){QMessageBox::critical(this,title,"Not enough memory to convert these layers. Select fewer layers and try again.");}
     catch(const std::exception& error){QMessageBox::critical(this,title,QString::fromUtf8(error.what()));}
 }
 void MainWindow::layerCommand(int command){
