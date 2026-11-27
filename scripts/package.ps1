@@ -39,6 +39,9 @@ try {
  $modelSource=Join-Path $imaging 'model\birefnet-lite.onnx'
  if((Get-FileHash -LiteralPath $modelSource -Algorithm SHA256).Hash -ine $lock.model.onnx_sha256){throw 'Foreground model checksum mismatch'}
  Copy-Item -LiteralPath $modelSource -Destination (Join-Path $payload 'models')
+ $depthSource=Join-Path $imaging 'depth-model\depth-anything-v2-small.onnx'
+ if((Get-FileHash -LiteralPath $depthSource -Algorithm SHA256).Hash -ine $lock.depth_model.onnx_sha256){throw 'Depth model checksum mismatch'}
+ Copy-Item -LiteralPath $depthSource -Destination (Join-Path $payload 'models')
  Copy-Item -LiteralPath (Join-Path $packageRoot 'shaders\BrushCoverage.hlsl') -Destination (Join-Path $payload 'shaders')
  Copy-Item -LiteralPath (Join-Path $packageRoot 'LICENSE') -Destination (Join-Path $payload 'licenses\Compositor-MIT.txt')
  Copy-Item -Path (Join-Path $imaging 'notices\*') -Destination (Join-Path $payload 'licenses') -Recurse
@@ -172,7 +175,7 @@ try {
  $readme=@"
 Compositor Windows $Version
 
-Run Compositor.exe. Windows 11 x64 is required. Codecs, the offline foreground model and runtime DLLs are included.
+Run Compositor.exe. Windows 11 x64 is required. Codecs, the offline foreground and depth models and runtime DLLs are included.
 Read RELEASE-NOTES.md, USER-GUIDE.md and KNOWN-ISSUES.md. Save projects outside the application directory.
 Updates are manual: install a newer MSI or extract a newer portable download into a new directory.
 This build is unsigned. Windows may show a publisher warning. Keep Windows security enabled and obtain releases from the published project links.

@@ -53,6 +53,24 @@
       "sha256": "c6ba983baf5681af108599675d2a89c2d145512d02de28aed0bff177cd0ba949",
       "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-1.30.0.zip",
       "path": "dependencies/imaging/onnxruntime-win-x64-1.30.0.zip"
+    },
+    {
+      "group": "model",
+      "sha256": "319566441daaac0c5ed83e75a8fd19bae0863f3275e23f147c06fe0906edf6fb",
+      "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/README.md",
+      "path": "dependencies/imaging/depth-model/README.md"
+    },
+    {
+      "group": "model",
+      "sha256": "c56698d3643dde1f83ea2212759e6b31a22b8f827246a36dd007ee8a22b3ff75",
+      "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/config.json",
+      "path": "dependencies/imaging/depth-model/config.json"
+    },
+    {
+      "group": "model",
+      "sha256": "3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70",
+      "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/model.safetensors",
+      "path": "dependencies/imaging/depth-model/model.safetensors"
     }
   ],
   "binaries": [
@@ -120,6 +138,20 @@
     "revision": "aa62cd87eafb9cc43056d08ef3615a14628b831d",
     "output": "float32 NCHW 1x1x1024x1024 sigmoid mask",
     "repo": "ZhengPeng7/BiRefNet_lite",
+    "runtime": "ONNX Runtime 1.30.0 CPU"
+  },
+  "depth_model": {
+    "input": "float32 NCHW 1x3xHxW ImageNet-normalized RGB, H and W multiples of 14, longer side 644",
+    "license": "Apache-2.0",
+    "model_card": "notices/Depth-Anything-V2-Small-model-card.md",
+    "safetensors_bytes": 99173660,
+    "onnx_bytes": 49743919,
+    "onnx_sha256": "61d29718cf81b46939d1549c2c0d0f85d788d3d837c7c389c3a2e949da516196",
+    "conversion": "tests/imaging/convert_depth_anything.py",
+    "weights": "float16 initializers cast to float32 at load; float32 inference",
+    "revision": "5426e4f0f36572d16453bbda7a8389317b1bef99",
+    "output": "float32 NCHW 1x1xHxW relative inverse depth (larger is nearer)",
+    "repo": "depth-anything/Depth-Anything-V2-Small-hf",
     "runtime": "ONNX Runtime 1.30.0 CPU"
   },
   "created_utc": "2026-09-20T00:18:47.0732873Z",
