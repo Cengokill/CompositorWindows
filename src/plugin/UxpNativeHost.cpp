@@ -1,4 +1,4 @@
-﻿#include "UxpNativeHost.h"
+#include "UxpNativeHost.h"
 #include "PluginRuntime.h"
 #include "ScriptRuntime.h"
 #include "core/Document.h"
@@ -65,15 +65,19 @@ bool UxpNativeHost::discover(const QString& directory, UxpPlugin& plugin, QStrin
 
     QString entry = manifest.value(QStringLiteral("main")).toString();
     if (!entry.isEmpty() && !QFileInfo::exists(dir.filePath(entry))) entry.clear();
+    QStringList scripts;
     if (!entry.isEmpty() && entry.endsWith(QStringLiteral(".html"), Qt::CaseInsensitive)) {
+        // A panel loads its code with several <script src> tags; the browser runs them
+        // in document order in one global scope, so collect all of them.
         const QRegularExpression ref(QStringLiteral(R"(<script[^>]+src\s*=\s*["']([^"']+)["'])"),
                                      QRegularExpression::CaseInsensitiveOption);
-        const auto match = ref.match(readText(dir.filePath(entry)));
-        entry.clear();
-        if (match.hasMatch()) {
-            const QString candidate = QFileInfo(dir.filePath(match.captured(1))).absoluteFilePath();
-            if (QFileInfo::exists(candidate)) entry = dir.relativeFilePath(candidate);
+        const QString html = readText(dir.filePath(entry));
+        auto matches = ref.globalMatch(html);
+        while (matches.hasNext()) {
+            const QString candidate = QFileInfo(dir.filePath(matches.next().captured(1))).absoluteFilePath();
+            if (QFileInfo::exists(candidate)) scripts.append(dir.relativeFilePath(candidate));
         }
+        entry = scripts.isEmpty() ? QString() : scripts.first();
     }
     if (entry.isEmpty()) {
         for (const char* name : {"index.js", "main.js", "plugin.js"}) {
@@ -97,7 +101,16 @@ bool UxpNativeHost::discover(const QString& directory, UxpPlugin& plugin, QStrin
         return false;
     }
     plugin.entryPath = entry;
-    plugin.source = readText(dir.filePath(entry));
+    plugin.scriptPaths = scripts.isEmpty() ? QStringList{entry} : scripts;
+    // Concatenate in document order: each file is a separate <script> in the panel,
+    // and they share one global scope.
+    QString combined;
+    for (const auto& script : plugin.scriptPaths) {
+        combined += QStringLiteral("\n// ---- %1 ----\n").arg(script);
+        combined += readText(dir.filePath(script));
+        combined += QStringLiteral("\n;\n");
+    }
+    plugin.source = combined;
     if (plugin.source.isEmpty()) {
         error = QStringLiteral("入口脚本为空：%1").arg(entry);
         return false;

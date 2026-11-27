@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "compositor_plugin.h"
 #include <QString>
 #include <QStringList>
@@ -17,7 +17,8 @@ struct UxpPlugin {
     QString version;
     QString description;
     QString entryPath;
-    QString source;
+    QStringList scriptPaths;  // Every script the panel loads, in document order.
+    QString source;            // Those scripts concatenated.
 };
 
 // Hosts Photoshop UXP plugins natively.

@@ -1,4 +1,4 @@
-﻿#include "ScriptRuntime.h"
+#include "ScriptRuntime.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -9,6 +9,127 @@
 namespace compositor::plugin {
 namespace {
 
+// A UXP panel expects the browser globals a panel is normally given. This shim is
+// deliberately small: it lets the panel build its tree and register handlers, which
+// the host fires itself, so no real DOM is required.
+QString domShimSource() {
+    return QStringLiteral(R"JS(
+var __compositorReadyHandlers = [];
+var __compositorLoadHandlers = [];
+globalThis.__compositorReadyHandlers = __compositorReadyHandlers;
+globalThis.__compositorLoadHandlers = __compositorLoadHandlers;
+if (typeof globalThis.window === 'undefined') { globalThis.window = globalThis; }
+if (typeof globalThis.self === 'undefined') { globalThis.self = globalThis; }
+var window = globalThis;
+var self = globalThis;
+
+function __Element(tag) {
+  this.tagName = String(tag || 'div').toUpperCase();
+  this.nodeName = this.tagName;
+  this.children = [];
+  this.childNodes = this.children;
+  this.style = {};
+  this.dataset = {};
+  this.attributes = {};
+  this.classList = {
+    add: function () {}, remove: function () {}, toggle: function () {},
+    contains: function () { return false; }
+  };
+  this.innerHTML = '';
+  this.textContent = '';
+  this.value = '';
+  this.checked = false;
+  this.parentNode = null;
+  this.offsetWidth = 0;
+  this.offsetHeight = 0;
+}
+__Element.prototype.appendChild = function (child) { this.children.push(child); if (child) child.parentNode = this; return child; };
+__Element.prototype.removeChild = function (child) { var i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); return child; };
+__Element.prototype.insertBefore = function (child) { this.children.unshift(child); return child; };
+__Element.prototype.replaceChild = function (next, old) { return this.appendChild(next); };
+__Element.prototype.setAttribute = function (name, value) { this.attributes[name] = value; if (name === 'id') this.id = value; };
+__Element.prototype.getAttribute = function (name) { return this.attributes[name] === undefined ? null : this.attributes[name]; };
+__Element.prototype.removeAttribute = function (name) { delete this.attributes[name]; };
+__Element.prototype.hasAttribute = function (name) { return this.attributes[name] !== undefined; };
+__Element.prototype.addEventListener = function () {};
+__Element.prototype.removeEventListener = function () {};
+__Element.prototype.dispatchEvent = function () { return true; };
+__Element.prototype.querySelector = function () { return null; };
+__Element.prototype.querySelectorAll = function () { return []; };
+__Element.prototype.getElementsByTagName = function () { return []; };
+__Element.prototype.getBoundingClientRect = function () {
+  return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
+};
+__Element.prototype.focus = function () {};
+__Element.prototype.blur = function () {};
+__Element.prototype.click = function () {};
+__Element.prototype.cloneNode = function () { return new __Element(this.tagName); };
+
+if (typeof globalThis.document === 'undefined') {
+  var __body = new __Element('body');
+  var __head = new __Element('head');
+  globalThis.document = {
+    body: __body,
+    head: __head,
+    documentElement: new __Element('html'),
+    createElement: function (tag) { return new __Element(tag); },
+    createTextNode: function (text) { var node = new __Element('#text'); node.textContent = text; return node; },
+    createDocumentFragment: function () { return new __Element('#fragment'); },
+    getElementById: function () { return null; },
+    querySelector: function () { return null; },
+    querySelectorAll: function () { return []; },
+    getElementsByClassName: function () { return []; },
+    getElementsByTagName: function () { return []; },
+    addEventListener: function (type, handler) {
+      if (type === 'DOMContentLoaded') __compositorReadyHandlers.push(handler);
+      else if (type === 'load') __compositorLoadHandlers.push(handler);
+    },
+    removeEventListener: function () {},
+    readyState: 'complete'
+  };
+}
+if (typeof globalThis.window.addEventListener !== 'function') {
+  globalThis.window.addEventListener = function (type, handler) {
+    if (type === 'DOMContentLoaded') __compositorReadyHandlers.push(handler);
+    else if (type === 'load') __compositorLoadHandlers.push(handler);
+  };
+}
+if (typeof globalThis.HTMLElement === 'undefined') { globalThis.HTMLElement = __Element; }
+if (typeof globalThis.Node === 'undefined') { globalThis.Node = __Element; }
+if (typeof globalThis.customElements === 'undefined') {
+  globalThis.customElements = { define: function () {}, get: function () { return undefined; } };
+}
+if (typeof globalThis.navigator === 'undefined') {
+  globalThis.navigator = { userAgent: 'Compositor UXP', platform: 'Win32', language: 'zh-CN' };
+}
+if (typeof globalThis.location === 'undefined') {
+  globalThis.location = { href: 'plugin://', protocol: 'plugin:', host: '' };
+}
+if (typeof globalThis.localStorage === 'undefined') {
+  var __store = {};
+  globalThis.localStorage = {
+    getItem: function (key) { return Object.prototype.hasOwnProperty.call(__store, key) ? __store[key] : null; },
+    setItem: function (key, value) { __store[key] = String(value); },
+    removeItem: function (key) { delete __store[key]; },
+    clear: function () { __store = {}; }
+  };
+  globalThis.sessionStorage = globalThis.localStorage;
+}
+if (typeof globalThis.requestAnimationFrame === 'undefined') {
+  globalThis.requestAnimationFrame = function (handler) { return setTimeout(function () { handler(Date.now()); }, 0); };
+  globalThis.cancelAnimationFrame = function (handle) { clearTimeout(handle); };
+}
+if (typeof globalThis.matchMedia === 'undefined') {
+  globalThis.matchMedia = function () { return { matches: false, addListener: function () {}, removeListener: function () {} }; };
+}
+if (typeof globalThis.getComputedStyle === 'undefined') {
+  globalThis.getComputedStyle = function () { return {}; };
+}
+if (typeof globalThis.alert === 'undefined') {
+  globalThis.alert = function () {}; globalThis.confirm = function () { return true; }; globalThis.prompt = function () { return null; };
+}
+)JS");
+}
 // The engine is a plain JavaScript program: the shim, the snapshot, the plugin and a
 // small epilogue that prints what the plugin recorded.
 QString buildProgram(const QString& shim, const QString& snapshot, const QString& plugin,
@@ -23,19 +144,33 @@ QString buildProgram(const QString& shim, const QString& snapshot, const QString
         "var console = { log: function(){}, info: function(){}, warn: function(){}, error: function(){} };\n");
     // Node's CommonJS wrapper binds a local `require` that hides the shim's version,
     // so route lookups through the global the shim installs.
-    program += QStringLiteral("var require = function(name){ return globalThis.require ? globalThis.require(name) : {}; };\n");    program += shim;
+    program += QStringLiteral("var require = function(name){ return globalThis.require ? globalThis.require(name) : {}; };\n");
+    // A UXP panel is written against a browser-ish environment: its bundle ends with
+    // `})(window)`, and it registers DOMContentLoaded handlers to initialise itself.
+    program += domShimSource();
+    program += shim;
     // The plugin is evaluated at module scope so its top-level declarations, such as
     // `function run()`, stay visible to the entry call below.
     program += QStringLiteral("\n");
     program += plugin;
     program += QStringLiteral("\n");
-    // Entry points: a global run(), an exported run, or onLoad().
+    // Entry points: a global run(), an exported run, onLoad(), or the panel's own
+    // DOMContentLoaded/load listeners, which no real DOM will ever fire for.
     program += QStringLiteral(
-        "try{ if(typeof run==='function'){ run(); }"
-        " else if(typeof module!=='undefined'&&module.exports&&typeof module.exports.run==='function'){ module.exports.run(); }"
-        " else if(typeof onLoad==='function'){ onLoad(); } }"
-        "catch(e){ process.stderr.write(String(e && e.stack || e) + '\\n'); process.exit(3); }\n");
-    program += QStringLiteral("process.stdout.write('__MUTATIONS__'+JSON.stringify(__compositorMutations)+'\\n');\n");
+        "try{\n"
+        "  var __invoked=false;\n"
+        "  if(typeof run==='function'){ run(); __invoked=true; }\n"
+        "  else if(typeof module!=='undefined'&&module.exports&&typeof module.exports.run==='function'){ module.exports.run(); __invoked=true; }\n"
+        "  else if(typeof onLoad==='function'){ onLoad(); __invoked=true; }\n"
+        "  var __fire=function(list){ for(var i=0;i<list.length;i++){ try{ list[i]({type:'init'}); }catch(e){ process.stderr.write(String(e&&e.stack||e)+'\\n'); } } };\n"
+        "  __fire(globalThis.__compositorReadyHandlers||[]);\n"
+        "  __fire(globalThis.__compositorLoadHandlers||[]);\n"
+        "}catch(e){ process.stderr.write(String(e && e.stack || e) + '\\n'); process.exit(3); }\n");
+    // Panels install timers and pollers, so the event loop would never drain: print the
+    // result and stop the process explicitly.
+    program += QStringLiteral(
+        "process.stdout.write('__MUTATIONS__'+JSON.stringify(__compositorMutations)+'\\n');\n"
+        "process.exit(0);\n");
     Q_UNUSED(entryPath);
     return program;
 }
