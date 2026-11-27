@@ -6,6 +6,7 @@
 #include "EditPanelSession.h"
 #include "NativeCanvas.h"
 #include "PropertyControls.h"
+#include "LayerPanelTokens.h"
 #include "LayerPanelWidgets.h"
 #include "graphics/MaskSampling.h"
 #include "graphics/Downsample.h"
@@ -64,6 +65,8 @@ std::filesystem::path depthModelPath(){
 struct VolumetricPreparation {
     std::shared_ptr<const filters::VolumetricLightInputs> inputs;
     QString note,error;
+    // Where an unmoved light starts, in source pixels; the panel alone asks for it.
+    std::optional<Point> lightStart;
 };
 std::shared_ptr<GrayRaster> grayRaster(const imaging::GrayMask& mask){
     auto out=std::make_shared<GrayRaster>();out->width=int(mask.width);out->height=int(mask.height);out->pixels.resize(std::size_t(mask.width)*mask.height);
@@ -72,9 +75,10 @@ std::shared_ptr<GrayRaster> grayRaster(const imaging::GrayMask& mask){
 }
 // The subject and depth are found on a copy no larger than 2048 pixels, which
 // keeps any image within the models' budgets; the filter resamples them to its
-// grid, so the preview and Apply share them. A missing or refused model file
-// leaves that part out, said in the note; a failed inference is an error.
-VolumetricPreparation prepareVolumetric(const Raster& source,const std::filesystem::path& subjectModel,const std::filesystem::path& depthModel,const std::function<bool()>& cancelled){
+// grid, so the preview and Apply share them. A model that cannot be loaded
+// leaves that part out, said in the note, unless the caller has nowhere to show
+// it and requires the models; a failed inference is always an error.
+VolumetricPreparation prepareVolumetric(const Raster& source,const std::filesystem::path& subjectModel,const std::filesystem::path& depthModel,const std::function<bool()>& cancelled,bool requireModels=false){
     imaging::ImportOptions options;options.cancelled=cancelled;
     const double factor=std::min(1.,2048./std::max(source.width,source.height));
     const auto w=std::uint32_t(std::max(1,int(std::lround(source.width*factor)))),h=std::uint32_t(std::max(1,int(std::lround(source.height*factor))));
@@ -97,7 +101,7 @@ VolumetricPreparation prepareVolumetric(const Raster& source,const std::filesyst
     {
         std::unique_ptr<imaging::OnnxSubjectProvider> provider;
         try{provider=std::make_unique<imaging::OnnxSubjectProvider>(subjectModel);}
-        catch(const std::exception& error){notes<<QString("Subject model unavailable (%1); nothing blocks the light.").arg(QString::fromUtf8(error.what()));}
+        catch(const std::exception& error){if(requireModels)throw;notes<<QString("Subject model unavailable (%1); nothing blocks the light.").arg(QString::fromUtf8(error.what()));}
         if(provider)if(auto raw=provider->inferOptional(image,options)){
             inputs->outline=grayRaster(*raw);
             imaging::MatteSettings settings;settings.advanced=true;settings.refineEdges=std::clamp(std::max(w,h)*.008,2.,40.);settings.contrast=0;
@@ -108,7 +112,7 @@ VolumetricPreparation prepareVolumetric(const Raster& source,const std::filesyst
     // BiRefNet's session is released first: the two models run one after the other.
     std::unique_ptr<imaging::OnnxDepthProvider> provider;
     try{provider=std::make_unique<imaging::OnnxDepthProvider>(depthModel);}
-    catch(const std::exception& error){notes<<QString("Depth model unavailable (%1); the haze follows the height in the frame.").arg(QString::fromUtf8(error.what()));}
+    catch(const std::exception& error){if(requireModels)throw;notes<<QString("Depth model unavailable (%1); the haze follows the height in the frame.").arg(QString::fromUtf8(error.what()));}
     if(provider){
         if(auto estimate=provider->estimate(image,options)){
             auto depth=std::make_shared<filters::DepthMap>();depth->width=int(estimate->width);depth->height=int(estimate->height);depth->values=std::move(estimate->values);inputs->depth=std::move(depth);
@@ -424,8 +428,9 @@ class FilterPanel final:public ui::EditPanelSession {
         }
         if(request_.kind==filters::Kind::RgbSplit){canvas->setCameraRawGuides({});return;}
         if(request_.kind==filters::Kind::VolumetricLight){
-            const Point c=request_.settings.volumetric.center.value_or(original_.transform.fromUnit({.5,.5}));
-            canvas->setCameraRawGuides({{{c.x-12,c.y},{c.x+12,c.y}},{{c.x,c.y-12},{c.x,c.y+12}}});
+            // No cross until the preparation or a click has placed the light.
+            if(const auto& c=request_.settings.volumetric.center)canvas->setCameraRawGuides({{{c->x-12,c->y},{c->x+12,c->y}},{{c->x,c->y-12},{c->x,c->y+12}}});
+            else canvas->setCameraRawGuides({});
             return;
         }
         if(!raw_)return;
@@ -647,9 +652,9 @@ public:
         }
         case filters::Kind::VolumetricLight:{
             auto& v=request_.settings.volumetric;const auto& d=factory.volumetric;
-            auto* hint=new QLabel("Click or drag on the canvas to move the light");hint->setObjectName("volumetricLightHint");hint->setWordWrap(true);hint->setStyleSheet("color: #989ba3;");
+            auto* hint=new QLabel("Click or drag on the canvas to move the light");hint->setObjectName("volumetricLightHint");hint->setWordWrap(true);hint->setStyleSheet(QString("color: %1;").arg(ui::layer_panel::secondary));
             auto* color=new QToolButton;color->setObjectName("volumetricLightColor");color->setFixedSize(36,22);color->setAccessibleName("Light color");color->setToolTip("The light's color");
-            auto paint=[this,color]{const auto& c=request_.settings.volumetric.color;const auto hex=QColor::fromRgbF(c[0],c[1],c[2]).name();color->setAccessibleDescription(hex);color->setStyleSheet(QString("QToolButton { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QToolButton:hover { background: %1; border-color: #bfc9d8; } QToolButton:pressed, QToolButton:focus { background: %1; border-color: #78b0f7; }").arg(hex));};paint();
+            auto paint=[this,color]{const auto& c=request_.settings.volumetric.color;const auto hex=QColor::fromRgbF(c[0],c[1],c[2]).name();color->setAccessibleDescription(hex);color->setStyleSheet(QString("QToolButton { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QToolButton:hover { background: %1; border-color: %2; } QToolButton:pressed, QToolButton:focus { background: %1; border-color: %3; }").arg(hex,ui::layer_panel::primary,ui::layer_panel::accent));};paint();
             fields_.addRow(hint);fields_.addRow("Color",color);
             connect(color,&QToolButton::clicked,&dialog_,[this,paint]{auto& c=request_.settings.volumetric.color;auto picked=QColorDialog::getColor(QColor::fromRgbF(c[0],c[1],c[2]),&dialog_,"Light color");if(picked.isValid()&&!closed_&&!committing()){c={picked.redF(),picked.greenF(),picked.blueF()};paint();change();}});
             number("Haze",v.haze,0,100,0,d.haze)->setToolTip("How thick the air is: haze lit by the light, thinner in front of the subject");
@@ -829,7 +834,10 @@ public:
             volumetricCache_=std::make_shared<filters::VolumetricLightCache>();preparing_=true;status_.setText("Preparing depth…");
             preparation_.setFuture(QtConcurrent::run([source=original_.raster,subject=subjectModelPath(),depth=depthModelPath(),token=preparationCancelled_]{
                 VolumetricPreparation out;
-                try{out=prepareVolumetric(*source,subject,depth,[token]{return token->load();});}
+                try{
+                    out=prepareVolumetric(*source,subject,depth,[token]{return token->load();});
+                    out.lightStart=filters::volumetricBrightestPoint(*source);
+                }
                 catch(const std::exception& error){out.error=QString::fromUtf8(error.what());}
                 return out;
             }));
@@ -839,6 +847,10 @@ public:
                 auto prepared=preparation_.result();
                 if(!prepared.error.isEmpty()){status_.setText(prepared.error);if(host_.error)host_.error(prepared.error);return;}
                 volumetricInputs_=std::move(prepared.inputs);volumetricNote_=std::move(prepared.note);
+                if(auto& center=request_.settings.volumetric.center;!center&&prepared.lightStart){
+                    center=request_.transform.fromUnit({prepared.lightStart->x/original_.raster->width,prepared.lightStart->y/original_.raster->height});
+                    syncGuideOverlay();
+                }
                 extractDepth_->setEnabled(volumetricInputs_->depth&&!committing());
                 if(!volumetricInputs_->depth)extractDepth_->setToolTip("Extract Depth needs the depth model");
                 start();
@@ -968,11 +980,9 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     auto request=buildFilterRequest(*p,before,original,kind);
     if(convert)request.deepSource.reset();
     if(kind==filters::Kind::ProgressiveBlur&&!repeating){request.settings.progressiveStart=request.transform.fromUnit({.5,0});request.settings.progressiveEnd=request.transform.fromUnit({.5,1});}
-    // Volumetric Light opens on the layer's brightest area: a window, the sky, a lamp.
-    if(kind==filters::Kind::VolumetricLight&&!repeating){
-        const auto start=filters::volumetricBrightestPoint(*original.raster);
-        request.settings.volumetric.center=request.transform.fromUnit({start.x/original.raster->width,start.y/original.raster->height});
-    }
+    // Volumetric Light opens on the layer's brightest area (a window, the sky, a lamp),
+    // which its preparation finds, rather than on the remembered position.
+    if(kind==filters::Kind::VolumetricLight&&!repeating)request.settings.volumetric.center.reset();
     if(kind==filters::Kind::RgbSplit&&!repeating){request.settings.rgbSplitCenter=request.transform.fromUnit({.5,.5});request.settings.rgbSplitReach=std::max(1.,std::hypot(request.transform.width,request.transform.height)/2);}
     if(repeating){
         if(ui::LastFilterJob::find(this,p))return;
@@ -1003,13 +1013,15 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
         try{
             const bool subjectAware=kind==filters::Kind::RimLight||kind==filters::Kind::VolumetricLight;
             const auto rimModel=subjectAware?subjectModelPath():std::filesystem::path{};
-            const auto depthModel=kind==filters::Kind::VolumetricLight?depthModelPath():std::filesystem::path{};
+            const auto injectedDepthModel=property("testDepthModelPath").toString();
+            const auto depthModel=kind!=filters::Kind::VolumetricLight?std::filesystem::path{}:
+                injectedDepthModel.isEmpty()?depthModelPath():std::filesystem::path(injectedDepthModel.toStdWString());
             new ui::LastFilterJob([job,original,selectionSource,rimModel,depthModel](std::function<bool()> cancelled){
                 auto active=job;active.limits.cancelled=std::move(cancelled);
                 if(selectionSource)active.selection=filterSelection(*selectionSource,original,active.kind,active.limits.cancelled);
                 if(active.kind==filters::Kind::RimLight)active.subjectMask=rimSubject(*active.source,rimModel,active.limits.cancelled);
                 if(active.kind==filters::Kind::VolumetricLight){
-                    auto prepared=prepareVolumetric(*active.source,rimModel,depthModel,active.limits.cancelled);
+                    auto prepared=prepareVolumetric(*active.source,rimModel,depthModel,active.limits.cancelled,true);
                     active.volumetric=std::move(prepared.inputs);
                 }
                 return filteredLayer(original,active).layer;

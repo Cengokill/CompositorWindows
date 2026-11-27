@@ -778,7 +778,7 @@ add_executable(remembered_filter_tests tests/session_state/RememberedFilterTests
 target_link_libraries(remembered_filter_tests PRIVATE compositor_ui Qt6::Test)
 add_executable(last_filter_tests tests/session_state/LastFilterTests.cpp)
 target_link_libraries(last_filter_tests PRIVATE compositor_ui Qt6::Test)
-foreach(case gaussian_repeat_one_undo adjustment_does_not_set_last content_aware_excluded menu_label_shows_name shortcut_is_last_filter_only shortcut_triggers_command disabled_during_hue cancel_skips_commit)
+foreach(case gaussian_repeat_one_undo adjustment_does_not_set_last content_aware_excluded menu_label_shows_name shortcut_is_last_filter_only shortcut_triggers_command disabled_during_hue cancel_skips_commit progress_cancel_button)
   add_test(NAME last_filter.${case} COMMAND last_filter_tests ${case})
   set_tests_properties(last_filter.${case} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
 endforeach()

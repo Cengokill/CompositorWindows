@@ -7,11 +7,8 @@
 #define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
 #undef ORT_API_MANUAL_INIT
-#include <windows.h>
-#include <bcrypt.h>
-#include <array>
+#include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <thread>
 #include <chrono>
 #include <mutex>

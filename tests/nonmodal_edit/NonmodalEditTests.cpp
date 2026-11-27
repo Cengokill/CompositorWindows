@@ -178,7 +178,29 @@ void volumetric_light_lifecycle(){
      require(heading&&heading->isVisible()&&heading->text()=="Applying the last filter"&&strip&&strip->isVisible()&&strip->width()>100&&box->findChild<QPushButton*>("exportProgressCancel")->isVisible(),"Last Filter progress window shows its heading, bar and Cancel");}
     wait([&]{return !f.project.projectBusy;},"volumetric Last Filter did not finish",120000);
     require(f.project.history.undoCount()==2,"volumetric Last Filter adds one step");trigger(f.window,"edit.undo");require(f.project.document==applied,"volumetric Last Filter undo");
+    // A model Last Filter cannot load is an error, not a silently different result.
+    {
+        QString reported;QTimer dismiss;dismiss.setInterval(10);
+        QObject::connect(&dismiss,&QTimer::timeout,&f.window,[&]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){reported=box->text();box->accept();}});
+        f.window.setProperty("testDepthModelPath","missing-depth-model.onnx");dismiss.start();trigger(f.window,"filter.last");
+        wait([&]{return !reported.isEmpty()||f.project.history.undoCount()!=1;},"Last Filter without the depth model did not end",120000);
+        dismiss.stop();f.window.setProperty("testDepthModelPath",QVariant());
+        require(reported=="Local depth model is missing"&&!f.project.projectBusy&&f.project.document==applied&&f.project.history.undoCount()==1,"Last Filter reports an unavailable model and leaves the layer unchanged");
+    }
     trigger(f.window,"edit.undo");require(f.project.document==before,"back to the original");
+    // The light starts on the brightest area unless a click placed it during the preparation.
+    const auto found=filters::volumetricBrightestPoint(*before.layers[1].raster);
+    const Point brightest=before.layers[1].transform.fromUnit({found.x/before.layers[1].raster->width,found.y/before.layers[1].raster->height});
+    for(const bool clicks:{false,true}){
+        const Point placed=clicks?Point{50,60}:brightest;
+        panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
+            if(clicks){require(volumetricStatus(p)->text()=="Preparing depth…","still preparing before the click");f.click(placed);}
+            wait([&]{return apply(p)->isEnabled();},"volumetric preview for the light start",120000);
+            apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"volumetric Apply for the light start",120000);});
+        const auto center=f.project.toolState.filterSettings.pixels.volumetric.center;
+        require(center&&std::abs(center->x-placed.x)<1&&std::abs(center->y-placed.y)<1,"volumetric light start, or the click made while preparing");
+        trigger(f.window,"edit.undo");require(f.project.document==before,"undo the light start check");
+    }
     // A changed source is not extracted.
     panel(f.window,"filter.volumetric_light","Volumetric Light",[&](QDialog& p){
         wait([&]{return apply(p)->isEnabled();},"volumetric preview for stale source",120000);
