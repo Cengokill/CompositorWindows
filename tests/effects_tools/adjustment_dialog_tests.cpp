@@ -13,7 +13,7 @@
 #include <QFontDatabase>
 #include <QLabel>
 #include <QPushButton>
-#include <QRadioButton>
+#include <QAbstractButton>
 #include <QTest>
 #include <QTimer>
 #include <filesystem>
@@ -41,8 +41,8 @@ void hue_colorize_reset(){auto d=document({255,0,0,255});auto result=drive(d,d.l
 
 void color_balance_controls(){auto d=document({128,128,128,255});auto before=d;auto result=drive(d,d.layers[0].id,"Color Balance",false,false,[](QDialog* dialog,int& step){if(!apply(dialog)->isEnabled())return;auto* slider=dialog->findChild<QSlider*>("colorBalanceSlider0");auto* level=dialog->findChild<QSpinBox*>("colorLevel0");REQUIRE(slider&&level&&dialog->findChild<QSlider*>("colorBalanceSlider2"));
     if(step==0){REQUIRE(slider->accessibleName()=="Cyan-Red slider"&&level->accessibleName()=="Cyan-Red value");slider->setValue(50);REQUIRE(level->value()==50);++step;return;}
-    if(step==1){dialog->findChild<QRadioButton*>("colorBalanceTone_shadows")->click();REQUIRE(level->value()==0&&slider->value()==0);level->setValue(40);REQUIRE(slider->value()==40);++step;return;}
-    if(step==2){QTest::mouseDClick(slider,Qt::LeftButton,{},slider->rect().center());REQUIRE(slider->value()==0&&level->value()==0);dialog->findChild<QRadioButton*>("colorBalanceTone_midtones")->click();REQUIRE(level->value()==50&&slider->value()==50);++step;return;}
+    if(step==1){dialog->findChild<QAbstractButton*>("colorBalanceTone_shadows")->click();REQUIRE(level->value()==0&&slider->value()==0);level->setValue(40);REQUIRE(slider->value()==40);++step;return;}
+    if(step==2){QTest::mouseDClick(slider,Qt::LeftButton,{},slider->rect().center());REQUIRE(slider->value()==0&&level->value()==0);dialog->findChild<QAbstractButton*>("colorBalanceTone_midtones")->click();REQUIRE(level->value()==50&&slider->value()==50);++step;return;}
     apply(dialog)->click();});REQUIRE(result&&d==before);const auto pixel=result->document.layers[0].raster->pixel(0,0);REQUIRE(pixel.r>pixel.g);}
 template<class T> T* namedChild(QDialog* dialog,const QString& name){for(auto* child:dialog->findChildren<T*>())if(child->accessibleName()==name)return child;return nullptr;}
 void black_white_controls(){auto d=document({255,0,0,255});auto baseline=drive(d,d.layers[0].id,"Black & White",false,false,[](QDialog* dialog,int& step){if(!apply(dialog)->isEnabled())return;++step;apply(dialog)->click();});REQUIRE(baseline);

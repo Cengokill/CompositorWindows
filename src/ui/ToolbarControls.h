@@ -42,6 +42,10 @@ QCheckBox* addOptionCheck(QToolBar* bar, const QString& text, const char* object
 void paintCheckBoxIndicator(QPainter* painter, const QRectF& rect, bool checked, bool enabled, bool hovered);
 // Pieces for bars that lay their controls out themselves (the Brush bar) instead of adding them to the toolbar.
 void styleAsNumberField(QAbstractSpinBox* field);
+// The same field at the wider edit-panel width.
+void styleAsPanelNumberField(QAbstractSpinBox* field);
+// A capsule button of a dialog or edit panel. A click leaves the focus where it was; Tab reaches the button and rings it.
+void markDialogPill(QPushButton* button, bool primary = false);
 void styleAsNumberField(QLineEdit* field);
 QLabel* makeCaption(const QString& text);
 QCheckBox* makeOptionCheck(const QString& text);
@@ -76,6 +80,7 @@ public:
     QColor color() const { return color_; }
     QSize sizeHint() const override;
 protected:
+    void keyPressEvent(QKeyEvent* event) override;
     void paintEvent(QPaintEvent*) override;
 private:
     QColor color_{Qt::black};

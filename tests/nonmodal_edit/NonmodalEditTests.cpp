@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 #include "ui/EditPanelSession.h"
+#include "ui/EditPanelPlacement.h"
+#include "ui/VisualStyle.h"
 #include "ui/LastFilterJob.h"
 #include "core/DocumentExport.h"
 #include "imaging/wic_codec.h"
@@ -14,11 +16,17 @@
 #include <QComboBox>
 #include <QColorDialog>
 #include <QDialogButtonBox>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QSpinBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QInputDialog>
+#include <QScreen>
+#include <QSpinBox>
 #include <QToolButton>
 #include <QImage>
 #include <QPixmap>
@@ -286,6 +294,209 @@ void adjustment_preview_toggle(){Fixture f;const auto expected=exposurePixel(f.b
 void adjustment_apply_undo(){Fixture f;const auto expected=exposurePixel(f.before,1);panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){field(p,"Exposure")->setValue(1);ready(p);apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"Apply did not finish");});require(f.visible()==expected&&f.project.history.undoCount()==1,"Apply commits rendered result once");trigger(f.window,"edit.undo");f.unchanged();}
 void adjustment_close_cancel(){Fixture f;panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){field(p,"Exposure")->setValue(1);ready(p);p.close();});f.unchanged();require(f.visible()==Pixel{80,100,120,255},"window close restores original canvas");}
 void adjustment_position(){Fixture f;QPoint position;panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){p.move(131,147);position=p.pos();});panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){require(p.pos()==position,"reopened panel retains source position");});f.unchanged();}
+void edit_panel_placement_geometry(){
+    using ui::EditPanelCorner;
+    const QRect screen(0,0,1920,1040),second(1920,0,1280,1040),canvas(100,100,1500,800);const QList<QRect> one{screen},two{screen,second};
+    require(ui::editPanelFrame({400,300},{},canvas,one,screen)==QRect(1400,350,400,300),"first panel straddles the canvas right edge");
+    require(ui::editPanelFrame({400,300},{},QRect(420,100,1500,800),one,screen)==QRect(1520,350,400,300),"first panel is clamped at the screen edge");
+    require(ui::editPanelFrame({400,300},{},{},one,screen)==QRect(760,370,400,300),"panel without a canvas is centered on the fallback screen");
+    const auto right=ui::editPanelCorner({1300,120,400,300},one,screen);require(right.right&&right.corner==QPoint(1700,120),"right half stores the right corner");
+    require(ui::editPanelFrame({520,300},right,canvas,one,screen)==QRect(1180,120,520,300),"wider panel keeps the right edge");
+    const auto left=ui::editPanelCorner({200,140,400,300},one,screen);require(!left.right&&left.corner==QPoint(200,140),"left half stores the left corner");
+    require(ui::editPanelFrame({520,300},left,canvas,one,screen)==QRect(200,140,520,300),"wider panel keeps the left edge");
+    const auto onSecond=ui::editPanelCorner({2000,50,400,300},two,screen);require(!onSecond.right&&onSecond.corner==QPoint(2000,50),"the side is relative to the panel's own screen");
+    require(ui::editPanelFrame({400,300},EditPanelCorner{{1800,900},false},canvas,two,screen)==QRect(1920,740,400,300),"the most overlapped screen clamps the panel");
+    require(ui::editPanelFrame({400,300},EditPanelCorner{{2600,200},false},canvas,one,screen)==QRect(1520,200,400,300),"a corner on a removed screen clamps onto the fallback screen");
+    require(ui::editPanelFrame({2200,1200},right,canvas,one,screen).topLeft()==QPoint(0,0),"an oversized panel keeps its title bar visible");
+}
+// The on-screen frame, and a move of that frame, that ignore QWidget's stale margins under the Mac-style chrome.
+bool frameless(const QWidget& panel){return panel.windowFlags().testFlag(Qt::FramelessWindowHint);}
+QRect windowFrame(const QWidget& panel){return frameless(panel)?panel.geometry():panel.frameGeometry();}
+void moveFrame(QWidget& panel,QPoint point){if(frameless(panel))panel.setGeometry({point,panel.size()});else panel.move(point);}
+QRect canvasArea(const Fixture& f){return {f.project.canvas->mapToGlobal(QPoint(0,0)),f.project.canvas->size()};}
+// A point that keeps a whole panel on the primary screen, on the chosen side of its middle.
+QPoint parkingSpot(const QWidget& panel,bool rightHalf){
+    const auto screen=QGuiApplication::primaryScreen()->availableGeometry();
+    return {rightHalf?screen.x()+screen.width()-panel.frameGeometry().width()-9:screen.x()+13,screen.y()+(rightHalf?29:17)};
+}
+int rightEdge(const QWidget& panel){return panel.frameGeometry().x()+panel.frameGeometry().width();}
+void first_panel_canvas_right_edge(){
+    Fixture f;QRect shown;QSize size,hint;
+    panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){QApplication::processEvents();shown=p.frameGeometry();size=p.size();});
+    const auto area=canvasArea(f),screen=QGuiApplication::primaryScreen()->availableGeometry();
+    const auto expected=ui::editPanelFrame(shown.size(),{},area,{screen},screen);
+    if(shown!=expected)std::fprintf(stderr,"first panel actual=%d,%d expected=%d,%d size=%dx%d\n",shown.x(),shown.y(),expected.x(),expected.y(),size.width(),size.height());
+    require(shown==expected,"first panel opens on the canvas right edge, centered top to bottom");
+    f.unchanged();
+}
+void shared_panel_position(){
+    Fixture f;QPoint left;int right=0,top=0,width=0;
+    panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){p.move(parkingSpot(p,false));QApplication::processEvents();left=p.pos();});f.unchanged();
+    panel(f.window,"filter.gaussian","Gaussian Blur",[&](QDialog& p){QApplication::processEvents();require(p.pos()==left,"filter panel opens where the adjustment panel was left");p.move(parkingSpot(p,true));QApplication::processEvents();right=rightEdge(p);top=p.frameGeometry().y();width=p.width();});f.unchanged();
+    panel(f.window,"adjust.levels","Levels",[&](QDialog& p){QApplication::processEvents();require(p.width()!=width,"Levels has another width than the filter panel");
+        if(rightEdge(p)!=right||p.frameGeometry().y()!=top)std::fprintf(stderr,"levels right=%d,%d expected=%d,%d\n",rightEdge(p),p.frameGeometry().y(),right,top);
+        require(rightEdge(p)==right&&p.frameGeometry().y()==top,"a panel of another width keeps the top-right corner");});f.unchanged();
+}
+void unmoved_panel_keeps_position(){
+    Fixture f;const auto screen=QGuiApplication::primaryScreen()->availableGeometry();QPoint parked;int shortHeight=0;
+    panel(f.window,"filter.gaussian","Gaussian Blur",[&](QDialog& p){QApplication::processEvents();shortHeight=p.frameGeometry().height();p.move(screen.x()+13,screen.y()+screen.height()-shortHeight);QApplication::processEvents();parked=p.pos();});
+    panel(f.window,"adjust.levels","Levels",[&](QDialog& p){QApplication::processEvents();require(p.frameGeometry().height()>shortHeight&&p.pos().y()<parked.y(),"taller panel is pushed back on screen");});
+    panel(f.window,"filter.gaussian","Gaussian Blur",[&](QDialog& p){QApplication::processEvents();require(p.pos()==parked,"closing an unmoved panel keeps the remembered position");});
+    f.unchanged();
+}
+void selection_dialog_shared_position(){
+    Fixture f;trigger(f.window,"selection.all");require(bool(f.project.document->selection),"selection prepared");
+    const auto before=*f.project.document;const auto history=f.project.history.undoCount();
+    auto unchanged=[&](const char* message){require(*f.project.document==before&&f.project.history.undoCount()==history,message);};
+    QPoint position;
+    panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){p.move(parkingSpot(p,false));QApplication::processEvents();position=p.pos();});unchanged("Exposure Cancel changed the document");
+    panel(f.window,"selection.feather","Feather Selection",[&](QDialog& p){QApplication::processEvents();require(p.objectName()=="featherDialog"&&QApplication::activeModalWidget()==&p,"feather dialog stays modal");
+        require(p.pos()==position,"selection dialog opens where the edit panel was left");p.move(position+QPoint(31,23));QApplication::processEvents();position=p.pos();});
+    unchanged("Feather Cancel changed the document");
+    panel(f.window,"layer.effect.drop_shadow","Drop Shadow",[&](QDialog& p){QApplication::processEvents();require(QApplication::activeModalWidget()==&p,"layer effect dialog stays modal");require(p.pos()==position,"effect dialog opens where the selection dialog was left");p.move(position+QPoint(19,11));QApplication::processEvents();position=p.pos();});
+    unchanged("Drop Shadow Cancel changed the document");
+    panel(f.window,"selection.color_range","Color Range",[&](QDialog& p){QApplication::processEvents();require(p.pos()==position,"Color Range opens where the effect dialog was left");});
+    unchanged("Color Range Cancel changed the document");
+}
+// The application wraps every dialog in its own chrome while polishing it, which placement triggers early.
+void chromePanelPosition(bool macTitleBar){
+    ui::installVisualStyle();qApp->setProperty("studioMacTitleBar",macTitleBar);
+    Fixture f;trigger(f.window,"selection.all");const auto before=*f.project.document;
+    QSize unplaced;
+    {QInputDialog reference(&f.window);reference.setWindowTitle("Expand Selection");reference.setLabelText("Pixels");reference.setDoubleDecimals(0);reference.setDoubleRange(1,500);reference.setDoubleValue(1);reference.setDoubleStep(1);reference.show();QApplication::processEvents();unplaced=reference.size();}
+    QRect shown;QPoint position;
+    panel(f.window,"selection.expand","Expand Selection",[&](QDialog& p){QApplication::processEvents();shown=windowFrame(p);
+        if(p.size()!=unplaced)std::fprintf(stderr,"expand size=%dx%d unplaced=%dx%d\n",p.width(),p.height(),unplaced.width(),unplaced.height());
+        require(p.size()==unplaced,"placement keeps the size Qt gives the dialog");
+        auto* field=p.findChild<QDoubleSpinBox*>();require(field&&field->isVisible()&&p.rect().contains(field->mapTo(&p,field->rect().center())),"amount field stays inside the dialog");
+        const auto screen=QGuiApplication::primaryScreen()->availableGeometry();require(shown==ui::editPanelFrame(shown.size(),{},canvasArea(f),{screen},screen),"first dialog straddles the canvas right edge");
+        moveFrame(p,parkingSpot(p,false));QApplication::processEvents();position=windowFrame(p).topLeft();});
+    panel(f.window,"selection.feather","Feather Selection",[&](QDialog& p){QApplication::processEvents();require(windowFrame(p).topLeft()==position,"feather dialog reuses the corner");
+        auto* field=p.findChild<QSpinBox*>("featherRadius");require(field&&field->isVisible()&&p.rect().contains(field->mapTo(&p,field->rect().center())),"feather field stays inside the dialog");});
+    panel(f.window,"layer.effect.drop_shadow","Drop Shadow",[&](QDialog& p){QApplication::processEvents();require(windowFrame(p).topLeft()==position,"effect dialog reuses the corner");});
+    panel(f.window,"adjust.exposure","Exposure",[&](QDialog& p){QApplication::processEvents();require(windowFrame(p).topLeft()==position,"adjustment panel reuses the corner");});
+    require(*f.project.document==before,"Cancel changed the document");
+}
+void studio_chrome_panel_position(){chromePanelPosition(false);}
+void mac_chrome_panel_position(){chromePanelPosition(true);}
+void color_well_keyboard(){
+    Fixture f;
+    panel(f.window,"adjust.gradient_map","Gradient Map",[&](QDialog& p){
+        ready(p);
+        QPointer<QDialog> adjustment=&p;
+        auto* shadows=control<QAbstractButton>(p,"gradientMapShadows");
+        apply(p)->setFocus(Qt::TabFocusReason);
+        const auto unfocused=shadows->grab().toImage();
+        shadows->setFocus(Qt::TabFocusReason);
+        require(shadows->hasFocus(),"Gradient Map swatch has keyboard focus");
+        const auto focused=shadows->grab().toImage();
+        for(auto key:{Qt::Key_Return,Qt::Key_Enter,Qt::Key_Space}){
+            shadows->setFocus(Qt::TabFocusReason);
+            QTest::keyClick(shadows,key);
+            require(adjustment&&adjustment->isVisible(),"color activation keeps the adjustment panel open");
+            PaletteDialog* picker=nullptr;
+            for(auto* dialog:f.window.findChildren<QDialog*>())
+                if(auto* candidate=dynamic_cast<PaletteDialog*>(dialog);candidate&&candidate->isVisible())picker=candidate;
+            require(picker,"keyboard opens the Gradient Map color picker");
+            picker->reject();
+            QApplication::processEvents();
+            f.unchanged();
+        }
+        require(focused!=unfocused,"the focused swatch is visibly distinct");
+    });
+    f.unchanged();
+    trigger(f.window,"tool.type");
+    auto* textColor=control<QAbstractButton>(f.window,"textColor");
+    require(textColor->isVisible()&&textColor->isEnabled(),"Type options color well is available");
+    bool opened=false;
+    QTimer::singleShot(0,&f.window,[&]{
+        if(auto* picker=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){
+            opened=true;
+            picker->reject();
+        }
+    });
+    textColor->setFocus(Qt::TabFocusReason);
+    QTest::keyClick(textColor,Qt::Key_Return);
+    require(opened,"Enter opens the Type options color picker");
+}
+void shifted_log_sliders(){
+    Fixture f;
+    auto check=[&](const char* command,const char* title,const char* name,double defaultValue){
+        panel(f.window,command,title,[&](QDialog& p){
+            auto* value=field(p,name);
+            QSlider* slider=nullptr;
+            for(auto* candidate:p.findChildren<QSlider*>())
+                if(candidate->accessibleName()==QString(name)+" slider")slider=candidate;
+            require(slider,"the adjustment has a slider for this value");
+            const int defaultPosition=slider->value();
+
+            slider->setValue(slider->minimum());
+            require(value->value()==0.,"slider minimum sets zero");
+            slider->setValue(slider->maximum());
+            require(value->value()==value->maximum(),"slider maximum sets the field maximum");
+            value->setValue(0.);
+            require(slider->value()==slider->minimum(),"zero moves the slider to its minimum");
+            value->setValue(value->maximum());
+            require(slider->value()==slider->maximum(),"field maximum moves the slider to its maximum");
+
+            slider->setValue((slider->minimum()+slider->maximum())/2);
+            const double midpoint=std::sqrt(value->maximum()+1.)-1.;
+            require(std::abs(value->value()-midpoint)<.051,"the slider midpoint follows the shifted logarithmic scale");
+            QTest::mouseDClick(slider,Qt::LeftButton);
+            require(value->value()==defaultValue&&slider->value()==defaultPosition,"double-click restores the default value and position");
+        });
+        f.unchanged();
+    };
+    check("adjust.gaussian","Gaussian Blur","Radius",8.);
+    check("adjust.motion","Motion Blur","Distance",16.);
+    check("adjust.noise","Add Noise","Amount",20.);
+}
+void panel_label_scrub(){
+    Fixture f;
+    auto name=[](QDialog& p,const QString& text){for(auto* label:p.findChildren<QLabel*>())if(label->text()==text)return label;throw std::runtime_error("value name label");};
+    auto drag=[](QLabel* label,int distance,bool escape=false,Qt::KeyboardModifiers modifiers={}){
+        const QPointF local(5,label->height()/2.),global=label->mapToGlobal(local);
+        auto send=[&](QEvent::Type type,int offset,Qt::MouseButtons held){QMouseEvent event(type,local+QPointF(offset,0),global+QPointF(offset,0),type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,held,modifiers);QApplication::sendEvent(label,&event);};
+        send(QEvent::MouseButtonPress,0,Qt::LeftButton);send(QEvent::MouseMove,distance,Qt::LeftButton);
+        if(escape)QTest::keyClick(label->window(),Qt::Key_Escape);
+        send(QEvent::MouseButtonRelease,distance,Qt::NoButton);
+    };
+    panel(f.window,"adjust.gaussian","Gaussian Blur",[&](QDialog& p){
+        ready(p);auto* radius=field(p,"Radius");
+        drag(name(p,"Radius"),30);require(radius->value()==38,"dragging a name right raises its value");
+        drag(name(p,"Radius"),-20);require(radius->value()==18,"dragging a name left lowers its value");
+        drag(name(p,"Radius"),25,true);require(radius->value()==18&&p.isVisible(),"Escape restores the value and keeps the panel open");
+        ready(p);require(bool(f.project.effectPreview),"a dragged value previews");
+    });
+    f.unchanged();
+    panel(f.window,"adjust.levels","Levels",[&](QDialog& p){
+        drag(name(p,"Gamma"),-5);require(std::abs(field(p,"Gamma")->value()-.5)<1e-9,"Levels gamma follows its caption");
+        drag(name(p,"Output white"),-40);require(field(p,"Output white")->value()==215,"Levels output follows its caption");
+    });
+    panel(f.window,"adjust.color_balance","Color Balance",[&](QDialog& p){
+        auto* value=control<QSpinBox>(p,"colorLevel0");
+        drag(name(p,"Cyan"),20);require(value->value()==20,"Color Balance left name drags its level");
+        drag(name(p,"Red"),-5);require(value->value()==15,"Color Balance right name drags its level");
+    });
+    panel(f.window,"filter.gaussian","Gaussian Blur",[&](QDialog& p){
+        auto* radius=field(p,"Radius");const double before=radius->value();
+        drag(name(p,"Radius"),10);require(radius->value()==before+10,"filter value follows its name");
+    });
+    auto checkUnitRange=[&](QDialog& p,const QString& label){
+        auto* value=field(p,label);
+        auto* caption=name(p,label);
+        value->setValue(.5);
+        drag(caption,10);
+        require(value->value()==.6,"unit-range labels drag by hundredths");
+        drag(caption,-10,false,Qt::ShiftModifier);
+        require(value->value()==.5,"fine drag respects the field precision");
+        drag(caption,4,false,Qt::ControlModifier);
+        require(value->value()==.9,"coarse drag changes a unit-range value by tenths");
+    };
+    panel(f.window,"filter.vignette","Vignette",[&](QDialog& p){checkUnitRange(p,"Midpoint");});
+    panel(f.window,"filter.bloom","Bloom",[&](QDialog& p){checkUnitRange(p,"Threshold");});
+    f.unchanged();
+}
 void levels_canvas_original_sample(){Fixture f(fixture({80,80,80,255}));panel(f.window,"adjust.levels","Levels",[&](QDialog& p){control<QDoubleSpinBox>(p,"levelsValue3")->setValue(160);ready(p);control<QPushButton>(p,"levelsSampleBlack")->click();f.click({30,20});auto settings=effects_tools::levelsFromAdjustmentJson(control<LevelsAdvancedControls>(p,"levelsAdvancedControls")->adjustmentJson());for(size_t c=1;c<4;++c)require(settings.ranges[c].black==80,"main canvas Levels samples original80 rather than preview");f.unchanged();});f.unchanged();}
 void hue_canvas_sample(){Fixture f(fixture({0,255,0,255}));panel(f.window,"adjust.hue_saturation","Hue/Saturation",[&](QDialog& p){control<QComboBox>(p,"hueRange")->setCurrentIndex(int(effects_tools::ColorRange::Reds));auto* controls=control<HueAdvancedControls>(p,"hueAdvancedControls");auto before=effects_tools::hueFromAdjustmentJson(controls->adjustmentJson());control<QPushButton>(p,"hueSampleColor")->click();f.click({30,20});const auto actual=effects_tools::hueFromAdjustmentJson(controls->adjustmentJson());const auto expected=effects_tools::sampleHueRange(before,120,effects_tools::HueSample::Replace);require(actual==expected&&actual!=before,"main canvas Hue samples visible green");f.unchanged();});f.unchanged();}
 void hue_canvas_target(){Fixture f(fixture({100,160,100,255}));panel(f.window,"adjust.hue_saturation","Hue/Saturation",[&](QDialog& p){auto* controls=control<HueAdvancedControls>(p,"hueAdvancedControls");auto expected=effects_tools::hueFromAdjustmentJson(controls->adjustmentJson());auto drag=effects_tools::beginHueTargeting(expected,effects_tools::PaletteColor{100/255.,160/255.,100/255.});require(drag.has_value(),"targeting fixture");control<QPushButton>(p,"hueTargetedAdjustment")->click();auto at=f.project.canvas->viewMapping().toView({30,20});QPoint start(int(at.x),int(at.y));QTest::mousePress(f.project.canvas,Qt::LeftButton,{},start);QTest::mouseMove(f.project.canvas,start+QPoint(20,0));QTest::mouseRelease(f.project.canvas,Qt::LeftButton,{},start+QPoint(20,0));QApplication::processEvents();expected=effects_tools::dragHueTargeting(expected,*drag,20,false);require(effects_tools::hueFromAdjustmentJson(controls->adjustmentJson())==expected,"main canvas targeted Hue drag uses view-pixel delta");f.unchanged();});f.unchanged();}
@@ -556,12 +767,12 @@ void sharpen_lifecycle(){
 }
 
 void vignette_lifecycle(){
-    auto swatch=[](QDialog& panel,const QColor& expected){auto* button=control<QToolButton>(panel,"vignetteColor");auto image=button->grab().toImage();if(button->size()!=QSize(36,22))throw std::runtime_error("Vignette swatch size: "+std::to_string(button->width())+"x"+std::to_string(button->height()));require(button->text().isEmpty()&&image.pixelColor(image.rect().center())==expected,"Vignette displays the selected color as a filled rectangle");};
+    auto swatch=[](QDialog& panel,const QColor& expected){auto* button=control<QAbstractButton>(panel,"vignetteColor");auto image=button->grab().toImage();if(button->size()!=QSize(34,20))throw std::runtime_error("Vignette swatch size: "+std::to_string(button->width())+"x"+std::to_string(button->height()));require(button->text().isEmpty()&&image.pixelColor(image.rect().center())==expected,"Vignette displays the selected color as a filled rectangle");};
     Fixture f;const auto source=f.project.document->layers[0].raster;
     panel(f.window,"adjust.new.vignette","Vignette",[&](QDialog& p){ready(p);swatch(p,QColor(Qt::black));require(f.project.history.undoCount()==1,"creation is one undo step");field(p,"Amount")->setValue(81);ready(p);p.reject();});
     require(f.project.document->layers.size()==2&&!f.project.effectPreview&&f.project.history.undoCount()==1,"Cancel retains created layer only");
     const auto created=f.project.document;const auto id=f.project.active;
-    panel(f.window,"adjust.edit","Vignette",[&](QDialog& p){require(field(p,"Amount")->value()==35,"Cancel restored defaults");field(p,"Amount")->setValue(81);field(p,"Midpoint")->setValue(18);field(p,"Roundness")->setValue(-42);field(p,"Feather")->setValue(37);field(p,"Highlights")->setValue(67);ready(p);control<QToolButton>(p,"vignetteColor")->click();PaletteDialog* picker=nullptr;for(auto* object:f.window.findChildren<QObject*>())if(auto* candidate=dynamic_cast<PaletteDialog*>(object);candidate&&candidate->isVisible())picker=candidate;require(picker,"Vignette uses shared palette");picker->sample({.2,.6,.8});swatch(p,QColor("#3399cc"));picker->accept();ready(p);require(bool(f.project.effectPreview),"vignette live preview");preview(p)->setChecked(false);ready(p);require(!f.project.effectPreview,"preview off clears overlay");preview(p)->setChecked(true);ready(p);apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"vignette Apply");});
+    panel(f.window,"adjust.edit","Vignette",[&](QDialog& p){require(field(p,"Amount")->value()==35,"Cancel restored defaults");field(p,"Amount")->setValue(81);field(p,"Midpoint")->setValue(18);field(p,"Roundness")->setValue(-42);field(p,"Feather")->setValue(37);field(p,"Highlights")->setValue(67);ready(p);control<QAbstractButton>(p,"vignetteColor")->click();PaletteDialog* picker=nullptr;for(auto* object:f.window.findChildren<QObject*>())if(auto* candidate=dynamic_cast<PaletteDialog*>(object);candidate&&candidate->isVisible())picker=candidate;require(picker,"Vignette uses shared palette");picker->sample({.2,.6,.8});swatch(p,QColor("#3399cc"));picker->accept();ready(p);require(bool(f.project.effectPreview),"vignette live preview");preview(p)->setChecked(false);ready(p);require(!f.project.effectPreview,"preview off clears overlay");preview(p)->setChecked(true);ready(p);apply(p)->click();wait([guard=QPointer<QDialog>(&p)]{return !guard||!guard->isVisible();},"vignette Apply");});
     const auto applied=f.project.document;require(f.project.history.undoCount()==2&&f.project.active==id&&f.project.document->layers[0].raster==source&&!f.project.effectPreview,"Apply preserves source identity history and clears overlay");
     trigger(f.window,"edit.undo");require(f.project.document==created,"first Undo restores creation settings");trigger(f.window,"edit.undo");require(f.project.document==f.before,"second Undo removes created layer");trigger(f.window,"edit.redo");trigger(f.window,"edit.redo");require(f.project.document==applied,"Redo restores applied settings");
     panel(f.window,"adjust.edit","Vignette",[&](QDialog& p){require(field(p,"Roundness")->value()==-42&&field(p,"Highlights")->value()==67,"controls restore existing values");swatch(p,QColor("#3399cc"));field(p,"Amount")->setValue(99);p.reject();});
@@ -649,4 +860,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"lens_large_adjustment_ui",lens_large_adjustment_ui},{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"rim_light_lifecycle",rim_light_lifecycle},{"volumetric_light_lifecycle",volumetric_light_lifecycle},{"volumetric_light_large_image",volumetric_light_large_image},{"volumetric_light_panel_geometry",volumetric_light_panel_geometry},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"color_well_keyboard",color_well_keyboard},{"panel_label_scrub",panel_label_scrub},{"shifted_log_sliders",shifted_log_sliders},{"lens_large_adjustment_ui",lens_large_adjustment_ui},{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"edit_panel_placement_geometry",edit_panel_placement_geometry},{"first_panel_canvas_right_edge",first_panel_canvas_right_edge},{"shared_panel_position",shared_panel_position},{"unmoved_panel_keeps_position",unmoved_panel_keeps_position},{"selection_dialog_shared_position",selection_dialog_shared_position},{"studio_chrome_panel_position",studio_chrome_panel_position},{"mac_chrome_panel_position",mac_chrome_panel_position},{"rim_light_lifecycle",rim_light_lifecycle},{"volumetric_light_lifecycle",volumetric_light_lifecycle},{"volumetric_light_large_image",volumetric_light_large_image},{"volumetric_light_panel_geometry",volumetric_light_panel_geometry},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "LastFilterJob.h"
 #include "CameraRawPanel.h"
+#include "EditPanelPlacement.h"
 #include "CropViewport.h"
 #include "DocumentPreview.h"
 #include "EditPanelSession.h"
@@ -8,12 +9,13 @@
 #include "PropertyControls.h"
 #include "LayerPanelTokens.h"
 #include "LayerPanelWidgets.h"
+#include "NumberScrub.h"
+#include "ToolbarControls.h"
 #include "graphics/MaskSampling.h"
 #include "graphics/Downsample.h"
 #include "imaging/onnx_depth_provider.h"
 #include "imaging/onnx_subject_provider.h"
 #include "imaging/subject_matte.h"
-#include <map>
 #include "filters/PixelFilters.h"
 #include "editing/Selection.h"
 #include <QDialog>
@@ -309,7 +311,6 @@ class FilterPanel final:public ui::EditPanelSession {
     std::uint64_t version_{},runningVersion_{},retainedPreviewBytes_{};
     bool running_{},runningViewportOnly_{},balanceRunning_{},closed_{},committing_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
     bool preparing_{},extractingDepth_{},lightDragging_{};
-    static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     bool autoBalancePending()const{return balanceRunning_&&raw_&&raw_->whiteBalanceIsAuto();}
     void retire(){if(closed_&&!running_&&!balanceRunning_&&!preparing_)deleteLater();}
     void disableControls(){
@@ -558,7 +559,7 @@ class FilterPanel final:public ui::EditPanelSession {
         }));
     }
     void finish(int answer){
-        if(closed_)return;closed_=true;cancelled_->store(true);preparationCancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)positions()[request_.kind]=dialog_.pos();
+        if(closed_)return;closed_=true;cancelled_->store(true);preparationCancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)ui::rememberEditPanel(&dialog_);
         if(balanceCancelled_)balanceCancelled_->store(true);
         try{if(answer==QDialog::Accepted&&splitLayers_&&channels_.front()&&host_.commit){
             constexpr std::array names{"Red","Green","Blue","Alpha"};
@@ -618,11 +619,12 @@ public:
         status_.setObjectName("filterPreviewStatus");status_.setWordWrap(true);status_.setStyleSheet("color: #989ba3; font-size: 11px;");layout_.addWidget(&status_);
         if(cameraRaw&&before_.selection){auto* note=new QLabel("Limited to the selection");note->setObjectName("cameraRawSelection");layout_.addWidget(note);}
         layout_.addWidget(&buttons_);apply_=buttons_.button(cameraRaw?QDialogButtonBox::Ok:QDialogButtonBox::Apply);apply_->setEnabled(cameraRaw);apply_->setDefault(true);buttons_.button(QDialogButtonBox::Cancel)->setAutoDefault(false);
+        if(!cameraRaw){ui::markDialogPill(apply_,true);ui::markDialogPill(buttons_.button(QDialogButtonBox::Cancel));}
         layout_.setContentsMargins(18,16,18,16);layout_.setSpacing(12);fields_.setVerticalSpacing(12);
         debounce_.setSingleShot(true);debounce_.setInterval(cameraRaw?16:120);
         const filters::Settings factory{};
         auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
-            auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"||label=="Threshold"||label=="Midpoint"?decimals:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
+            auto* spin=new ui::PropertyNumber;ui::styleAsPanelNumberField(spin);spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"||label=="Threshold"||label=="Midpoint"?decimals:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
             if(request_.kind==filters::Kind::Sharpen)spin->setSuffix(label=="Amount"?" %":" px");
             if(request_.kind==filters::Kind::VolumetricLight)spin->setSuffix(" %");
             auto* slider=new ui::OptionSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
@@ -630,6 +632,11 @@ public:
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
             slider->setValue(position(spin->value()));slider->setDefaultValue(position(fallback));layout->addWidget(slider,1);layout->addWidget(spin);fields_.addRow(label,row);
+            if(auto* name=qobject_cast<QLabel*>(fields_.labelForField(row))){
+                name->setMinimumHeight(ui::layer_panel::controlHeight);
+                const double stepPerPixel=low==0.&&high==1.?spin->singleStep():0.;
+                ui::attachScrub(name,spin,{},stepPerPixel);
+            }
             connect(slider,&QSlider::valueChanged,&dialog_,[spin,first,last,logarithmic,stepDecimals](int v){const double normalized=first+(last-first)*v/10000.;const double factor=std::pow(10.,stepDecimals);spin->setValue(std::round((logarithmic?std::exp(normalized):normalized)*factor)/factor);});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[slider,position](double v){QSignalBlocker block(slider);slider->setValue(position(v));});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[this,field=&value](double next){*field=next;change();});
@@ -714,7 +721,7 @@ public:
             number("Angle",request_.settings.rgbSplitAngle,-180,180,1,factory.rgbSplitAngle);
             auto* radial=new QCheckBox("Radial");radial->setObjectName("rgbSplitRadial");radial->setChecked(request_.settings.rgbSplitRadial);fields_.addRow(radial);
             connect(radial,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.rgbSplitRadial=value;syncGuideOverlay();change();});
-            auto* split=new QPushButton("Split to Layers");split->setObjectName("rgbSplitToLayers");fields_.addRow(split);
+            auto* split=new QPushButton("Split to Layers");split->setObjectName("rgbSplitToLayers");ui::markDialogPill(split);fields_.addRow(split);
             split->setToolTip("Create hidden grayscale layers from the original Red, Green, Blue and Alpha channels.");
             connect(split,&QPushButton::clicked,&dialog_,[this,split]{
                 if(closed_||committing_||splitLayers_)return;
@@ -894,7 +901,7 @@ public:
             };
         }
         if(cameraRaw){auto* dock=new DockFollow(&dialog_,parent->window());parent->window()->installEventFilter(dock);dialog_.setFixedWidth(440);start();dialog_.show();dock->place();}
-        else{dialog_.resize(430,220);if(auto found=positions().find(request_.kind);found!=positions().end())dialog_.move(found->second);start();dialog_.show();}
+        else{dialog_.resize(430,220);ui::placeEditPanel(&dialog_,host_.canvas);start();dialog_.show();}
         dialog_.raise();dialog_.activateWindow();
         if(auto* first=dialog_.findChild<QDoubleSpinBox*>())first->setFocus(Qt::ActiveWindowFocusReason);
         else preview_.setFocus(Qt::ActiveWindowFocusReason);

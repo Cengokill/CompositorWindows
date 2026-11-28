@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "EditPanelPlacement.h"
 #include "SelectionCursors.h"
 #include "SegmentedControl.h"
 #include "ToolbarControls.h"
@@ -34,10 +35,22 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <cmath>
+#include <optional>
 
 namespace compositor {
 namespace {
 std::optional<editing::SelectionOutline> outlineOf(const std::optional<Selection>&selection){if(!selection)return {};if(selection->outline)return *selection->outline;if(selection->coverage)return editing::SelectionOutline::fromCoverage(*selection->coverage);return editing::SelectionOutline();}
+// The QInputDialog static helpers leave placement to Qt, so the dialog is built here to share the edit panel position.
+std::optional<double> askAmount(QWidget*parent,const QWidget*canvas,const QString&title,const QString&label,QInputDialog::InputMode mode,double value,int minimum,int maximum){
+    QInputDialog dialog(parent);dialog.setWindowTitle(title);dialog.setLabelText(label);
+    if(mode==QInputDialog::IntInput){dialog.setIntRange(minimum,maximum);dialog.setIntValue(int(value));dialog.setIntStep(1);}
+    else{dialog.setDoubleDecimals(0);dialog.setDoubleRange(minimum,maximum);dialog.setDoubleValue(value);dialog.setDoubleStep(1);}
+    ui::placeEditPanel(&dialog,canvas);
+    const bool accepted=dialog.exec()==QDialog::Accepted;
+    ui::rememberEditPanel(&dialog);
+    if(!accepted)return {};
+    return mode==QInputDialog::IntInput?double(dialog.intValue()):dialog.doubleValue();
+}
 }
 void MainWindow::setupSelectionActions(){
     qApp->installEventFilter(this);
@@ -47,9 +60,9 @@ void MainWindow::setupSelectionActions(){
     auto*menu=menuBar()->addMenu("&Select");
     for(bool expand:{true,false})action(menu,expand?"Expand…":"Contract…",{},[this,expand]{
         auto* p=current();if(!p||!p->document||!p->document->selection)return;
-        auto& remembered=expand?selectionExpandAmount_:selectionContractAmount_;bool ok=false;
-        const auto amount=QInputDialog::getDouble(this,expand?"Expand Selection":"Contract Selection","Pixels",remembered,1,500,0,&ok);
-        if(ok){remembered=int(amount);if(auto* spin=findChild<QSpinBox*>(expand?"selectionExpandAmount":"selectionContractAmount")){const QSignalBlocker block(spin);spin->setValue(remembered);}resizeSelection(expand,amount);}
+        auto& remembered=expand?selectionExpandAmount_:selectionContractAmount_;
+        const auto amount=askAmount(this,p->canvas,expand?"Expand Selection":"Contract Selection","Pixels",QInputDialog::DoubleInput,remembered,1,500);
+        if(amount){remembered=int(*amount);if(auto* spin=findChild<QSpinBox*>(expand?"selectionExpandAmount":"selectionContractAmount")){const QSignalBlocker block(spin);spin->setValue(remembered);}resizeSelection(expand,*amount);}
     });
     action(menu,"All",QKeySequence::SelectAll,[this]{edit("Select All",[&](Document&d){d.selection=editing::rasterSelection(editing::SelectionOutline::rectangle({0,0,double(d.width),double(d.height)}),d.width,d.height);});});
     action(menu,"Deselect",QKeySequence("Ctrl+D"),[this]{edit("Deselect",[](Document&d){d.selection.reset();});});
@@ -63,11 +76,14 @@ void MainWindow::setupSelectionActions(){
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
         connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
         field->selectAll();field->setFocus();
-        if(dialog.exec()!=QDialog::Accepted)return;const int radius=field->value();
+        ui::placeEditPanel(&dialog,p->canvas);
+        const bool accepted=dialog.exec()==QDialog::Accepted;
+        ui::rememberEditPanel(&dialog);
+        if(!accepted)return;const int radius=field->value();
         selectionFeatherAmount_=int(radius);if(auto* spin=findChild<QSpinBox*>("selectionFeatherAmount")){const QSignalBlocker block(spin);spin->setValue(selectionFeatherAmount_);}
         featherSelectionBy(radius);
     });
-    action(menu,"Color Range…",{},[this]{auto*p=current();auto*l=active();if(!p||!p->document||!l||!l->raster)return;bool ok=false;auto tolerance=QInputDialog::getInt(this,"Color Range","Tolerance",32,0,255,1,&ok);if(!ok)return;edit("Color Range",[l,tolerance](Document&d){auto mask=editing::colorRangeMask(*l->raster,l->raster->width/2,l->raster->height/2,tolerance);if(mask->width!=d.width||mask->height!=d.height)throw std::runtime_error("Color range needs a canvas-sized layer");d.selection=Selection{mask};});});
+    action(menu,"Color Range…",{},[this]{auto*p=current();auto*l=active();if(!p||!p->document||!l||!l->raster)return;const auto answer=askAmount(this,p->canvas,"Color Range","Tolerance",QInputDialog::IntInput,32,0,255);if(!answer)return;const int tolerance=int(*answer);edit("Color Range",[l,tolerance](Document&d){auto mask=editing::colorRangeMask(*l->raster,l->raster->width/2,l->raster->height/2,tolerance);if(mask->width!=d.width||mask->height!=d.height)throw std::runtime_error("Color range needs a canvas-sized layer");d.selection=Selection{mask};});});
     action(menu,"Inverse",QKeySequence("Ctrl+Shift+I"),[this]{if(current()&&current()->document&&current()->document->selection)edit("Inverse",[](Document&d){
         if(d.selection->outline)d.selection=editing::rasterSelection(editing::inverseSelection(*d.selection->outline,d.width,d.height),d.width,d.height);
         else if(d.selection->coverage&&d.selection->coverage->source){
