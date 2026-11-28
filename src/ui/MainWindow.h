@@ -31,6 +31,7 @@
 #include <QStackedWidget>
 #include <QPointer>
 #include <QMainWindow>
+#include <QAbstractNativeEventFilter>
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QDoubleSpinBox>
@@ -86,7 +87,7 @@ struct EditorProject {
     QWidget* welcome{};
     NativeCanvas* canvas{};
 };
-class MainWindow final:public QMainWindow {
+class MainWindow final:public QMainWindow,private QAbstractNativeEventFilter {
 public:
     // Runs on a worker thread; must not touch the window.
     using ReleaseFetcher=std::function<QByteArray(const std::function<bool()>& cancelled)>;
@@ -147,6 +148,8 @@ private:
     QColor sampleOriginal_;
     bool zoomDragging_{},zoomMoved_{};
     bool spaceHeld_{},spaceDragging_{};
+    // An Alt+Space press kept from Qt, whose release Qt may then not report.
+    bool altSpaceHeld_{};
     QPointF spacePress_;
     double zoomStart_{};
     QPointF zoomAnchor_;
@@ -223,6 +226,8 @@ private:
     EditorProject* selectionOwner_{};
     QChronoTimer* selectionScrollTimer_{};
     std::optional<Point> selectionScrollPoint_;
+    // Latest unsnapped document pointer of a selection drag, where a Space move starts from.
+    Point selectionPointer_{};
     Qt::KeyboardModifiers selectionModifiers_{};
     // Bounds of the selection when a move began; the snapped move reads them each event.
     std::optional<editing::Rect> selectionMoveBox_;
@@ -431,6 +436,7 @@ private:
     void stopSelectionAutoscroll();
     void stepSelectionAutoscroll();
     bool eventFilter(QObject*,QEvent*) override;
+    bool nativeEventFilter(const QByteArray&,void*,qintptr*) override;
     void copySelection(bool merged,bool cut=false,bool viaLayer=false);
     void addPixelLayer(std::shared_ptr<const Raster>,Point,const char*);
     void pasteSelection();
