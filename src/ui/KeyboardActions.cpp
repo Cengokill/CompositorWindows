@@ -96,7 +96,7 @@ bool MainWindow::updateTemporaryHand(Point point,bool finish){
     if(finish){spaceDragging_=false;if(canvas()){if(spaceHeld_)canvas()->setCursor(Qt::OpenHandCursor);else releaseCanvasCursor();}refreshBrushPointer();}return true;
 }
 void MainWindow::cancelTemporaryHand(){spaceHeld_=spaceDragging_=false;selectionGesture_.endMarqueeMove();releaseCanvasCursor();}
-void MainWindow::keyReleaseEvent(QKeyEvent* event){if(event->key()==Qt::Key_Space){if(!event->isAutoRepeat()){spaceHeld_=false;selectionGesture_.endMarqueeMove();if(selectionGesture_.marquee())refreshSelectionGesture();else if(!spaceDragging_)releaseCanvasCursor();refreshBrushPointer();}event->accept();return;}QMainWindow::keyReleaseEvent(event);}
+void MainWindow::keyReleaseEvent(QKeyEvent* event){if(event->key()==Qt::Key_Space){if(!event->isAutoRepeat()){spaceHeld_=false;selectionGesture_.endMarqueeMove();selectionGesture_.modifiersChanged(selectionModifiers_.testFlag(Qt::ShiftModifier));if(selectionGesture_.marquee())refreshSelectionGesture();else if(!spaceDragging_)releaseCanvasCursor();refreshBrushPointer();}event->accept();return;}QMainWindow::keyReleaseEvent(event);}
 // Qt answers Alt+Space with the window menu and sends no key event. A Marquee drawn with Alt (Subtract)
 // takes that press for itself, with its repeats, even past the drag while Space stays down.
 bool MainWindow::nativeEventFilter(const QByteArray& type,void* message,qintptr*){

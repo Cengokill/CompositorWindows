@@ -66,9 +66,12 @@ void space_move_ellipse_reverse(){Fixture f(400);command(f.window,"tool.marquee"
 void space_move_shift(){Fixture f(400);command(f.window,"tool.marquee")->trigger();f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,60},Qt::ShiftModifier);require(draftIs(f,{40,40,40,40}),"Shift squares before the move");
  holdSpace(f);f.send(QEvent::MouseMove,{90,70},Qt::ShiftModifier);require(draftIs(f,{50,50,40,40}),"a moved square stays square");
  QTest::keyRelease(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,40}),"releasing Shift while moving does not reshape");
- releaseSpace(f);QTest::keyPress(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,40}),"a stationary Shift after the move does not jump back");
+ releaseSpace(f);require(draftIs(f,{50,50,40,20}),"releasing Space applies a Shift released during the move");
+ QTest::keyPress(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,40}),"a stationary Shift after the move does not jump back");
  QTest::keyRelease(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,20}),"releasing Shift after the move restores the free box at the new place");
- f.send(QEvent::MouseButtonRelease,{90,70});require(selectionIs(f,{50,50,40,20}),"the Shift result commits");}
+ holdSpace(f);QTest::keyPress(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,20}),"pressing Shift while moving does not reshape");
+ releaseSpace(f);require(draftIs(f,{50,50,40,40}),"releasing Space applies a Shift pressed during the move");
+ f.send(QEvent::MouseButtonRelease,{90,70},Qt::ShiftModifier);require(selectionIs(f,{50,50,40,40}),"the Shift result commits without another mouse move");QTest::keyRelease(f.project.canvas,Qt::Key_Shift);}
 void space_move_cancel(){Fixture f(400);command(f.window,"tool.marquee")->trigger();const auto before=f.project.document;
  const auto resizesAgain=[&]{f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});f.send(QEvent::MouseMove,{90,90});require(draftIs(f,{40,40,50,50}),"a later Marquee resizes normally");QTest::keyClick(f.project.canvas,Qt::Key_Escape);f.send(QEvent::MouseButtonRelease,{90,90});};
  f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});holdSpace(f);f.send(QEvent::MouseMove,{100,90});QTest::keyClick(f.project.canvas,Qt::Key_Escape);
