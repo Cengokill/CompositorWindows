@@ -37,6 +37,29 @@ void clipping(){
     d.layers.push_back(layer("drop"));auto adopted=place(d,{},"drop",{{},"base",false});check(get(adopted.document,"drop").maskSourceId=="base"&&get(adopted.document,"one").maskSourceId=="base","drop into stack adopts shared base");
     check(!canLink(d,"one","base")&&!canLink(d,"base","base"),"cyclic links rejected");auto adjustment=layer("adjustment");adjustment.adjustmentJson="{}";d.layers.push_back(adjustment);check(!canLink(d,"adjustment","drop")&&canLink(d,"base","adjustment"),"adjustment may be target but not alpha source");
 }
+void selectedClipping(){
+    auto d=document({layer("base"),layer("one"),layer("two"),layer("three")});const auto maskOf=[](const Document& doc,const std::string& id){return get(doc,id).maskSourceId;};
+    auto withBottom=selected({"base","one","two","three"},"three");check(!canToggleSelectedClipping(d,withBottom)&&!toggleSelectedClipping(d,withBottom).changed,"bottom layer has nothing below it to clip to");
+    auto run=selected({"one","two","three"},"three");check(canToggleSelectedClipping(d,run)&&!releasesSelectedClipping(d,run),"a run above the base can be clipped");auto clipped=toggleSelectedClipping(d,run);check(clipped.changed&&clipped.action=="Create Clipping Mask"&&maskOf(clipped.document,"one")=="base"&&maskOf(clipped.document,"two")=="base"&&maskOf(clipped.document,"three")=="base"&&maskOf(clipped.document,"base").empty(),"every target clips to the layer under the lowest");check(maskOf(d,"one").empty(),"create leaves its input unchanged");
+    check(releasesSelectedClipping(clipped.document,run),"all-clipped selection releases");auto released=toggleSelectedClipping(clipped.document,run);check(released.action=="Release Clipping Mask"&&released.document==d,"release restores the unclipped document");
+    auto partial=releaseSelectedClipping(clipped.document,selected({"two","three"},"three"));check(maskOf(partial.document,"one")=="base"&&maskOf(partial.document,"two").empty()&&maskOf(partial.document,"three").empty(),"release frees the target and the run above it, not the layers below");
+    auto lowerRun=releaseSelectedClipping(clipped.document,selected({"one"}));check(maskOf(lowerRun.document,"one").empty()&&maskOf(lowerRun.document,"two").empty()&&maskOf(lowerRun.document,"three").empty(),"releasing the lowest also frees the clipped layers above it");
+    auto mixed=document({layer("base"),layer("one"),layer("two"),layer("three")});mixed.layers[1].maskSourceId="base";auto mixedSelection=selected({"one","three"},"three");check(!releasesSelectedClipping(mixed,mixedSelection),"a mixed selection creates");auto rest=toggleSelectedClipping(mixed,mixedSelection);check(maskOf(rest.document,"one")=="base"&&maskOf(rest.document,"three")=="two"&&maskOf(rest.document,"two").empty(),"a mixed selection clips the rest and leaves clipped layers alone");
+    auto onlyClipped=releaseSelectedClipping(mixed,mixedSelection);check(maskOf(onlyClipped.document,"one").empty()&&maskOf(onlyClipped.document,"three").empty()&&onlyClipped.changed,"the context-menu release frees the clipped layers of a mixed selection");
+    auto chain=document({layer("base"),layer("one"),layer("two"),layer("three")});chain.layers[1].maskSourceId="base";chain.layers[2].maskSourceId="base";auto tail=toggleSelectedClipping(chain,selected({"three"}));check(maskOf(tail.document,"three")=="base"&&maskOf(tail.document,"one")=="base"&&maskOf(tail.document,"two")=="base","an unselected chain keeps its links and a new layer joins its base");
+    auto active=toggleSelectedClipping(d,SelectionState{{"two"},"three"});check(maskOf(active.document,"two")=="one"&&maskOf(active.document,"three")=="one","the active layer is a target even when it is missing from the selection");
+    auto folders=document({layer("folder",{},true),layer("above"),layer("other",{},true),layer("inside","other")});check(!canToggleSelectedClipping(folders,selected({"folder"}))&&!canToggleSelectedClipping(folders,selected({"above","folder"},"above")),"a folder target disables the command");check(!canToggleSelectedClipping(folders,selected({"above"})),"a layer above a folder cannot clip to it");check(!canToggleSelectedClipping(folders,selected({"folder","other"}))&&!canToggleSelectedClipping(folders,selected({"inside"})),"two folders or the lowest layer in a folder have no source");auto refused=toggleSelectedClipping(folders,selected({"folder","above"},"above"));check(!refused.changed&&refused.document==folders,"an invalid target changes nothing, not even the valid ones");
+    auto adjustment=layer("adjustment");adjustment.adjustmentJson="{}";auto invalid=document({layer("base"),adjustment,layer("top")});check(!canToggleSelectedClipping(invalid,selected({"top"})),"a layer above an adjustment cannot clip to it");auto unchanged=toggleSelectedClipping(invalid,selected({"base","top"},"top"));check(!unchanged.changed&&unchanged.document==invalid,"a failed validation leaves the document unchanged");
+}
+void selectedVisibility(){
+    auto d=document({layer("a"),layer("b"),layer("c"),layer("folder",{},true)});auto both=selected({"a","c"},"c");check(selectedVisibilityTitle(d,both)=="Hide Layers"&&selectedVisibilityTitle(d,selected({"b"}))=="Hide Layer","titles follow the selection size");
+    auto hidden=toggleSelectedVisibility(d,both);check(hidden.changed&&hidden.action=="Hide Layers"&&!get(hidden.document,"a").visible&&!get(hidden.document,"c").visible&&get(hidden.document,"b").visible&&get(hidden.document,"folder").visible&&get(d,"a").visible,"selected layers hide and the others stay");
+    check(selectedVisibilityTitle(hidden.document,both)=="Show Layers","the title offers Show once the active layer is hidden");
+    auto mixed=hidden.document;mixed.layers[0].visible=true;check(selectedVisibilityTitle(mixed,both)=="Show Layers","a hidden active layer shows all");auto shown=toggleSelectedVisibility(mixed,both);check(shown.action=="Show Layers"&&get(shown.document,"a").visible&&get(shown.document,"c").visible,"a hidden active layer shows every target, including one already visible");
+    auto withFolder=toggleSelectedVisibility(d,selected({"folder","a"},"a"));check(!get(withFolder.document,"folder").visible&&!get(withFolder.document,"a").visible&&get(withFolder.document,"b").visible,"folders hide with the selection");
+    auto activeOnly=toggleSelectedVisibility(d,SelectionState{{"a"},"b"});check(!get(activeOnly.document,"a").visible&&!get(activeOnly.document,"b").visible,"the active layer is a target even when it is missing from the selection");
+    check(!toggleSelectedVisibility(d,{}).changed,"no selection changes nothing");
+}
 void bakeAndDelete(){
     auto target=layer("target"),source=layer("source");target.raster=alpha({255,255,255,255});source.raster=alpha({255,0,128,255},0);source.visible=false;target.maskSourceId="source";auto d=document({target,source});graphics::StackRenderer renderer;auto before=renderer.render(d,0,0,2,2);auto plan=deletionPlan(d,selected({"source"}));check(plan.dependents==std::vector<std::string>{"target"},"delete exposes dependent choice");auto cancelled=erase(d,selected({"source"}),DeleteMode::Cancel);check(!cancelled.changed&&cancelled.document==d,"cancel preserves original graph");
     auto baked=erase(d,selected({"source"}),DeleteMode::Bake);auto after=renderer.render(baked.document,0,0,2,2);check(before->rgba()==after->rgba()&&get(baked.document,"target").maskSourceId.empty(),"source hidden-black alpha bake and delete preserves appearance");auto unlinked=erase(d,selected({"source"}),DeleteMode::RemoveLinks);check(get(unlinked.document,"target").raster==target.raster&&renderer.render(unlinked.document,0,0,2,2)->pixel(1,0).a==255,"remove links reveals original pixels");
@@ -61,5 +84,57 @@ void merging(){
     auto clear=document({layer("a"),layer("b")},7,5);merged=merge(clear,selected({"b"}),renderer);check(merged.document.layers[0].raster->width==7&&merged.document.layers[0].raster->height==5,"transparent merge keeps canvas grid");
     struct Failure:IRasterBackend{std::shared_ptr<const Raster> render(const Document&,int,int,int,int)const override{throw std::runtime_error("injected renderer failure");}} failure;fails([&]{merge(clear,selected({"b"}),failure);},"renderer failure propagates atomically");check(clear.layers.size()==2,"failed merge leaves source unchanged");
 }
+void depth(){
+    std::vector<std::uint8_t> bytes{128,0,0,128,7,3,1,9,255,254,1,255,0,0,0,0};const auto pixels=Raster::fromRgba(2,2,bytes.data(),8);
+    auto folder=layer("folder",{},true),eight=layer("eight","folder"),text=layer("text","folder"),shape=layer("shape","folder"),adjustment=layer("adjustment","folder"),gif=layer("gif","folder"),blank=layer("blank","folder"),sixteen=layer("sixteen"),outside=layer("outside");
+    eight.raster=text.raster=shape.raster=gif.raster=sixteen.raster=outside.raster=pixels;sixteen.deep=deepFromRaster(*pixels);
+    text.text=TextContent{"Text"};shape.shapeJson="{}";adjustment.adjustmentJson="{}";gif.animation=GifAnimation{{{pixels,100}},0};
+    eight.opacity=.5;eight.blend=Blend::Multiply;eight.mask=solidMask(128);blank.transform={1,1,1,1};blank.mask=solidMask(255);
+    const auto d=document({folder,eight,text,shape,adjustment,gif,blank,sixteen,outside});
+    const auto chosen=selected({"eight","folder","sixteen"},"sixteen");
+    check(depthTargets(d,chosen)==std::vector<std::string>({"eight","blank","sixteen"}),"targets cover selected folders once and skip unsupported layers");
+    check(canConvertDepth(d,chosen,BitDepth::Sixteen)&&canConvertDepth(d,chosen,BitDepth::Eight),"a mixed selection can go either way");
+    check(!canConvertDepth(d,selected({"text","shape","adjustment","gif"}),BitDepth::Sixteen),"unsupported layers enable nothing");
+
+    const auto wide=convertDepth(d,chosen,BitDepth::Sixteen);
+    check(wide.changed&&wide.action=="Convert to 16-Bit"&&wide.selection.ids==normalizeSelection(d,chosen).ids&&wide.selection.primary=="sixteen","conversion keeps the selection");
+    const auto& converted=get(wide.document,"eight");
+    check(converted.deep&&converted.raster==pixels&&converted.opacity==.5&&converted.blend==Blend::Multiply&&converted.mask==eight.mask&&converted.transform==eight.transform,"8-bit layer keeps pixels and appearance");
+    for(std::size_t i=0;i<bytes.size();++i)check(converted.deep->samples[i]==promote8(bytes[i]),"16-bit samples are the exact 8-bit equivalents");
+    const auto& filled=get(wide.document,"blank");
+    check(filled.deep&&filled.raster&&filled.raster->width==2&&filled.raster->height==2&&std::all_of(filled.deep->samples.begin(),filled.deep->samples.end(),[](std::uint16_t v){return v==0;}),"blank layer gets clear canvas pixels");
+    check(filled.transform.x==0&&filled.transform.y==0&&filled.transform.width==2&&filled.transform.height==2&&filled.mask&&filled.mask->placement==blank.transform,"blank layer covers the canvas and its mask stays in place");
+    for(const char* id:{"folder","text","shape","adjustment","gif","sixteen","outside"})check(get(wide.document,id)==get(d,id),"excluded, unselected and already 16-bit layers are untouched");
+    check(!canConvertDepth(wide.document,chosen,BitDepth::Sixteen)&&!convertDepth(wide.document,chosen,BitDepth::Sixteen).changed,"nothing left to widen");
+
+    const auto narrow=convertDepth(wide.document,chosen,BitDepth::Eight);
+    check(narrow.action=="Convert to 8-Bit"&&!get(narrow.document,"eight").deep&&!get(narrow.document,"blank").deep&&!get(narrow.document,"sixteen").deep,"every selected deep layer narrows");
+    check(get(narrow.document,"eight")==get(d,"eight"),"8 to 16 to 8 restores the layer exactly");
+    check(rasterFromDeep(*converted.deep)->rgba()==pixels->rgba(),"dithering promoted pixels returns the same bytes");
+    std::vector<std::uint8_t> ramp;for(int a=0;a<256;++a)for(int v=0;v<256;++v){const auto value=std::uint8_t(std::min(v,a));ramp.insert(ramp.end(),{value,value,value,std::uint8_t(a)});}
+    const auto every=Raster::fromRgba(256,256,ramp.data(),1024);check(rasterFromDeep(*deepFromRaster(*every))->rgba()==ramp,"every premultiplied 8-bit value survives the round trip");
+
+    History history;std::optional<Document> current=d;history.begin(wide.action,current,chosen.primary);current=wide.document;history.end(current,wide.selection.primary);
+    check(history.undoCount()==1,"one history step");const auto undone=history.undo();check(undone&&undone->document==d&&!history.canUndo(),"one undo restores every layer");const auto redone=history.redo();check(redone&&redone->document==wide.document,"one redo converts every layer again");
+
+    auto linked=layer("linked"),placed=layer("placed");linked.mask=solidMask(255);placed.transform={1,0,1,1};placed.mask=solidMask(255);placed.mask->placement=Transform{5,6,2,2};
+    const auto masks=document({linked,placed});const auto masked=convertDepth(masks,selected({"linked","placed"}),BitDepth::Sixteen);
+    check(get(masked.document,"placed").mask==placed.mask,"a placed mask keeps its placement");
+    check(!get(masked.document,"linked").mask->placement||get(masked.document,"linked").transform!=linked.transform,"a mask on a canvas-sized blank layer is not moved");
+
+    auto hdr=layer("hdr");auto samples=makeDeep(2,2,DeepImage::Format::HalfFloat);samples->setPixel(0,0,{2,.5f,0,1});hdr.deep=samples;hdr.raster=rasterFromDeep(*samples);
+    const auto bright=document({hdr});
+    check(!canConvertDepth(bright,selected({"hdr"}),BitDepth::Sixteen)&&canConvertDepth(bright,selected({"hdr"}),BitDepth::Eight),"HDR only goes to 8 bits here");
+    const auto clipped=convertDepth(bright,selected({"hdr"}),BitDepth::Eight);check(!clipped.document.layers[0].deep&&clipped.document.layers[0].raster==hdr.raster,"HDR keeps its clipped 8-bit presentation");
+
+    const auto nested=document({layer("deepest","inner"),layer("outer",{},true),layer("inner","outer",true),layer("loose")});
+    check(depthTargets(nested,selected({"outer"}))==std::vector<std::string>({"deepest"}),"a selected folder covers every level below it, whatever the list order");
+    check(!depthChoices(nested,selected({"missing"})).sixteen&&depthChoices(nested,selected({"inner"})).sixteen,"choices follow the selected targets");
+
+    std::vector<Layer> blanks;SelectionState all;for(int i=0;i<6;++i){blanks.push_back(layer("blank"+std::to_string(i)));all.ids.push_back(blanks.back().id);}all.primary=all.ids.front();
+    const auto large=document(std::move(blanks),10000,10000);const auto before=large;
+    check(canConvertDepth(large,all,BitDepth::Sixteen),"oversized request is still offered");
+    fails([&]{convertDepth(large,all,BitDepth::Sixteen);},"six 100 MP blank layers exceed the project pixel budget");check(large==before,"rejected conversion changes nothing");
 }
-int main(int argc,char** argv){try{const std::vector<std::pair<std::string,void(*)()>> cases{{"hierarchy",hierarchy},{"grouping",grouping},{"moves_duplicate",movesAndDuplicate},{"clipping",clipping},{"bake_delete",bakeAndDelete},{"multi_history",multiDeleteAndHistory},{"copy_graph",copyGraph},{"merge",merging}};bool ran=false;for(const auto& [name,run]:cases)if(argc==1||name==argv[1]){run();std::cout<<"PASS layers."<<name<<'\n';ran=true;}check(ran,"Unknown test case");return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+}
+int main(int argc,char** argv){try{const std::vector<std::pair<std::string,void(*)()>> cases{{"hierarchy",hierarchy},{"grouping",grouping},{"moves_duplicate",movesAndDuplicate},{"depth",depth},{"clipping",clipping},{"selected_clipping",selectedClipping},{"selected_visibility",selectedVisibility},{"bake_delete",bakeAndDelete},{"multi_history",multiDeleteAndHistory},{"copy_graph",copyGraph},{"merge",merging}};bool ran=false;for(const auto& [name,run]:cases)if(argc==1||name==argv[1]){run();std::cout<<"PASS layers."<<name<<'\n';ran=true;}check(ran,"Unknown test case");return 0;}catch(const std::exception& error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

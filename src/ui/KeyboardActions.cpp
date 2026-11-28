@@ -5,6 +5,7 @@
 #include <QKeyEvent>
 #include <QSignalBlocker>
 #include <QStatusBar>
+#include <qt_windows.h>
 #include <algorithm>
 
 namespace compositor {
@@ -72,6 +73,8 @@ bool MainWindow::handleEditingKey(QKeyEvent* event){
                 if(project->maskSelected&&layer&&layer->mask&&layerSelection().ids.size()<=1)maskCommand(int(ui::MaskCommand::Delete));else layerCommand(6);
             }return true;
         }
+        // Mid-drag, Space moves the Marquee being drawn instead of showing the Hand.
+        if(key==Qt::Key_Space&&selectionGesture_.marquee()){spaceHeld_=true;selectionGesture_.beginMarqueeMove(selectionPointer_);if(canvas())canvas()->setSnapGuides();return true;}
         if(key==Qt::Key_Space){spaceHeld_=true;refreshBrushPointer();if(canvas()){canvas()->setCursor(spaceDragging_?Qt::ClosedHandCursor:Qt::OpenHandCursor);canvas()->updateHoverCursorAtPointer();}return true;}
         if(plain&&shift&&(key==Qt::Key_Plus||key==Qt::Key_Equal||key==Qt::Key_Minus||key==Qt::Key_Underscore)){
             if(canEditAppearance()){const bool forward=key==Qt::Key_Plus||key==Qt::Key_Equal;const int count=int(blendNames.size()),index=int(active()->blend);setLayerBlendMode(Blend((index+(forward?1:count-1))%count));}return true;
@@ -92,8 +95,26 @@ bool MainWindow::updateTemporaryHand(Point point,bool finish){
     if(!spaceDragging_)return false;if(canvas())canvas()->panBy((QPointF(point.x,point.y)-spacePress_)*canvas()->pointsPerPixel());
     if(finish){spaceDragging_=false;if(canvas()){if(spaceHeld_)canvas()->setCursor(Qt::OpenHandCursor);else releaseCanvasCursor();}refreshBrushPointer();}return true;
 }
-void MainWindow::cancelTemporaryHand(){spaceHeld_=spaceDragging_=false;releaseCanvasCursor();}
-void MainWindow::keyReleaseEvent(QKeyEvent* event){if(event->key()==Qt::Key_Space){if(!event->isAutoRepeat()){spaceHeld_=false;if(!spaceDragging_)releaseCanvasCursor();refreshBrushPointer();}event->accept();return;}QMainWindow::keyReleaseEvent(event);}
+void MainWindow::cancelTemporaryHand(){spaceHeld_=spaceDragging_=false;selectionGesture_.endMarqueeMove();releaseCanvasCursor();}
+void MainWindow::keyReleaseEvent(QKeyEvent* event){if(event->key()==Qt::Key_Space){if(!event->isAutoRepeat()){spaceHeld_=false;selectionGesture_.endMarqueeMove();selectionGesture_.modifiersChanged(selectionModifiers_.testFlag(Qt::ShiftModifier));if(selectionGesture_.marquee())refreshSelectionGesture();else if(!spaceDragging_)releaseCanvasCursor();refreshBrushPointer();}event->accept();return;}QMainWindow::keyReleaseEvent(event);}
+// Qt answers Alt+Space with the window menu and sends no key event. A Marquee drawn with Alt (Subtract)
+// takes that press for itself, with its repeats, even past the drag while Space stays down.
+bool MainWindow::nativeEventFilter(const QByteArray& type,void* message,qintptr*){
+    if(type!="windows_generic_MSG")return false;
+    const auto* native=static_cast<const MSG*>(message);
+    if(native->wParam!=VK_SPACE)return false;
+    const auto send=[this](QEvent::Type kind,bool repeat){if(auto* view=canvas()){QKeyEvent key(kind,Qt::Key_Space,Qt::AltModifier,QString(),repeat);QApplication::sendEvent(view,&key);}};
+    if(native->message==WM_SYSKEYDOWN&&(native->lParam&(LPARAM(1)<<29))){
+        const bool repeat=native->lParam&(LPARAM(1)<<30);
+        // A new press forgets one whose release went to another window.
+        if(!repeat)altSpaceHeld_=false;
+        if(!altSpaceHeld_&&!selectionGesture_.marquee())return false;
+        altSpaceHeld_=true;send(QEvent::KeyPress,repeat);return true;
+    }
+    // Without Alt, or once Alt is released, Qt may still never report this release. It also sees the message.
+    if(altSpaceHeld_&&(native->message==WM_KEYUP||native->message==WM_SYSKEYUP)){altSpaceHeld_=false;send(QEvent::KeyRelease,false);}
+    return false;
+}
 void MainWindow::changeEvent(QEvent* event){if(event->type()==QEvent::ActivationChange&&!isActiveWindow())cancelTemporaryHand();QMainWindow::changeEvent(event);}
 
 void MainWindow::interruptPointer(){

@@ -298,7 +298,8 @@ class History {
     TrimPlan planTrim(const std::optional<Document>&,std::span<const Entry>,std::span<const Entry>) const;
     void applyTrim(TrimPlan) noexcept;
 public:
-    size_t entryLimit{100},byteLimit{256*1024*1024};
+    static constexpr size_t defaultByteLimit=256*1024*1024;
+    size_t entryLimit{100},byteLimit{defaultByteLimit};
     // A session may retain a small number of essential steps above the byte budget.
     size_t minimumEntries{};
     void begin(std::string name,const std::optional<Document>& doc,const std::string& active);

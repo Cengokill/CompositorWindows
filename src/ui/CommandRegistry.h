@@ -23,7 +23,7 @@ struct CommandState {
     bool levels{},hueSaturation{},filterEdit{},showsNewDocument{},showsImporter{};
     bool renamingLayer{},importError{},adjustmentEditing{},transformEdit{},persistentTransform{};
     bool crop{},gradient{},pixelMove{},colorPicker{},lassoDraft{},managing{},modalDialog{};
-    bool hdrLayer{};
+    bool hdrLayer{},canConvertToSixteenBit{},canConvertToEightBit{};
     bool activeLayer{},group{},asset{},adjustmentLayer{},mask{},maskEnabled{},maskSelected{},effectiveVisible{},singleSelected{};
     bool selection{},selectionEmpty{},renderHasPixels{},historyUndo{},historyRedo{},clipboardImage{};
     bool transformable{},hasParent{},canMoveUp{},canMoveDown{},canMerge{},canToggleClipping{},hasOtherProject{},shape{};
@@ -45,7 +45,7 @@ enum class CommandGate {
     SingleLayer,Duplicate,Parent,MoveUp,MoveDown,Merge,Clipping,OtherProject,Mask,AddMask,ImageAlpha,
     Selection,ModifySelection,Copy,Cut,CopyMerged,Paste,Paint,Clear,Invert,Adjust,NewAdjustment,
     EditAdjustment,ContentAwareFill,Transform,TransformDraft,TransformControls,ShapeStyle,Tool,Palette,
-    ApplyTransform,ApplyGradient,ApplyCrop,RepeatLastFilter
+    ApplyTransform,ApplyGradient,ApplyCrop,RepeatLastFilter,ConvertToSixteenBit,ConvertToEightBit
 };
 enum class CommandPreparation { None,FinishAppearance,CommitTransformAndGradient,ProjectOperation };
 enum class TextCommand { None,Undo,Redo,Cut,Copy,Paste,SelectAll };

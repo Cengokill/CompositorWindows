@@ -41,6 +41,8 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.singleSelected=selected.ids.size()==1;
     state.canMerge=layers::mergePlan(document,selected).has_value();
     state.hasOtherProject=std::any_of(projects_.begin(),projects_.end(),[&](const auto& item){return item.get()!=project&&!item->importing&&!item->projectBusy;});
+    const auto depthChoices=layers::depthChoices(document,selected);
+    state.canConvertToSixteenBit=depthChoices.sixteen;state.canConvertToEightBit=depthChoices.eight;
     if(found==document.layers.end())return state;
     const auto& layer=*found;state.activeLayer=true;state.group=layer.group;state.asset=bool(layer.raster);state.hdrLayer=layer.deep&&layer.deep->isHdr();
     state.mask=layer.mask.has_value();state.maskEnabled=layer.mask&&layer.mask->enabled;
@@ -50,7 +52,7 @@ ui::CommandState MainWindow::commandState(EditorProject* owner){
     state.effectiveVisible=std::any_of(entries.begin(),entries.end(),[&](const auto& entry){return entry.id==layer.id&&entry.visible;});
     state.transformable=project==current()&&(state.singleSelected&&!state.group?(state.asset&&state.effectiveVisible):selectedTransform().has_value());
     state.canMoveUp=layers::canMoveSibling(document,layer.id,1);state.canMoveDown=layers::canMoveSibling(document,layer.id,-1);
-    state.canToggleClipping=layers::canToggleClipping(document,layer.id);
+    state.canToggleClipping=layers::canToggleSelectedClipping(document,selected);
     if(project&&project->toolState.lastFilterKind){
         const auto kind=*project->toolState.lastFilterKind;
         const bool sessions=!editPanel_&&!state.warpStroke&&!state.levels&&!state.hueSaturation&&!state.filterEdit&&!state.adjustmentEditing;

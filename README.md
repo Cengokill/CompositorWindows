@@ -18,15 +18,6 @@ Install the setup EXE or the x64 MSI, or extract the portable ZIP and run `Compo
 
 <img width="1024" alt="The welcome screen with the New canvas panel: preset, print units, resolution and background" src="docs/images/new-canvas.png" />
 
-## What's new in 1.6.0
-
-See the [release notes](docs/release-notes.md) for details.
-
-- **Layers and selections.** See the drop position as you drag layers in the redesigned panel. Feather a selection from the tool options bar.
-- **JPEG and PNG export.** Choose Standard, Optimized or Progressive JPEG. Interlace a PNG or fill transparent pixels with a background color.
-- **Faster editing.** Zoom through deep layer stacks more smoothly. Blur, Smudge and Liquify start faster on 8-bit layers, and Camera Raw updates Texture previews sooner.
-- **Alignment and effects.** Snap a layer to the canvas center with the grid hidden. Preview, apply and export Lens Effects on SDR photos up to 8 million pixels at full resolution.
-
 ## Features
 
 The [user guide](docs/user-guide.md) describes each workflow and its limits.

@@ -42,6 +42,17 @@ if(Test-Path -LiteralPath $msi){
   for($y=0;$y -lt $actual.Height;$y++){for($x=0;$x -lt $actual.Width;$x++){if($actualImage.GetPixel($x,$y).ToArgb() -ne $expectedImage.GetPixel($x,$y).ToArgb()){$same=$false;break}}}
   Record 'bundle_icon' $same @{width=$actual.Width;height=$actual.Height}
  } finally {if($actualImage){$actualImage.Dispose()};if($expectedImage){$expectedImage.Dispose()};$actual.Dispose();$expected.Dispose()}
+ # Explorer draws every .msi with the msiexec icon; the package carries Compositor art in its dialogs, Apps entry and shortcut.
+ $decompiled=Join-Path $run 'msi-decompiled'
+ & dotnet exec --roll-forward Major $wix msi decompile $msi -x $decompiled -o (Join-Path $decompiled 'Package.wxs')
+ if($LASTEXITCODE){throw 'Cannot decompile the MSI'}
+ $art=[ordered]@{'Binary\WixUI_Bmp_Banner'='assets\msi-banner.bmp';'Binary\WixUI_Bmp_Dialog'='assets\msi-dialog.bmp';'Icon\CompositorIcon'='assets\app.ico'}
+ $mismatched=@($art.Keys | Where-Object {$stored=Join-Path $decompiled $_; -not(Test-Path -LiteralPath $stored -PathType Leaf) -or (Get-FileHash -LiteralPath $stored).Hash -ne (Get-FileHash -LiteralPath (Join-Path $root $art[$_])).Hash})
+ [xml]$decompiledXml=Get-Content -LiteralPath (Join-Path $decompiled 'Package.wxs') -Raw
+ $ns=@{w='http://wixtoolset.org/schemas/v4/wxs'}
+ $arpIcon=(Select-Xml -Xml $decompiledXml -XPath '//w:Property[@Id="ARPPRODUCTICON"]' -Namespace $ns).Node.Value
+ $shortcutIcon=(Select-Xml -Xml $decompiledXml -XPath '//w:Shortcut[@Id="CompositorShortcut"]' -Namespace $ns).Node.Icon
+ Record 'msi_compositor_branding' ($mismatched.Count -eq 0 -and $arpIcon -eq 'CompositorIcon' -and $shortcutIcon -eq 'CompositorIcon') @{mismatched=$mismatched;arpIcon=$arpIcon;shortcutIcon=$shortcutIcon}
 }
 $bad=@($manifest.files|Where-Object {(Get-FileHash -LiteralPath (Join-Path $portable $_.path) -Algorithm SHA256).Hash -ine $_.sha256})
 Record 'package_sha256' ($bad.Count -eq 0) @{files=$manifest.files.Count;bad=$bad}

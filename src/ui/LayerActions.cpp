@@ -26,6 +26,8 @@
 #include <QMenu>
 #include <QStackedWidget>
 #include <algorithm>
+#include <new>
+#include <unordered_set>
 
 namespace compositor {
 layers::SelectionState MainWindow::layerSelection()const{
@@ -99,6 +101,44 @@ void MainWindow::refreshLayerVisibility(EditorProject& project, const Layer& lay
     if(brushPointer_)refreshBrushPointer();
     if(commands_)commands_->refresh();
 }
+void MainWindow::convertLayerDepth(layers::BitDepth depth){
+    auto* project=current();
+    const auto available=[&]{
+        return project&&current()==project&&project->document&&canEditLayers()&&!selectionGesture_.active()&&
+               layers::canConvertDepth(*project->document,layerSelection(),depth);
+    };
+    if(!available())return;
+    const auto title=depth==layers::BitDepth::Sixteen?QStringLiteral("Convert to 16-Bit"):QStringLiteral("Convert to 8-Bit");
+    if(depth==layers::BitDepth::Eight){
+        const auto targets=layers::depthTargets(*project->document,layerSelection());
+        const bool clips=std::any_of(project->document->layers.begin(),project->document->layers.end(),[&](const Layer& layer){
+            return layer.deep&&layer.deep->isHdr()&&std::find(targets.begin(),targets.end(),layer.id)!=targets.end();
+        });
+        if(clips){
+            // Nothing pending is committed before this answer, so Cancel leaves the project as it was.
+            QMessageBox confirmation(QMessageBox::Question,title,"Values brighter than white and negative colors will be clipped. This conversion can be undone.",QMessageBox::Ok|QMessageBox::Cancel,this);
+            confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
+            if(confirmation.exec()!=QMessageBox::Ok||!available())return;
+        }
+    }
+    finishOpacityEdit();if(textSession_)finishText();pointerCancel();
+    if(!available())return;
+    try{
+        auto result=layers::convertDepth(*project->document,layerSelection(),depth);
+        // The 16-bit samples this edit drops, or adds and then undoes, are held by history alone. Allow one
+        // conversion above the normal budget so trimming keeps this step and the ones before it.
+        std::unordered_set<const DeepImage*> counted;std::size_t bytes=0;
+        for(std::size_t i=0;i<result.document.layers.size();++i){
+            const auto& before=project->document->layers[i].deep;const auto& after=result.document.layers[i].deep;
+            if(before!=after)for(const auto* deep:{before.get(),after.get()})
+                if(deep&&counted.insert(deep).second)bytes+=deep->samples.size()*sizeof(std::uint16_t);
+        }
+        project->history.byteLimit=std::max(project->history.byteLimit,History::defaultByteLimit+bytes);
+        applyLayerEdit(std::move(result));
+    }
+    catch(const std::bad_alloc&){QMessageBox::critical(this,title,"Not enough memory to convert these layers. Select fewer layers and try again.");}
+    catch(const std::exception& error){QMessageBox::critical(this,title,QString::fromUtf8(error.what()));}
+}
 void MainWindow::layerCommand(int command){
     if(command==14){
         auto* p=current();auto* layer=active();if(!canEditLayers()||!p||!layer||!layer->deep||!layer->deep->isHdr()||layerSelection().ids.size()!=1)return;
@@ -111,6 +151,7 @@ void MainWindow::layerCommand(int command){
         try{new ui::LastFilterJob([original](std::function<bool()> cancelled){auto layer=original;layer.deep=hdrTo16Bit(*original.deep,cancelled);layer.raster=rasterFromDeep(*layer.deep);return layer;},std::move(host),this,p,"Converting HDR pixels…");}
         catch(...){p->projectBusy=false;refresh(false,false);throw;}return;
     }
+    if(command==16||command==17){convertLayerDepth(command==16?layers::BitDepth::Sixteen:layers::BitDepth::Eight);return;}
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
     auto*p=current();if(!p||!p->document)return;const auto&d=*p->document;auto selection=layerSelection();
     switch(command){
@@ -123,8 +164,9 @@ void MainWindow::layerCommand(int command){
         case 6:{auto plan=layers::deletionPlan(d,selection);auto mode=layers::DeleteMode::Bake;
             if(!plan.dependents.empty()){QMessageBox box(QMessageBox::Question,"Delete Layers","Other layers use the selected layers as clipping sources.",QMessageBox::Cancel,this);auto*bake=box.addButton("Bake Appearance",QMessageBox::AcceptRole);auto*release=box.addButton("Remove Clipping Links",QMessageBox::DestructiveRole);box.exec();if(box.clickedButton()==bake)mode=layers::DeleteMode::Bake;else if(box.clickedButton()==release)mode=layers::DeleteMode::RemoveLinks;else return;}
             applyLayerEdit(layers::erase(d,selection,mode));break;}
-        case 7:applyLayerEdit(layers::toggleClipping(d,selection,p->active));break;
+        case 7:applyLayerEdit(layers::toggleSelectedClipping(d,selection));break;
         case 8:mergeLayers();break;
+        case 15:exportLayers();break;
         case 9:{
             QStringList titles{"New Project"};std::vector<QPointer<QObject>> identities{nullptr};
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()!=p&&!projects_[i]->importing&&!projects_[i]->projectBusy){identities.push_back(projects_[i]->canvas);titles.append(tabs_->tabText(i));}
@@ -143,13 +185,14 @@ void MainWindow::layerCommand(int command){
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()==target)tabs_->setCurrentIndex(i);refresh();if(first)target->canvas->fit();break;
         }
         case 10:QTimer::singleShot(0,this,[this]{if(auto*item=layers_->currentItem())layers_->editItem(item,0);});break;
-        case 11:if(const auto* layer=active()){
-            const auto id=layer->id;
-            const bool visible=!layer->visible;
-            edit("Layer Visibility",[this](Document&){active()->visible=!active()->visible;},false);
-            if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome(id,visible);
+        case 11:{
+            auto toggled=layers::toggleSelectedVisibility(d,selection);if(!toggled.changed)break;
+            std::vector<std::pair<std::string,bool>> changes;
+            for(std::size_t i=0;i<d.layers.size();++i)if(d.layers[i].visible!=toggled.document.layers[i].visible)changes.emplace_back(d.layers[i].id,toggled.document.layers[i].visible);
+            edit(toggled.action.c_str(),[&](Document& document){document=std::move(toggled.document);},false);
+            if(auto* panel=ui::LayerPanelController::find(layers_))for(const auto& [id,visible]:changes)panel->syncVisibilityChrome(id,visible);
         }break;
-        case 12:applyLayerEdit(layers::releaseClipping(d,selection,p->active));break;
+        case 12:applyLayerEdit(layers::releaseSelectedClipping(d,selection));break;
         case 13:applyLayerEdit(layers::ungroup(d,selection));break;
     }
 }
@@ -159,6 +202,7 @@ void MainWindow::setupLayerActions(){
     action(menu,"Text Layer…",{},[this]{if(!current()||!current()->document)return;selectTool(Tool::Text);beginText({32,32},true);});
     action(menu,"Create / Release Clipping Mask",QKeySequence("Ctrl+Alt+G"),[this]{layerCommand(7);});action(menu,"Merge Layers",QKeySequence("Ctrl+E"),[this]{layerCommand(8);});action(menu,"Copy Layer to Project…",{},[this]{layerCommand(9);});
     action(menu,"Convert HDR to 16-Bit…",{},[this]{layerCommand(14);});
+    action(menu,"Convert to 16-Bit",{},[this]{layerCommand(16);});action(menu,"Convert to 8-Bit",{},[this]{layerCommand(17);});
     ui::LayerPanelController::Host host;
     host.dragOwner=[this]()->QObject*{auto*p=current();return p?p->canvas:nullptr;};
     host.deliverExternalDrop=[this](const QMimeData* mime,QPoint global,Qt::KeyboardModifiers modifiers,bool drop){

@@ -64,6 +64,7 @@ $rtf='{\rtf1\ansi\deff0{\fonttbl{\f0 Segoe UI;}}\f0\fs20 '+$license.Replace('\',
 $licensePath=Join-Path $work 'License.rtf'; [IO.File]::WriteAllText($licensePath,$rtf,[Text.Encoding]::ASCII)
 & dotnet exec --roll-forward Major $compiler build -arch x64 -ext $extension -culture en-us -wx -ct 2 -pdbtype none `
     -d "Version=$Version" -d "Icon=$(Join-Path $root 'assets\app.ico')" -d "LicenseRtf=$licensePath" `
+    -d "Banner=$(Join-Path $root 'assets\msi-banner.bmp')" -d "Dialog=$(Join-Path $root 'assets\msi-dialog.bmp')" `
     -intermediatefolder $work -o $msi (Join-Path $PSScriptRoot 'Package.wxs') $payloadSource *> (Join-Path $output 'installer-build.log')
 if($LASTEXITCODE){throw "MSI compilation failed; see $output\installer-build.log"}
 # ICE91 warns about intentionally per-user payloads; all other ICEs remain enabled.

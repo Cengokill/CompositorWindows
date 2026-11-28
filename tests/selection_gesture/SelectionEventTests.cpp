@@ -1,8 +1,11 @@
 #include "ui/MainWindow.h"
+#include "ui/SegmentedControl.h"
 #include <QApplication>
 #include <QMouseEvent>
 #include <QFocusEvent>
 #include <QTest>
+#include <QAbstractEventDispatcher>
+#include <qt_windows.h>
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
@@ -10,10 +13,10 @@ using namespace compositor;
 namespace {
 void require(bool value,const char* why){if(!value)throw std::runtime_error(why);}
 QAction* command(MainWindow& w,const char* id){for(auto* a:w.findChildren<QAction*>())if(a->property("commandId").toString()==id)return a;throw std::runtime_error("missing command");}
-Document document(){Document d;d.id=newId();d.width=d.height=100;Layer l;l.id=newId();l.name="Layer 1";l.transform={0,0,100,100};d.layers.push_back(l);return d;}
+Document document(int size){Document d;d.id=newId();d.width=d.height=size;Layer l;l.id=newId();l.name="Layer 1";l.transform={0,0,double(size),double(size)};d.layers.push_back(l);return d;}
 struct Fixture {
  MainWindow window{true};EditorProject& project;
- Fixture():project(window.addProject(document())){window.show();QApplication::processEvents();}
+ explicit Fixture(int size=100):project(window.addProject(document(size))){window.show();QApplication::processEvents();}
  void send(QEvent::Type type,Point point,Qt::KeyboardModifiers flags={}){
   auto* canvas=project.canvas;const auto v=canvas->viewMapping().toView(point);const QPointF at(v.x,v.y);
   const bool release=type==QEvent::MouseButtonRelease;const bool move=type==QEvent::MouseMove;
@@ -33,5 +36,85 @@ void focus_retention(){Fixture f;command(f.window,"tool.polygon")->trigger();f.c
 void move_click_and_axis(){Fixture f;command(f.window,"tool.marquee")->trigger();f.project.document->selection=editing::rasterSelection(editing::SelectionOutline::rectangle({10,10,20,20}),100,100);f.send(QEvent::MouseButtonPress,{20,20});f.send(QEvent::MouseMove,{40,40},Qt::ShiftModifier);f.send(QEvent::MouseButtonRelease,{40,40},Qt::ShiftModifier);require(f.project.document->selection->outline->bounds()==editing::Rect{30,10,20,20},"source Shift move ties choose X");require(f.project.history.undoName()=="Move Selection"&&f.project.history.undoCount()==1,"source move owns one history");f.click({40,20});require(!f.project.document->selection&&f.project.history.undoName()=="Deselect"&&f.project.history.undoCount()==2,"source click inside unmoved selection deselects");}
 void repeated_outline_noop(){Fixture f;command(f.window,"tool.marquee")->trigger();f.project.document->selection=editing::rasterSelection(editing::SelectionOutline::rectangle({10,10,20,20}),100,100);const auto before=f.project.document;f.send(QEvent::MouseButtonPress,{10,10},Qt::ShiftModifier);f.send(QEvent::MouseMove,{30,30},Qt::ShiftModifier);f.send(QEvent::MouseButtonRelease,{30,30},Qt::ShiftModifier);require(f.project.document==before&&f.project.history.undoCount()==0,"identical whole geometry must retain selection identity and no undo");}
 void autoscroll_events(){Fixture f;command(f.window,"tool.marquee")->trigger();f.send(QEvent::MouseButtonPress,{10,10});const auto viewPoint=QPointF(f.project.canvas->width()+30,f.project.canvas->height()/2);const auto docPoint=f.project.canvas->documentPoint(viewPoint);const auto pan=f.project.canvas->pan;f.send(QEvent::MouseMove,{docPoint.x(),docPoint.y()});QTest::qWait(65);require(f.project.canvas->pan.x()<pan.x(),"source timer pans toward outside pointer");require(f.project.canvas->selectionDraft()&&f.project.canvas->selectionDraft()->points[1].x>std::round(docPoint.x()),"stationary outside view pointer follows new document mapping");const auto after=f.project.canvas->pan;f.send(QEvent::MouseButtonRelease,{docPoint.x(),docPoint.y()});QTest::qWait(40);require(f.project.canvas->pan==after,"source release stops autoscroll");}
+// Space tests use a 400-pixel canvas and stay clear of its edges and center, so snapping does not interfere.
+void holdSpace(Fixture& f){QTest::keyPress(f.project.canvas,Qt::Key_Space);}
+void releaseSpace(Fixture& f){QTest::keyRelease(f.project.canvas,Qt::Key_Space);}
+bool draftIs(const Fixture& f,editing::Rect box){const auto& draft=f.project.canvas->selectionDraft();if(!draft||draft->points.size()!=4)return false;return draft->points[0]==Point{box.x,box.y}&&draft->points[2]==Point{box.x+box.width,box.y+box.height};}
+bool selectionIs(const Fixture& f,editing::Rect box){return f.project.document->selection&&f.project.document->selection->outline&&f.project.document->selection->outline->bounds()==box;}
+bool handCursor(const Fixture& f){const auto shape=f.project.canvas->cursor().shape();return shape==Qt::OpenHandCursor||shape==Qt::ClosedHandCursor;}
+void space_move_rectangle(){Fixture f(400);command(f.window,"tool.marquee")->trigger();const auto before=f.project.document;f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});const auto cursor=f.project.canvas->cursor().pixmap().cacheKey();
+ holdSpace(f);require(!handCursor(f)&&f.project.canvas->cursor().pixmap().cacheKey()==cursor,"Space during a Marquee keeps the selection cursor");
+ f.send(QEvent::MouseMove,{100,90});require(draftIs(f,{60,60,40,30}),"Space moves the draft without resizing it");
+ holdSpace(f);f.send(QEvent::MouseMove,{110,95});require(draftIs(f,{70,65,40,30}),"a repeated Space press keeps the same move");
+ require(f.project.document==before&&f.project.history.undoCount()==0,"moving a draft owns no history");
+ releaseSpace(f);require(f.project.canvas->cursor().pixmap().cacheKey()==cursor,"releasing Space keeps the selection cursor");
+ f.send(QEvent::MouseMove,{130,110});require(draftIs(f,{70,65,60,45}),"releasing Space resizes from the moved anchor");
+ f.send(QEvent::MouseButtonRelease,{130,110});require(selectionIs(f,{70,65,60,45}),"committed selection matches the preview");
+ require(f.project.history.undoCount()==1&&f.project.history.undoName()=="Rectangular Marquee","one history entry for the whole gesture");
+ command(f.window,"edit.undo")->trigger();require(!f.project.document->selection,"one undo removes the moved selection");}
+void space_move_ellipse_reverse(){Fixture f(400);command(f.window,"tool.marquee")->trigger();auto* shape=ui::findSegmentedControl(&f.window,"marqueeShape");require(shape&&shape->changed,"marquee shape control");shape->changed(1);
+ f.send(QEvent::MouseButtonPress,{150,150});f.send(QEvent::MouseMove,{110,120});holdSpace(f);f.send(QEvent::MouseMove,{90,100});
+ require(draftIs(f,{90,100,40,30})&&f.project.canvas->selectionDraft()->kind==editing::LassoKind::Ellipse,"a reversed ellipse moves without resizing");
+ require(f.project.canvas->selectionDraft()->anchor==Point{130,130},"a reversed drag moves its anchor corner");
+ f.send(QEvent::MouseButtonRelease,{90,100});require(bool(f.project.document->selection),"release with Space held commits");const auto bounds=f.project.document->selection->outline->bounds();
+ require(std::abs(bounds.x-90)<.5&&std::abs(bounds.y-100)<.5&&std::abs(bounds.width-40)<.5&&std::abs(bounds.height-30)<.5,"committed ellipse matches the preview");
+ require(f.project.history.undoCount()==1&&f.project.history.undoName()=="Elliptical Marquee","ellipse owns one history entry");
+ require(f.project.canvas->cursor().shape()==Qt::OpenHandCursor,"Space still held after release shows the Hand cursor");
+ const auto pan=f.project.canvas->pan;const auto document=f.project.document;f.send(QEvent::MouseButtonPress,{200,200});f.send(QEvent::MouseMove,{220,200});f.send(QEvent::MouseButtonRelease,{220,200});
+ require(f.project.canvas->pan!=pan&&f.project.document==document&&f.project.history.undoCount()==1,"Space outside a draft still pans");
+ releaseSpace(f);require(!handCursor(f),"releasing Space leaves the Hand cursor");}
+void space_move_shift(){Fixture f(400);command(f.window,"tool.marquee")->trigger();f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,60},Qt::ShiftModifier);require(draftIs(f,{40,40,40,40}),"Shift squares before the move");
+ holdSpace(f);f.send(QEvent::MouseMove,{90,70},Qt::ShiftModifier);require(draftIs(f,{50,50,40,40}),"a moved square stays square");
+ QTest::keyRelease(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,40}),"releasing Shift while moving does not reshape");
+ releaseSpace(f);require(draftIs(f,{50,50,40,20}),"releasing Space applies a Shift released during the move");
+ QTest::keyPress(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,40}),"a stationary Shift after the move does not jump back");
+ QTest::keyRelease(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,20}),"releasing Shift after the move restores the free box at the new place");
+ holdSpace(f);QTest::keyPress(f.project.canvas,Qt::Key_Shift);require(draftIs(f,{50,50,40,20}),"pressing Shift while moving does not reshape");
+ releaseSpace(f);require(draftIs(f,{50,50,40,40}),"releasing Space applies a Shift pressed during the move");
+ f.send(QEvent::MouseButtonRelease,{90,70},Qt::ShiftModifier);require(selectionIs(f,{50,50,40,40}),"the Shift result commits without another mouse move");QTest::keyRelease(f.project.canvas,Qt::Key_Shift);}
+void space_move_cancel(){Fixture f(400);command(f.window,"tool.marquee")->trigger();const auto before=f.project.document;
+ const auto resizesAgain=[&]{f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});f.send(QEvent::MouseMove,{90,90});require(draftIs(f,{40,40,50,50}),"a later Marquee resizes normally");QTest::keyClick(f.project.canvas,Qt::Key_Escape);f.send(QEvent::MouseButtonRelease,{90,90});};
+ f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});holdSpace(f);f.send(QEvent::MouseMove,{100,90});QTest::keyClick(f.project.canvas,Qt::Key_Escape);
+ require(!f.project.canvas->selectionDraft()&&f.project.document==before&&f.project.history.undoCount()==0,"Escape cancels a moved draft without history");
+ f.send(QEvent::MouseButtonRelease,{100,90});releaseSpace(f);require(!handCursor(f),"Escape leaves no Hand cursor");resizesAgain();
+ f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});holdSpace(f);f.send(QEvent::MouseMove,{100,90});QFocusEvent out(QEvent::FocusOut);QApplication::sendEvent(f.project.canvas,&out);
+ require(!f.project.canvas->selectionDraft()&&f.project.document==before&&f.project.history.undoCount()==0,"focus loss cancels a moved draft without history");
+ require(!handCursor(f),"focus loss leaves no Hand cursor");resizesAgain();
+ const auto pan=f.project.canvas->pan;holdSpace(f);f.send(QEvent::MouseButtonPress,{200,200});f.send(QEvent::MouseMove,{230,200});require(!f.project.canvas->selectionDraft(),"Space before the press starts no draft");
+ f.send(QEvent::MouseButtonRelease,{230,200});releaseSpace(f);require(f.project.canvas->pan!=pan&&f.project.document==before&&f.project.history.undoCount()==0,"Space before the press pans");}
+void space_move_history_restore(){Fixture f(400);command(f.window,"tool.marquee")->trigger();f.send(QEvent::MouseButtonPress,{250,250});f.send(QEvent::MouseMove,{290,290});f.send(QEvent::MouseButtonRelease,{290,290});
+ f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{80,70});holdSpace(f);f.send(QEvent::MouseMove,{100,90});command(f.window,"edit.undo")->trigger();require(draftIs(f,{60,60,40,30}),"undo keeps the moved draft");
+ f.send(QEvent::MouseMove,{110,100});require(draftIs(f,{60,60,50,40}),"undo ends the move together with the held Space state");
+ f.send(QEvent::MouseButtonRelease,{110,100});releaseSpace(f);require(selectionIs(f,{60,60,50,40}),"the draft commits after undo");}
+// Qt opens the window menu on Alt+Space without sending a key event, so the offscreen platform cannot type it.
+// This hands the Windows message to the installed native filters; true means Qt never sees it.
+bool nativeSpace(UINT message,bool alt,bool repeat=false){MSG native{};native.message=message;native.wParam=VK_SPACE;native.lParam=LPARAM((alt?1u<<29:0u)|(repeat?1u<<30:0u));qintptr result=0;return QAbstractEventDispatcher::instance()->filterNativeEvent("windows_generic_MSG",&native,&result);}
+void space_move_alt(){Fixture f(400);command(f.window,"tool.marquee")->trigger();f.send(QEvent::MouseButtonPress,{100,100});f.send(QEvent::MouseMove,{300,300});f.send(QEvent::MouseButtonRelease,{300,300});
+ require(!nativeSpace(WM_SYSKEYDOWN,true),"Alt+Space outside a draft keeps the window menu");
+ f.send(QEvent::MouseButtonPress,{140,140},Qt::AltModifier);f.send(QEvent::MouseMove,{180,170},Qt::AltModifier);
+ require(nativeSpace(WM_SYSKEYDOWN,true),"Alt+Space during a Marquee does not reach the window menu");
+ f.send(QEvent::MouseMove,{190,180},Qt::AltModifier);require(draftIs(f,{150,150,40,30})&&f.project.canvas->selectionDraft()->mode==editing::SelectionMode::Subtract,"Alt+Space moves the subtracting draft");
+ require(nativeSpace(WM_SYSKEYDOWN,true,true),"the repeated Alt+Space is held back too");
+ require(!nativeSpace(WM_SYSKEYUP,true),"the release stays visible to Qt");
+ f.send(QEvent::MouseMove,{200,200},Qt::AltModifier);require(draftIs(f,{150,150,50,50}),"releasing Space with Alt held resumes resizing");
+ require(nativeSpace(WM_SYSKEYDOWN,true),"a second Alt+Space starts another move");f.send(QEvent::MouseMove,{210,200},Qt::AltModifier);require(draftIs(f,{160,150,50,50}),"the second move offsets the box");
+ require(!nativeSpace(WM_KEYUP,false),"releasing Space after Alt stays visible to Qt");f.send(QEvent::MouseMove,{220,210});require(draftIs(f,{160,150,60,60}),"releasing Space after Alt resumes resizing");
+ require(nativeSpace(WM_SYSKEYDOWN,true),"Alt+Space before the mouse release");f.send(QEvent::MouseButtonRelease,{220,210},Qt::AltModifier);
+ require(f.project.history.undoCount()==2&&f.coverage(190,180)==0&&f.coverage(110,110)==255,"the moved box is subtracted once");
+ require(nativeSpace(WM_SYSKEYDOWN,true,true),"Space still held after the release does not open the menu");
+ require(!nativeSpace(WM_SYSKEYUP,true),"final release");require(!handCursor(f),"no Hand cursor remains");
+ require(!nativeSpace(WM_SYSKEYDOWN,true),"the window menu works again afterwards");
+ f.send(QEvent::MouseButtonPress,{140,140},Qt::AltModifier);require(nativeSpace(WM_SYSKEYDOWN,true),"Alt+Space on a new draft");QTest::keyClick(f.project.canvas,Qt::Key_Escape);f.send(QEvent::MouseButtonRelease,{140,140});
+ require(!nativeSpace(WM_SYSKEYDOWN,true),"a release lost with focus does not block the next menu");require(!handCursor(f),"cancel leaves no Hand cursor");}
+void space_move_snapping(){Fixture f(400);auto* snap=f.window.findChild<QAction*>("viewSnap");require(snap&&snap->isChecked(),"default snapping is on");command(f.window,"tool.marquee")->trigger();
+ f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{100,80});holdSpace(f);f.send(QEvent::MouseMove,{63,80});require(draftIs(f,{3,40,60,40}),"a moved box does not snap to the canvas edge");
+ f.send(QEvent::MouseMove,{40,80});require(draftIs(f,{-20,40,60,40}),"a moved box can leave the canvas without resizing");
+ releaseSpace(f);f.send(QEvent::MouseMove,{2,90});require(draftIs(f,{-20,40,20,50}),"snapping resumes with resizing");
+ f.send(QEvent::MouseButtonRelease,{2,90});require(!f.project.document->selection||f.project.document->selection->outline->bounds().empty(),"a box outside the canvas selects nothing");}
+void space_move_autoscroll(){Fixture f(400);command(f.window,"tool.marquee")->trigger();f.send(QEvent::MouseButtonPress,{40,40});f.send(QEvent::MouseMove,{100,80});holdSpace(f);
+ const QPointF view(f.project.canvas->width()+30,f.project.canvas->height()/2);const auto outside=f.project.canvas->documentPoint(view);const auto pan=f.project.canvas->pan;f.send(QEvent::MouseMove,{outside.x(),outside.y()});
+ require(bool(f.project.canvas->selectionDraft()),"draft before autoscroll");const auto first=*f.project.canvas->selectionDraft()->anchor;QTest::qWait(80);require(f.project.canvas->pan.x()<pan.x(),"moving against the edge pans the view");
+ const auto draft=*f.project.canvas->selectionDraft();require(draft.anchor->x>first.x,"the box follows the stationary pointer");require(draft.points[2].x-draft.points[0].x==60&&draft.points[2].y-draft.points[0].y==40,"autoscroll keeps the box size");
+ f.send(QEvent::MouseButtonRelease,{outside.x(),outside.y()});releaseSpace(f);const auto after=f.project.canvas->pan;QTest::qWait(40);require(f.project.canvas->pan==after,"release stops autoscroll");}
 }
-int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="option_marquee")option_marquee();else if(c=="fresh_shift_marquee")fresh_shift_marquee();else if(c=="polygon_click_close")polygon_click_close();else if(c=="canonical_draft")canonical_draft();else if(c=="polygon_backspace_enter")polygon_backspace_enter();else if(c=="polygon_doubleclick_adds_corner")polygon_doubleclick_adds_corner();else if(c=="stationary_shift")stationary_shift();else if(c=="focus_retention")focus_retention();else if(c=="move_click_and_axis")move_click_and_axis();else if(c=="repeated_outline_noop")repeated_outline_noop();else if(c=="autoscroll_events")autoscroll_events();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);try{require(argc==2,"provide case");const std::string c=argv[1];if(c=="option_marquee")option_marquee();else if(c=="fresh_shift_marquee")fresh_shift_marquee();else if(c=="polygon_click_close")polygon_click_close();else if(c=="canonical_draft")canonical_draft();else if(c=="polygon_backspace_enter")polygon_backspace_enter();else if(c=="polygon_doubleclick_adds_corner")polygon_doubleclick_adds_corner();else if(c=="stationary_shift")stationary_shift();else if(c=="focus_retention")focus_retention();else if(c=="move_click_and_axis")move_click_and_axis();else if(c=="repeated_outline_noop")repeated_outline_noop();else if(c=="autoscroll_events")autoscroll_events();else if(c=="space_move_rectangle")space_move_rectangle();else if(c=="space_move_ellipse_reverse")space_move_ellipse_reverse();else if(c=="space_move_shift")space_move_shift();else if(c=="space_move_cancel")space_move_cancel();else if(c=="space_move_history_restore")space_move_history_restore();else if(c=="space_move_alt")space_move_alt();else if(c=="space_move_snapping")space_move_snapping();else if(c=="space_move_autoscroll")space_move_autoscroll();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<c<<'\n';return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
