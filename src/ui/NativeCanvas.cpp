@@ -25,6 +25,7 @@ static void check(HRESULT result,const char*message){if(FAILED(result))throw std
 namespace {
 // The moved layer outline and snap guides share the Layers panel opacity slider blue.
 D2D1_COLOR_F canvasAccent(){const QColor color(ui::layer_panel::accent);return D2D1::ColorF(float(color.redF()),float(color.greenF()),float(color.blueF()));}
+D2D1_COLOR_F themeColor(const char* token){const QColor color(token);return D2D1::ColorF(float(color.redF()),float(color.greenF()),float(color.blueF()));}
 D2D1_COLOR_F canvasSurroundColor(){const QColor color(ui::layer_panel::canvasSurround);return D2D1::ColorF(float(color.redF()),float(color.greenF()),float(color.blueF()));}
 double niceRulerStep(double raw){
     if(!(raw>0)||!std::isfinite(raw))return 1;
@@ -226,7 +227,7 @@ NativeCanvas::RulerBand NativeCanvas::rulerBandAt(QPointF view) const{
     return RulerBand::None;
 }
 std::optional<int> NativeCanvas::guideIndexAt(QPointF view) const{
-    if(!showGuides||documentWidth_<=0||rulerBandAt(view)!=RulerBand::None)return {};
+    if(!guidesVisible()||documentWidth_<=0||rulerBandAt(view)!=RulerBand::None)return {};
     const auto mapping=viewMapping();
     constexpr double slop=5;
     int best=-1;double bestDistance=slop;
@@ -294,7 +295,7 @@ void NativeCanvas::finishGuideDrag(QPointF view){
 void NativeCanvas::drawGuideOverlay(){
     if(!context_||documentWidth_<=0||documentHeight_<=0)return;
     const bool preview=guideDrag_.has_value();
-    if(!showGuides&&!preview)return;
+    if(!guidesVisible()&&!preview)return;
     const auto mapping=viewMapping();
     const double scale=mapping.pointsPerPixel;
     if(!(scale>0))return;
@@ -315,11 +316,11 @@ void NativeCanvas::drawGuideOverlay(){
         else{const float x=docLeft+float(position*scale);context_->DrawLine(D2D1::Point2F(x,clip.top),D2D1::Point2F(x,clip.bottom),brush,1);}
         context_->PopAxisAlignedClip();
     };
-    if(showGuides){ComPtr<ID2D1SolidColorBrush> guide;check(context_->CreateSolidColorBrush(D2D1::ColorF(.2f,.75f,.95f,.85f),&guide),"Guide brush");for(auto [horizontal,position]:guides)drawLine(horizontal,position,guide.Get(),true);}
+    if(guidesVisible()){ComPtr<ID2D1SolidColorBrush> guide;check(context_->CreateSolidColorBrush(D2D1::ColorF(.2f,.75f,.95f,.85f),&guide),"Guide brush");for(auto [horizontal,position]:guides)drawLine(horizontal,position,guide.Get(),true);}
     if(preview){ComPtr<ID2D1SolidColorBrush> live;check(context_->CreateSolidColorBrush(D2D1::ColorF(1.f,.86f,.25f),&live),"Guide preview");drawLine(guideDrag_->horizontal,guideDrag_->position,live.Get(),false);}
 }
 void NativeCanvas::drawLayoutGrid(){
-    if(!context_||!layoutGrid_.visible||!layoutGrid_.valid()||documentWidth_<=0||documentHeight_<=0||layoutGrid_.opacity<=0)return;
+    if(!context_||layoutGridHeld_||!layoutGrid_.visible||!layoutGrid_.valid()||documentWidth_<=0||documentHeight_<=0||layoutGrid_.opacity<=0)return;
     const auto mapping=viewMapping();
     const double scale=mapping.pointsPerPixel;
     if(!(scale>0))return;
@@ -362,10 +363,11 @@ void NativeCanvas::drawRulers(){
     if(frame.left()<=0||frame.top()<=0||frame.width()<=0||frame.height()<=0)return;
     const float thickness=float(rulerThickness),widgetWidth=float(width()),widgetHeight=float(height());
     ComPtr<ID2D1SolidColorBrush> fill,tick,edge,text;
-    check(context_->CreateSolidColorBrush(D2D1::ColorF(.18f,.19f,.22f),&fill),"Ruler fill");
-    check(context_->CreateSolidColorBrush(D2D1::ColorF(.78f,.8f,.84f),&tick),"Ruler tick");
-    check(context_->CreateSolidColorBrush(D2D1::ColorF(.08f,.08f,.1f),&edge),"Ruler edge");
-    check(context_->CreateSolidColorBrush(D2D1::ColorF(.9f,.91f,.93f),&text),"Ruler text");
+    // The rulers are window chrome, so they take the surface colors of the tool rail and options bars.
+    check(context_->CreateSolidColorBrush(themeColor(ui::layer_panel::surface),&fill),"Ruler fill");
+    check(context_->CreateSolidColorBrush(themeColor(ui::layer_panel::secondary),&tick),"Ruler tick");
+    check(context_->CreateSolidColorBrush(themeColor(ui::layer_panel::surfaceBorder),&edge),"Ruler edge");
+    check(context_->CreateSolidColorBrush(themeColor(ui::layer_panel::secondary),&text),"Ruler text");
     context_->FillRectangle(D2D1::RectF(0,0,widgetWidth,thickness),fill.Get());
     context_->FillRectangle(D2D1::RectF(0,thickness,thickness,widgetHeight),fill.Get());
     context_->DrawLine(D2D1::Point2F(0,thickness),D2D1::Point2F(widgetWidth,thickness),edge.Get(),1);
@@ -410,7 +412,7 @@ void NativeCanvas::drawRulers(){
         const float y=std::clamp(float(guideDrag_->view.y())+8.f,float(frame.top()+2),float(std::max(frame.top()+2,frame.bottom()-16)));
         const auto box=D2D1::RectF(x,y,x+labelWidth,y+14);
         ComPtr<ID2D1SolidColorBrush> back,ink;
-        check(context_->CreateSolidColorBrush(D2D1::ColorF(.1f,.1f,.12f,.92f),&back),"Guide label");
+        check(context_->CreateSolidColorBrush([]{auto color=themeColor(ui::layer_panel::popup);color.a=.92f;return color;}(),&back),"Guide label");
         check(context_->CreateSolidColorBrush(D2D1::ColorF(1.f,.9f,.4f),&ink),"Guide label text");
         context_->FillRectangle(box,back.Get());
         context_->DrawText(label.c_str(),UINT32(label.size()),rulerTextFormat(),box,ink.Get());
@@ -645,14 +647,22 @@ void NativeCanvas::setSelection(std::shared_ptr<const GrayRaster> value,std::sha
     if(!path&&value&&value->source)path=value->source->vectorOutline();
     if(!path&&value)path=std::make_shared<editing::SelectionOutline>(editing::SelectionOutline::fromCoverage(*value));
     selection_=std::move(value);selectionInputOutline_=std::move(outline);selectionOutline_=std::move(path);
+    selectionEdgesHeld_=false;
     selectionGeometry_.Reset();selectionMatrix_.reset();updateSelectionAnimation();update();
 }
 void NativeCanvas::updateSelectionAnimation(){
-    if(selectionTimer_){const bool active=selectionOutline_&&!selectionOutline_->empty()&&documentWidth_>0&&documentHeight_>0&&isVisible();
+    if(selectionTimer_){const bool active=!selectionEdgesHeld_&&selectionOutline_&&!selectionOutline_->empty()&&documentWidth_>0&&documentHeight_>0&&isVisible();
         if(active&&!selectionTimer_->isActive())selectionTimer_->start();else if(!active)selectionTimer_->stop();}
 }
+void NativeCanvas::setExtrasShown(bool shown){
+    // Only what is on screen is held, so the check mark and the next press follow what the user sees.
+    selectionEdgesHeld_=!shown&&selectionOutline_&&!selectionOutline_->empty();
+    guidesHeld_=!shown&&showGuides;
+    layoutGridHeld_=!shown&&layoutGrid_.visible;
+    updateSelectionAnimation();update();
+}
 void NativeCanvas::drawSelection(){
-    if(!selectionOutline_||selectionOutline_->empty()||documentWidth_<=0||documentHeight_<=0)return;
+    if(selectionEdgesHeld_||!selectionOutline_||selectionOutline_->empty()||documentWidth_<=0||documentHeight_<=0)return;
     const auto mapping=viewMapping();const std::array<float,6> matrix{float(mapping.pointsPerPixel),0,0,float(mapping.pointsPerPixel),float(mapping.origin.x),float(mapping.origin.y)};
     if(!selectionGeometry_||selectionMatrix_!=matrix){
         ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Selection path");
@@ -691,7 +701,7 @@ void NativeCanvas::installViewport(const graphics::CanvasViewport& state){
     if(!wasVisible&&navigatorPlacement().visible&&navigatorDirty_&&!navigatorDeferred_)scheduleNavigator();
 }
 void NativeCanvas::synchronizeViewport(){auto state=viewportState();const auto frame=contentRect();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({frame.width(),frame.height()},devicePixelRatioF(),document);installViewport(state);}
-void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();cameraRawGuides_.clear();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
+void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionEdgesHeld_=false;selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();cameraRawGuides_.clear();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
 editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto frame=contentRect();const auto state=viewportState();auto origin=state.origin({double(documentWidth_),double(documentHeight_)});origin.x+=frame.left();origin.y+=frame.top();return {state.pointsPerPixel(),origin};}
 QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto frame=contentRect();const auto point=viewportState().documentPoint({p.x()-frame.left(),p.y()-frame.top()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}

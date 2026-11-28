@@ -73,6 +73,7 @@ private:
     std::optional<std::array<float,6>> selectionMatrix_;
     QTimer* selectionTimer_{};
     int selectionPhase_{};
+    bool selectionEdgesHeld_{},guidesHeld_{},layoutGridHeld_{};
     std::optional<Transform> transformOverlay_;
     std::optional<editing_transform::Corners> distortionOverlay_;
     std::optional<std::pair<Point,Point>> gradientLine_;
@@ -197,6 +198,15 @@ public:
     QPointF pan; // Logical view pixels (DIPs).
     bool showPixelGrid{};
     bool showGuides{};
+    // View > Show Extras holds back the selection edges, guides and layout grid. It is view-only:
+    // their data and their own settings stay as they are. A new selection ends the hold on its
+    // edges, and turning guides or the layout grid on again ends theirs.
+    bool extrasShown() const{return !selectionEdgesHeld_&&!guidesHeld_&&!layoutGridHeld_;}
+    void setExtrasShown(bool shown);
+    bool guidesVisible() const{return showGuides&&!guidesHeld_;}
+    bool layoutGridHeld() const{return layoutGridHeld_;}
+    void revealGuides(){guidesHeld_=false;update();}
+    void revealLayoutGrid(){layoutGridHeld_=false;update();}
     // Layout grid lines are overlay-only; they never reach the composite raster or exports.
     const editing::LayoutGrid& layoutGrid() const{return layoutGrid_;}
     void setLayoutGrid(const editing::LayoutGrid& value){layoutGrid_=value;update();}

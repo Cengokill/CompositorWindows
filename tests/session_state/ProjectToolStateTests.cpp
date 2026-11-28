@@ -50,7 +50,7 @@ void snap_grid_sync(){Fixture f;f.select(f.a);const auto before=f.a->document;
     f.select(f.b);REQUIRE(!f.b->canvas->layoutGrid().visible&&!f.b->toolState.snapPolicy.grid&&f.b->toolState.snapPolicy.enabled);
     REQUIRE(f.a->document==before&&f.a->history.undoCount()==0&&f.b->history.undoCount()==0);
 }
-void selection_guide_clears(){Fixture f;f.select(f.a);Guide guide;guide.id="guide-x";guide.position=20;f.a->document->guides.push_back(guide);
+void selection_guide_clears(){Fixture f;f.select(f.a);Guide guide;guide.id="guide-x";guide.position=20;f.a->document->guides.push_back(guide);f.a->canvas->showGuides=true;
     f.tool(ProjectTool::Marquee);
     // The press and the last move both snap to the guide; release must clear the accent line.
     f.a->canvas->pointerDown({19,4},{});f.a->canvas->pointerMove({20,12},{});REQUIRE(f.a->canvas->hasSnapGuides());

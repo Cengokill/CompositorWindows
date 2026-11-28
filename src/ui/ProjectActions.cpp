@@ -248,7 +248,7 @@ void MainWindow::initializeProject(EditorProject&project){
         statusBar()->clearMessage();
         try{
             if(auto* item=findChild<QAction*>("viewGuides"))item->setChecked(true);
-            if(auto* surface=canvas())surface->showGuides=true;
+            if(auto* surface=canvas()){surface->showGuides=true;surface->revealGuides();refreshSnapControls();}
             if(index<0)edit("Add Guide",[horizontal,position](Document& document){document.guides.push_back({newId(),horizontal,position});});
             else edit("Move Guide",[index,horizontal,position](Document& document){
                 if(index<0||size_t(index)>=document.guides.size()||document.guides[size_t(index)].horizontal!=horizontal)return;
