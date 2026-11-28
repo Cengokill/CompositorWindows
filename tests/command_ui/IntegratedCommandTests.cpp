@@ -19,6 +19,8 @@
 #include <QJsonObject>
 #include <QSet>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QMessageBox>
 #include <QWidgetAction>
 #include <cmath>
 #include <iostream>
@@ -122,4 +124,66 @@ void about_restores_commands(){
     about->findChild<QPushButton*>("aboutClose")->click();QApplication::processEvents();
     check(command(w,"file.new")->isEnabled()&&command(w,"tool.brush")->isEnabled(),"commands stayed disabled after About");
 }
-int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="about_restores_commands")about_restores_commands();else if(name=="about_opaque_surface")about_opaque_surface();else if(name=="palette_contrast")palette_contrast();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}
+void layer_depth(){
+    MainWindow w(true);auto document=example();Layer second=document.layers[0];second.id=newId();second.name="Second";document.layers.push_back(second);auto&p=w.addProject(document);
+    auto* sixteen=command(w,"layer.convert_16bit");auto* eight=command(w,"layer.convert_8bit");
+    int inLayerMenu=0;for(auto* menu:w.findChildren<QMenu*>())if(menu->title()=="&Layer")for(auto* action:menu->actions())inLayerMenu+=action==sixteen||action==eight;
+    check(inLayerMenu==2,"depth commands are missing from the Layer menu");
+    registry(w).refresh();check(sixteen->isEnabled()&&!eight->isEnabled(),"8-bit selection enablement");
+    const auto original=p.document;
+    p.importing=true;registry(w).refresh();check(!sixteen->isEnabled(),"conversion stayed enabled while importing");p.importing=false;
+    p.projectBusy=true;registry(w).refresh();check(!sixteen->isEnabled(),"conversion stayed enabled while busy");p.projectBusy=false;
+    registry(w).refresh();command(w,"transform.free")->trigger();check(command(w,"transform.apply")->isEnabled(),"transform did not start");registry(w).refresh();check(!sixteen->isEnabled()&&!registry(w).invoke("layer.convert_16bit"),"conversion stayed enabled during a transform");command(w,"transform.cancel")->trigger();
+    check(p.document==original&&p.history.undoCount()==0,"blocked conversion changed the project");
+    registry(w).refresh();sixteen->trigger();
+    check(p.history.undoCount()==1&&p.document->layers[1].deep&&!p.document->layers[0].deep,"only the active layer converts, in one step");
+    registry(w).refresh();check(!sixteen->isEnabled()&&eight->isEnabled(),"16-bit selection enablement");
+    command(w,"edit.undo")->trigger();check(p.document==original&&p.history.undoCount()==0,"one undo restores the 8-bit layer");
+    command(w,"edit.redo")->trigger();check(p.history.undoCount()==1&&p.document->layers[1].deep,"redo restores 16 bits");
+    command(w,"edit.undo")->trigger();
+
+    // Right-clicking a selected row keeps the whole selection and the command covers it.
+    const std::vector<std::string> both{p.document->layers[0].id,p.document->layers[1].id};p.selected=both;p.active=both[1];
+    command(w,"layer.new")->trigger();command(w,"edit.undo")->trigger();p.selected=both;p.active=both[1];
+    w.resize(1280,800);w.show();QApplication::processEvents();
+    auto* tree=w.findChild<QTreeWidget*>("layersTree");check(tree&&tree->topLevelItemCount()==2,"layers tree missing");
+    {QSignalBlocker block(tree);for(int i=0;i<tree->topLevelItemCount();++i)tree->topLevelItem(i)->setSelected(true);}
+    bool offered=false;
+    QTimer::singleShot(0,&w,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;QAction* wide=nullptr;QAction* narrow=nullptr;for(auto* action:menu->actions()){if(action->text()=="Convert to 16-Bit")wide=action;if(action->text()=="Convert to 8-Bit")narrow=action;}offered=wide&&narrow&&wide->isEnabled()&&!narrow->isEnabled();if(offered)wide->trigger();menu->close();});
+    emit tree->customContextMenuRequested(tree->visualItemRect(tree->topLevelItem(1)).center());
+    check(offered,"context menu does not offer both entries with the right enablement");
+    check(p.selected.size()==2&&p.document->layers[0].deep&&p.document->layers[1].deep&&p.history.undoCount()==1,"context menu conversion must cover the whole selection in one step");
+
+    MainWindow bright(true);auto hdrDocument=example();auto samples=makeDeep(96,64,DeepImage::Format::HalfFloat);samples->setPixel(0,0,{2,1,0,1});hdrDocument.layers[0].deep=samples;hdrDocument.layers[0].raster=rasterFromDeep(*samples);auto&hdr=bright.addProject(hdrDocument);
+    const auto untouched=hdr.document;
+    const auto answer=[&](QMessageBox::StandardButton button,bool& asked){QTimer::singleShot(0,&bright,[&asked,button]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())){asked=true;box->button(button)->click();}});};
+    registry(bright).refresh();check(!command(bright,"layer.convert_16bit")->isEnabled()&&command(bright,"layer.convert_8bit")->isEnabled(),"HDR enablement");
+    bool cancelled=false;answer(QMessageBox::Cancel,cancelled);command(bright,"layer.convert_8bit")->trigger();
+    check(cancelled&&hdr.document==untouched&&hdr.history.undoCount()==0,"cancelled HDR warning changed the project");
+    bool accepted=false;answer(QMessageBox::Ok,accepted);command(bright,"layer.convert_8bit")->trigger();
+    check(accepted&&!hdr.document->layers[0].deep&&hdr.history.undoCount()==1,"accepted HDR warning should convert in one step");
+}
+// Above about 33.5 MP, the 16-bit samples that only history holds exceed its normal byte budget.
+void layer_depth_history(){
+    const auto large=[](bool hdr){Document d;d.id=newId();d.width=d.height=6000;Layer layer;layer.id=newId();layer.name="Large";layer.transform={0,0,6000,6000};layer.raster=Raster::filled(6000,6000,{140,70,35,255});if(hdr)layer.deep=makeDeep(6000,6000,DeepImage::Format::HalfFloat);d.layers.push_back(layer);return d;};
+    const auto rename=[](EditorProject& p,const char* name){p.history.begin("Rename",p.document,p.active);p.document->layers[0].name=name;p.history.end(p.document,p.active);};
+    {
+        MainWindow w(true);auto&p=w.addProject(large(false));rename(p,"One");rename(p,"Two");
+        const auto trigger=[&](const char* id){registry(w).refresh();check(command(w,id)->isEnabled(),"large history command is disabled");command(w,id)->trigger();};
+        trigger("layer.convert_16bit");check(p.history.undoCount()==3,"widening a large layer dropped history");
+        trigger("edit.undo");check(p.history.undoCount()==2&&p.history.canRedo()&&!p.document->layers[0].deep,"undoing a large widening dropped history");
+        trigger("edit.redo");check(p.history.undoCount()==3&&p.document->layers[0].deep,"redoing a large widening dropped history");
+        trigger("layer.convert_8bit");check(p.history.undoCount()==4&&!p.document->layers[0].deep,"narrowing a large layer dropped history");
+        trigger("edit.undo");check(p.history.undoCount()==3&&p.history.canRedo()&&p.document->layers[0].deep,"undo must restore the large 16-bit pixels");
+        trigger("edit.redo");check(p.history.undoCount()==4&&!p.document->layers[0].deep,"redo must narrow the large layer again");
+        for(int i=0;i<4;++i)trigger("edit.undo");
+        check(p.document->layers[0].name=="Large"&&!p.document->layers[0].deep,"older steps must stay reachable");
+    }
+    MainWindow w(true);auto&p=w.addProject(large(true));rename(p,"One");const auto samples=p.document->layers[0].deep;
+    QTimer::singleShot(0,&w,[]{if(auto* box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))box->button(QMessageBox::Ok)->click();});
+    registry(w).refresh();command(w,"layer.convert_8bit")->trigger();
+    check(p.history.undoCount()==2&&!p.document->layers[0].deep,"narrowing large HDR pixels dropped history");
+    registry(w).refresh();command(w,"edit.undo")->trigger();
+    check(p.history.undoCount()==1&&p.history.canRedo()&&p.document->layers[0].deep==samples,"undo must restore the large HDR pixels");
+}
+int main(int argc,char**argv){QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));try{check(argc==2,"one test name required");const std::string name=argv[1];if(name=="about_version")about_version();else if(name=="about_restores_commands")about_restores_commands();else if(name=="about_opaque_surface")about_opaque_surface();else if(name=="palette_contrast")palette_contrast();else if(name=="registered_actions")registered_actions();else if(name=="pending_gradient_undo")pending_gradient_undo();else if(name=="blocked_layers")blocked_layers();else if(name=="import_busy")import_busy();else if(name=="blank_hidden_transform")blank_hidden_transform();else if(name=="text_focus")text_focus();else if(name=="transform_draft")transform_draft();else if(name=="command_palette")command_palette();else if(name=="layer_depth")layer_depth();else if(name=="layer_depth_history")layer_depth_history();else throw std::runtime_error("unknown case");std::cout<<"PASS "<<name<<'\n';return 0;}catch(const std::exception&error){std::cerr<<"FAIL "<<error.what()<<'\n';return 1;}}

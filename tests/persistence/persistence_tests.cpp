@@ -2,6 +2,7 @@
 #include "imaging/win32_file_path.h"
 #include "editing/DocumentGeometry.h"
 #include "editing/Shapes.h"
+#include "layers/LayerOperations.h"
 #include "graphics/StackRenderer.h"
 #include <QCoreApplication>
 #include <QFile>
@@ -47,6 +48,17 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{check(argc==2,
  else if(test=="raster_mask_roundtrip"){d.layers[0].raster=Raster::filled(17,13,{16,32,48,64});auto gray=std::make_shared<GrayRaster>(GrayRaster{3,2,{0,64,128,192,254,255}});d.layers[0].mask=Mask{gray,false,false,d.layers[0].transform};d.layers[0].opacity=.625;d.layers[0].blend=Blend::Luminosity;store.save(p,d,id(2));auto r=store.load(p).document.layers[0];check(r.raster->rgba()==d.layers[0].raster->rgba(),"Raster changed");check(r.mask->raster->pixels==gray->pixels&&!r.mask->enabled&&!r.mask->linked&&r.mask->placement==d.layers[0].mask->placement,"Mask contract lost");check(r.opacity==.625&&r.blend==Blend::Luminosity,"Appearance lost");d.layers[0].raster.reset();d.layers[0].mask.reset();store.save(p,d,id(2));check(fs::is_empty(p/L"images"),"Removed assets retained");}
  else if(test=="legacy_version_gates"){for(int version=1;version<=7;++version){store.save(p,d,id(2));mutate(p,[&](auto&o){o["version"]=version;o.remove("resolution");auto a=o["layers"].toArray();auto l=a[0].toObject();for(const char*k:{"opacity","blendMode","isGroup"})l.remove(k);a[0]=l;o["layers"]=a;});auto r=store.load(p);check(r.readVersion==version&&r.document.resolution==72&&r.document.layers[0].opacity==1,"Legacy default wrong");}store.save(p,d,id(2));mutate(p,[](auto&o){o["version"]=2;});mutateLayer(p,[](auto&l){l["opacity"]=.5;});rejects([&]{store.load(p);});store.save(p,d,id(2));mutate(p,[](auto&o){o["version"]=1;});mutateLayer(p,[](auto&l){l["isGroup"]=true;});rejects([&]{store.load(p);});}
  else if(test=="malformed_metadata"){for(const char*k:{"format","version","colorSpace","width","documentID","layers"}){store.save(p,d,id(2));mutate(p,[&](auto&o){o.remove(k);});rejects([&]{store.load(p);});}for(const char*k:{"rotation","flipX","flipY","sampling","origin","size"}){store.save(p,d,id(2));mutateLayer(p,[&](auto&l){auto t=l["transform"].toObject();t.remove(k);l["transform"]=t;});rejects([&]{store.load(p);});}store.save(p,d,id(2));mutateLayer(p,[](auto&l){l["imageFile"]="../../outside.png";});rejects([&]{store.load(p);});store.save(p,d,id(2));mutateLayer(p,[](auto&l){l["name"]="  \n";});rejects([&]{store.load(p);});store.save(p,d,id(2));mutateLayer(p,[](auto&l){l["isVisible"]=1;});rejects([&]{store.load(p);});}
+ else if(test=="depth_roundtrip"){
+    d.layers[0].raster=Raster::filled(17,13,{16,32,48,64});Layer empty;empty.id=id(3);empty.name="Empty";empty.transform={0,0,19,17};d.layers.push_back(empty);
+    const layers::SelectionState both{{id(2),id(3)},id(2)};ProjectStore actual(makeWicProjectCodec());
+    const auto wide=layers::convertDepth(d,both,layers::BitDepth::Sixteen).document;actual.save(p,wide,id(2));
+    check(json(p/L"manifest.json")["version"]==13,"16-bit layers need format v13");
+    const auto reopened=actual.load(p).document;
+    for(size_t i=0;i<2;++i){const auto& layer=reopened.layers[i];check(layer.deep&&!layer.deep->isHdr(),"16-bit depth lost on reopen");check(layer.deep->samples==wide.layers[i].deep->samples,"16-bit samples changed on reopen");check(layer.raster->rgba()==wide.layers[i].raster->rgba(),"8-bit presentation changed on reopen");}
+    const auto narrow=layers::convertDepth(reopened,both,layers::BitDepth::Eight).document;actual.save(p,narrow,id(2));
+    check(json(p/L"manifest.json")["version"]==7,"8-bit project should return to the lowest format version");
+    const auto last=actual.load(p).document;check(!last.layers[0].deep&&!last.layers[1].deep&&last.layers[0].raster->rgba()==d.layers[0].raster->rgba(),"8-bit pixels changed after the round trip");
+ }
  else if(test=="unsupported_gif_project"){for(int version:{7,17}){store.save(p,d,id(2));mutate(p,[version](auto&o){o["version"]=version;});mutateLayer(p,[](auto&l){l["gif"]=QJsonObject{{"sourceFile","source.gif"},{"selectedFrameIndex",0}};});auto before=read(p/L"manifest.json");rejects([&]{store.load(p);});check(read(p/L"manifest.json")==before,"Rejected GIF project was modified");}store.save(p,d,id(2));mutateLayer(p,[](auto&l){l["gif"]=QJsonValue::Null;});check(store.load(p).document.layers.size()==1,"Null GIF metadata rejected");}
  else if(test=="animation_roundtrip"){
     auto red=Raster::filled(2,2,{255,0,0,255});auto blue=Raster::filled(2,2,{0,0,128,128});
