@@ -98,4 +98,19 @@ Point selectionAutoscrollDelta(Rect visible,Point point){
     return {speed(visible.x+12-point.x)-speed(point.x-(visible.x+visible.width-12)),
         speed(visible.y+12-point.y)-speed(point.y-(visible.y+visible.height-12))};
 }
+std::optional<SelectionStatusSize> selectionStatusSize(const std::optional<LassoDraft>& draft,const std::optional<Selection>& selection,int width,int height){
+    if(draft&&draft->anchor&&draft->points.size()==4){
+        const auto box=pointBounds(draft->points);
+        return SelectionStatusSize{int(std::lround(box.width)),int(std::lround(box.height))};
+    }
+    if(!selection)return {};
+    Rect box;
+    if(selection->outline){if(selection->outline->empty())return {};box=selection->outline->bounds();}
+    else if(selection->coverage)box=coverageBounds(*selection->coverage);
+    else return {};
+    const double left=std::max(box.x,0.),top=std::max(box.y,0.);
+    const double right=std::min(box.x+box.width,double(width)),bottom=std::min(box.y+box.height,double(height));
+    if(right<=left||bottom<=top)return {};
+    return SelectionStatusSize{int(std::ceil(right)-std::floor(left)),int(std::ceil(bottom)-std::floor(top))};
+}
 }

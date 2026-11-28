@@ -53,7 +53,7 @@ void MainWindow::setupStatusInfo(){
     auto* host=new QWidget;host->setObjectName("statusInfo");
     auto* row=new QHBoxLayout(host);row->setContentsMargins(18,0,18,0);row->setSpacing(16);
     const auto add=[&](const char* name){auto* label=new QLabel;label->setObjectName(name);row->addWidget(label);return label;};
-    add("statusZoom")->setFixedWidth(62);add("statusDimensions");add("statusProfile");
+    add("statusZoom")->setFixedWidth(62);add("statusDimensions");add("statusSelection");add("statusProfile");
     row->addStretch();add("statusHint");
     host->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
     bar->addPermanentWidget(host,1);
@@ -72,6 +72,20 @@ void MainWindow::refreshStatusInfo(){
     zoom->setVisible(document);dimensions->setVisible(document);
     zoom->setText(document?QString("%1 %").arg(std::lround(canvas()->zoom*100)):QString());
     dimensions->setText(document?QString::fromUtf8("%1 × %2 px").arg(p->document->width).arg(p->document->height):QString());
+    if(auto* selection=text("statusSelection")){
+        std::optional<editing::SelectionStatusSize> size;
+        if(document&&selectionOwner_==p)size=editing::selectionStatusSize(selectionGesture_.draft(),std::nullopt,0,0);
+        if(document&&!size&&p->document->selection){
+            const auto& current=*p->document->selection;auto& cache=selectionSizeCache_;
+            const int width=p->document->width,height=p->document->height;
+            const auto same=[](const auto& weak,const auto& shared){return !weak.owner_before(shared)&&!shared.owner_before(weak);};
+            if(!same(cache.coverage,current.coverage)||!same(cache.outline,current.outline)||cache.width!=width||cache.height!=height)
+                cache={current.coverage,current.outline,width,height,editing::selectionStatusSize(std::nullopt,current,width,height)};
+            size=cache.size;
+        }
+        selection->setVisible(size.has_value());
+        selection->setText(size?QString::fromUtf8("Selection %1 × %2 px").arg(size->width).arg(size->height):QString());
+    }
     profile->setText(document?"sRGB · Transparent":"Ready when you are");
     const auto message=statusBar()->currentMessage();
     hint->setText(!message.isEmpty()?message:document?toolHint():QString());
