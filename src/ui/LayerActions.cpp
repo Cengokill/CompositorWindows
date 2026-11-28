@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "EditPanelPlacement.h"
 #include "LastFilterJob.h"
 #include "LayerPanel.h"
 #include "LayerPanelWidgets.h"
@@ -323,7 +324,10 @@ void MainWindow::editLayerEffect(int kind){
     connect(enabled,&QCheckBox::toggled,&dialog,republish);connect(opacity,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(size,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(angle,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(distance,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,republish);connect(position,&QComboBox::currentIndexChanged,&dialog,republish);connect(blend,&QComboBox::currentIndexChanged,&dialog,republish);
     connect(colorButton,&QPushButton::clicked,&dialog,[&]{auto chosen=QColorDialog::getColor(QColor(color.r,color.g,color.b),&dialog,"Effect Color");if(!chosen.isValid())return;color={uint8_t(chosen.red()),uint8_t(chosen.green()),uint8_t(chosen.blue()),255};paint();republish();});
     republish();
-    if(dialog.exec()!=QDialog::Accepted){*project->document=original;if(textSession_&&textSession_->owner==project&&textSession_->layerId==id)publishTextEdit();else refresh(false,false);return;}
+    ui::placeEditPanel(&dialog,project->canvas);
+    const int answer=dialog.exec();
+    ui::rememberEditPanel(&dialog);
+    if(answer!=QDialog::Accepted){*project->document=original;if(textSession_&&textSession_->owner==project&&textSession_->layerId==id)publishTextEdit();else refresh(false,false);return;}
     project->history.begin(titles[std::clamp(kind,0,5)],original,project->active);project->history.end(project->document,project->active);refresh();
 }
 void MainWindow::refreshLayerPanel(){

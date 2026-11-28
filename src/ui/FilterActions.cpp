@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "LastFilterJob.h"
 #include "CameraRawPanel.h"
+#include "EditPanelPlacement.h"
 #include "CropViewport.h"
 #include "DocumentPreview.h"
 #include "EditPanelSession.h"
@@ -13,7 +14,6 @@
 #include "imaging/onnx_depth_provider.h"
 #include "imaging/onnx_subject_provider.h"
 #include "imaging/subject_matte.h"
-#include <map>
 #include "filters/PixelFilters.h"
 #include "editing/Selection.h"
 #include <QDialog>
@@ -309,7 +309,6 @@ class FilterPanel final:public ui::EditPanelSession {
     std::uint64_t version_{},runningVersion_{},retainedPreviewBytes_{};
     bool running_{},runningViewportOnly_{},balanceRunning_{},closed_{},committing_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
     bool preparing_{},extractingDepth_{},lightDragging_{};
-    static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     bool autoBalancePending()const{return balanceRunning_&&raw_&&raw_->whiteBalanceIsAuto();}
     void retire(){if(closed_&&!running_&&!balanceRunning_&&!preparing_)deleteLater();}
     void disableControls(){
@@ -558,7 +557,7 @@ class FilterPanel final:public ui::EditPanelSession {
         }));
     }
     void finish(int answer){
-        if(closed_)return;closed_=true;cancelled_->store(true);preparationCancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)positions()[request_.kind]=dialog_.pos();
+        if(closed_)return;closed_=true;cancelled_->store(true);preparationCancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)ui::rememberEditPanel(&dialog_);
         if(balanceCancelled_)balanceCancelled_->store(true);
         try{if(answer==QDialog::Accepted&&splitLayers_&&channels_.front()&&host_.commit){
             constexpr std::array names{"Red","Green","Blue","Alpha"};
@@ -894,7 +893,7 @@ public:
             };
         }
         if(cameraRaw){auto* dock=new DockFollow(&dialog_,parent->window());parent->window()->installEventFilter(dock);dialog_.setFixedWidth(440);start();dialog_.show();dock->place();}
-        else{dialog_.resize(430,220);if(auto found=positions().find(request_.kind);found!=positions().end())dialog_.move(found->second);start();dialog_.show();}
+        else{dialog_.resize(430,220);ui::placeEditPanel(&dialog_,host_.canvas);start();dialog_.show();}
         dialog_.raise();dialog_.activateWindow();
         if(auto* first=dialog_.findChild<QDoubleSpinBox*>())first->setFocus(Qt::ActiveWindowFocusReason);
         else preview_.setFocus(Qt::ActiveWindowFocusReason);

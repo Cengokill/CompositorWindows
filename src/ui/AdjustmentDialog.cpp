@@ -1,11 +1,11 @@
 #include "AdjustmentDialog.h"
+#include "EditPanelPlacement.h"
 #include "NativeCanvas.h"
 #include "DocumentPreview.h"
 #include "LevelsPreviewHistogram.h"
 #include "AdjustmentAdvancedControls.h"
 #include "PropertyControls.h"
 #include <QEventLoop>
-#include <map>
 #include "editing/Selection.h"
 #include "layers/LayerOperations.h"
 #include <QMouseEvent>
@@ -170,12 +170,11 @@ class AdjustmentPanel final:public ui::EditPanelSession {
     LevelsAdvancedControls* levelsControls{};
     QString balanceTone{"midtones"};
     HueAdvancedControls* hueControls{};
-    static std::map<Kind,QPoint>& positions(){static std::map<Kind,QPoint> value;return value;}
     void retire(){if(closed_&&!watcher.isRunning()&&!histogramWatcher.isRunning())deleteLater();}
     void finish(int answer){
         if(closed_)return;closed_=true;closing=true;previewCancelled->store(true);histogramCancelled->store(true);debounce.stop();
         if(host_.closeColor)host_.closeColor(answer==QDialog::Accepted);
-        if(!modal)positions()[kind_]=dialog.pos();
+        if(!modal)ui::rememberEditPanel(&dialog);
         try{if(answer==QDialog::Accepted&&completed&&(!host_.valid||host_.valid())&&host_.commit)host_.commit({std::move(completed->document),std::move(completed->active),false});}
         catch(const std::exception& error){if(host_.error)host_.error(QString::fromUtf8(error.what()));}
         if(auto* canvas=dynamic_cast<NativeCanvas*>(host_.canvas.data()))canvas->setCameraRawGuides({});
@@ -457,7 +456,7 @@ class AdjustmentPanel final:public ui::EditPanelSession {
         rightLayout.setContentsMargins(0,0,0,0);rightLayout.removeWidget(&previewEnabled);rightLayout.removeWidget(&buttons);
         auto* footer=new QHBoxLayout;footer->addWidget(&previewEnabled);footer->addStretch();footer->addWidget(&buttons);rightLayout.addLayout(footer);
         status.setStyleSheet("color: #989ba3; font-size: 11px;");status.setMinimumHeight(16);
-        dialog.resize(dialog.sizeHint());if(auto found=positions().find(kind_);found!=positions().end())dialog.move(found->second);
+        dialog.resize(dialog.sizeHint());ui::placeEditPanel(&dialog,host_.canvas);
     }
     syncGuideOverlay();
     start();dialog.show();dialog.raise();dialog.activateWindow();
