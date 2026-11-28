@@ -1,6 +1,8 @@
 # Current checkpoint
 
-Windows version **1.6.0** was published on 2026-11-23 and republished on 2026-11-24 from `e968f9d651732354e5a4339a97991c3093c13272`, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+Windows version **1.6.1** was published on 2026-11-28 from `24a81fc0b2bb17f08b484a8dc8f951effb803694`, based on Mac Compositor 1.0.4 at `a19db9011282399785dc18efcfded904627bdcc2`. The public repository is https://github.com/Cengokill/CompositorWindows. The complete existing Windows commit history is retained.
+
+The [1.6.1 release](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.6.1) exports selected layers as trimmed PNGs, applies visibility and clipping to every selected layer, extends opacity number keys to the selection tools and AZERTY/keypad input, and brings Liquid Glass to the menu bar and Help windows. The MSI installer windows now show Compositor art. Its manifest records `sourceDirty: false`; all eleven packaging checks and MSI ICE validation passed. All seven published asset hashes match the candidate. MSI installation and upgrade were not tested in this run.
 
 The [1.6.0 release](https://github.com/Cengokill/CompositorWindows/releases/tag/v1.6.0) redesigns the Layers panel with drop indicators, refreshes the tool options bars, adds JPEG and PNG export options, restores the layer/mask editing target, and speeds up deep-stack zoom and retouch strokes. The republished packages add the interface redesign to the embedded What's New notes; application code is unchanged and tag `v1.6.0` moved from `7a856b02cccdb79e24516897a416f1b01e807099`. Its manifest records `sourceDirty: false`; all ten packaging checks and MSI ICE validation passed. All seven published asset hashes match the candidate. MSI installation and upgrade were not tested in this run.
 
