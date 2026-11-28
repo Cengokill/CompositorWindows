@@ -151,7 +151,7 @@ void MainWindow::layerCommand(int command){
         try{new ui::LastFilterJob([original](std::function<bool()> cancelled){auto layer=original;layer.deep=hdrTo16Bit(*original.deep,cancelled);layer.raster=rasterFromDeep(*layer.deep);return layer;},std::move(host),this,p,"Converting HDR pixels…");}
         catch(...){p->projectBusy=false;refresh(false,false);throw;}return;
     }
-    if(command==15||command==16){convertLayerDepth(command==15?layers::BitDepth::Sixteen:layers::BitDepth::Eight);return;}
+    if(command==16||command==17){convertLayerDepth(command==16?layers::BitDepth::Sixteen:layers::BitDepth::Eight);return;}
     applyGradient();if(transformSession_&&transformSession_->persistent)applyTransformSession();pointerCancel();
     auto*p=current();if(!p||!p->document)return;const auto&d=*p->document;auto selection=layerSelection();
     switch(command){
@@ -164,8 +164,9 @@ void MainWindow::layerCommand(int command){
         case 6:{auto plan=layers::deletionPlan(d,selection);auto mode=layers::DeleteMode::Bake;
             if(!plan.dependents.empty()){QMessageBox box(QMessageBox::Question,"Delete Layers","Other layers use the selected layers as clipping sources.",QMessageBox::Cancel,this);auto*bake=box.addButton("Bake Appearance",QMessageBox::AcceptRole);auto*release=box.addButton("Remove Clipping Links",QMessageBox::DestructiveRole);box.exec();if(box.clickedButton()==bake)mode=layers::DeleteMode::Bake;else if(box.clickedButton()==release)mode=layers::DeleteMode::RemoveLinks;else return;}
             applyLayerEdit(layers::erase(d,selection,mode));break;}
-        case 7:applyLayerEdit(layers::toggleClipping(d,selection,p->active));break;
+        case 7:applyLayerEdit(layers::toggleSelectedClipping(d,selection));break;
         case 8:mergeLayers();break;
+        case 15:exportLayers();break;
         case 9:{
             QStringList titles{"New Project"};std::vector<QPointer<QObject>> identities{nullptr};
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()!=p&&!projects_[i]->importing&&!projects_[i]->projectBusy){identities.push_back(projects_[i]->canvas);titles.append(tabs_->tabText(i));}
@@ -184,13 +185,14 @@ void MainWindow::layerCommand(int command){
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()==target)tabs_->setCurrentIndex(i);refresh();if(first)target->canvas->fit();break;
         }
         case 10:QTimer::singleShot(0,this,[this]{if(auto*item=layers_->currentItem())layers_->editItem(item,0);});break;
-        case 11:if(const auto* layer=active()){
-            const auto id=layer->id;
-            const bool visible=!layer->visible;
-            edit("Layer Visibility",[this](Document&){active()->visible=!active()->visible;},false);
-            if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome(id,visible);
+        case 11:{
+            auto toggled=layers::toggleSelectedVisibility(d,selection);if(!toggled.changed)break;
+            std::vector<std::pair<std::string,bool>> changes;
+            for(std::size_t i=0;i<d.layers.size();++i)if(d.layers[i].visible!=toggled.document.layers[i].visible)changes.emplace_back(d.layers[i].id,toggled.document.layers[i].visible);
+            edit(toggled.action.c_str(),[&](Document& document){document=std::move(toggled.document);},false);
+            if(auto* panel=ui::LayerPanelController::find(layers_))for(const auto& [id,visible]:changes)panel->syncVisibilityChrome(id,visible);
         }break;
-        case 12:applyLayerEdit(layers::releaseClipping(d,selection,p->active));break;
+        case 12:applyLayerEdit(layers::releaseSelectedClipping(d,selection));break;
         case 13:applyLayerEdit(layers::ungroup(d,selection));break;
     }
 }
@@ -200,7 +202,7 @@ void MainWindow::setupLayerActions(){
     action(menu,"Text Layer…",{},[this]{if(!current()||!current()->document)return;selectTool(Tool::Text);beginText({32,32},true);});
     action(menu,"Create / Release Clipping Mask",QKeySequence("Ctrl+Alt+G"),[this]{layerCommand(7);});action(menu,"Merge Layers",QKeySequence("Ctrl+E"),[this]{layerCommand(8);});action(menu,"Copy Layer to Project…",{},[this]{layerCommand(9);});
     action(menu,"Convert HDR to 16-Bit…",{},[this]{layerCommand(14);});
-    action(menu,"Convert to 16-Bit",{},[this]{layerCommand(15);});action(menu,"Convert to 8-Bit",{},[this]{layerCommand(16);});
+    action(menu,"Convert to 16-Bit",{},[this]{layerCommand(16);});action(menu,"Convert to 8-Bit",{},[this]{layerCommand(17);});
     ui::LayerPanelController::Host host;
     host.dragOwner=[this]()->QObject*{auto*p=current();return p?p->canvas:nullptr;};
     host.deliverExternalDrop=[this](const QMimeData* mime,QPoint global,Qt::KeyboardModifiers modifiers,bool drop){

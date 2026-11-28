@@ -25,6 +25,8 @@ The demo ZIP contains redistributable images, project folders, exported images, 
 
 Both downloads include application-local Qt/MSVC/codec/ONNX runtimes, the offline foreground model, shader, user guide, limitations, notices and corresponding dependency sources. The MSI is validated with the Windows Installer ICE checks; only ICE91 is suppressed because installation is intentionally per-user. WiX [package scope](https://docs.firegiant.com/wix/schema/wxs/packagescopetype/) and [UI documentation](https://docs.firegiant.com/wix/tools/wixext/wixui/) describe the installer facilities used.
 
+The setup EXE embeds the Compositor icon (`assets/app.ico`) and shows `assets/setup-logo.png`. The MSI uses the same icon for its Apps entry and Start menu shortcut, and shows `assets/msi-banner.bmp` (493 × 58) and `assets/msi-dialog.bmp` (493 × 312) in its installer windows. Both bitmaps are drawn from the 256-pixel layer of `assets/app.ico`; WixUI writes its text over their white areas. Explorer shows every `.msi` and `.zip` file with the icon of its file type, so these files cannot carry the Compositor icon themselves.
+
 Run the existing deployment checks after freezing the candidate:
 
 ```powershell

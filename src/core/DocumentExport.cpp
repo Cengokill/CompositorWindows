@@ -6,6 +6,7 @@
 #include "imaging/export_temporary_file.h"
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace compositor {
 namespace {
@@ -95,6 +96,48 @@ imaging::RgbaImage deepPreview(const DeepImage& image, std::uint32_t maxWidth, s
     }
     return preview;
 }
+// Renders canvas rows into premultiplied RGBA8 through SoftwareRenderer. The region may start at (originX, originY)
+// in document coordinates, so a trimmed export keeps the canvas pixels, grain and masks of a full render.
+struct StackRowRenderer {
+    static constexpr int chunkWidth = 1024;
+    const Document& document;
+    const imaging::ExportOptions& options;
+    SoftwareRenderer renderer;
+    std::size_t renderBound = 0;
+    const bool hdrStack;
+    // A stack with no image or adjustment has no color contribution, including
+    // empty layers/folders with masks. Fill its encoder stripes directly instead
+    // of allocating and discarding transparent Raster tiles for every chunk.
+    // Adjustments still go through the renderer so invalid effects remain errors.
+    const bool emptyStack;
+    StackRowRenderer(const Document& source, const imaging::ExportOptions& exportOptions)
+        : document(source), options(exportOptions),
+          hdrStack(std::any_of(source.layers.begin(), source.layers.end(), [](const Layer& layer){ return layer.deep && layer.deep->isHdr(); })),
+          emptyStack(std::none_of(source.layers.begin(), source.layers.end(), [](const Layer& layer){ return layer.raster || !layer.adjustmentJson.empty(); })) {}
+    void fill(int originX, int originY, int regionWidth, std::uint32_t top, std::uint32_t rows, std::span<std::uint8_t> output, std::size_t stride) {
+        if(emptyStack){for(std::uint32_t y=0;y<rows;++y)std::fill_n(output.data()+std::size_t(y)*stride,std::size_t(regionWidth)*4,uint8_t(0));return;}
+        for (int left = 0; left < regionWidth; left += chunkWidth) {
+            if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
+            const int width = std::min(chunkWidth, regionWidth - left);
+            const int margin=effects::adjustmentStackPadding(document);
+            if(width>30000-2*margin||rows>std::uint32_t(30000-2*margin)||std::uint64_t(width+2*margin)*(rows+2*margin)>100000000)throw std::runtime_error("Adjustment export padding exceeds render budget");
+            const int x = originX + left, y0 = originY + int(top);
+            auto raster = hdrStack?rasterFromDeep(*renderer.renderDeep(document,x,y0,width,int(rows),options.cancelled)):renderer.render(document, x-margin, y0-margin, width+2*margin, int(rows)+2*margin);
+            const int offset=hdrStack?0:margin;
+            // StackRenderer holds at most result/group/alpha scanlines plus two
+            // adjustment tile sets. Add one 33^3 RGB float lookup cube allowance.
+            renderBound = std::max(renderBound, std::size_t(width+2*offset) * (rows+2*offset) * 9 + raster->retainedBytes() * 3 + 1024 * 1024);
+            if(hdrStack)renderBound=std::max(renderBound,size_t(width+2*margin)*(rows+2*margin)*80+raster->retainedBytes());
+            for (std::uint32_t y = 0; y < rows; ++y) {
+                auto* row = output.data() + std::size_t(y) * stride + std::size_t(left) * 4;
+                for (int px = 0; px < width; ++px) {
+                    auto p = raster->pixel(px+offset, int(y)+offset);
+                    row[px * 4] = p.r; row[px * 4 + 1] = p.g; row[px * 4 + 2] = p.b; row[px * 4 + 3] = p.a;
+                }
+            }
+        }
+    }
+};
 }
 imaging::StreamingExportResult exportDocumentAtomic(const Document& document, const std::filesystem::path& path,
     imaging::ExportOptions options, const imaging::StreamExportLimits& limits, const imaging::ExportProgress& progress) {
@@ -153,44 +196,121 @@ imaging::StreamingExportResult exportDocumentAtomic(const Document& document, co
         result.maxRenderPixelBytes = flat->samples.size() * sizeof(std::uint16_t);
         return result;
     }
-    constexpr int chunkWidth = 1024;
-    std::size_t renderBound = 0;
-    SoftwareRenderer renderer;
-    const bool hdrStack=std::any_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.deep&&layer.deep->isHdr();});
-    // A stack with no image or adjustment has no color contribution, including
-    // empty layers/folders with masks. Fill its encoder stripes directly instead
-    // of allocating and discarding transparent Raster tiles for every chunk.
-    // Adjustments still go through the renderer so invalid effects remain errors.
-    const bool emptyStack=std::none_of(document.layers.begin(),document.layers.end(),[](const Layer& layer){return layer.raster||!layer.adjustmentJson.empty();});
+    StackRowRenderer stack(document, options);
     const imaging::RgbaRows fillRows =
         [&](std::uint32_t top, std::uint32_t rows, std::span<std::uint8_t> output, std::size_t stride) {
-            if(emptyStack){for(std::uint32_t y=0;y<rows;++y)std::fill_n(output.data()+std::size_t(y)*stride,std::size_t(document.width)*4,uint8_t(0));return;}
-            for (int left = 0; left < document.width; left += chunkWidth) {
-                if (options.cancelled && options.cancelled()) throw imaging::ExportCancelled();
-                const int width = std::min(chunkWidth, document.width - left);
-                const int margin=effects::adjustmentStackPadding(document);
-                if(width>30000-2*margin||rows>std::uint32_t(30000-2*margin)||std::uint64_t(width+2*margin)*(rows+2*margin)>100000000)throw std::runtime_error("Adjustment export padding exceeds render budget");
-                auto raster = hdrStack?rasterFromDeep(*renderer.renderDeep(document,left,int(top),width,int(rows),options.cancelled)):renderer.render(document, left-margin, int(top)-margin, width+2*margin, int(rows)+2*margin);
-                const int offset=hdrStack?0:margin;
-                // StackRenderer holds at most result/group/alpha scanlines plus two
-                // adjustment tile sets. Add one 33^3 RGB float lookup cube allowance.
-                renderBound = std::max(renderBound, std::size_t(width+2*offset) * (rows+2*offset) * 9 + raster->retainedBytes() * 3 + 1024 * 1024);
-                if(hdrStack)renderBound=std::max(renderBound,size_t(width+2*margin)*(rows+2*margin)*80+raster->retainedBytes());
-                for (std::uint32_t y = 0; y < rows; ++y) {
-                    auto* row = output.data() + std::size_t(y) * stride + std::size_t(left) * 4;
-                    for (int x = 0; x < width; ++x) {
-                        auto p = raster->pixel(x+offset, int(y)+offset);
-                        row[x * 4] = p.r; row[x * 4 + 1] = p.g; row[x * 4 + 2] = p.b; row[x * 4 + 3] = p.a;
-                    }
-                }
-            }
+            stack.fill(0, 0, document.width, top, rows, output, stride);
         };
     // A PDF page is the same 8-bit composite as the canvas (never the 16-bit PNG path), encoded at the document's
     // resolution; encodePdfAtomic scales it and fills transparent pixels with the chosen background.
     auto result = options.format == imaging::ImageFormat::Pdf
         ? imaging::encodePdfAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height), fillRows, options, limits, progress)
         : imaging::encodeRowsAtomic(path, std::uint32_t(document.width), std::uint32_t(document.height), fillRows, options, limits, progress);
-    result.maxRenderPixelBytes = renderBound;
+    result.maxRenderPixelBytes = stack.renderBound;
+    return result;
+}
+
+Document isolateLayerForExport(const Document& document, const std::string& id) {
+    validateDocument(document);
+    std::unordered_map<std::string, std::size_t> index;
+    for (std::size_t i = 0; i < document.layers.size(); ++i) index.emplace(document.layers[i].id, i);
+    const auto found = index.find(id);
+    if (found == index.end()) throw std::invalid_argument("Layer to export is missing");
+    const std::size_t target = found->second;
+    std::vector<char> keep(document.layers.size(), 0), shown(document.layers.size(), 0);
+    // The exported layer and its folders are drawn even when hidden, so their opacity and masks apply.
+    for (std::size_t i = target;;) {
+        keep[i] = shown[i] = 1;
+        if (document.layers[i].parentId.empty()) break;
+        i = index.at(document.layers[i].parentId);
+    }
+    // A folder keeps the visibility its contents have in the document.
+    if (document.layers[target].group) for (std::size_t i = 0; i < document.layers.size(); ++i) {
+        if (i == target) continue;
+        bool inside = false;
+        for (std::size_t node = i; document.layers[node].visible && !document.layers[node].parentId.empty();) {
+            node = index.at(document.layers[node].parentId);
+            if (node == target) { inside = true; break; }
+        }
+        if (inside) keep[i] = shown[i] = 1;
+    }
+    // Clipping sources keep clipping while hidden: the renderer reads their coverage whatever their visibility,
+    // so a clipped layer is cut by its base without drawing the base. Their folders are kept for the hierarchy.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t i = 0; i < document.layers.size(); ++i) {
+            if (!keep[i]) continue;
+            for (const auto* related : {&document.layers[i].maskSourceId, &document.layers[i].parentId}) {
+                if (related->empty()) continue;
+                const auto at = index.at(*related);
+                if (!keep[at]) { keep[at] = 1; changed = true; }
+            }
+        }
+    }
+    Document isolated = document;
+    isolated.layers.clear();
+    for (std::size_t i = 0; i < document.layers.size(); ++i) {
+        if (!keep[i]) continue;
+        isolated.layers.push_back(document.layers[i]);
+        isolated.layers.back().visible = shown[i] != 0;
+    }
+    validateDocument(isolated);
+    return isolated;
+}
+
+std::optional<imaging::StreamingExportResult> exportLayerPngAtomic(const Document& document, const std::string& id,
+    const std::filesystem::path& path, imaging::ExportOptions options, const imaging::StreamExportLimits& limits,
+    const imaging::ExportProgress& progress) {
+    imaging::validateExportExtent(std::uint32_t(document.width), std::uint32_t(document.height));
+    const Document isolated = isolateLayerForExport(document, id);
+    options.format = imaging::ImageFormat::Png;
+    options.cmykProfile = nullptr;
+    options.pngTransparency = true;
+    options.dpi = document.resolution;
+    int minX = document.width, minY = document.height, maxX = -1, maxY = -1;
+    if (flatDeepExport(isolated)) {
+        const auto flat = flattenDeep(isolated, options);
+        for (int y = 0; y < flat->height; ++y) for (int x = 0; x < flat->width; ++x) if (flat->at(x, y)[3]) {
+            minX = std::min(minX, x); maxX = std::max(maxX, x); minY = std::min(minY, y); maxY = std::max(maxY, y);
+        }
+        if (maxX < 0) return std::nullopt;
+        auto cropped = std::make_shared<DeepImage>();
+        cropped->width = maxX - minX + 1; cropped->height = maxY - minY + 1;
+        if (options.pngInterlaced && std::uint64_t(cropped->width) * cropped->height * 8 > 512ULL * 1024 * 1024)
+            throw std::invalid_argument("16-bit interlaced PNG exceeds the 512 MiB encoder image budget for this canvas.");
+        cropped->samples.resize(std::size_t(cropped->width) * std::size_t(cropped->height) * 4);
+        for (int y = 0; y < cropped->height; ++y) std::copy_n(flat->at(minX, minY + y), std::size_t(cropped->width) * 4, cropped->at(0, y));
+        imaging::WicCodec::encodeProjectDeepPng(path, *cropped, &options);
+        if (progress) progress(std::uint32_t(cropped->height), std::uint32_t(cropped->height));
+        imaging::StreamingExportResult result;
+        result.encodedBytes = std::filesystem::file_size(path);
+        result.preview = deepPreview(*cropped, limits.previewWidth, limits.previewHeight);
+        result.stripeRows = limits.stripeRows;
+        // The full-canvas buffer and the trimmed copy are alive together.
+        result.maxRenderPixelBytes = (flat->samples.size() + cropped->samples.size()) * sizeof(std::uint16_t);
+        return result;
+    }
+    StackRowRenderer stack(isolated, options);
+    if (stack.emptyStack) return std::nullopt;
+    // Pass 1 finds the pixels that are not fully transparent, one bounded stripe at a time.
+    std::uint32_t stripeRows = std::max(1u, std::min(limits.stripeRows, std::uint32_t(document.height)));
+    while (stripeRows > 1 && std::uint64_t(document.width) * stripeRows * 4 > limits.maxBufferBytes) stripeRows /= 2;
+    const std::size_t stride = std::size_t(document.width) * 4;
+    std::vector<std::uint8_t> stripe(stride * stripeRows);
+    for (std::uint32_t top = 0; top < std::uint32_t(document.height); top += stripeRows) {
+        const std::uint32_t rows = std::min(stripeRows, std::uint32_t(document.height) - top);
+        stack.fill(0, 0, document.width, top, rows, stripe, stride);
+        for (std::uint32_t y = 0; y < rows; ++y) for (int x = 0; x < document.width; ++x) if (stripe[std::size_t(y) * stride + std::size_t(x) * 4 + 3]) {
+            minX = std::min(minX, x); maxX = std::max(maxX, x); minY = std::min(minY, int(top + y)); maxY = std::max(maxY, int(top + y));
+        }
+    }
+    if (maxX < 0) return std::nullopt;
+    const int width = maxX - minX + 1, height = maxY - minY + 1;
+    const imaging::RgbaRows fillRows = [&](std::uint32_t top, std::uint32_t rows, std::span<std::uint8_t> output, std::size_t outputStride) {
+        stack.fill(minX, minY, width, top, rows, output, outputStride);
+    };
+    auto result = imaging::encodeRowsAtomic(path, std::uint32_t(width), std::uint32_t(height), fillRows, options, limits, progress);
+    result.maxRenderPixelBytes = stack.renderBound;
     return result;
 }
 

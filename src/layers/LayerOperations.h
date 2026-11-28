@@ -46,6 +46,16 @@ DepthChoices depthChoices(const Document&,SelectionState);
 bool canConvertDepth(const Document&,SelectionState,BitDepth);
 // One edit. A blank layer gets clear 16-bit pixels over the canvas; the project pixel budget is checked first.
 EditResult convertDepth(const Document&,SelectionState,BitDepth);
+// Menu clipping and visibility commands act on the selection plus the active layer as one edit. Creating clips each
+// unclipped target to the layer below it (or to that layer's base) and is all-or-nothing; it releases when every
+// target is clipped. Releasing also frees the layers clipped directly above each target to the same base.
+bool releasesSelectedClipping(const Document&,SelectionState);
+bool canToggleSelectedClipping(const Document&,SelectionState);
+EditResult toggleSelectedClipping(const Document&,SelectionState);
+EditResult releaseSelectedClipping(const Document&,SelectionState);
+// The active layer decides: visible hides every target, hidden shows every target. Folders are included.
+EditResult toggleSelectedVisibility(const Document&,SelectionState);
+std::string selectedVisibilityTitle(const Document&,SelectionState);
 struct DeletePlan {std::vector<std::string> roots,dependents;std::unordered_set<std::string> removed;};
 DeletePlan deletionPlan(const Document&,SelectionState);
 enum class DeleteMode {Cancel,Bake,RemoveLinks};

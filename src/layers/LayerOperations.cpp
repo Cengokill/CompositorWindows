@@ -121,6 +121,55 @@ EditResult convertDepth(const Document& d,SelectionState selected,BitDepth depth
     return result(d,std::move(next),std::move(selected),depth==BitDepth::Sixteen?"Convert to 16-Bit":"Convert to 8-Bit");
 }
 
+namespace {
+// The layers the menu commands work on: the selection plus the active layer, as an unordered set.
+IDs commandTargets(const Document& d,SelectionState selected){if(!selected.primary.empty())selected.ids.push_back(selected.primary);const auto normal=normalizeSelection(d,std::move(selected));return IDs(normal.ids.begin(),normal.ids.end());}
+}
+bool releasesSelectedClipping(const Document& d,SelectionState selected){auto targets=commandTargets(d,std::move(selected));return !targets.empty()&&std::all_of(d.layers.begin(),d.layers.end(),[&](const Layer& l){return !targets.contains(l.id)||!l.maskSourceId.empty();});}
+namespace {
+// Photoshop's Create Clipping Mask for several layers: from the bottom up, each unclipped target clips to the
+// layer below it, or to that layer's base, so a run of targets all clip to the layer under the lowest one.
+std::optional<Document> clippedSelection(const Document& d,SelectionState selected){
+    auto targets=commandTargets(d,std::move(selected));if(targets.empty())return std::nullopt;
+    auto next=d;
+    for(std::size_t i=0;i<next.layers.size();++i){
+        auto& layer=next.layers[i];if(!targets.contains(layer.id)||!layer.maskSourceId.empty())continue;
+        if(layer.group)return std::nullopt;
+        const Layer* below=nullptr;for(std::size_t j=i;j-->0;)if(next.layers[j].parentId==layer.parentId){below=&next.layers[j];break;}
+        if(!below||below->group)return std::nullopt;
+        layer.maskSourceId=below->maskSourceId.empty()?below->id:below->maskSourceId;
+    }
+    try{validateDocument(next);}catch(...){return std::nullopt;}
+    return next;
+}
+}
+bool canToggleSelectedClipping(const Document& d,SelectionState selected){try{validateDocument(d);return releasesSelectedClipping(d,selected)||clippedSelection(d,std::move(selected)).has_value();}catch(...){return false;}}
+EditResult releaseSelectedClipping(const Document& d,SelectionState selected){
+    validateDocument(d);auto targets=commandTargets(d,selected);IDs release;
+    for(const auto& id:targets){
+        auto t=find(d,id);if(!t||t->maskSourceId.empty())continue;
+        auto stack=siblings(d,t->parentId);
+        for(auto it=std::find(stack.begin(),stack.end(),id);it!=stack.end();++it){if(*it!=id&&find(d,*it)->maskSourceId!=t->maskSourceId)break;release.insert(*it);}
+    }
+    auto next=d;for(auto& l:next.layers)if(release.contains(l.id))l.maskSourceId.clear();
+    return result(d,std::move(next),std::move(selected),"Release Clipping Mask");
+}
+EditResult toggleSelectedClipping(const Document& d,SelectionState selected){
+    if(releasesSelectedClipping(d,selected))return releaseSelectedClipping(d,std::move(selected));
+    auto next=clippedSelection(d,selected);if(!next)return result(d,d,std::move(selected),"Create Clipping Mask");
+    return result(d,std::move(*next),std::move(selected),"Create Clipping Mask");
+}
+std::string selectedVisibilityTitle(const Document& d,SelectionState selected){
+    const auto active=find(d,selected.primary);const auto count=commandTargets(d,selected).size();
+    return std::string(active&&!active->visible?"Show ":"Hide ")+(count>1?"Layers":"Layer");
+}
+EditResult toggleSelectedVisibility(const Document& d,SelectionState selected){
+    validateDocument(d);auto targets=commandTargets(d,selected);auto title=selectedVisibilityTitle(d,selected);
+    const auto active=find(d,selected.primary);if(!active||targets.empty())return result(d,d,std::move(selected),std::move(title));
+    const bool visible=!active->visible;auto next=d;for(auto& l:next.layers)if(targets.contains(l.id))l.visible=visible;
+    return result(d,std::move(next),std::move(selected),std::move(title));
+}
+
 DeletePlan deletionPlan(const Document& d,SelectionState selected){validateDocument(d);selected=normalizeSelection(d,std::move(selected));DeletePlan plan;plan.roots=selected.ids.size()>1?selected.ids:single(selected.primary).ids;for(const auto& id:plan.roots){plan.removed.insert(id);auto inside=descendants(d,id);plan.removed.insert(inside.begin(),inside.end());}for(const auto& l:d.layers)if(!plan.removed.contains(l.id)&&plan.removed.contains(l.maskSourceId))plan.dependents.push_back(l.id);return plan;}
 std::shared_ptr<const Raster> bakeLiveMask(const Document& d,const std::string& target,const Limits& limits,std::shared_ptr<const DeepImage>* deep){
     validateDocument(d);cancel(limits);auto layer=find(d,target);if(!layer)throw std::runtime_error("Unknown bake target");if(!layer->raster)return {};if(layer->maskSourceId.empty())return layer->raster;

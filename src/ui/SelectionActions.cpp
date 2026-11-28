@@ -35,6 +35,7 @@ std::optional<editing::SelectionOutline> outlineOf(const std::optional<Selection
 }
 void MainWindow::setupSelectionActions(){
     qApp->installEventFilter(this);
+    qApp->installNativeEventFilter(this);
     selectionScrollTimer_=new QChronoTimer(this);selectionScrollTimer_->setTimerType(Qt::PreciseTimer);selectionScrollTimer_->setInterval(std::chrono::nanoseconds(16666667));
     connect(selectionScrollTimer_,&QChronoTimer::timeout,this,[this]{try{stepSelectionAutoscroll();}catch(const std::exception& error){pointerCancel();statusBar()->showMessage(error.what());}});
     auto*menu=menuBar()->addMenu("&Select");
@@ -128,6 +129,7 @@ bool MainWindow::beginSelection(Point point,Qt::KeyboardModifiers modifiers,int)
         p->history.begin("Move Selection",p->document,p->active);refreshSelectionGesture();return true;
     }
     if(tool_==Tool::Wand){runWand(point,modifiers);return true;}
+    selectionPointer_=point;
     if(tool_==Tool::Marquee||tool_==Tool::Polygon)point=snapGesturePoint(point,modifiers);
     finishOpacityEdit();selectionOwner_=p;selectionBefore_.reset();press_=point;
     const auto kind=tool_==Tool::Marquee?(ellipse_?editing::LassoKind::Ellipse:editing::LassoKind::Rectangle):tool_==Tool::Polygon?editing::LassoKind::Polygonal:editing::LassoKind::Freehand;
@@ -137,6 +139,7 @@ void MainWindow::finishSelectionGesture(){
     stopSelectionAutoscroll();auto* p=selectionOwner_;
     if(!p||p!=current()||!p->document){cancelSelectionGesture();return;}
     const auto before=outlineOf(p->document->selection);
+    const bool marquee=selectionGesture_.marquee();
     auto result=selectionGesture_.finish(before,p->document->width,p->document->height,selectionAntialias_);
     selectionOwner_=nullptr;pointerOwner_=nullptr;p->canvas->setSelectionDraft({});p->canvas->setSnapGuides();
     if(result&&result->requestsEdit){
@@ -147,6 +150,8 @@ void MainWindow::finishSelectionGesture(){
         }
     }
     refresh(false,false);
+    // Space outlasting the Marquee it was moving goes back to panning.
+    if(marquee&&spaceHeld_)p->canvas->setCursor(Qt::OpenHandCursor);
 }
 bool MainWindow::updateSelection(Point point,Qt::KeyboardModifiers modifiers,bool finish){
     if(!movingSelection_&&!selectionGesture_.active())return tool_==Tool::Marquee||tool_==Tool::Lasso||tool_==Tool::Polygon||tool_==Tool::Wand;
@@ -174,9 +179,12 @@ bool MainWindow::updateSelection(Point point,Qt::KeyboardModifiers modifiers,boo
         refresh(false,false);return true;
     }
     if(finish){stopSelectionAutoscroll();if(selectionGesture_.draft()->kind!=editing::LassoKind::Polygonal)finishSelectionGesture();return true;}
-    if(selectionGesture_.marquee())point=snapGesturePoint(point,modifiers);
+    // A Space move and autoscroll follow the real pointer; only resizing snaps.
+    selectionPointer_=point;
+    if(selectionGesture_.movingMarquee())p->canvas->setSnapGuides();
+    else if(selectionGesture_.marquee())point=snapGesturePoint(point,modifiers);
     selectionGesture_.move(point,modifiers.testFlag(Qt::ShiftModifier));
-    if(selectionGesture_.marquee())updateSelectionAutoscroll(p->canvas->viewMapping().toView(point));
+    if(selectionGesture_.marquee())updateSelectionAutoscroll(p->canvas->viewMapping().toView(selectionPointer_));
     refreshSelectionGesture();return true;
 }
 void MainWindow::finishPolygon(){if(selectionGesture_.draft()&&selectionGesture_.draft()->kind==editing::LassoKind::Polygonal)finishSelectionGesture();}
