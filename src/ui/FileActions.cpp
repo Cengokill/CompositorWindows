@@ -19,6 +19,8 @@
 #include "VirtualImageDrop.h"
 #include "ProjectLayerDrag.h"
 #include "ProjectLayerCopyJob.h"
+#include "ExportProgressDialog.h"
+#include "LayerExportNames.h"
 #include "LayerCopyCommit.h"
 #include <QDir>
 #include <QDialog>
@@ -51,6 +53,7 @@
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QSettings>
+#include <QSet>
 #include <QScopedValueRollback>
 #include <QScopeGuard>
 #include <QTabBar>
@@ -67,6 +70,7 @@
 #include <commdlg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <wrl/client.h>
 #include <algorithm>
 #include <limits>
 #include <atomic>
@@ -233,7 +237,7 @@ QString withExportSuffix(QString path,ExportKind kind){
     const char* extension=kind==ExportKind::Jpeg?".jpg":kind==ExportKind::Pdf?".pdf":kind==ExportKind::Tiff?".tif":kind==ExportKind::Exr?".exr":kind==ExportKind::Gif?".gif":".png";
     return QDir::cleanPath(QDir(info.path()).filePath(stem+extension));
 }
-QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested){
+QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const QString& suggested,const wchar_t* title=L"Export Image"){
     static const wchar_t pngFilter[]=L"PNG\0*.png\0All files\0*.*\0";
     static const wchar_t jpegFilter[]=L"JPEG\0*.jpg;*.jpeg\0All files\0*.*\0";
     static const wchar_t pdfFilter[]=L"PDF\0*.pdf\0All files\0*.*\0";
@@ -242,7 +246,7 @@ QString chooseNativeExportDestination(MainWindow* window,ExportKind kind,const Q
     static const wchar_t gifFilter[]=L"GIF\0*.gif\0All files\0*.*\0";
     const wchar_t* filter=kind==ExportKind::Gif?gifFilter:kind==ExportKind::Exr?exrFilter:kind==ExportKind::Jpeg?jpegFilter:kind==ExportKind::Pdf?pdfFilter:kind==ExportKind::Tiff?tiffFilter:pngFilter;
     const wchar_t* defaultExtension=kind==ExportKind::Jpeg?L"jpg":kind==ExportKind::Pdf?L"pdf":kind==ExportKind::Tiff?L"tif":kind==ExportKind::Exr?L"exr":kind==ExportKind::Gif?L"gif":L"png";
-    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,L"Export Image",defaultExtension);
+    auto path=chooseNativeSaveDestination(window,MainWindow::userDownloadsDirectory(),suggested,filter,title,defaultExtension);
     if(path.isEmpty())return {};
     return withExportSuffix(path,kind);
 }
@@ -254,6 +258,48 @@ QString chooseNativeProjectDestination(MainWindow* window,const QString& suggest
     if(path.isEmpty())return {};
     if(!path.endsWith(".comp",Qt::CaseInsensitive))path+=".comp";
     return path;
+}
+// The folder a multi-layer export writes into. Empty when cancelled or when no picker could be shown.
+QString chooseNativeExportFolder(MainWindow* window){
+    const auto override=window->property("testNativeExportFolder").toString();
+    if(!override.isEmpty())return override;
+    if(window->property("nativePickerInProgress").toBool()){
+        reportPickerBusy(window);
+        return {};
+    }
+    QPointer<MainWindow> guard(window);
+    window->setProperty("nativePickerInProgress",true);
+    const auto clearBusy=qScopeGuard([&]{if(guard)guard->setProperty("nativePickerInProgress",false);});
+    const auto owner=reinterpret_cast<HWND>(window->winId());
+    const auto start=MainWindow::userDownloadsDirectory().toStdWString();
+    auto folder=std::make_shared<QString>();
+    try{
+        ui::runOnStaThread([folder,owner,start]{
+            using Microsoft::WRL::ComPtr;
+            ComPtr<IFileOpenDialog> dialog;
+            if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))throw std::runtime_error("Cannot create the folder picker");
+            FILEOPENDIALOGOPTIONS options{};
+            if(FAILED(dialog->GetOptions(&options))||FAILED(dialog->SetOptions(options|FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST)))throw std::runtime_error("Cannot configure the folder picker");
+            dialog->SetTitle(L"Export Layers as PNGs");
+            dialog->SetOkButtonLabel(L"Export");
+            ComPtr<IShellItem> initial;
+            if(SUCCEEDED(SHCreateItemFromParsingName(start.c_str(),nullptr,IID_PPV_ARGS(&initial))))dialog->SetFolder(initial.Get());
+            const auto shown=dialog->Show(owner);
+            if(shown==HRESULT_FROM_WIN32(ERROR_CANCELLED))return;
+            if(FAILED(shown))throw std::runtime_error("Cannot show the folder picker");
+            ComPtr<IShellItem> item;
+            PWSTR text=nullptr;
+            if(FAILED(dialog->GetResult(&item))||FAILED(item->GetDisplayName(SIGDN_FILESYSPATH,&text)))throw std::runtime_error("Cannot read the chosen folder");
+            *folder=QDir::cleanPath(QString::fromWCharArray(text));
+            CoTaskMemFree(text);
+        });
+    }catch(const std::runtime_error& error){
+        logging::trace(QString("native folder picker failed: %1").arg(QString::fromUtf8(error.what())));
+        if(guard)guard->statusBar()->showMessage("The folder picker could not be opened",5000);
+        return {};
+    }
+    if(!guard)return {};
+    return *folder;
 }
 }
 ui::ImportQueue* MainWindow::ensureImportQueue(){
@@ -1002,13 +1048,86 @@ void MainWindow::exportImage(){
     const auto chosen=kind();
     const auto suggested=(p->path.isEmpty()?QString("Untitled"):QFileInfo(p->path).completeBaseName())+((chosen==ExportKind::Png||chosen==ExportKind::ChannelPack)?".png":chosen==ExportKind::Jpeg?".jpg":chosen==ExportKind::Tiff?".tif":chosen==ExportKind::Exr?".exr":chosen==ExportKind::Gif?".gif":".pdf");
     const auto destination=chooseNativeExportDestination(this,chosen,suggested);if(destination.isEmpty())return;
-    QProgressDialog saving("Saving image…","Cancel",0,0,this);saving.setObjectName("imageExportSaving");saving.setWindowModality(Qt::ApplicationModal);saving.setMinimumDuration(0);
+    ui::ExportProgressDialog saving(this,"Export Image","Saving image",1);saving.setObjectName("imageExportSaving");saving.setProgress(0,QFileInfo(destination).fileName());
     auto copyCancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<QString> copy;
-    connect(&saving,&QProgressDialog::canceled,&saving,[copyCancelled]{copyCancelled->store(true);});
+    saving.setCancelHandler([copyCancelled]{copyCancelled->store(true);});
     connect(&copy,&QFutureWatcher<QString>::finished,&saving,&QDialog::accept);
     copy.setFuture(QtConcurrent::run([readyPath,destination,copyCancelled]{try{imaging::copyEncodedAtomic(nativePath(readyPath),nativePath(destination),[copyCancelled]{return copyCancelled->load();});return QString();}catch(const imaging::ExportCancelled&){return QString();}catch(const std::exception&e){return QString::fromUtf8(e.what());}}));
     saving.exec();copy.waitForFinished();if(!copy.result().isEmpty())throw std::runtime_error(copy.result().toStdString());
     if(chosen==ExportKind::Jpeg&&!copyCancelled->load()){settings.setValue("jpegExportQuality",quality.value()/100.);settings.setValue("jpegExportMode",jpegMode.currentText());}
     // The file that produced the encoded preview is copied exactly. No project/history mutation.
+}
+void MainWindow::exportLayers(){
+    auto*p=current();if(!p||!p->document||p->importing||p->projectBusy)return;
+    imaging::validateExportExtent(uint32_t(p->document->width),uint32_t(p->document->height));
+    const Document snapshot=*p->document;
+    const auto selected=layerSelection().ids;
+    struct Target{std::string id;QString name,file,path;};
+    std::vector<Target> targets;
+    {
+        // Front to back, so that when two layers share a name the upper one keeps it.
+        QSet<QString> used;
+        for(auto layer=snapshot.layers.rbegin();layer!=snapshot.layers.rend();++layer){
+            if(std::find(selected.begin(),selected.end(),layer->id)==selected.end())continue;
+            const auto stem=ui::layerExportStem(QString::fromStdString(layer->name));
+            auto unique=stem;for(int number=2;used.contains(unique.toCaseFolded());++number)unique=stem+' '+QString::number(number);
+            used.insert(unique.toCaseFolded());
+            targets.push_back({layer->id,QString::fromStdString(layer->name),unique+".png",{}});
+        }
+    }
+    if(targets.empty())return;
+    if(targets.size()==1){
+        targets[0].path=chooseNativeExportDestination(this,ExportKind::Png,targets[0].file,L"Export Layer as PNG");
+        if(targets[0].path.isEmpty())return;
+    }else{
+        const auto folder=chooseNativeExportFolder(this);if(folder.isEmpty())return;
+        QStringList existing;
+        for(auto& target:targets){target.path=QDir(folder).filePath(target.file);if(QFileInfo::exists(target.path))existing.append(target.file);}
+        if(!existing.isEmpty()){
+            const auto listed=existing.mid(0,8).join('\n')+(existing.size()>8?QString("\n… and %1 more").arg(existing.size()-8):QString());
+            QMessageBox box(QMessageBox::Warning,"Export Layers as PNGs",QString("%1 of the files already exist in this folder:\n\n%2\n\nReplace them?").arg(existing.size()).arg(listed),QMessageBox::NoButton,this);
+            box.setObjectName("layerExportReplace");box.setProperty("studioChrome",true);
+            auto* replace=box.addButton("Replace",QMessageBox::AcceptRole);auto* cancel=box.addButton("Cancel",QMessageBox::RejectRole);
+            box.setDefaultButton(cancel);box.setEscapeButton(cancel);box.exec();
+            if(box.clickedButton()!=replace)return;
+        }
+    }
+    struct Outcome{int written{};QStringList empty,failed;bool cancelled{};};
+    const int total=int(targets.size());
+    p->projectBusy=true;refresh(false,false);
+    struct Restore {std::function<void()> action;~Restore(){action();}} restore{[&]{p->projectBusy=false;refresh(false,false);}};
+    ui::ExportProgressDialog progress(this,"Export Layers as PNGs","Saving layer",total);progress.setObjectName("layerExportProgress");progress.setProgress(0,targets[0].file);
+    auto cancelled=std::make_shared<std::atomic_bool>(false);QFutureWatcher<Outcome> watcher;
+    progress.setCancelHandler([cancelled]{cancelled->store(true);});
+    connect(&watcher,&QFutureWatcher<Outcome>::finished,&progress,[&]{const auto done=watcher.result();progress.finish(done.cancelled?-1:done.written+int(done.empty.size())+int(done.failed.size()));});
+    auto* dialog=&progress;
+    watcher.setFuture(QtConcurrent::run([snapshot,targets,cancelled,dialog,total]{
+        Outcome outcome;
+        for(int index=0;index<total;++index){
+            const auto& target=targets[size_t(index)];
+            if(cancelled->load()){outcome.cancelled=true;break;}
+            QMetaObject::invokeMethod(dialog,[dialog,index,file=target.file]{dialog->setProgress(index,file);},Qt::QueuedConnection);
+            imaging::ExportOptions options;options.cancelled=[cancelled]{return cancelled->load();};
+            try{
+                if(exportLayerPngAtomic(snapshot,target.id,nativePath(target.path),options))++outcome.written;
+                else{outcome.empty.append(target.name);QMetaObject::invokeMethod(dialog,[dialog,index]{dialog->markSkipped(index);},Qt::QueuedConnection);}
+            }catch(const imaging::ExportCancelled&){outcome.cancelled=true;break;}
+            catch(const std::exception& error){
+                outcome.failed.append(QString("%1 (%2)").arg(target.name,QString::fromUtf8(error.what())));
+                QMetaObject::invokeMethod(dialog,[dialog,index]{dialog->markSkipped(index);},Qt::QueuedConnection);
+            }
+        }
+        return outcome;
+    }));
+    progress.exec();watcher.waitForFinished();
+    const auto outcome=watcher.result();
+    // Only an export that wrote every layer is announced as done; anything else says exactly how many files exist.
+    QStringList lines;
+    if(outcome.cancelled||!outcome.failed.isEmpty()||!outcome.empty.isEmpty())lines.append(QString(outcome.cancelled?"Export cancelled. %1 of %2 PNG file(s) written.":"%1 of %2 PNG file(s) written.").arg(outcome.written).arg(total));
+    if(!outcome.failed.isEmpty())lines.append("Could not write:\n"+outcome.failed.join('\n'));
+    if(!outcome.empty.isEmpty())lines.append("Nothing to export, no visible pixels:\n"+outcome.empty.join('\n'));
+    if(lines.isEmpty()){statusBar()->showMessage(total==1?QString("Exported %1").arg(QDir::toNativeSeparators(targets[0].path)):QString("Exported %1 layers as PNG files").arg(outcome.written),8000);return;}
+    QMessageBox summary(outcome.cancelled||!outcome.failed.isEmpty()?QMessageBox::Warning:QMessageBox::Information,"Export Layers as PNGs",lines.join("\n\n"),QMessageBox::Ok,this);
+    summary.setObjectName("layerExportSummary");summary.setProperty("studioChrome",true);summary.exec();
 }
 }

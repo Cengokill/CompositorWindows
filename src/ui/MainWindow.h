@@ -315,6 +315,8 @@ private:
     void focusStackImages();
     void importWelcomeImage();
     void exportImage();
+    // Each selected layer as its own PNG trimmed to its pixels; a layer with nothing visible is reported, not written.
+    void exportLayers();
     void openProjectDialog();
     void setupRecentProjectsMenu(QMenu* file);
     void noteRecentProject(const QString& path);
