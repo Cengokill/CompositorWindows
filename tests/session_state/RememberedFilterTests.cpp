@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QTest>
 #include <QMouseEvent>
+#include <QAbstractButton>
 #include <filesystem>
 namespace {
 QCheckBox* flag(QDialog& dialog,const char* label){for(auto* c:dialog.findChildren<QCheckBox*>())if(c->text()==label)return c;throw std::runtime_error(std::string("missing checkbox ")+label);}
@@ -34,9 +35,9 @@ void curves_grain(){Fixture f;f.modal("adjust.curves",[](QDialog& d){field<QComb
  f.select(f.b);f.modal("adjust.curves",[](QDialog& d){require(field<QComboBox>(d,"curvesChannel")->currentIndex()==0,"other project default RGB curve");});f.select(f.a);require(f.a->toolState.filterSettings.curves==saved,"curve points survive tab roundtrip");
 }
 void gradient_palette(){Fixture f;f.select(f.b);f.a->toolState.foreground=QColor(255,0,0);f.a->toolState.background=QColor(0,0,255);f.select(f.a);
- f.modal("adjust.gradient_map",[](QDialog& d){bool red=false,blue=false;for(auto* button:d.findChildren<QPushButton*>()){red|=button->text()=="#ff0000";blue|=button->text()=="#0000ff";}require(red&&blue&&!flag(d,"Reverse")->isChecked(),"gradient starts from project foreground/background");flag(d,"Reverse")->setChecked(true);},true);
+ f.modal("adjust.gradient_map",[](QDialog& d){bool red=false,blue=false;for(auto* button:d.findChildren<QAbstractButton*>()){red|=button->accessibleDescription()=="#ff0000";blue|=button->accessibleDescription()=="#0000ff";}require(red&&blue&&!flag(d,"Reverse")->isChecked(),"gradient starts from project foreground/background");flag(d,"Reverse")->setChecked(true);},true);
  require(f.a->toolState.filterSettings.gradientMap["reversed"].toBool(),"applied gradient map stored");f.select(f.b);f.a->toolState.foreground=QColor(0,255,0);f.a->toolState.background=QColor(255,255,0);f.select(f.a);
- f.modal("adjust.gradient_map",[](QDialog& d){bool green=false,yellow=false;for(auto* button:d.findChildren<QPushButton*>()){green|=button->text()=="#00ff00";yellow|=button->text()=="#ffff00";}require(green&&yellow&&!flag(d,"Reverse")->isChecked(),"new Gradient Map discards remembered endpoints and reverse for current palette");});require(f.a->toolState.filterSettings.gradientMap["reversed"].toBool(),"Cancel does not replace remembered map");
+ f.modal("adjust.gradient_map",[](QDialog& d){bool green=false,yellow=false;for(auto* button:d.findChildren<QAbstractButton*>()){green|=button->accessibleDescription()=="#00ff00";yellow|=button->accessibleDescription()=="#ffff00";}require(green&&yellow&&!flag(d,"Reverse")->isChecked(),"new Gradient Map discards remembered endpoints and reverse for current palette");});require(f.a->toolState.filterSettings.gradientMap["reversed"].toBool(),"Cancel does not replace remembered map");
 }
 void live_independence(){Fixture f;f.modal("adjust.exposure",[](QDialog& d){field<QDoubleSpinBox>(d,"Exposure")->setValue(1.5);},true);const auto saved=f.a->toolState.filterSettings.exposure;
  f.modal("adjust.new.exposure",[](QDialog& d){require(field<QDoubleSpinBox>(d,"Exposure")->value()==0,"new live adjustment starts neutral");field<QDoubleSpinBox>(d,"Exposure")->setValue(2.5);},true);require(f.a->toolState.filterSettings.exposure==saved,"live Apply does not overwrite destructive filter memory");

@@ -75,6 +75,10 @@ QString optionsBarStyleSheet() {
         QPushButton[pill="true"][primary="true"] { background: %16; color: white; }
         QPushButton[pill="true"][primary="true"]:hover { background: %16; }
         QPushButton[pill="true"][primary="true"]:disabled { background: %8; color: %9; }
+        QPushButton[pill="true"]:checked, QPushButton[pill="true"]:checked:hover, QPushButton[pill="true"]:checked:pressed { background: %16; color: white; }
+        QPushButton[pill="true"]:checked:disabled { background: %8; color: %9; }
+        QPushButton[dialogPill="true"] { border: 1px solid transparent; min-height: %19px; max-height: %19px; }
+        QPushButton[dialogPill="true"]:focus { border-color: %2; }
         QToolButton[segment="true"] { background: transparent; color: %2; border: 0; border-radius: %10px; padding: 0 %11px; min-height: %12px; max-height: %12px; }
         QToolButton[segment="true"]:hover:!checked { background: %6; }
         QToolButton[segment="true"]:checked { background: transparent; color: white; }
@@ -90,13 +94,23 @@ QString optionsBarStyleSheet() {
         .arg(t::control, t::primary).arg(t::controlHeight / 2).arg(t::pillPadding).arg(t::controlHeight)
         .arg(t::pressed, t::controlPressed, t::controlDisabled, t::controlTextDisabled)
         .arg((t::controlHeight - 2 * t::segmentInset) / 2).arg(t::segmentPadding).arg(t::controlHeight - 2 * t::segmentInset)
-        .arg(t::field, t::separator).arg(t::fieldRadius).arg(t::accent, t::fieldDisabled, t::secondary);
+        .arg(t::field, t::separator).arg(t::fieldRadius).arg(t::accent, t::fieldDisabled, t::secondary).arg(t::controlHeight - 2);
 }
 void styleAsNumberField(QAbstractSpinBox* field) {
     field->setButtonSymbols(QAbstractSpinBox::NoButtons);
     field->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     field->setProperty("numberField", true);
     field->setFixedSize(t::numberFieldWidth, t::controlHeight);
+}
+void styleAsPanelNumberField(QAbstractSpinBox* field) {
+    styleAsNumberField(field);
+    field->setFixedWidth(t::panelNumberFieldWidth);
+}
+void markDialogPill(QPushButton* button, bool primary) {
+    markPill(button);
+    button->setProperty("dialogPill", true);
+    if (primary) button->setProperty("primary", true);
+    button->setFocusPolicy(Qt::TabFocus);
 }
 void styleAsNumberField(QLineEdit* field) {
     field->setAlignment(Qt::AlignRight | Qt::AlignVCenter);

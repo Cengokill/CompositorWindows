@@ -63,6 +63,8 @@ inline constexpr int segmentInset = 2;
 inline constexpr int segmentPadding = 12;
 inline constexpr int pillPadding = 14;
 inline constexpr int numberFieldWidth = 44;
+// Edit-panel number fields hold longer values such as "-0.5000" or "2000.0".
+inline constexpr int panelNumberFieldWidth = 68;
 inline constexpr int checkBoxSize = 16;
 inline constexpr int checkBoxRadius = 4;
 inline constexpr int checkBoxGap = 6;
