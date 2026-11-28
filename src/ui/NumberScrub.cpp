@@ -27,7 +27,8 @@ constexpr double fineFactor = .1, coarseFactor = 10;
 
 class Scrubber final : public QObject {
 public:
-    Scrubber(QLabel* label, QAbstractSpinBox* field, ScrubHistory history) : QObject(label), label_(label), field_(field), history_(std::move(history)) {
+    Scrubber(QLabel* label, QAbstractSpinBox* field, ScrubHistory history, double stepPerPixel)
+        : QObject(label), label_(label), field_(field), history_(std::move(history)), stepPerPixel_(stepPerPixel) {
         label->installEventFilter(this);
         label->setCursor(Qt::SplitHCursor);
     }
@@ -59,10 +60,11 @@ private:
         label_->style()->polish(label_);
         label_->update();
     }
-    // Per pixel dragged: 1 for whole numbers, the next-to-last decimal for the others; Shift divides by 10 (not below the last decimal), Ctrl multiplies by 10.
+    // By default, drag by 1 for whole numbers or by the next-to-last decimal. Shift divides by 10 (not below the last decimal), Ctrl multiplies by 10.
     double pixelStep(Qt::KeyboardModifiers modifiers) const {
         const double unit = std::pow(10., -decimals());
         double step = decimals() == 0 ? 1. : unit * 10;
+        if (stepPerPixel_ > 0) step = stepPerPixel_;
         if (modifiers.testFlag(Qt::ShiftModifier)) step = std::max(unit, step * fineFactor);
         else if (modifiers.testFlag(Qt::ControlModifier)) step *= coarseFactor;
         return step;
@@ -156,6 +158,7 @@ private:
     QLabel* label_;
     QAbstractSpinBox* field_;
     ScrubHistory history_;
+    double stepPerPixel_;
     bool pressed_{}, dragging_{};
     double pressX_{}, rebaseX_{}, startValue_{}, originalValue_{};
     int depthBefore_{-1};
@@ -187,9 +190,9 @@ void pair(const QList<QWidget*>& siblings, const ScrubHistory& history) {
 }
 }
 
-void attachScrub(QLabel* label, QAbstractSpinBox* field, ScrubHistory history) {
+void attachScrub(QLabel* label, QAbstractSpinBox* field, ScrubHistory history, double stepPerPixel) {
     if (!label || !field || label->findChild<QObject*>("numberScrub")) return;
-    auto* scrubber = new Scrubber(label, field, std::move(history));
+    auto* scrubber = new Scrubber(label, field, std::move(history), stepPerPixel);
     scrubber->setObjectName("numberScrub");
 }
 

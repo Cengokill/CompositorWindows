@@ -13,7 +13,8 @@ struct ScrubHistory { std::function<int()> depth; std::function<void()> undo; };
 // Shift drags in fine steps and Ctrl in coarse ones, Escape restores the value from before the drag, and a click without movement
 // focuses the field. The field is a QSpinBox or a QDoubleSpinBox; its own valueChanged and editingFinished signals carry the edit.
 // The history hooks belong to this scrubber alone, so they stay with the window that created them.
-void attachScrub(QLabel* label, QAbstractSpinBox* field, ScrubHistory history = {});
+// A positive stepPerPixel overrides the default drag sensitivity derived from the field's decimals.
+void attachScrub(QLabel* label, QAbstractSpinBox* field, ScrubHistory history = {}, double stepPerPixel = 0.);
 // Pairs every caption of the options bars with the number field that follows it (and the Zoom title with its field) and attaches the scrub.
 void installNumberScrubbing(QMainWindow* window, ScrubHistory history = {});
 }

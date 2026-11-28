@@ -80,6 +80,7 @@ public:
     QColor color() const { return color_; }
     QSize sizeHint() const override;
 protected:
+    void keyPressEvent(QKeyEvent* event) override;
     void paintEvent(QPaintEvent*) override;
 private:
     QColor color_{Qt::black};

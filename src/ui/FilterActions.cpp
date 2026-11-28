@@ -631,7 +631,12 @@ public:
             const bool logarithmic=(label=="Radius"||label=="Distance"||label=="Amount")&&low>0;
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
             auto position=[first,last,logarithmic](double v){return int(std::lround(((logarithmic?std::log(v):v)-first)/(last-first)*10000));};
-            slider->setValue(position(spin->value()));slider->setDefaultValue(position(fallback));layout->addWidget(slider,1);layout->addWidget(spin);fields_.addRow(label,row);if(auto* name=qobject_cast<QLabel*>(fields_.labelForField(row))){name->setMinimumHeight(ui::layer_panel::controlHeight);ui::attachScrub(name,spin);}
+            slider->setValue(position(spin->value()));slider->setDefaultValue(position(fallback));layout->addWidget(slider,1);layout->addWidget(spin);fields_.addRow(label,row);
+            if(auto* name=qobject_cast<QLabel*>(fields_.labelForField(row))){
+                name->setMinimumHeight(ui::layer_panel::controlHeight);
+                const double stepPerPixel=low==0.&&high==1.?spin->singleStep():0.;
+                ui::attachScrub(name,spin,{},stepPerPixel);
+            }
             connect(slider,&QSlider::valueChanged,&dialog_,[spin,first,last,logarithmic,stepDecimals](int v){const double normalized=first+(last-first)*v/10000.;const double factor=std::pow(10.,stepDecimals);spin->setValue(std::round((logarithmic?std::exp(normalized):normalized)*factor)/factor);});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[slider,position](double v){QSignalBlocker block(slider);slider->setValue(position(v));});
             connect(spin,&QDoubleSpinBox::valueChanged,&dialog_,[this,field=&value](double next){*field=next;change();});

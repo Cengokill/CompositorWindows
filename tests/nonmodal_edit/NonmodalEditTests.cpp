@@ -379,12 +379,84 @@ void chromePanelPosition(bool macTitleBar){
 }
 void studio_chrome_panel_position(){chromePanelPosition(false);}
 void mac_chrome_panel_position(){chromePanelPosition(true);}
+void color_well_keyboard(){
+    Fixture f;
+    panel(f.window,"adjust.gradient_map","Gradient Map",[&](QDialog& p){
+        ready(p);
+        QPointer<QDialog> adjustment=&p;
+        auto* shadows=control<QAbstractButton>(p,"gradientMapShadows");
+        apply(p)->setFocus(Qt::TabFocusReason);
+        const auto unfocused=shadows->grab().toImage();
+        shadows->setFocus(Qt::TabFocusReason);
+        require(shadows->hasFocus(),"Gradient Map swatch has keyboard focus");
+        const auto focused=shadows->grab().toImage();
+        for(auto key:{Qt::Key_Return,Qt::Key_Enter,Qt::Key_Space}){
+            shadows->setFocus(Qt::TabFocusReason);
+            QTest::keyClick(shadows,key);
+            require(adjustment&&adjustment->isVisible(),"color activation keeps the adjustment panel open");
+            PaletteDialog* picker=nullptr;
+            for(auto* dialog:f.window.findChildren<QDialog*>())
+                if(auto* candidate=dynamic_cast<PaletteDialog*>(dialog);candidate&&candidate->isVisible())picker=candidate;
+            require(picker,"keyboard opens the Gradient Map color picker");
+            picker->reject();
+            QApplication::processEvents();
+            f.unchanged();
+        }
+        require(focused!=unfocused,"the focused swatch is visibly distinct");
+    });
+    f.unchanged();
+    trigger(f.window,"tool.type");
+    auto* textColor=control<QAbstractButton>(f.window,"textColor");
+    require(textColor->isVisible()&&textColor->isEnabled(),"Type options color well is available");
+    bool opened=false;
+    QTimer::singleShot(0,&f.window,[&]{
+        if(auto* picker=qobject_cast<QColorDialog*>(QApplication::activeModalWidget())){
+            opened=true;
+            picker->reject();
+        }
+    });
+    textColor->setFocus(Qt::TabFocusReason);
+    QTest::keyClick(textColor,Qt::Key_Return);
+    require(opened,"Enter opens the Type options color picker");
+}
+void shifted_log_sliders(){
+    Fixture f;
+    auto check=[&](const char* command,const char* title,const char* name,double defaultValue){
+        panel(f.window,command,title,[&](QDialog& p){
+            auto* value=field(p,name);
+            QSlider* slider=nullptr;
+            for(auto* candidate:p.findChildren<QSlider*>())
+                if(candidate->accessibleName()==QString(name)+" slider")slider=candidate;
+            require(slider,"the adjustment has a slider for this value");
+            const int defaultPosition=slider->value();
+
+            slider->setValue(slider->minimum());
+            require(value->value()==0.,"slider minimum sets zero");
+            slider->setValue(slider->maximum());
+            require(value->value()==value->maximum(),"slider maximum sets the field maximum");
+            value->setValue(0.);
+            require(slider->value()==slider->minimum(),"zero moves the slider to its minimum");
+            value->setValue(value->maximum());
+            require(slider->value()==slider->maximum(),"field maximum moves the slider to its maximum");
+
+            slider->setValue((slider->minimum()+slider->maximum())/2);
+            const double midpoint=std::sqrt(value->maximum()+1.)-1.;
+            require(std::abs(value->value()-midpoint)<.051,"the slider midpoint follows the shifted logarithmic scale");
+            QTest::mouseDClick(slider,Qt::LeftButton);
+            require(value->value()==defaultValue&&slider->value()==defaultPosition,"double-click restores the default value and position");
+        });
+        f.unchanged();
+    };
+    check("adjust.gaussian","Gaussian Blur","Radius",8.);
+    check("adjust.motion","Motion Blur","Distance",16.);
+    check("adjust.noise","Add Noise","Amount",20.);
+}
 void panel_label_scrub(){
     Fixture f;
     auto name=[](QDialog& p,const QString& text){for(auto* label:p.findChildren<QLabel*>())if(label->text()==text)return label;throw std::runtime_error("value name label");};
-    auto drag=[](QLabel* label,int distance,bool escape=false){
+    auto drag=[](QLabel* label,int distance,bool escape=false,Qt::KeyboardModifiers modifiers={}){
         const QPointF local(5,label->height()/2.),global=label->mapToGlobal(local);
-        auto send=[&](QEvent::Type type,int offset,Qt::MouseButtons held){QMouseEvent event(type,local+QPointF(offset,0),global+QPointF(offset,0),type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,held,Qt::NoModifier);QApplication::sendEvent(label,&event);};
+        auto send=[&](QEvent::Type type,int offset,Qt::MouseButtons held){QMouseEvent event(type,local+QPointF(offset,0),global+QPointF(offset,0),type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,held,modifiers);QApplication::sendEvent(label,&event);};
         send(QEvent::MouseButtonPress,0,Qt::LeftButton);send(QEvent::MouseMove,distance,Qt::LeftButton);
         if(escape)QTest::keyClick(label->window(),Qt::Key_Escape);
         send(QEvent::MouseButtonRelease,distance,Qt::NoButton);
@@ -410,6 +482,19 @@ void panel_label_scrub(){
         auto* radius=field(p,"Radius");const double before=radius->value();
         drag(name(p,"Radius"),10);require(radius->value()==before+10,"filter value follows its name");
     });
+    auto checkUnitRange=[&](QDialog& p,const QString& label){
+        auto* value=field(p,label);
+        auto* caption=name(p,label);
+        value->setValue(.5);
+        drag(caption,10);
+        require(value->value()==.6,"unit-range labels drag by hundredths");
+        drag(caption,-10,false,Qt::ShiftModifier);
+        require(value->value()==.5,"fine drag respects the field precision");
+        drag(caption,4,false,Qt::ControlModifier);
+        require(value->value()==.9,"coarse drag changes a unit-range value by tenths");
+    };
+    panel(f.window,"filter.vignette","Vignette",[&](QDialog& p){checkUnitRange(p,"Midpoint");});
+    panel(f.window,"filter.bloom","Bloom",[&](QDialog& p){checkUnitRange(p,"Threshold");});
     f.unchanged();
 }
 void levels_canvas_original_sample(){Fixture f(fixture({80,80,80,255}));panel(f.window,"adjust.levels","Levels",[&](QDialog& p){control<QDoubleSpinBox>(p,"levelsValue3")->setValue(160);ready(p);control<QPushButton>(p,"levelsSampleBlack")->click();f.click({30,20});auto settings=effects_tools::levelsFromAdjustmentJson(control<LevelsAdvancedControls>(p,"levelsAdvancedControls")->adjustmentJson());for(size_t c=1;c<4;++c)require(settings.ranges[c].black==80,"main canvas Levels samples original80 rather than preview");f.unchanged();});f.unchanged();}
@@ -775,4 +860,4 @@ void hdr_stale_pixels_discard_apply(){
 }
 
 }
-int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"panel_label_scrub",panel_label_scrub},{"lens_large_adjustment_ui",lens_large_adjustment_ui},{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"edit_panel_placement_geometry",edit_panel_placement_geometry},{"first_panel_canvas_right_edge",first_panel_canvas_right_edge},{"shared_panel_position",shared_panel_position},{"unmoved_panel_keeps_position",unmoved_panel_keeps_position},{"selection_dialog_shared_position",selection_dialog_shared_position},{"studio_chrome_panel_position",studio_chrome_panel_position},{"mac_chrome_panel_position",mac_chrome_panel_position},{"rim_light_lifecycle",rim_light_lifecycle},{"volumetric_light_lifecycle",volumetric_light_lifecycle},{"volumetric_light_large_image",volumetric_light_large_image},{"volumetric_light_panel_geometry",volumetric_light_panel_geometry},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}
+int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"color_well_keyboard",color_well_keyboard},{"panel_label_scrub",panel_label_scrub},{"shifted_log_sliders",shifted_log_sliders},{"lens_large_adjustment_ui",lens_large_adjustment_ui},{"rim_light_control_alignment",rim_light_control_alignment},{"rim_light_panel_geometry",rim_light_panel_geometry},{"edit_panel_placement_geometry",edit_panel_placement_geometry},{"first_panel_canvas_right_edge",first_panel_canvas_right_edge},{"shared_panel_position",shared_panel_position},{"unmoved_panel_keeps_position",unmoved_panel_keeps_position},{"selection_dialog_shared_position",selection_dialog_shared_position},{"studio_chrome_panel_position",studio_chrome_panel_position},{"mac_chrome_panel_position",mac_chrome_panel_position},{"rim_light_lifecycle",rim_light_lifecycle},{"volumetric_light_lifecycle",volumetric_light_lifecycle},{"volumetric_light_large_image",volumetric_light_large_image},{"volumetric_light_panel_geometry",volumetric_light_panel_geometry},{"sharpen_filter_lifecycle",sharpen_filter_lifecycle},{"sharpen_lifecycle",sharpen_lifecycle},{"lens_native_canvas",lens_native_canvas},{"lens_adjustment_lifecycle",lens_adjustment_lifecycle},{"tonal_lifecycle",tonal_lifecycle},{"vignette_lifecycle",vignette_lifecycle},{"lens_effects_lifecycle",lens_effects_lifecycle},{"deep_adjustment_apply_cancel_undo",deep_adjustment_apply_cancel_undo},{"rgb_split_canvas_split_layers",rgb_split_canvas_split_layers},{"rgb_split_canvas_cancel_layers",rgb_split_canvas_cancel_layers},{"rgb_split_small_layer_apply_undo",rgb_split_small_layer_apply_undo},{"live_filter_adjustments",live_filter_adjustments},{"hdr_filter_apply_cancel_undo",hdr_filter_apply_cancel_undo},{"hdr_stale_pixels_discard_apply",hdr_stale_pixels_discard_apply},{"hdr_conversion_cancel_undo",hdr_conversion_cancel_undo},{"hdr_adjustment_apply_cancel_undo",hdr_adjustment_apply_cancel_undo},{"adjustment_reduced_preview_full_apply",adjustment_reduced_preview_full_apply},{"levels_reduced_preview_full_apply",levels_reduced_preview_full_apply},{"worker_cancel_no_late_result",worker_cancel_no_late_result},{"palette_visible_preview",palette_visible_preview},{"filter_mask_placed_unchanged",filter_mask_placed_unchanged},{"filter_solid_mask_unchanged",filter_solid_mask_unchanged},{"filter_mask_pretrim_order",filter_mask_pretrim_order},{"filter_mask_canvas_trim",filter_mask_canvas_trim},{"property_step_and_slider",property_step_and_slider},{"adjustment_nonmodal",adjustment_nonmodal},{"filter_nonmodal",filter_nonmodal},{"adjustment_canvas_preview",adjustment_canvas_preview},{"adjustment_preview_toggle",adjustment_preview_toggle},{"adjustment_apply_undo",adjustment_apply_undo},{"adjustment_close_cancel",adjustment_close_cancel},{"adjustment_position",adjustment_position},{"levels_canvas_original_sample",levels_canvas_original_sample},{"hue_canvas_sample",hue_canvas_sample},{"hue_canvas_target",hue_canvas_target},{"progressive_canvas_cancel_apply",progressive_canvas_cancel_apply},{"filter_canvas_preview",filter_canvas_preview},{"filter_apply_undo",filter_apply_undo},{"filter_preview_checkbox",filter_preview_checkbox},{"filter_mask_growth",filter_mask_growth},{"pending_edit_guards",pending_edit_guards},{"existing_live_preview_cancel",existing_live_preview_cancel},{"latest_preview_wins",latest_preview_wins}};try{require(argc==2&&cases.contains(argv[1]),"provide named nonmodal case");cases.at(argv[1])();std::printf("PASS %s\n",argv[1]);return 0;}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s: %s\n",argc>1?argv[1]:"argument",e.what());return 1;}}

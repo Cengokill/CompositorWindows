@@ -4,6 +4,7 @@
 #include "PropertyControls.h"
 #include <QCheckBox>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
@@ -178,11 +179,20 @@ void GradientSwatch::paintEvent(QPaintEvent*) {
 ColorWell::ColorWell(QWidget* parent) : QAbstractButton(parent) { setCursor(Qt::PointingHandCursor); setFocusPolicy(Qt::StrongFocus); }
 void ColorWell::setColor(const QColor& color) { if (color == color_) return; color_ = color; update(); }
 QSize ColorWell::sizeHint() const { return {t::colorWellWidth, t::colorWellHeight}; }
+void ColorWell::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        event->accept();
+        if (!event->isAutoRepeat()) click();
+        return;
+    }
+    QAbstractButton::keyPressEvent(event);
+}
 void ColorWell::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF box = QRectF(rect()).adjusted(.75, .75, -.75, -.75);
-    painter.setPen(QPen(isEnabled() ? QColor(t::primary) : QColor(t::controlTextDisabled), 1.5));
+    const auto border = !isEnabled() ? t::controlTextDisabled : hasFocus() ? t::accent : t::primary;
+    painter.setPen(QPen(QColor(border), 1.5));
     painter.setBrush(isEnabled() ? color_ : color_.darker(160));
     painter.drawRoundedRect(box, t::colorWellRadius, t::colorWellRadius);
 }
