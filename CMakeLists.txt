@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31.6)
-project(CompositorWindows VERSION 1.6.0 LANGUAGES C CXX)
+project(CompositorWindows VERSION 1.6.1 LANGUAGES C CXX)
 include(scripts/HdrDependencies.cmake)
 include(scripts/JpegDependencies.cmake)
 configure_file(src/CompositorVersion.h.in ${CMAKE_BINARY_DIR}/generated/CompositorVersion.h @ONLY)

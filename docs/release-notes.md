@@ -1,3 +1,21 @@
+# Compositor Windows 1.6.1
+
+## New features
+
+- Export layers as PNGs trimmed to their visible pixels. Right-click a layer and choose **Export Layer as PNG…**, or select several layers and choose **Export Layers as PNGs…** to save one file per layer in a folder.
+- Hide, show and clip every selected layer at once. **Hide Layers**, **Show Layers** and **Create Clipping Mask** (Ctrl+Alt+G) apply to the whole selection and undo in one step.
+- Set layer opacity with the number keys while Marquee, Lasso, Polygon or Magic Wand is active, as you already could with Move.
+
+## Improvements
+
+- The menu bar menus, Command Palette, Keyboard Shortcuts, Check for Updates and About Compositor use Liquid Glass. Over bright images the glass darkens to keep text readable.
+- Follow a layer export as each file fills a glass tile and gets a check mark. Large batches show a progress bar, and Cancel reports how many files were written.
+
+## Fixes
+
+- Opacity number keys work with the top row of AZERTY keyboards and with the numeric keypad, and still work after you click a layer in the Layers panel.
+- The export progress window shows its text and progress instead of opening empty.
+
 # Compositor Windows 1.6.0
 
 ## New features
