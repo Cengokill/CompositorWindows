@@ -123,6 +123,7 @@ const std::vector<CommandSpec>& commandCatalog(){
         add("selection.feather","Select","Feather…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift");
         add("selection.color_range","Select","Color Range…","",C::Selection,G::ModifySelection,P::FinishAppearance,"Compositor/Document/Selection.swift");
         add("view.guides","View","Guides","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
+        add("view.show_extras","View","Show Extras","Ctrl+H",C::View,G::Document,P::None,"Compositor/Document/Selection.swift");
         add("view.mac_title_bar","Appearance","Mac-style title bar","",C::View,G::Always,P::None,"Windows title bar preference");
         add("view.snap","View","Snap","",C::View,G::Always,P::None,"Compositor/Document/Guides.swift");
         add("view.layout_grid","View","Layout Grid","",C::View,G::Document,P::None,"Windows layout grid (issue #11)");

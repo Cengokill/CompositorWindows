@@ -349,6 +349,54 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         require(control<QToolButton>(window,"textFont")->text()=="Arial","Reediting did not retain the explicit choice");
         action(window,"textCancel");
     });
+    test("show_extras_is_view_only_and_keeps_extra_settings",[]{
+        MainWindow window(true);auto starting=example();starting.selection=selection();starting.guides.push_back({newId(),false,40});
+        auto& project=window.addProject(starting);window.resize(1100,700);window.show();window.activateWindow();QApplication::processEvents();
+        auto* canvas=project.canvas;auto* extras=command(window,"view.show_extras");auto* guides=control<QAction>(window,"viewGuides");auto* grid=control<QAction>(window,"viewLayoutGrid");
+        auto* ants=canvas->findChild<QTimer*>("selectionAntsTimer");require(ants!=nullptr,"Ants timer missing");
+        require(extras->shortcut()==QKeySequence("Ctrl+H")&&extras->isEnabled()&&extras->isCheckable()&&extras->isChecked(),"Show Extras is not an enabled, checked Ctrl+H command");
+        const auto before=*project.document;const auto history=project.history.undoCount();
+        canvas->setFocus();QTest::keyClick(canvas,Qt::Key_H,Qt::ControlModifier);
+        require(!extras->isChecked()&&!ants->isActive()&&!canvas->guidesVisible()&&canvas->layoutGridHeld(),"Ctrl+H did not hide the extras");
+        require(canvas->showGuides&&guides->isChecked(),"Hiding extras changed the Guides setting");
+        QTest::keyClick(canvas,Qt::Key_H,Qt::ControlModifier);
+        require(extras->isChecked()&&ants->isActive()&&canvas->guidesVisible()&&!canvas->layoutGridHeld(),"A second Ctrl+H did not restore the extras");
+        require(*project.document==before&&project.history.undoCount()==history,"Show Extras changed the document or history");
+
+        extras->trigger();key(window,Qt::Key_Delete,Qt::AltModifier);
+        require(project.history.undoCount()==history+1,"Fill with hidden edges was not one undo step");
+        require(project.document->layers.front().raster->pixel(2,2)==before.layers.front().raster->pixel(2,2),"A hidden selection did not limit the fill");
+        require(project.document->layers.front().raster->pixel(15,15)!=before.layers.front().raster->pixel(15,15),"Fill missed the selection");
+        require(!ants->isActive()&&!extras->isChecked(),"Painting showed the hidden edges");
+        command(window,"edit.undo")->trigger();require(*project.document==before&&!ants->isActive(),"Undo of the fill changed the document or showed the edges");
+        command(window,"selection.deselect")->trigger();require(!project.document->selection,"Deselect failed");
+        command(window,"edit.undo")->trigger();require(project.document->selection&&ants->isActive(),"A restored selection stayed hidden");
+        require(!extras->isChecked()&&!canvas->guidesVisible(),"A selection change restored the guides");
+        extras->trigger();require(extras->isChecked()&&canvas->guidesVisible(),"The command did not restore what was still held");
+
+        guides->trigger();require(!canvas->showGuides,"Guides did not turn off");
+        extras->trigger();extras->trigger();require(!canvas->showGuides&&!guides->isChecked(),"Show Extras turned disabled guides on");
+        extras->trigger();guides->trigger();require(canvas->guidesVisible()&&guides->isChecked()&&canvas->layoutGridHeld()&&!extras->isChecked(),"Turning Guides on did not reveal the guides alone");
+        grid->trigger();require(grid->isChecked()&&!canvas->layoutGridHeld(),"Turning Layout Grid on did not reveal it");
+        extras->trigger();require(extras->isChecked()&&ants->isActive(),"Hidden selection was not restored");
+
+        guides->trigger();extras->trigger();canvas->guideDragFinished(false,30,-1);
+        require(canvas->guidesVisible()&&guides->isChecked()&&!ants->isActive(),"A ruler guide did not reveal the guides alone");
+        extras->trigger();
+
+        command(window,"tool.move")->trigger();auto* controls=control<QCheckBox>(window,"transformShowControls");const bool shown=controls->isChecked();
+        canvas->setFocus();QTest::keyClick(canvas,Qt::Key_H,Qt::ControlModifier);
+        require(!extras->isChecked()&&controls->isChecked()==shown,"Ctrl+H with Move did not act on the extras alone");
+
+        auto& other=window.addProject(example());require(other.canvas->extrasShown()&&extras->isChecked(),"A new tab inherited hidden extras");
+        auto* tabs=window.findChild<QTabWidget*>();require(tabs!=nullptr,"Project tabs missing");tabs->setCurrentIndex(0);QApplication::processEvents();
+        require(!canvas->extrasShown()&&!extras->isChecked(),"The first tab lost its hidden extras");
+
+        QTemporaryDir directory;require(directory.isValid(),"Missing temporary project directory");const auto path=directory.filePath("HiddenExtras.comp");
+        ProjectStore store(makeWicProjectCodec());store.save(std::filesystem::path(path.toStdWString()),*project.document,project.active);
+        require(window.openProjectPaths({path}),"Could not reopen the project saved with hidden extras");
+        require(window.canvas()!=canvas&&window.canvas()->extrasShown()&&window.canvas()->guidesVisible()&&extras->isChecked(),"A reopened project did not show its extras");
+    });
     test("keyboard_remapped_shortcuts_restore_and_dispatch",[&]{
         auto toolChecked=[](MainWindow& window,ProjectTool tool){for(auto* action:window.findChildren<QAction*>())if(action->property("editorTool").isValid()&&action->property("editorTool").toInt()==int(tool)&&action->isChecked())return true;return false;};
         auto shortcutsOf=[](MainWindow& window,const char* id){for(auto* action:window.findChildren<QAction*>())if(action->property("commandId").toString()==id&&!action->shortcuts().isEmpty())return action->shortcuts();return QList<QKeySequence>{};};

@@ -66,7 +66,7 @@ private:
 void MainWindow::setupLayoutGridActions(QMenu* view){
     auto*layout=action(view,"Layout Grid",{},[this]{
         if(!canvas())return;
-        auto grid=canvas()->layoutGrid();grid.visible=!grid.visible;canvas()->setLayoutGrid(grid);refreshSnapControls();
+        auto grid=canvas()->layoutGrid();grid.visible=!grid.visible;canvas()->setLayoutGrid(grid);if(grid.visible)canvas()->revealLayoutGrid();refreshSnapControls();
     });
     layout->setObjectName("viewLayoutGrid");layout->setCheckable(true);
     action(view,"Grid Settings…",{},[this]{showGridSettings();})->setObjectName("viewGridSettings");
@@ -94,6 +94,7 @@ void MainWindow::refreshSnapControls(){
     setAction("snapLayerEdges",snapPolicy_.layerEdges);setAction("snapLayerCenters",snapPolicy_.layerCenters);
     setAction("snapDocumentEdges",snapPolicy_.documentEdges);setAction("snapDocumentCenter",snapPolicy_.documentCenter);
     setAction("viewLayoutGrid",canvas()&&canvas()->layoutGrid().visible);
+    setAction("viewShowExtras",!canvas()||canvas()->extrasShown());
     if(auto*item=findChild<QAction*>("viewGridSettings"))item->setEnabled(canvas()!=nullptr);
     if(auto*box=findChild<QCheckBox*>("transformSnapping")){const QSignalBlocker block(box);box->setChecked(snapPolicy_.enabled);}
 }
@@ -116,10 +117,21 @@ void MainWindow::showGridSettings(){
     rememberSnapAndGrid(snapPolicy_,next);
 }
 
+// Lines the canvas does not show never snap. The layout grid's own visibility is already checked
+// where its lines are built, so only the Show Extras hold is added for it here.
+editing::SnapPolicy MainWindow::visibleSnapPolicy(){
+    auto policy=snapPolicy_;
+    if(auto*view=canvas()){
+        if(!view->guidesVisible())policy.guides=false;
+        if(view->layoutGridHeld())policy.grid=false;
+    }
+    return policy;
+}
+
 std::optional<editing::SnapLines> MainWindow::snapLines(const Document& document,std::span<const std::string> excluded){
     if(!snapPolicy_.enabled)return {};
     const auto grid=canvas()?canvas()->layoutGrid():editing::LayoutGrid{};
-    return editing_transform::collectSnapTargets({double(document.width),double(document.height)},editing_transform::visiblePlacements(document),excluded,document.guides,snapPolicy_,grid);
+    return editing_transform::collectSnapTargets({double(document.width),double(document.height)},editing_transform::visiblePlacements(document),excluded,document.guides,visibleSnapPolicy(),grid);
 }
 
 Point MainWindow::snapGesturePoint(Point point,Qt::KeyboardModifiers modifiers,std::span<const std::string> excluded){

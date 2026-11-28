@@ -453,6 +453,8 @@ private:
     void refreshSnapControls();
     void setSnapPolicy(const editing::SnapPolicy& value);
     void showGridSettings();
+    // The Snap To choices, without the guides and layout grid the canvas is not showing.
+    editing::SnapPolicy visibleSnapPolicy();
     // Active snap lines for the current document, or nullopt when Snap is off. Excluded layers are moving layers.
     std::optional<editing::SnapLines> snapLines(const Document& document,std::span<const std::string> excluded={});
     // Snaps a gesture point and shows guide feedback. Ctrl suppresses snapping, matching transform moves.

@@ -210,7 +210,7 @@ bool MainWindow::beginDrawing(Point point,Qt::KeyboardModifiers modifiers){
         const bool hadDraft=cropDraft_.has_value();
         if(drag.mode==editing::CropDrag::Mode::Create)cropDraft_.reset();
         cropDrag_=drag;
-        if(snapPolicy_.enabled)cropSnap_=editing::cropSnapTargets(*p->document,snapPolicy_,canvas()->layoutGrid(),8/std::max(canvas()->pointsPerPixel(),.0001));
+        if(snapPolicy_.enabled)cropSnap_=editing::cropSnapTargets(*p->document,visibleSnapPolicy(),canvas()->layoutGrid(),8/std::max(canvas()->pointsPerPixel(),.0001));
         if(hadDraft&&!cropDraft_)refresh(false,false);
         return true;
     }

@@ -264,5 +264,28 @@ int main(int argc,char** argv){QApplication app(argc,argv);int passed=0,failed=0
         require(project.history.undoCount()==2,"Each move must be one undo step");
         gridSnap->trigger();
     });
+    test("ui_hidden_guides_snap_neither_a_layer_nor_a_crop",[]{
+        MainWindow window(true);Document d;d.id=newId();d.width=1000;d.height=1000;
+        Layer back;back.id=newId();back.name="Back";back.transform={0,0,1000,1000};back.raster=Raster::filled(1000,1000,{255,255,255,255});d.layers.push_back(back);
+        Layer square;square.id=newId();square.name="Square";square.transform={103,207,200,200};square.raster=Raster::filled(200,200,{220,40,40,255});d.layers.push_back(square);
+        d.guides={{newId(),false,112},{newId(),true,215}};
+        auto& project=window.addProject(d);showCanvas(window);project.canvas->zoom=1;project.active=square.id;project.selected={square.id};
+        auto* extras=control<QAction>(window,"viewShowExtras");auto* guides=control<QAction>(window,"viewGuides");
+        const auto command=[&](const char* id){for(auto* item:window.findChildren<QAction*>())if(item->property("commandId").toString()==id){item->trigger();return;}throw std::runtime_error(std::string("Missing command ")+id);};
+        const auto& moved=[&]()->const Transform&{return project.document->layers.back().transform;};
+        const auto undo=[&]{command("edit.undo");require(moved().x==103&&moved().y==207,"Undo did not restore the layer");};
+        const auto cropCorner=[&]{
+            command("tool.crop");project.canvas->zoom=1;drag(project,{600,600},{118,221});const auto frame=project.canvas->cropOverlay();require(frame.has_value(),"Crop frame missing");
+            const Point corner{frame->x,frame->y};command("crop.cancel");command("tool.move");return corner;
+        };
+        const auto expectFree=[&](const char* how){
+            drag(project,{203,307},{207,310});require(moved().x==107&&moved().y==210,how);undo();
+            const auto corner=cropCorner();require(corner.x==118&&corner.y==221,how);
+        };
+        extras->trigger();expectFree("Guides hidden by Show Extras still snapped");extras->trigger();
+        guides->trigger();expectFree("Guides turned off in View still snapped");guides->trigger();
+        drag(project,{203,307},{207,310});require(moved().x==112&&moved().y==215,"Restored guides did not snap the layer");undo();
+        const auto corner=cropCorner();require(corner.x==112&&corner.y==215,"Restored guides did not snap the crop");
+    });
     std::cout<<"{\"suite\":\"transform_ui\",\"passed\":"<<passed<<",\"failed\":"<<failed<<",\"mac_differential\":false,\"visual_acceptance\":false}\n";return failed?1:0;
 }

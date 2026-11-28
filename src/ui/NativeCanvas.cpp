@@ -226,7 +226,7 @@ NativeCanvas::RulerBand NativeCanvas::rulerBandAt(QPointF view) const{
     return RulerBand::None;
 }
 std::optional<int> NativeCanvas::guideIndexAt(QPointF view) const{
-    if(!showGuides||documentWidth_<=0||rulerBandAt(view)!=RulerBand::None)return {};
+    if(!guidesVisible()||documentWidth_<=0||rulerBandAt(view)!=RulerBand::None)return {};
     const auto mapping=viewMapping();
     constexpr double slop=5;
     int best=-1;double bestDistance=slop;
@@ -294,7 +294,7 @@ void NativeCanvas::finishGuideDrag(QPointF view){
 void NativeCanvas::drawGuideOverlay(){
     if(!context_||documentWidth_<=0||documentHeight_<=0)return;
     const bool preview=guideDrag_.has_value();
-    if(!showGuides&&!preview)return;
+    if(!guidesVisible()&&!preview)return;
     const auto mapping=viewMapping();
     const double scale=mapping.pointsPerPixel;
     if(!(scale>0))return;
@@ -315,11 +315,11 @@ void NativeCanvas::drawGuideOverlay(){
         else{const float x=docLeft+float(position*scale);context_->DrawLine(D2D1::Point2F(x,clip.top),D2D1::Point2F(x,clip.bottom),brush,1);}
         context_->PopAxisAlignedClip();
     };
-    if(showGuides){ComPtr<ID2D1SolidColorBrush> guide;check(context_->CreateSolidColorBrush(D2D1::ColorF(.2f,.75f,.95f,.85f),&guide),"Guide brush");for(auto [horizontal,position]:guides)drawLine(horizontal,position,guide.Get(),true);}
+    if(guidesVisible()){ComPtr<ID2D1SolidColorBrush> guide;check(context_->CreateSolidColorBrush(D2D1::ColorF(.2f,.75f,.95f,.85f),&guide),"Guide brush");for(auto [horizontal,position]:guides)drawLine(horizontal,position,guide.Get(),true);}
     if(preview){ComPtr<ID2D1SolidColorBrush> live;check(context_->CreateSolidColorBrush(D2D1::ColorF(1.f,.86f,.25f),&live),"Guide preview");drawLine(guideDrag_->horizontal,guideDrag_->position,live.Get(),false);}
 }
 void NativeCanvas::drawLayoutGrid(){
-    if(!context_||!layoutGrid_.visible||!layoutGrid_.valid()||documentWidth_<=0||documentHeight_<=0||layoutGrid_.opacity<=0)return;
+    if(!context_||layoutGridHeld_||!layoutGrid_.visible||!layoutGrid_.valid()||documentWidth_<=0||documentHeight_<=0||layoutGrid_.opacity<=0)return;
     const auto mapping=viewMapping();
     const double scale=mapping.pointsPerPixel;
     if(!(scale>0))return;
@@ -645,14 +645,21 @@ void NativeCanvas::setSelection(std::shared_ptr<const GrayRaster> value,std::sha
     if(!path&&value&&value->source)path=value->source->vectorOutline();
     if(!path&&value)path=std::make_shared<editing::SelectionOutline>(editing::SelectionOutline::fromCoverage(*value));
     selection_=std::move(value);selectionInputOutline_=std::move(outline);selectionOutline_=std::move(path);
+    selectionEdgesHeld_=false;
     selectionGeometry_.Reset();selectionMatrix_.reset();updateSelectionAnimation();update();
 }
 void NativeCanvas::updateSelectionAnimation(){
-    if(selectionTimer_){const bool active=selectionOutline_&&!selectionOutline_->empty()&&documentWidth_>0&&documentHeight_>0&&isVisible();
+    if(selectionTimer_){const bool active=!selectionEdgesHeld_&&selectionOutline_&&!selectionOutline_->empty()&&documentWidth_>0&&documentHeight_>0&&isVisible();
         if(active&&!selectionTimer_->isActive())selectionTimer_->start();else if(!active)selectionTimer_->stop();}
 }
+void NativeCanvas::setExtrasShown(bool shown){
+    // Edges are held only for a selection that is there to hide; guides and the grid are held either way.
+    selectionEdgesHeld_=!shown&&selectionOutline_&&!selectionOutline_->empty();
+    guidesHeld_=layoutGridHeld_=!shown;
+    updateSelectionAnimation();update();
+}
 void NativeCanvas::drawSelection(){
-    if(!selectionOutline_||selectionOutline_->empty()||documentWidth_<=0||documentHeight_<=0)return;
+    if(selectionEdgesHeld_||!selectionOutline_||selectionOutline_->empty()||documentWidth_<=0||documentHeight_<=0)return;
     const auto mapping=viewMapping();const std::array<float,6> matrix{float(mapping.pointsPerPixel),0,0,float(mapping.pointsPerPixel),float(mapping.origin.x),float(mapping.origin.y)};
     if(!selectionGeometry_||selectionMatrix_!=matrix){
         ComPtr<ID2D1PathGeometry> path;check(factory_->CreatePathGeometry(&path),"Selection path");
@@ -691,7 +698,7 @@ void NativeCanvas::installViewport(const graphics::CanvasViewport& state){
     if(!wasVisible&&navigatorPlacement().visible&&navigatorDirty_&&!navigatorDeferred_)scheduleNavigator();
 }
 void NativeCanvas::synchronizeViewport(){auto state=viewportState();const auto frame=contentRect();std::optional<Point> document;if(documentWidth_>0&&documentHeight_>0)document=Point{double(documentWidth_),double(documentHeight_)};state.resize({frame.width(),frame.height()},devicePixelRatioF(),document);installViewport(state);}
-void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();cameraRawGuides_.clear();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
+void NativeCanvas::setDocumentSize(int w,int h){const bool changed=documentWidth_!=w||documentHeight_!=h;documentWidth_=w;documentHeight_=h;if(w<=0||h<=0){documentWidth_=documentHeight_=0;raster_.reset();selection_.reset();selectionInputOutline_.reset();selectionOutline_.reset();selectionEdgesHeld_=false;selectionGeometry_.Reset();selectionMatrix_.reset();selectionDraft_.reset();transformOverlay_.reset();distortionOverlay_.reset();gradientLine_.reset();cameraRawGuides_.clear();shapeDraft_.reset();cropOverlay_.reset();snapGuideX_.reset();snapGuideY_.reset();sampleRing_.reset();displayTiles_.clear();image_.Reset();navigatorRaster_.reset();navigatorBitmap_.Reset();navigatorDirty_=false;movePreview_.reset();if(navigatorTimer_)navigatorTimer_->stop();}updateSelectionAnimation();if(changed){synchronizeViewport();if(documentWidth_>0)scheduleNavigator();}else update();}
 void NativeCanvas::fit(){if(documentWidth_>0&&documentHeight_>0){auto state=viewportState();state.fit({double(documentWidth_),double(documentHeight_)});installViewport(state);}}
 editing_transform::ViewMapping NativeCanvas::viewMapping()const{if(documentWidth_<=0)return {};const auto frame=contentRect();const auto state=viewportState();auto origin=state.origin({double(documentWidth_),double(documentHeight_)});origin.x+=frame.left();origin.y+=frame.top();return {state.pointsPerPixel(),origin};}
 QPointF NativeCanvas::documentPoint(QPointF p)const{if(documentWidth_<=0)return p;const auto frame=contentRect();const auto point=viewportState().documentPoint({p.x()-frame.left(),p.y()-frame.top()},{double(documentWidth_),double(documentHeight_)});return {point.x,point.y};}
