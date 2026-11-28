@@ -28,11 +28,14 @@ auto test=[&](const char*name,std::function<void()>fn){try{fn();++passed;std::co
 test("initial_empty_tab_create_undo_redo_same_tab",[]{
  MainWindow w(true);auto&p=w.addEmptyProject();auto*tabs=w.findChild<QTabWidget*>();check(tabs->count()==1&&!p.document&&p.page->currentWidget()==p.welcome,"Initial window is not one empty welcome tab");
  control<QDoubleSpinBox>(p.welcome,"newCanvasWidth")->setValue(91);control<QDoubleSpinBox>(p.welcome,"newCanvasHeight")->setValue(67);control<QPushButton>(p.welcome,"createCanvas")->click();
- check(tabs->count()==1&&p.document&&p.document->width==91&&p.document->height==67&&p.document->layers.size()==1&&!p.document->layers[0].raster&&p.history.undoCount()==1&&p.history.modified(),"Create did not initialize same project and history");
- QTest::keyClick(&w,Qt::Key_Z,Qt::ControlModifier); // QAction shortcut needs active window; use registered action as fallback below.
- if(p.document)action(w,"Undo New Canvas");
- check(!p.document&&p.page->currentWidget()==p.welcome&&!p.canvas->viewportProvider(0,0,91,67,1).raster,"Undo kept old canvas visible");
- action(w,"Redo New Canvas");check(p.document&&p.page->currentWidget()==p.canvas&&p.document->width==91,"Redo failed to restore canvas");
+ check(tabs->count()==1&&p.document&&p.document->width==91&&p.document->height==67&&p.document->layers.size()==1&&!p.document->layers[0].raster&&p.history.undoCount()==0&&p.history.modified(),"Create did not initialize same project and history");
+ for(auto*a:w.findChildren<QAction*>())if(a->text()=="Undo")check(!a->isEnabled(),"Undo is enabled on a new canvas");
+ const auto created=p.document;
+ action(w,"New Layer");check(p.document->layers.size()==2,"New Layer failed");
+ action(w,"Undo New Blank Layer");check(p.document==created&&p.page->currentWidget()==p.canvas&&!p.history.canUndo(),"Undo did not stop at the new canvas");
+ action(w,"Undo");check(p.document==created&&p.page->currentWidget()==p.canvas,"Undo returned the tab to the welcome card");
+ action(w,"Redo New Blank Layer");check(p.document->layers.size()==2,"Redo failed after reaching the baseline");
+ auto&other=w.addEmptyProject(false);check(!other.document&&!other.history.canUndo()&&p.history.canUndo(),"Second tab shares history");
 });
 test("new_tab_clipboard_defaults_and_close_last",[]{
  QImage image(23,17,QImage::Format_ARGB32);image.fill(Qt::green);QApplication::clipboard()->setImage(image);
@@ -67,11 +70,10 @@ test("paste_inherits_parent_floors_external_center_and_duplicate_shares_source",
  const auto& pasted=p.document->layers.back();check(pasted.parentId=="g"&&pasted.name=="Layer 2"&&pasted.transform.x==36&&pasted.transform.y==23,"Paste parent/name/floor origin wrong");
  const auto source=pasted.raster;const auto transform=pasted.transform;action(w,"Layer via Copy");check(p.document->layers.size()==4&&p.document->layers.back().raster==source&&p.document->layers.back().transform==transform&&p.document->layers.back().parentId=="g","Layer via Copy without selection resampled or lost parent");
 });
-test("copy_layer_to_empty_project_and_undo_to_welcome",[]{
+test("copy_layer_to_empty_project_is_history_baseline",[]{
  MainWindow w(true);Document d;d.id=newId();d.width=96;d.height=64;Layer layer;layer.id="source";layer.transform={0,0,96,64};layer.raster=Raster::filled(96,64,{20,50,70,255});d.layers={layer};auto&source=w.addProject(d);auto&target=w.addEmptyProject(false);auto*tabs=w.findChild<QTabWidget*>();tabs->setCurrentWidget(source.page);
  QTimer::singleShot(0,[]{for(auto* widget:QApplication::topLevelWidgets())if(auto* dialog=qobject_cast<QInputDialog*>(widget)){auto* combo=dialog->findChild<QComboBox*>();check(combo&&combo->count()==2,"Copy destinations omitted empty tab");combo->setCurrentIndex(1);dialog->accept();}});
- action(w,"Copy Layer to Project…");check(target.document&&target.document->width==96&&target.document->height==64&&target.document->layers.size()==2&&target.document->layers.back().raster==layer.raster&&target.history.undoCount()==1,"Copy to empty target failed");
- action(w,"Undo Copy Layers from Project");check(!target.document&&target.page->currentWidget()==target.welcome&&source.document==std::optional(d),"Copy undo lost empty target or changed source");
+ action(w,"Copy Layer to Project…");check(target.document&&target.document->width==96&&target.document->height==64&&target.document->layers.size()==2&&target.document->layers.back().raster==layer.raster&&target.history.undoCount()==0&&source.document==std::optional(d),"Copy to empty target failed or changed source");
 });
 test("new_canvas_presets_units_and_resolution_keep_pixels",[]{
  MainWindow w(true);auto&p=w.addEmptyProject();auto*tabs=w.findChild<QTabWidget*>();
@@ -86,8 +88,7 @@ test("new_canvas_presets_units_and_resolution_keep_pixels",[]{
  create->click();
  check(tabs->count()==1&&p.document&&p.document->width==2550&&p.document->height==3300&&p.document->resolution==300&&p.document->layers.size()==1&&p.document->layers[0].name=="Layer 1"&&!p.document->layers[0].raster,"8.5 × 11 in at 300 DPI creates a transparent 2550 × 3300 canvas");
  const auto id=p.document->layers[0].id;check(p.active==id&&p.selected==std::vector<std::string>{id},"Initial layer is selected");
- action(w,"Undo New Canvas");check(!p.document&&p.page->currentWidget()==p.welcome,"Undo returns to the welcome card");
- action(w,"Redo New Canvas");check(p.document&&p.document->width==2550&&p.document->resolution==300&&p.active==id&&p.selected==std::vector<std::string>{id},"Redo restores the same document and selection");
+ check(!p.history.canUndo()&&p.page->currentWidget()==p.canvas,"New canvas is the first history state");
 });
 test("new_canvas_category_presets_set_units_and_resolution",[]{
  MainWindow w(true);auto&p=w.addEmptyProject();

@@ -66,7 +66,7 @@ struct Fixture {
         require(project.document==prepared.document&&project.active==prepared.selection.primary,"copy did not install prepared state");
         require(project.selected==prepared.selection.ids&&!project.maskSelected,"successful copy did not select copied image");
         require(project.collapsedGroups==std::unordered_set<std::string>{std::string(64,'g'),std::string(64,'h')},"copy changed collapsed groups");
-        require(project.history.undoCount()==(before?2u:1u)&&!project.history.canRedo()&&project.history.modified(),"successful copy did not record exactly one edit");
+        require(project.history.undoCount()==(before?2u:0u)&&!project.history.canRedo()&&project.history.modified(),"successful copy did not record one edit, or one baseline in an empty target");
     }
 };
 void allocationSweep(bool empty){
@@ -79,7 +79,9 @@ void allocationSweep(bool empty){
         if(failed){
             ++failures;require(rollbackAllocations==0,"copy rollback attempted allocation after failure");fixture.unchanged();
             commit(fixture.project,fixture.before,fixture.active,fixture.prepared);fixture.committed();
-            auto prior=fixture.project.history.undo();require(prior&&prior->document==fixture.before&&prior->activeLayer==fixture.active&&!fixture.project.history.modified(),"retry undo did not restore saved state");
+            auto prior=fixture.project.history.undo();
+            if(empty)require(!prior&&fixture.project.history.modified(),"retry into an empty target became undoable or clean");
+            else require(prior&&prior->document==fixture.before&&prior->activeLayer==fixture.active&&!fixture.project.history.modified(),"retry undo did not restore saved state");
         }else{fixture.committed();require(failures>0,"allocation sweep did not inject failures");std::printf("PASS %s allocation_points=%zu rollback_allocations=0\n",empty?"empty_allocation_sweep":"allocation_sweep",failures);return;}
     }
     throw std::runtime_error("allocation sweep did not terminate");
