@@ -86,7 +86,7 @@ try {
   }
  }
  foreach($dir in @('src','shaders')){Copy-ApplicationSource (Join-Path $packageRoot $dir) (Join-Path $source $dir) @('.cpp','.c','.h','.hpp','.inc','.hlsl','.rc','.manifest','.in','.txt')}
- Copy-ApplicationSource (Join-Path $packageRoot 'assets') (Join-Path $source 'assets') @('.ico','.svg','.png','.txt','.ttf')
+ Copy-ApplicationSource (Join-Path $packageRoot 'assets') (Join-Path $source 'assets') @('.ico','.svg','.png','.bmp','.txt','.ttf')
  $testSources=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
  $includeDirectories=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
  [void]$includeDirectories.Add((Join-Path $packageRoot 'src'))

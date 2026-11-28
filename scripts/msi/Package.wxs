@@ -26,6 +26,8 @@
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/robbietilton/Compositor" />
     <Icon Id="CompositorIcon" SourceFile="$(var.Icon)" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.Banner)" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.Dialog)" />
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
