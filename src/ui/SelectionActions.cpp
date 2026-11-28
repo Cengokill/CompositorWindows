@@ -3,6 +3,7 @@
 #include "SegmentedControl.h"
 #include "ToolbarControls.h"
 #include "OpacityDigit.h"
+#include "NumberScrub.h"
 #include "editing/PixelEdits.h"
 #include "editing/SelectionExtras.h"
 #include <QMenuBar>
@@ -27,6 +28,11 @@
 #include <QSignalBlocker>
 #include <chrono>
 #include <QInputDialog>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QHBoxLayout>
+#include <QSpinBox>
+#include <QVBoxLayout>
 #include <cmath>
 
 namespace compositor {
@@ -48,8 +54,15 @@ void MainWindow::setupSelectionActions(){
     action(menu,"Deselect",QKeySequence("Ctrl+D"),[this]{edit("Deselect",[](Document&d){d.selection.reset();});});
     action(menu,"Feather…",{},[this]{
         auto*p=current();if(!p||!p->document||!p->document->selection)return;
-        bool ok=false;const auto radius=QInputDialog::getDouble(this,"Feather Selection","Radius",selectionFeatherAmount_,0,250,0,&ok);
-        if(!ok)return;
+        // Radius, its field and the unit share one row; dragging the Radius label scrubs the value like the options bars.
+        QDialog dialog(this);dialog.setObjectName("featherDialog");dialog.setWindowTitle("Feather Selection");
+        auto* layout=new QVBoxLayout(&dialog);auto* row=new QHBoxLayout;layout->addLayout(row);
+        auto* label=new QLabel("Radius",&dialog);auto* field=new QSpinBox(&dialog);field->setObjectName("featherRadius");field->setAccessibleName("Feather radius");field->setRange(0,250);field->setValue(selectionFeatherAmount_);label->setBuddy(field);
+        row->addWidget(label);row->addWidget(field,1);row->addWidget(new QLabel("px",&dialog));ui::attachScrub(label,field);
+        auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
+        connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+        field->selectAll();field->setFocus();
+        if(dialog.exec()!=QDialog::Accepted)return;const int radius=field->value();
         selectionFeatherAmount_=int(radius);if(auto* spin=findChild<QSpinBox*>("selectionFeatherAmount")){const QSignalBlocker block(spin);spin->setValue(selectionFeatherAmount_);}
         featherSelectionBy(radius);
     });
