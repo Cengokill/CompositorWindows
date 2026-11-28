@@ -3,6 +3,8 @@ Compositor Windows development distribution
 The application and reused Compositor code are distributed under MIT; see
 Compositor-MIT.txt. The offline foreground replacement uses MIT-licensed
 BiRefNet_lite weights, pinned to the revision recorded in its model card.
+Volumetric Light's depth uses Apache-2.0 Depth Anything V2 Small weights, pinned
+to the revision in dependencies/imaging/lock.json; see its model card and license.
 ONNX Runtime license and third party notices accompany its binary.
 
 LibRaw 0.22.2 is statically linked into Compositor.exe under CDDL-1.0; the

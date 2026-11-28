@@ -9,6 +9,8 @@ and complete Photoshop compatibility are not claimed.
 The application and reused Compositor code are distributed under MIT; see
 Compositor-MIT.txt. The offline foreground replacement uses MIT-licensed
 BiRefNet_lite weights, pinned to the revision recorded in its model card.
+Volumetric Light's depth uses Apache-2.0 Depth Anything V2 Small weights, pinned
+to the revision in dependencies/imaging/lock.json; see its model card and license.
 ONNX Runtime license and third party notices accompany its binary.
 libjpeg-turbo is statically linked; its licence and IJG notice are included.
 This software is based in part on the work of the Independent JPEG Group.

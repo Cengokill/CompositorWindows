@@ -6,9 +6,11 @@
 #include "EditPanelSession.h"
 #include "NativeCanvas.h"
 #include "PropertyControls.h"
+#include "LayerPanelTokens.h"
 #include "LayerPanelWidgets.h"
 #include "graphics/MaskSampling.h"
 #include "graphics/Downsample.h"
+#include "imaging/onnx_depth_provider.h"
 #include "imaging/onnx_subject_provider.h"
 #include "imaging/subject_matte.h"
 #include <map>
@@ -54,6 +56,69 @@ std::filesystem::path subjectModelPath(){
     auto model=QDir(QApplication::applicationDirPath()).filePath("models/birefnet-lite.onnx");
     if(!QFileInfo::exists(model))model=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/dependencies/imaging/model/birefnet-lite.onnx";
     return std::filesystem::path(model.toStdWString());
+}
+std::filesystem::path depthModelPath(){
+    auto model=QDir(QApplication::applicationDirPath()).filePath("models/depth-anything-v2-small.onnx");
+    if(!QFileInfo::exists(model))model=QStringLiteral(COMPOSITOR_SOURCE_ROOT)+"/dependencies/imaging/depth-model/depth-anything-v2-small.onnx";
+    return std::filesystem::path(model.toStdWString());
+}
+struct VolumetricPreparation {
+    std::shared_ptr<const filters::VolumetricLightInputs> inputs;
+    QString note,error;
+    // Where an unmoved light starts, in source pixels; the panel alone asks for it.
+    std::optional<Point> lightStart;
+};
+std::shared_ptr<GrayRaster> grayRaster(const imaging::GrayMask& mask){
+    auto out=std::make_shared<GrayRaster>();out->width=int(mask.width);out->height=int(mask.height);out->pixels.resize(std::size_t(mask.width)*mask.height);
+    for(std::uint32_t y=0;y<mask.height;++y)std::copy_n(mask.pixels.data()+y*mask.stride,mask.width,out->pixels.data()+std::size_t(y)*mask.width);
+    return out;
+}
+// The subject and depth are found on a copy no larger than 2048 pixels, which
+// keeps any image within the models' budgets; the filter resamples them to its
+// grid, so the preview and Apply share them. A model that cannot be loaded
+// leaves that part out, said in the note, unless the caller has nowhere to show
+// it and requires the models; a failed inference is always an error.
+VolumetricPreparation prepareVolumetric(const Raster& source,const std::filesystem::path& subjectModel,const std::filesystem::path& depthModel,const std::function<bool()>& cancelled,bool requireModels=false){
+    imaging::ImportOptions options;options.cancelled=cancelled;
+    const double factor=std::min(1.,2048./std::max(source.width,source.height));
+    const auto w=std::uint32_t(std::max(1,int(std::lround(source.width*factor)))),h=std::uint32_t(std::max(1,int(std::lround(source.height*factor))));
+    imaging::RgbaImage image{w,h,std::size_t(w)*4,{}};
+    if(factor<1){
+        image.pixels.resize(std::size_t(w)*h*4);
+        for(std::uint32_t y=0;y<h;++y){
+            imaging::checkCancelled(options);
+            const int y0=int(std::uint64_t(y)*source.height/h),y1=std::max(y0+1,int(std::uint64_t(y+1)*source.height/h));
+            for(std::uint32_t x=0;x<w;++x){
+                const int x0=int(std::uint64_t(x)*source.width/w),x1=std::max(x0+1,int(std::uint64_t(x+1)*source.width/w));
+                std::array<unsigned,4> sum{};
+                for(int sy=y0;sy<y1;++sy)for(int sx=x0;sx<x1;++sx){const auto p=source.pixel(sx,sy);sum[0]+=p.r;sum[1]+=p.g;sum[2]+=p.b;sum[3]+=p.a;}
+                const unsigned count=unsigned((x1-x0)*(y1-y0));
+                for(int c=0;c<4;++c)image.pixels[(std::size_t(y)*w+x)*4+c]=std::uint8_t((sum[c]+count/2)/count);
+            }
+        }
+    }else image.pixels=source.rgba();
+    auto inputs=std::make_shared<filters::VolumetricLightInputs>();QStringList notes;
+    {
+        std::unique_ptr<imaging::OnnxSubjectProvider> provider;
+        try{provider=std::make_unique<imaging::OnnxSubjectProvider>(subjectModel);}
+        catch(const std::exception& error){if(requireModels)throw;notes<<QString("Subject model unavailable (%1); nothing blocks the light.").arg(QString::fromUtf8(error.what()));}
+        if(provider)if(auto raw=provider->inferOptional(image,options)){
+            inputs->outline=grayRaster(*raw);
+            imaging::MatteSettings settings;settings.advanced=true;settings.refineEdges=std::clamp(std::max(w,h)*.008,2.,40.);settings.contrast=0;
+            inputs->subject=grayRaster(imaging::refineSubjectMask(*raw,image,settings,false,nullptr,options));
+        }
+    }
+    imaging::checkCancelled(options);
+    // BiRefNet's session is released first: the two models run one after the other.
+    std::unique_ptr<imaging::OnnxDepthProvider> provider;
+    try{provider=std::make_unique<imaging::OnnxDepthProvider>(depthModel);}
+    catch(const std::exception& error){if(requireModels)throw;notes<<QString("Depth model unavailable (%1); the haze follows the height in the frame.").arg(QString::fromUtf8(error.what()));}
+    if(provider){
+        if(auto estimate=provider->estimate(image,options)){
+            auto depth=std::make_shared<filters::DepthMap>();depth->width=int(estimate->width);depth->height=int(estimate->height);depth->values=std::move(estimate->values);inputs->depth=std::move(depth);
+        }else notes<<"The depth shows no variation; the haze follows the height in the frame.";
+    }
+    return {std::move(inputs),notes.join(' '),{}};
 }
 std::shared_ptr<const GrayRaster> rimSubject(const Raster& source,const std::filesystem::path& model,const std::function<bool()>& cancelled){
     imaging::ImportOptions options;options.cancelled=cancelled;
@@ -143,7 +208,7 @@ std::function<Layer(const Layer&)> filterMerge(const Layer& rendered,const Layer
         return carryFilterMask(current,std::move(layer),job,rendered.raster!=original.raster||rendered.transform!=original.transform);
     };
 }
-QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects","Sharpen","Rim Light"};}
+QStringList filterKindNames(){return {"Gaussian Blur","Motion Blur","Add Noise","Lens Correction","Content-Aware Fill","Vignette","Bloom","Tonal Contrast","Dither","Scanlines","Camera Raw Filter","Progressive Blur","RGB Split","Lens Effects","Sharpen","Rim Light","Volumetric Light"};}
 filters::Request buildFilterRequest(EditorProject& project,const Document& before,const Layer& layer,filters::Kind kind){
     filters::Request request;request.settings=project.toolState.filterSettings.pixels;request.cameraRaw=project.toolState.filterSettings.cameraRaw.normalized();
     request.kind=kind;request.deepSource=layer.deep;request.source=layer.raster?layer.raster:Raster::filled(before.width,before.height);
@@ -160,6 +225,7 @@ filters::Request buildFilterRequest(EditorProject& project,const Document& befor
 struct FilterOutput {
     std::optional<Document> document;
     std::array<std::shared_ptr<const Raster>,4> channels;
+    std::shared_ptr<const Raster> depthLayer;
     QImage thumbnail;
     QString error;
     QString viewportError;
@@ -213,6 +279,15 @@ class FilterPanel final:public ui::EditPanelSession {
     std::shared_ptr<std::optional<filters::SourceSelection>> rawSelection_;
     std::shared_ptr<std::shared_ptr<const GrayRaster>> rimMask_=std::make_shared<std::shared_ptr<const GrayRaster>>();
     std::filesystem::path rimModel_;
+    // Volumetric Light's subject and depth, prepared once by their own job: a
+    // setting change cancels only the render, never the preparation.
+    std::shared_ptr<const filters::VolumetricLightInputs> volumetricInputs_;
+    std::shared_ptr<filters::VolumetricLightCache> volumetricCache_;
+    QFutureWatcher<VolumetricPreparation> preparation_;
+    std::shared_ptr<std::atomic_bool> preparationCancelled_=std::make_shared<std::atomic_bool>(false);
+    QString volumetricNote_;
+    QPushButton* extractDepth_{};
+    std::shared_ptr<const Raster> depthLayer_;
     ui::CameraRawPanel::Tool dragKind_{ui::CameraRawPanel::Tool::None};
     FilterDialog dialog_;
     QVBoxLayout layout_;
@@ -233,9 +308,45 @@ class FilterPanel final:public ui::EditPanelSession {
     filters::CameraRawView runningRawView_;
     std::uint64_t version_{},runningVersion_{},retainedPreviewBytes_{};
     bool running_{},runningViewportOnly_{},balanceRunning_{},closed_{},committing_{},progressiveDragging_{},rgbDragging_{},splitLayers_{};
+    bool preparing_{},extractingDepth_{},lightDragging_{};
     static std::map<filters::Kind,QPoint>& positions(){static std::map<filters::Kind,QPoint> value;return value;}
     bool autoBalancePending()const{return balanceRunning_&&raw_&&raw_->whiteBalanceIsAuto();}
-    void retire(){if(closed_&&!running_&&!balanceRunning_)deleteLater();}
+    void retire(){if(closed_&&!running_&&!balanceRunning_&&!preparing_)deleteLater();}
+    void disableControls(){
+        for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QComboBox*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
+        for(auto* control:dialog_.findChildren<QToolButton*>())if(control->objectName().startsWith("rimLightColor")||control->objectName()=="volumetricLightColor")control->setEnabled(false);
+        if(extractDepth_)extractDepth_->setEnabled(false);
+    }
+    bool sourceUnchanged()const{
+        const auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
+        if(!current)return false;
+        auto target=std::find_if(current->layers.begin(),current->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
+        return target!=current->layers.end()&&target->raster&&target->raster==original_.raster&&target->deep==original_.deep&&target->transform==original_.transform;
+    }
+    void beginExtractDepth(){
+        if(closed_||committing_||splitLayers_||extractingDepth_||!volumetricInputs_||!volumetricInputs_->depth)return;
+        if(!sourceUnchanged()){status_.setText("The source layer changed. Reopen Volumetric Light to extract its depth.");return;}
+        const auto current=host_.currentDocument();
+        auto pixels=std::uint64_t(original_.raster->width)*original_.raster->height;
+        for(const auto& layer:current->layers)if(layer.raster)pixels+=std::uint64_t(layer.raster->width)*layer.raster->height;
+        if(pixels>maxDocumentImagePixels){
+            QMessageBox warning(QMessageBox::Warning,"Cannot Extract Depth",
+                QString("The depth layer would exceed the project's combined %1-megapixel image limit. Reduce the image size or remove other image layers before trying again.")
+                    .arg(maxDocumentImagePixels/1'000'000),
+                QMessageBox::Ok,&dialog_);
+            warning.setProperty("studioChrome",true);warning.exec();
+            return;
+        }
+        extractingDepth_=true;++version_;lightDragging_=false;cancelled_->store(true);debounce_.stop();
+        apply_->setEnabled(false);disableControls();
+        completedPreview_.reset();clearGuideOverlay();
+        status_.setText("Extracting depth…");
+        publishPreview();
+        start();
+    }
     void beginSplitToLayers(QPushButton* split){
         if(closed_||committing_||splitLayers_||!split)return;
         const auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
@@ -316,6 +427,12 @@ class FilterPanel final:public ui::EditPanelSession {
             return;
         }
         if(request_.kind==filters::Kind::RgbSplit){canvas->setCameraRawGuides({});return;}
+        if(request_.kind==filters::Kind::VolumetricLight){
+            // No cross until the preparation or a click has placed the light.
+            if(const auto& c=request_.settings.volumetric.center)canvas->setCameraRawGuides({{{c->x-12,c->y},{c->x+12,c->y}},{{c->x,c->y-12},{c->x,c->y+12}}});
+            else canvas->setCameraRawGuides({});
+            return;
+        }
         if(!raw_)return;
         const auto guides=raw_->guideOverlay();
         std::vector<std::pair<Point,Point>> lines;lines.reserve(guides.size());
@@ -348,9 +465,20 @@ class FilterPanel final:public ui::EditPanelSession {
     }
     void start(std::optional<RawViewport> viewportOnly={}){
         if(closed_||running_)return;
+        // The render waits for the preparation, then starts with the latest settings.
+        if(request_.kind==filters::Kind::VolumetricLight&&!volumetricInputs_)return;
         if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
         running_=true;runningVersion_=version_;runningRawView_=request_.cameraRawView;
         cancelled_=std::make_shared<std::atomic_bool>(false);
+        if(extractingDepth_){
+            worker_.setFuture(QtConcurrent::run([source=original_.raster,inputs=volumetricInputs_,settings=request_.settings.volumetric,limits=request_.limits,token=cancelled_]{
+                FilterOutput out;
+                try{out.depthLayer=filters::volumetricDepthLayer(*inputs,settings,source->width,source->height,limits.maxWorkingBytes,[token]{return token->load();});}
+                catch(const std::exception& error){out.error=QString::fromUtf8(error.what());}
+                return out;
+            }));
+            return;
+        }
         if(splitLayers_){
             worker_.setFuture(QtConcurrent::run([source=original_.raster,limits=request_.limits,token=cancelled_]() mutable {
                 FilterOutput out;
@@ -376,6 +504,7 @@ class FilterPanel final:public ui::EditPanelSession {
             job.cameraRawRetainedPreviewBytes=retainedPreviewBytes_;
         }
         if((job.kind==filters::Kind::ProgressiveBlur||job.kind==filters::Kind::RgbSplit||job.kind==filters::Kind::LensEffects)&&job.preview)job.previewMaxEdge=512;
+        if(job.kind==filters::Kind::VolumetricLight){job.volumetric=volumetricInputs_;job.volumetricCache=volumetricCache_;if(job.preview)job.previewMaxEdge=1024;}
         if(!existingGrade)status_.setText(committing_?"Applying filter…":"Updating preview…");
         const int navigatorEdge=existingGrade?std::exchange(pendingNavigatorEdge_,0):0;
         worker_.setFuture(QtConcurrent::run([job,before=before_,original=original_,selection=rawSelection_,rimMask=rimMask_,rimModel=rimModel_,
@@ -429,7 +558,7 @@ class FilterPanel final:public ui::EditPanelSession {
         }));
     }
     void finish(int answer){
-        if(closed_)return;closed_=true;cancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)positions()[request_.kind]=dialog_.pos();
+        if(closed_)return;closed_=true;cancelled_->store(true);preparationCancelled_->store(true);debounce_.stop();if(request_.kind!=filters::Kind::CameraRaw)positions()[request_.kind]=dialog_.pos();
         if(balanceCancelled_)balanceCancelled_->store(true);
         try{if(answer==QDialog::Accepted&&splitLayers_&&channels_.front()&&host_.commit){
             constexpr std::array names{"Red","Green","Blue","Alpha"};
@@ -443,20 +572,27 @@ class FilterPanel final:public ui::EditPanelSession {
                 layer.raster=std::move(channels_[i]);
                 layers.push_back(std::move(layer));
             }
-            host_.commit({{},original_.id,false,{},std::move(layers)});
+            host_.commit({{},original_.id,false,{},std::move(layers),"Split to Layers"});
+        }else if(answer==QDialog::Accepted&&extractingDepth_&&depthLayer_&&host_.commit){
+            Layer layer;layer.id=newId();layer.name="Depth";layer.raster=std::move(depthLayer_);
+            ui::EditPanelResult result;result.active=original_.id;result.insertAfterTarget.push_back(std::move(layer));
+            result.insertName="Extract Depth";result.insertAboveClipping=true;result.activateInserted=true;
+            host_.commit(std::move(result));
         }else if(answer==QDialog::Accepted&&committed_&&host_.commit){
-            if(request_.kind==filters::Kind::RimLight){
+            const bool subjectAware=request_.kind==filters::Kind::RimLight||request_.kind==filters::Kind::VolumetricLight;
+            if(subjectAware){
+                const auto name=filterKindNames()[int(request_.kind)].toStdString();
                 auto current=host_.currentDocument?host_.currentDocument():std::nullopt;
-                if(!current)throw std::runtime_error("The Rim Light document is no longer available");
+                if(!current)throw std::runtime_error("The "+name+" document is no longer available");
                 auto target=std::find_if(current->layers.begin(),current->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
-                if(target==current->layers.end()||target->raster!=original_.raster||target->deep!=original_.deep||target->transform!=original_.transform)throw std::runtime_error("The Rim Light source layer changed before Apply finished");
+                if(target==current->layers.end()||target->raster!=original_.raster||target->deep!=original_.deep||target->transform!=original_.transform)throw std::runtime_error("The "+name+" source layer changed before Apply finished");
             }
             auto found=std::find_if(committed_->layers.begin(),committed_->layers.end(),[this](const Layer& layer){return layer.id==original_.id;});
             if(found==committed_->layers.end())throw std::runtime_error("Completed filter target is missing");
             auto job=request_;job.preview=false;job.limits.cancelled={};
             auto merge=filterMerge(*found,original_,job);
             host_.commit({std::move(*committed_),original_.id,false,std::move(merge)});
-            if(request_.kind==filters::Kind::RimLight&&remember_)remember_(request_.settings.normalized());
+            if(subjectAware&&remember_)remember_(request_.settings.normalized());
             if(raw_&&rememberRaw_)rememberRaw_(request_.cameraRaw);
             if(rememberLast_)rememberLast_(request_.kind);
         }}
@@ -488,6 +624,7 @@ public:
         auto number=[this](const QString& label,double& value,double low,double high,int decimals,double fallback){
             auto* spin=new ui::PropertyNumber;spin->setRange(low,high);spin->setDecimals(decimals);const int stepDecimals=label=="Radius"||label=="Amount"||label=="From"||label=="To"||label=="Threshold"||label=="Midpoint"?decimals:0;spin->setSingleStep(std::pow(10.,-stepDecimals));spin->setValue(value);spin->setAccessibleName(label);auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
             if(request_.kind==filters::Kind::Sharpen)spin->setSuffix(label=="Amount"?" %":" px");
+            if(request_.kind==filters::Kind::VolumetricLight)spin->setSuffix(" %");
             auto* slider=new ui::OptionSlider(Qt::Horizontal);slider->setRange(0,10000);slider->setAccessibleName(label+" slider");
             const bool logarithmic=(label=="Radius"||label=="Distance"||label=="Amount")&&low>0;
             const double first=logarithmic?std::log(low):low,last=logarithmic?std::log(high):high;
@@ -512,6 +649,27 @@ public:
             auto show=[this,rows](int selected){for(int i=0;i<3;++i)if(i!=selected)for(int row=rows[i].first;row<rows[i].second;++row)fields_.setRowVisible(row,false);for(int row=rows[selected].first;row<rows[selected].second;++row)fields_.setRowVisible(row,true);};show(0);
             connect(active,&QComboBox::currentIndexChanged,&dialog_,[show](int index){show(index);});
             connect(count,&QComboBox::currentIndexChanged,&dialog_,[this,show,active](int index){request_.settings.rimLight.count=index+1;QSignalBlocker block(active);active->clear();for(int i=0;i<=index;++i)active->addItem(QString("Light %1").arg(i+1));active->setCurrentIndex(index);show(index);change();});rimNumbers.push_back(number("Glow",rim.glow,0,100,0,factory.rimLight.glow));int width=0;for(auto* spin:rimNumbers){spin->ensurePolished();width=std::max(width,spin->sizeHint().width());}for(auto* spin:rimNumbers)spin->setFixedWidth(width);break;
+        }
+        case filters::Kind::VolumetricLight:{
+            auto& v=request_.settings.volumetric;const auto& d=factory.volumetric;
+            auto* hint=new QLabel("Click or drag on the canvas to move the light");hint->setObjectName("volumetricLightHint");hint->setWordWrap(true);hint->setStyleSheet(QString("color: %1;").arg(ui::layer_panel::secondary));
+            auto* color=new QToolButton;color->setObjectName("volumetricLightColor");color->setFixedSize(36,22);color->setAccessibleName("Light color");color->setToolTip("The light's color");
+            auto paint=[this,color]{const auto& c=request_.settings.volumetric.color;const auto hex=QColor::fromRgbF(c[0],c[1],c[2]).name();color->setAccessibleDescription(hex);color->setStyleSheet(QString("QToolButton { background: %1; border: 1px solid palette(mid); border-radius: 4px; padding: 0; min-width: 0; min-height: 20px; } QToolButton:hover { background: %1; border-color: %2; } QToolButton:pressed, QToolButton:focus { background: %1; border-color: %3; }").arg(hex,ui::layer_panel::primary,ui::layer_panel::accent));};paint();
+            fields_.addRow(hint);fields_.addRow("Color",color);
+            connect(color,&QToolButton::clicked,&dialog_,[this,paint]{auto& c=request_.settings.volumetric.color;auto picked=QColorDialog::getColor(QColor::fromRgbF(c[0],c[1],c[2]),&dialog_,"Light color");if(picked.isValid()&&!closed_&&!committing()){c={picked.redF(),picked.greenF(),picked.blueF()};paint();change();}});
+            number("Haze",v.haze,0,100,0,d.haze)->setToolTip("How thick the air is: haze lit by the light, thinner in front of the subject");
+            number("Distance",v.distance,0,100,0,d.distance)->setToolTip("How far into the scene the haze begins: low reaches up to the camera, high leaves all but the farthest parts clear");
+            number("Depth Contrast",v.depthContrast,0,100,0,d.depthContrast)->setToolTip("Spread out depths bunched together, such as a distant city, so the haze builds through them in steps; 0 keeps the depth as the model sees it");
+            number("Size",v.size,0,100,0,d.size)->setToolTip("How big the light is");
+            number("Intensity",v.intensity,0,100,0,d.intensity)->setToolTip("How bright the beams are");
+            number("Length",v.length,0,100,0,d.length)->setToolTip("How far from the light the beams reach");
+            number("Shafts",v.shafts,0,100,0,d.shafts)->setToolTip("How much the beams break up into separate shafts");
+            auto* keep=new QCheckBox("Keep Subject Clear");keep->setObjectName("volumetricKeepSubjectClear");keep->setChecked(v.keepsSubjectClear);keep->setToolTip("Keep the subject clear of the haze; off, it is hazed by its own distance, so a figure far off is misted");fields_.addRow(keep);
+            connect(keep,&QCheckBox::toggled,&dialog_,[this](bool value){request_.settings.volumetric.keepsSubjectClear=value;change();});
+            extractDepth_=new QPushButton("Extract Depth");extractDepth_->setObjectName("volumetricExtractDepth");extractDepth_->setEnabled(false);
+            extractDepth_->setToolTip("Close the filter and add the depth the haze uses as a new layer: white is near, black is far");fields_.addRow(extractDepth_);
+            connect(extractDepth_,&QPushButton::clicked,&dialog_,[this]{beginExtractDepth();});
+            break;
         }
         case filters::Kind::Sharpen:number("Amount",request_.settings.sharpenAmount,0,300,0,factory.sharpenAmount);number("Radius",request_.settings.sharpenRadius,.1,20,1,factory.sharpenRadius);break;
         case filters::Kind::GaussianBlur:number("Radius",request_.settings.radius,.1,250,1,factory.radius);break;
@@ -622,12 +780,12 @@ public:
                 return;
             }
             auto result=worker_.result();
-            if(splitLayers_){
+            if(splitLayers_||extractingDepth_){
                 if(!result.error.isEmpty()){
                     if(host_.error)host_.error(result.error);
                     dialog_.reject();
                 }else{
-                    channels_=std::move(result.channels);
+                    channels_=std::move(result.channels);depthLayer_=std::move(result.depthLayer);
                     dialog_.accept();
                 }
                 return;
@@ -667,13 +825,39 @@ public:
             if(raw_&&canvas&&preview_.isChecked()&&!pendingNavigatorEdge_)canvas->scheduleNavigator();
             if(!result.thumbnail.isNull())thumbnail_.setPixmap(QPixmap::fromImage(result.thumbnail));
             if(current&&!result.viewportError.isEmpty())status_.setText(result.viewportError);
-            else status_.setText(raw_&&result.reduced?"Preview (reduced to fit memory)":"Preview");
+            else status_.setText(raw_&&result.reduced?"Preview (reduced to fit memory)":!volumetricNote_.isEmpty()?volumetricNote_:"Preview");
             apply_->setEnabled(!autoBalancePending());
             if(superseded||result.canRefine)start();
             else if(raw_)deferRawViewport();
         });
+        if(request_.kind==filters::Kind::VolumetricLight){
+            volumetricCache_=std::make_shared<filters::VolumetricLightCache>();preparing_=true;status_.setText("Preparing depth…");
+            preparation_.setFuture(QtConcurrent::run([source=original_.raster,subject=subjectModelPath(),depth=depthModelPath(),token=preparationCancelled_]{
+                VolumetricPreparation out;
+                try{
+                    out=prepareVolumetric(*source,subject,depth,[token]{return token->load();});
+                    out.lightStart=filters::volumetricBrightestPoint(*source);
+                }
+                catch(const std::exception& error){out.error=QString::fromUtf8(error.what());}
+                return out;
+            }));
+            connect(&preparation_,&QFutureWatcher<VolumetricPreparation>::finished,&dialog_,[this]{
+                preparing_=false;
+                if(closed_){retire();return;}
+                auto prepared=preparation_.result();
+                if(!prepared.error.isEmpty()){status_.setText(prepared.error);if(host_.error)host_.error(prepared.error);return;}
+                volumetricInputs_=std::move(prepared.inputs);volumetricNote_=std::move(prepared.note);
+                if(auto& center=request_.settings.volumetric.center;!center&&prepared.lightStart){
+                    center=request_.transform.fromUnit({prepared.lightStart->x/original_.raster->width,prepared.lightStart->y/original_.raster->height});
+                    syncGuideOverlay();
+                }
+                extractDepth_->setEnabled(volumetricInputs_->depth&&!committing());
+                if(!volumetricInputs_->depth)extractDepth_->setToolTip("Extract Depth needs the depth model");
+                start();
+            });
+        }
         connect(apply_,&QPushButton::clicked,&dialog_,[this]{
-            if(splitLayers_)return;
+            if(splitLayers_||extractingDepth_)return;
             if(raw_){
                 if(autoBalancePending())return;
                 auto rendered=raw_->rendered();
@@ -687,15 +871,12 @@ public:
                 request_.cameraRaw=std::move(rendered);request_.cameraRawView={};
             }else if(request_.kind==filters::Kind::LensCorrection&&request_.settings.distortion==0){dialog_.reject();return;}
             else if(request_.kind==filters::Kind::RimLight&&request_.settings.rimLight.isIdentity()){dialog_.reject();return;}
+            else if(request_.kind==filters::Kind::VolumetricLight&&(request_.settings.volumetric.isIdentity()||!volumetricInputs_)){if(volumetricInputs_)dialog_.reject();return;}
             else if(request_.kind==filters::Kind::LensEffects&&request_.settings.lens.isIdentity()){dialog_.reject();return;}
             else if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitDistance==0&&request_.settings.rgbSplitBlur==0){dialog_.reject();return;}
             if(host_.valid&&!host_.valid()){committing_=false;cancel();return;}
-            if(!raw_&&request_.kind!=filters::Kind::RimLight&&remember_)remember_(request_.settings.normalized());committing_=true;apply_->setEnabled(false);buttons_.button(QDialogButtonBox::Cancel)->setEnabled(false);
-            for(auto* control:dialog_.findChildren<QDoubleSpinBox*>())control->setEnabled(false);
-            for(auto* control:dialog_.findChildren<QCheckBox*>())control->setEnabled(false);
-            for(auto* control:dialog_.findChildren<QComboBox*>())control->setEnabled(false);
-            for(auto* control:dialog_.findChildren<QSlider*>())control->setEnabled(false);
-            for(auto* control:dialog_.findChildren<QToolButton*>())if(control->objectName().startsWith("rimLightColor"))control->setEnabled(false);
+            if(!raw_&&request_.kind!=filters::Kind::RimLight&&request_.kind!=filters::Kind::VolumetricLight&&remember_)remember_(request_.settings.normalized());committing_=true;apply_->setEnabled(false);buttons_.button(QDialogButtonBox::Cancel)->setEnabled(false);
+            disableControls();lightDragging_=false;
             preview_.setEnabled(false);debounce_.stop();
             if(!raw_)publishPreview();
             if(running_){++version_;cancelled_->store(true);}
@@ -720,13 +901,13 @@ public:
     }
     ~FilterPanel()override{
         if(!closed_)clearRawViewportProviders();
-        clearGuideOverlay();cancelled_->store(true);
+        clearGuideOverlay();cancelled_->store(true);preparationCancelled_->store(true);
         if(balanceCancelled_)balanceCancelled_->store(true);
-        disconnect(&worker_,nullptr,&dialog_,nullptr);disconnect(&balance_,nullptr,&dialog_,nullptr);
-        worker_.waitForFinished();balance_.waitForFinished();
+        disconnect(&worker_,nullptr,&dialog_,nullptr);disconnect(&balance_,nullptr,&dialog_,nullptr);disconnect(&preparation_,nullptr,&dialog_,nullptr);
+        worker_.waitForFinished();balance_.waitForFinished();preparation_.waitForFinished();
     }
     QDialog* panel()const override{return const_cast<FilterDialog*>(&dialog_);}
-    bool committing()const override{return committing_||splitLayers_;}
+    bool committing()const override{return committing_||splitLayers_||extractingDepth_;}
     void cancel()override{if(!closed_&&!committing_)dialog_.reject();}
     bool samplePress(Point point,double,Qt::KeyboardModifiers)override{
         if(request_.kind==filters::Kind::ProgressiveBlur&&!closed_&&!committing_){
@@ -734,6 +915,9 @@ public:
         }
         if(request_.kind==filters::Kind::RgbSplit&&request_.settings.rgbSplitRadial&&!closed_&&!committing_){
             rgbDragging_=true;request_.settings.rgbSplitCenter=point;syncGuideOverlay();change();return true;
+        }
+        if(request_.kind==filters::Kind::VolumetricLight&&!closed_&&!committing()){
+            lightDragging_=true;request_.settings.volumetric.center=point;syncGuideOverlay();change();return true;
         }
         if(!raw_||closed_||committing_||raw_->tool()==ui::CameraRawPanel::Tool::None)return false;
         dragKind_=raw_->tool();
@@ -746,6 +930,7 @@ public:
     bool sampleMove(Point point,double,Qt::KeyboardModifiers,bool finish)override{
         if(progressiveDragging_){request_.settings.progressiveEnd=point;syncGuideOverlay();change();if(finish){progressiveDragging_=false;dialog_.activateWindow();}return true;}
         if(rgbDragging_){request_.settings.rgbSplitCenter=point;syncGuideOverlay();change();if(finish){rgbDragging_=false;dialog_.activateWindow();}return true;}
+        if(lightDragging_){request_.settings.volumetric.center=point;syncGuideOverlay();change();if(finish){lightDragging_=false;dialog_.activateWindow();}return true;}
         if(dragKind_==ui::CameraRawPanel::Tool::None)return false;
         if(dragKind_==ui::CameraRawPanel::Tool::Guide){double x=0,y=0;if(guidePoint(point,x,y))raw_->dragGuide(x,y);if(finish)raw_->endGuide();syncGuideOverlay();}
         else if(dragKind_==ui::CameraRawPanel::Tool::Curve||dragKind_==ui::CameraRawPanel::Tool::Mixer)raw_->dragTarget(viewY(point));
@@ -785,7 +970,7 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     if(repeating&&!canRunFilterKind(*p,kind))return;
     if(kind==filters::Kind::ContentAwareFill&&!p->document->selection)return;
     if(layer->deep&&layer->deep->isHdr()&&!filters::supportsHdr(kind))throw std::runtime_error("Use Layer > Convert HDR to 16-Bit before this spatial filter");
-    const bool convert=layer->deep&&layer->deep->valid()&&!layer->deep->isHdr()&&(kind==filters::Kind::LensCorrection||kind==filters::Kind::ContentAwareFill||kind==filters::Kind::RimLight);
+    const bool convert=layer->deep&&layer->deep->valid()&&!layer->deep->isHdr()&&(kind==filters::Kind::LensCorrection||kind==filters::Kind::ContentAwareFill||kind==filters::Kind::RimLight||kind==filters::Kind::VolumetricLight);
     if(convert){
         QMessageBox confirmation(QMessageBox::Question,"Convert to 8-Bit","This filter uses an 8-bit kernel. Convert this 16-bit layer to 8-bit first? This conversion can be undone.",QMessageBox::Ok|QMessageBox::Cancel,this);
         confirmation.setProperty("studioChrome",true);confirmation.setDefaultButton(QMessageBox::Cancel);
@@ -795,6 +980,9 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
     auto request=buildFilterRequest(*p,before,original,kind);
     if(convert)request.deepSource.reset();
     if(kind==filters::Kind::ProgressiveBlur&&!repeating){request.settings.progressiveStart=request.transform.fromUnit({.5,0});request.settings.progressiveEnd=request.transform.fromUnit({.5,1});}
+    // Volumetric Light opens on the layer's brightest area (a window, the sky, a lamp),
+    // which its preparation finds, rather than on the remembered position.
+    if(kind==filters::Kind::VolumetricLight&&!repeating)request.settings.volumetric.center.reset();
     if(kind==filters::Kind::RgbSplit&&!repeating){request.settings.rgbSplitCenter=request.transform.fromUnit({.5,.5});request.settings.rgbSplitReach=std::max(1.,std::hypot(request.transform.width,request.transform.height)/2);}
     if(repeating){
         if(ui::LastFilterJob::find(this,p))return;
@@ -823,11 +1011,19 @@ void MainWindow::runFilter(int kindIndex,bool repeating){
         };
         p->projectBusy=true;refresh(false,false);
         try{
-            const auto rimModel=kind==filters::Kind::RimLight?subjectModelPath():std::filesystem::path{};
-            new ui::LastFilterJob([job,original,selectionSource,rimModel](std::function<bool()> cancelled){
+            const bool subjectAware=kind==filters::Kind::RimLight||kind==filters::Kind::VolumetricLight;
+            const auto rimModel=subjectAware?subjectModelPath():std::filesystem::path{};
+            const auto injectedDepthModel=property("testDepthModelPath").toString();
+            const auto depthModel=kind!=filters::Kind::VolumetricLight?std::filesystem::path{}:
+                injectedDepthModel.isEmpty()?depthModelPath():std::filesystem::path(injectedDepthModel.toStdWString());
+            new ui::LastFilterJob([job,original,selectionSource,rimModel,depthModel](std::function<bool()> cancelled){
                 auto active=job;active.limits.cancelled=std::move(cancelled);
                 if(selectionSource)active.selection=filterSelection(*selectionSource,original,active.kind,active.limits.cancelled);
                 if(active.kind==filters::Kind::RimLight)active.subjectMask=rimSubject(*active.source,rimModel,active.limits.cancelled);
+                if(active.kind==filters::Kind::VolumetricLight){
+                    auto prepared=prepareVolumetric(*active.source,rimModel,depthModel,active.limits.cancelled,true);
+                    active.volumetric=std::move(prepared.inputs);
+                }
                 return filteredLayer(original,active).layer;
             },std::move(host),this,p);
         }catch(...){p->projectBusy=false;refresh(false,false);throw;}

@@ -2,13 +2,14 @@
 #include "CameraRaw.h"
 #include "CameraRawShadows.h"
 #include "RimLight.h"
+#include "VolumetricLight.h"
 #include "core/Document.h"
 #include <array>
 #include <functional>
 #include <optional>
 #include <string>
 namespace compositor::filters {
-enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit,LensEffects,Sharpen,RimLight };
+enum class Kind { GaussianBlur,MotionBlur,AddNoise,LensCorrection,ContentAwareFill,Vignette,Bloom,TonalContrast,Dither,Scanlines,CameraRaw,ProgressiveBlur,RgbSplit,LensEffects,Sharpen,RimLight,VolumetricLight };
 enum class LensEffect { AnamorphicFlare,Starburst,Mist,Prism,Bokeh };
 enum class BokehShape { Round,Hexagon,Oval,CatsEye };
 struct LensEffectSettings {
@@ -38,6 +39,8 @@ struct Settings {
     std::optional<TonalLayerSettings> tonalLayer;
     LensEffectSettings lens;
     RimLightSettings rimLight;
+    // The light's center is in document coordinates.
+    VolumetricLightSettings volumetric;
     double radius{1},angle{0},distance{10},amount{10},distortion{0};
     bool gaussian{},monochromatic{};
     double vignette{},vignetteMidpoint{.5},vignetteFeather{.5};
@@ -106,6 +109,9 @@ struct Request {
     Limits limits;
     std::shared_ptr<const DeepImage> deepSource;
     std::shared_ptr<const GrayRaster> subjectMask;
+    std::shared_ptr<const VolumetricLightInputs> volumetric;
+    // Reused by previews only; Apply works at full size without retaining its layers.
+    std::shared_ptr<VolumetricLightCache> volumetricCache;
     int canvasWidth{},canvasHeight{};
     bool cameraRawNativePreview{};
     std::uint64_t cameraRawRetainedPreviewBytes{};

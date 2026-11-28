@@ -19,6 +19,12 @@ struct EditPanelResult {
     std::function<Layer(const Layer&)> mergeLayer;
     // Structural filter results are inserted into the current document.
     std::vector<Layer> insertAfterTarget;
+    // The insertion's history step, also named in its error.
+    std::string insertName;
+    // Insert above the target's whole clipping stack, so clipped layers keep their base.
+    bool insertAboveClipping{};
+    // The first inserted layer becomes the active layer.
+    bool activateInserted{};
 };
 struct EditPanelHost {
     QPointer<QWidget> canvas;

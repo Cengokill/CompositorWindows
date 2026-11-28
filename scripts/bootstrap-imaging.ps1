@@ -57,6 +57,9 @@ if(-not $SkipModel){
     $model=Join-Path $dependency 'model/birefnet-lite.onnx'
     if(-not (Test-Path $model)){& $pythonExe (Join-Path $root 'tests/imaging/convert_birefnet.py');if($LASTEXITCODE){throw 'Model conversion/verification failed'}}
     Assert-Hash $model $lock.model.onnx_sha256
+    $depth=Join-Path $dependency 'depth-model/depth-anything-v2-small.onnx'
+    if(-not (Test-Path $depth)){& $pythonExe (Join-Path $root 'tests/imaging/convert_depth_anything.py');if($LASTEXITCODE){throw 'Depth model conversion/verification failed'}}
+    Assert-Hash $depth $lock.depth_model.onnx_sha256
 }
 Write-Output 'Pinned imaging dependencies are available locally.'
 

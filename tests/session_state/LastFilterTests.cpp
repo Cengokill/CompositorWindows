@@ -8,8 +8,11 @@
 #include <QElapsedTimer>
 #include <QKeySequence>
 #include <QMenu>
+#include <QPushButton>
+#include <QThread>
 #include <QTest>
 #include <QTimer>
+#include <atomic>
 #include <set>
 #include <iostream>
 namespace {
@@ -97,6 +100,29 @@ void cancel_skips_commit(){
     waitFor([&]{return !f.a->projectBusy;},"Last Filter cancel did not settle");
     require(f.a->history.undoCount()==before,"cancelled Last Filter does not commit");
 }
+// The window's own Cancel asks the work to stop and stays open until it has.
+void progress_cancel_button(){
+    Fixture f;
+    auto release=std::make_shared<std::atomic_bool>(false),sawCancel=std::make_shared<std::atomic_bool>(false);
+    int commits=0,settled=0,errors=0;
+    ui::LastFilterJob::Host host;host.commit=[&](Layer){++commits;};host.settled=[&]{++settled;};host.error=[&](const QString&){++errors;};
+    const auto layer=f.a->document->layers.front();
+    new ui::LastFilterJob([layer,release,sawCancel](std::function<bool()> cancelled){
+        QElapsedTimer limit;limit.start();
+        while(!release->load()&&limit.elapsed()<20000){if(cancelled())sawCancel->store(true);QThread::msleep(2);}
+        return layer;
+    },std::move(host),&f.window,f.a);
+    QDialog* box=nullptr;
+    waitFor([&]{box=f.window.findChild<QDialog*>("lastFilterProgress");return box&&box->isVisible();},"progress window did not appear");
+    auto* cancel=box->findChild<QPushButton*>("exportProgressCancel");
+    require(cancel&&cancel->isEnabled(),"progress window offers Cancel");
+    cancel->click();
+    waitFor([&]{return sawCancel->load();},"Cancel did not reach the work");
+    require(box->isVisible()&&!cancel->isEnabled()&&cancel->text()==QString::fromUtf8("Cancelling…")&&settled==0,"the window stays while the work stops");
+    release->store(true);
+    waitFor([&]{return settled==1;},"cancelled job did not settle");
+    require(commits==0&&errors==0,"cancelled job commits nothing");
+}
 void shortcut_triggers_command(){
     Fixture f;
     f.modal("filter.gaussian",[](QDialog& d){field<QDoubleSpinBox>(d,"Radius")->setValue(3);},true);
@@ -120,6 +146,7 @@ int main(int argc,char** argv){
         {"shortcut_triggers_command",shortcut_triggers_command},
         {"disabled_during_hue",disabled_during_hue},
         {"cancel_skips_commit",cancel_skips_commit},
+        {"progress_cancel_button",progress_cancel_button},
     };
     try{
         require(argc==2&&cases.contains(argv[1]),"provide named case");

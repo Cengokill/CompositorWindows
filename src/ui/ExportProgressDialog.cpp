@@ -287,6 +287,7 @@ void ExportProgressDialog::setProgress(int completed, const QString& current) {
     strip_->setAccessibleName(headingLabel_->text());
 }
 void ExportProgressDialog::markSkipped(int index) { strip_->markSkipped(index); }
+void ExportProgressDialog::setStatus(const QString& text) { countLabel_->setText(text); }
 void ExportProgressDialog::finish(int completed) {
     if (completed < 0 || count_ < 2 || cancelRequested_) { accept(); return; }
     setProgress(completed, {});

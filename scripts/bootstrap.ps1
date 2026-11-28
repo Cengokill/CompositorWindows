@@ -41,7 +41,7 @@ $env:PATH = "$taskQt\bin;$env:PATH"
 $env:PATH = "$taskRoot\dependencies\imaging\install\bin;$taskRoot\dependencies\imaging\onnxruntime-win-x64-1.30.0\lib;$env:PATH"
 $env:QT_PLUGIN_PATH = Join-Path $taskQt 'plugins'
 $taskImaging = Join-Path $taskRoot 'dependencies\imaging'
-$taskRequired = @('install\bin\heif.dll','install\bin\libde265.dll','install\lib\heif.lib','install\lib\de265.lib','install\include\libheif\heif.h','onnxruntime-win-x64-1.30.0\lib\onnxruntime.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime_providers_shared.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime.lib','onnxruntime-win-x64-1.30.0\include\onnxruntime_cxx_api.h','model\birefnet-lite.onnx')
+$taskRequired = @('install\bin\heif.dll','install\bin\libde265.dll','install\lib\heif.lib','install\lib\de265.lib','install\include\libheif\heif.h','onnxruntime-win-x64-1.30.0\lib\onnxruntime.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime_providers_shared.dll','onnxruntime-win-x64-1.30.0\lib\onnxruntime.lib','onnxruntime-win-x64-1.30.0\include\onnxruntime_cxx_api.h','model\birefnet-lite.onnx','depth-model\depth-anything-v2-small.onnx')
 $taskMissing = @($taskRequired | Where-Object { -not (Test-Path -LiteralPath (Join-Path $taskImaging $_)) })
 if ($taskMissing.Count) {
     if ($Offline) { throw "Offline imaging dependencies missing: $($taskMissing -join ', '). Run bootstrap with network access and Python 3.12 to build the locked dependencies/model." }
@@ -56,5 +56,6 @@ if ($RuntimeDirectory) {
     & (Join-Path $PSScriptRoot 'restore-imaging-runtime.ps1') -RuntimeDirectory $RuntimeDirectory
 }
 if ((Get-FileHash -LiteralPath (Join-Path $taskImaging 'model\birefnet-lite.onnx') -Algorithm SHA256).Hash -ine 'c0faf38f5504f2239f1e6481ce4ac166b17435b38ea35e480d811a47bc1aba80') { throw 'Foreground model SHA256 mismatch.' }
+if ((Get-FileHash -LiteralPath (Join-Path $taskImaging 'depth-model\depth-anything-v2-small.onnx') -Algorithm SHA256).Hash -ine '61d29718cf81b46939d1549c2c0d0f85d788d3d837c7c389c3a2e949da516196') { throw 'Depth model SHA256 mismatch.' }
 & cmake --version
 Write-Host "Ready: Qt $($taskLock.qt.version), MSVC $env:VCToolsVersion, SDK $env:WindowsSDKVersion. Run cmake --preset windows-x64-debug from $taskRoot."

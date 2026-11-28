@@ -23,6 +23,8 @@ public:
     // The work has ended. `completed` files were handled, or -1 when it was cancelled. With tiles, the last ones are
     // given a moment to finish filling before the window closes; otherwise it closes at once.
     void finish(int completed);
+    // The line beside Cancel, for single-file work that is not writing a file.
+    void setStatus(const QString& text);
     // Called once, on the interface thread, when Cancel is pressed or the window is closed.
     void setCancelHandler(std::function<void()> handler) { onCancel_ = std::move(handler); }
 protected:

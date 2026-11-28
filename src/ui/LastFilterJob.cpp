@@ -1,8 +1,8 @@
 #include "LastFilterJob.h"
+#include "ExportProgressDialog.h"
 #include <optional>
 #include <QFutureWatcher>
 #include <QPointer>
-#include <QProgressDialog>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <atomic>
@@ -14,19 +14,20 @@ struct LastFilterJob::Impl {
     EditorProject* owner{};
     std::shared_ptr<std::atomic_bool> cancelled=std::make_shared<std::atomic_bool>(false);
     QFutureWatcher<Result> watcher;
-    QProgressDialog progress;
-    explicit Impl(QWidget* parent):progress("Applying last filter…","Cancel",0,0,parent){
-        progress.setObjectName("lastFilterProgress");progress.setWindowTitle("Last Filter");
-        progress.setWindowModality(Qt::NonModal);progress.setMinimumDuration(0);
-        progress.setAutoClose(false);progress.setAutoReset(false);
+    // The shared progress window: the application chrome empties a plain QProgressDialog.
+    ExportProgressDialog progress;
+    Impl(QWidget* parent,const QString& progressText)
+        :progress(parent,progressText.isEmpty()?"Last Filter":"Convert HDR to 16-Bit",progressText.isEmpty()?"Applying the last filter":progressText,1){
+        progress.setObjectName("lastFilterProgress");progress.setWindowModality(Qt::NonModal);
+        progress.setStatus(progressText.isEmpty()?"Working on the layer…":"Converting the layer…");
     }
 };
 LastFilterJob::LastFilterJob(std::function<Layer(std::function<bool()>)> work,Host host,QWidget* parent,EditorProject* owner,const QString& progressText)
-    :QObject(parent),impl_(std::make_unique<Impl>(parent)){
+    :QObject(parent),impl_(std::make_unique<Impl>(parent,progressText)){
     if(!work||!host.commit||!host.settled||!host.error||!owner)throw std::invalid_argument("Incomplete last-filter job");
-    if(!progressText.isEmpty()){impl_->progress.setProperty("studioChrome",true);impl_->progress.setLabelText(progressText);impl_->progress.setWindowTitle("Convert HDR to 16-Bit");}
     setObjectName("lastFilterJob");impl_->host=std::move(host);impl_->owner=owner;
-    connect(&impl_->progress,&QProgressDialog::canceled,this,[this]{cancel();});
+    // Cancel keeps the window, reading "Cancelling…", until the work has stopped.
+    impl_->progress.setCancelHandler([token=impl_->cancelled]{token->store(true);});
     connect(&impl_->watcher,&QFutureWatcher<Impl::Result>::finished,this,[this]{
         auto& state=*impl_;auto result=state.watcher.result();
         state.progress.hide();QPointer<LastFilterJob> alive=this;
