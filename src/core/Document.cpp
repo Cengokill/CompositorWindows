@@ -245,6 +245,13 @@ void History::end(const std::optional<Document>& d,const std::string& active) {
     if (depth_ == 0) return;
     if (depth_ > 1) { --depth_; return; }
     if (pending_->document == d) { pending_.reset(); depth_ = 0; return; }
+    // A document created from an empty tab is the history baseline: Undo stops there.
+    if (!pending_->document) {
+        past_.clear(); future_.clear();
+        revision_ = nextRevision_++;
+        pending_.reset(); depth_ = 0;
+        return;
+    }
     // Pending remains available to cancel() until every allocation, including
     // retention accounting, succeeds. No intermediate revision is published.
     past_.push_back({pendingName_,*pending_,{d,active,nextRevision_}});
