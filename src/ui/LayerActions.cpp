@@ -123,7 +123,7 @@ void MainWindow::layerCommand(int command){
         case 6:{auto plan=layers::deletionPlan(d,selection);auto mode=layers::DeleteMode::Bake;
             if(!plan.dependents.empty()){QMessageBox box(QMessageBox::Question,"Delete Layers","Other layers use the selected layers as clipping sources.",QMessageBox::Cancel,this);auto*bake=box.addButton("Bake Appearance",QMessageBox::AcceptRole);auto*release=box.addButton("Remove Clipping Links",QMessageBox::DestructiveRole);box.exec();if(box.clickedButton()==bake)mode=layers::DeleteMode::Bake;else if(box.clickedButton()==release)mode=layers::DeleteMode::RemoveLinks;else return;}
             applyLayerEdit(layers::erase(d,selection,mode));break;}
-        case 7:applyLayerEdit(layers::toggleClipping(d,selection,p->active));break;
+        case 7:applyLayerEdit(layers::toggleSelectedClipping(d,selection));break;
         case 8:mergeLayers();break;
         case 15:exportLayers();break;
         case 9:{
@@ -144,13 +144,14 @@ void MainWindow::layerCommand(int command){
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()==target)tabs_->setCurrentIndex(i);refresh();if(first)target->canvas->fit();break;
         }
         case 10:QTimer::singleShot(0,this,[this]{if(auto*item=layers_->currentItem())layers_->editItem(item,0);});break;
-        case 11:if(const auto* layer=active()){
-            const auto id=layer->id;
-            const bool visible=!layer->visible;
-            edit("Layer Visibility",[this](Document&){active()->visible=!active()->visible;},false);
-            if(auto* panel=ui::LayerPanelController::find(layers_))panel->syncVisibilityChrome(id,visible);
+        case 11:{
+            auto toggled=layers::toggleSelectedVisibility(d,selection);if(!toggled.changed)break;
+            std::vector<std::pair<std::string,bool>> changes;
+            for(std::size_t i=0;i<d.layers.size();++i)if(d.layers[i].visible!=toggled.document.layers[i].visible)changes.emplace_back(d.layers[i].id,toggled.document.layers[i].visible);
+            edit(toggled.action.c_str(),[&](Document& document){document=std::move(toggled.document);},false);
+            if(auto* panel=ui::LayerPanelController::find(layers_))for(const auto& [id,visible]:changes)panel->syncVisibilityChrome(id,visible);
         }break;
-        case 12:applyLayerEdit(layers::releaseClipping(d,selection,p->active));break;
+        case 12:applyLayerEdit(layers::releaseSelectedClipping(d,selection));break;
         case 13:applyLayerEdit(layers::ungroup(d,selection));break;
     }
 }
