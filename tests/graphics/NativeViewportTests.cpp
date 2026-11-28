@@ -1,6 +1,7 @@
 #include "ui/NativeCanvas.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewportCompositeJob.h"
+#include "ui/LayerPanelTokens.h"
 #include <objbase.h>
 #include <QApplication>
 #include <QCheckBox>
@@ -266,7 +267,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         const auto image=canvas.captureRendered();
         const QPoint corner(int(std::lround(4*dpr)),int(std::lround(4*dpr)));
         const auto band=image.pixelColor(corner);
-        require(band.red()>35&&band.red()<70&&band.blue()>40&&band.blue()<80,"Ruler band was not drawn");
+        require(band==QColor(ui::layer_panel::surface),"Ruler band does not use the window surface color");
         const double major=canvas.rulerMajorInterval();
         const auto mid=canvas.documentPoint(canvas.contentRect().center());
         const double tick=std::round(mid.x()/major)*major;
