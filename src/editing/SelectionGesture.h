@@ -81,9 +81,11 @@ struct SelectionStatusSize {
     int width{}, height{};
     bool operator==(const SelectionStatusSize&) const = default;
 };
-// Source EditorSession.selectionSize: a Marquee draft's rounded size, not clipped;
-// otherwise the selection's bounds within the canvas, expanded to whole pixels.
+// The two halves of Source EditorSession.selectionSize; the draft's size wins when it has one.
+// A dragged Marquee's rounded size, not clipped. Nothing for any other draft.
+std::optional<SelectionStatusSize> marqueeDraftSize(const std::optional<LassoDraft>&);
+// The selection's bounds within the canvas, expanded to whole pixels.
 // Nothing for no selection, an empty one, or one wholly off the canvas.
-std::optional<SelectionStatusSize> selectionStatusSize(const std::optional<LassoDraft>&,
-    const std::optional<Selection>&, int canvasWidth, int canvasHeight);
+std::optional<SelectionStatusSize> committedSelectionSize(const std::optional<Selection>&,
+    int canvasWidth, int canvasHeight);
 }
