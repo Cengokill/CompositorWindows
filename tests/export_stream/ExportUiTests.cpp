@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+#include "ui/ExportProgressDialog.h"
+#include "ui/LayerExportNames.h"
 #include "imaging/cmyk.h"
 #include "../cmyk/Fixtures.h"
 #include "../cmyk/ProfileFixture.h"
@@ -17,12 +19,16 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QSlider>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <iostream>
 #include <cmath>
 #include <cstdint>
@@ -40,6 +46,48 @@ void drive(MainWindow& window,const std::function<void()>& callback){
     timer.start();exportAction(window)->trigger();timer.stop();if(error)std::rethrow_exception(error);
 }
 template<class T>T* control(QDialog* dialog,const char* name){auto* result=dialog->findChild<T*>(name);require(result,"Missing actual export control");return result;}
+Transform exact(double x,double y,double width,double height){Transform t{x,y,width,height};t.sampling=Transform::Sampling::Nearest;return t;}
+Layer solid(const char* name,Transform transform,Pixel color){Layer layer;layer.id=newId();layer.name=name;layer.transform=transform;layer.raster=Raster::filled(int(transform.width),int(transform.height),color);return layer;}
+QTreeWidgetItem* layerItem(MainWindow& window,const std::string& id){auto* tree=window.findChild<QTreeWidget*>("layersTree");require(tree,"Layer tree exists");for(QTreeWidgetItemIterator it(tree);*it;++it)if((*it)->data(0,Qt::UserRole).toString().toStdString()==id)return *it;throw std::runtime_error("Layer row missing");}
+// Selects `ids` in the Layers panel, opens the context menu on the first one and chooses `entry`, as a user would.
+// `modal` runs on a timer for everything the entry then shows (confirmations, the summary).
+void chooseLayerMenuEntry(MainWindow& window,const std::vector<std::string>& ids,const QString& entry,const std::function<void()>& modal){
+    window.show();QApplication::processEvents();
+    auto* tree=window.findChild<QTreeWidget*>("layersTree");require(tree,"Layer tree exists");tree->clearSelection();
+    for(const auto& id:ids)layerItem(window,id)->setSelected(true);
+    QApplication::processEvents();
+    std::exception_ptr error;QElapsedTimer elapsed;elapsed.start();bool chosen=false;QTimer timer;timer.setInterval(10);
+    const auto abandon=[&]{timer.stop();for(auto* widget:QApplication::topLevelWidgets()){if(auto* dialog=qobject_cast<QDialog*>(widget))dialog->reject();else if(auto* menu=qobject_cast<QMenu*>(widget))menu->close();}};
+    QObject::connect(&timer,&QTimer::timeout,&window,[&]{
+        try{
+            if(elapsed.elapsed()>20000)throw std::runtime_error("Layer export timed out");
+            if(!chosen){
+                for(auto* widget:QApplication::topLevelWidgets()){
+                    auto* menu=qobject_cast<QMenu*>(widget);if(!menu||menu->objectName()!="layerContextMenu"||!menu->isVisible())continue;
+                    // Liquid Glass like the menu bar: a frameless translucent window, the Mask submenu included.
+                    const auto glass=[](QMenu* m){return m->testAttribute(Qt::WA_TranslucentBackground)&&(m->windowFlags()&Qt::FramelessWindowHint);};
+                    require(glass(menu),"The layer menu is not Liquid Glass");
+                    for(auto* child:menu->findChildren<QMenu*>())require(glass(child),"A layer submenu is not Liquid Glass");
+                    for(auto* action:menu->actions())if(action->text()==entry){require(action->isEnabled(),"Layer export entry is disabled");chosen=true;
+                        // Not from inside this timer slot: Qt delivers no timer events to nested loops started from one,
+                        // and the entry opens modal dialogs that this timer must still answer.
+                        QMetaObject::invokeMethod(menu,[action,menu]{action->trigger();menu->close();},Qt::QueuedConnection);return;}
+                    throw std::runtime_error("Layer menu has no entry "+entry.toStdString());
+                }
+                return;
+            }
+            modal();
+        }catch(...){error=std::current_exception();abandon();}
+    });
+    timer.start();emit tree->customContextMenuRequested(tree->visualItemRect(layerItem(window,ids.front())).center());timer.stop();
+    if(error)std::rethrow_exception(error);require(chosen,"Layer menu entry was not chosen");
+}
+// Lets the dialog's animations run and paint for `ms`.
+void settle(int ms){QElapsedTimer waited;waited.start();while(waited.elapsed()<ms){QApplication::processEvents();QThread::msleep(5);}}
+bool isBlue(const QColor& color){return color.blue()>=150&&color.red()<=60&&color.blue()-color.red()>=100;}
+QPoint inDialog(QWidget* dialog,QWidget* child,QPoint at){return child->mapTo(dialog,at);}
+QMessageBox* shown(MainWindow& window,const char* name){auto* box=window.findChild<QMessageBox*>(name);return box&&box->isVisible()?box:nullptr;}
+void press(QMessageBox* box,const char* text){for(auto* button:box->buttons())if(button->text()==text){button->click();return;}throw std::runtime_error(std::string("Message box has no button ")+text);}
 }
 int main(int argc,char**argv){
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);QApplication app(argc,argv);QTemporaryDir settings;
@@ -186,6 +234,119 @@ int main(int argc,char**argv){
         window.setProperty("testNativeSavePath",output.filePath("bright.png"));bool saved=false;
         drive(window,[&]{auto* dialog=window.findChild<QDialog*>("imageExportDialog");if(!dialog||saved)return;control<QComboBox>(dialog,"exportFormat")->setCurrentIndex(4);require(!control<QSlider>(dialog,"exportQuality")->isEnabled()&&!control<QPushButton>(dialog,"exportMatte")->isEnabled(),"EXR enabled SDR quality/matte controls");auto* buttons=control<QDialogButtonBox>(dialog,"exportButtons");if(buttons->button(QDialogButtonBox::Save)->isEnabled()&&dialog->property("readyExportPath").toString().endsWith(".exr")){saved=true;buttons->button(QDialogButtonBox::Save)->click();}});
         auto result=imaging::decodeExr(std::filesystem::path(output.filePath("bright.exr").toStdWString()));require(saved&&result->pixel(7,0)[0]>1.99f&&!QFile::exists(output.filePath("bright.png")),"EXR export lost highlights or used wrong suffix");require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"EXR export mutated source/history");
+    });
+    test("layer_export_folder",[]{
+        QTemporaryDir output;MainWindow window(true);
+        auto lower=solid("logo - dark- v2",exact(4,4,2,2),{0,255,0,255});auto upper=solid("Logo / Dark: v2",exact(1,1,3,2),{255,0,0,255});
+        auto device=solid("CON",exact(7,11,1,1),{0,0,255,255});auto clear=solid("Clear",exact(0,0,8,12),{0,0,0,0});
+        auto d=blank(8,12);d.layers={lower,upper,device,clear};auto& project=window.addProject(d);const auto before=project.document;
+        window.setProperty("testNativeExportFolder",output.path());bool summary=false;
+        chooseLayerMenuEntry(window,{lower.id,upper.id,device.id,clear.id},QString::fromUtf8("Export Layers as PNGs\xE2\x80\xA6"),[&]{
+            require(!shown(window,"layerExportReplace"),"Nothing existed yet, yet replacement was asked");
+            if(auto* box=shown(window,"layerExportSummary")){require(box->text().contains("3 of 4")&&box->text().contains("Clear")&&!box->text().contains("cancelled"),"The summary does not say what was written and skipped");summary=true;box->accept();}
+        });
+        require(summary,"No summary for the empty layer");
+        const auto names=QDir(output.path()).entryList({"*.png"},QDir::Files);require(QSet<QString>(names.begin(),names.end())==QSet<QString>{"Logo - Dark- v2.png","logo - dark- v2 2.png","Layer CON.png"},"Unexpected exported file names");
+        const auto decode=[&](const char* name){return imaging::WicCodec::decode(std::filesystem::path(output.filePath(name).toStdWString())).image;};
+        const auto topLayer=decode("Logo - Dark- v2.png"),bottomLayer=decode("logo - dark- v2 2.png"),reserved=decode("Layer CON.png");
+        require(topLayer.width==3&&topLayer.height==2&&topLayer.pixels[0]==255&&topLayer.pixels[1]==0&&topLayer.pixels[3]==255,"The upper layer did not keep the name, or its pixels are wrong");
+        require(bottomLayer.width==2&&bottomLayer.height==2&&bottomLayer.pixels[0]==0&&bottomLayer.pixels[1]==255&&bottomLayer.pixels[3]==255,"The duplicate name did not get the lower layer");
+        require(reserved.width==1&&reserved.height==1&&reserved.pixels[2]==255,"The reserved name was not prefixed");
+        auto* tree=window.findChild<QTreeWidget*>("layersTree");require(tree->selectedItems().size()==4,"Exporting changed the layer selection");
+        require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"Layer export changed the project");
+    });
+    test("layer_export_replace_cancel",[]{
+        QTemporaryDir output;MainWindow window(true);
+        auto one=solid("One",exact(0,0,2,2),{255,0,0,255});auto two=solid("Two",exact(2,2,2,2),{0,255,0,255});
+        auto d=blank(6,6);d.layers={one,two};auto& project=window.addProject(d);const auto before=project.document;
+        const auto existing=output.filePath("One.png");{QFile file(existing);require(file.open(QIODevice::WriteOnly),"Cannot create the existing file");file.write("keep me");}
+        window.setProperty("testNativeExportFolder",output.path());
+        const auto entry=QString::fromUtf8("Export Layers as PNGs\xE2\x80\xA6");bool asked=false;
+        chooseLayerMenuEntry(window,{one.id,two.id},entry,[&]{if(auto* box=shown(window,"layerExportReplace")){require(box->defaultButton()&&box->defaultButton()->text()=="Cancel"&&box->text().contains("One.png"),"Replacement is not cancel-by-default or does not name the file");asked=true;press(box,"Cancel");}});
+        require(asked&&read(existing)=="keep me"&&!QFile::exists(output.filePath("Two.png")),"Cancelling the replacement wrote files");
+        require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"Cancelled export changed the project");
+        asked=false;chooseLayerMenuEntry(window,{one.id,two.id},entry,[&]{if(auto* box=shown(window,"layerExportReplace")){asked=true;press(box,"Replace");}});
+        const auto replaced=imaging::WicCodec::decode(std::filesystem::path(existing.toStdWString())).image;
+        require(asked&&replaced.width==2&&replaced.pixels[0]==255&&QFile::exists(output.filePath("Two.png"))&&!shown(window,"layerExportSummary"),"Replacing did not write both layers");
+        require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"Replacing export changed the project");
+    });
+    test("layer_export_single",[]{
+        QTemporaryDir output;MainWindow window(true);
+        auto shape=solid("Shape",exact(1,2,2,3),{255,0,0,255});auto other=solid("Other",exact(0,0,1,1),{0,0,255,255});
+        auto d=blank(6,8);d.layers={shape,other};auto& project=window.addProject(d);const auto before=project.document;
+        const auto destination=output.filePath("shape.png");window.setProperty("testNativeSavePath",destination);
+        chooseLayerMenuEntry(window,{shape.id},QString::fromUtf8("Export Layer as PNG\xE2\x80\xA6"),[]{});
+        const auto exported=imaging::WicCodec::decode(std::filesystem::path(destination.toStdWString())).image;
+        require(exported.width==2&&exported.height==3&&exported.pixels[0]==255&&exported.pixels[3]==255,"The single layer export is not the trimmed layer");
+        require(project.document==before&&project.history.undoCount()==0&&!project.projectBusy,"Single layer export changed the project");
+    });
+    test("export_progress_dialog_tiles",[]{
+        MainWindow window(true);
+        ui::ExportProgressDialog dialog(&window,"Export Layers as PNGs","Saving layer",5);
+        int cancelled=0;dialog.setCancelHandler([&]{++cancelled;});dialog.show();dialog.setProgress(2,"Shape.png");settle(1000);
+        // The application chrome must not wrap this dialog: the wrapper hid the children of the Qt progress dialog.
+        require(!dialog.findChild<QWidget*>("dialogContent"),"The progress dialog was wrapped by the dialog chrome");
+        auto* heading=dialog.findChild<QLabel*>("exportProgressHeading");auto* current=dialog.findChild<QLabel*>("exportProgressCurrent");auto* count=dialog.findChild<QLabel*>("exportProgressCount");
+        auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");auto* cancel=dialog.findChild<QPushButton*>("exportProgressCancel");
+        require(heading&&current&&count&&strip&&cancel&&heading->isVisible()&&current->isVisible()&&strip->isVisible()&&cancel->isVisible(),"A progress control is missing or hidden");
+        require(heading->text()=="Exporting layer 3 of 5"&&current->text()=="Shape.png"&&count->text()=="2 of 5 done"&&cancel->text()=="Cancel","Progress texts are wrong");
+        require(cancel->property("pill").toBool(),"Cancel is not the capsule button");
+        const auto image=dialog.grab().toImage();
+        // Tiles are 44 px with 8 px gaps. The two written tiles are filled with the accent blue, the others are glass.
+        const auto sample=[&](int tile){const auto at=inDialog(&dialog,strip,QPoint(tile*52+7,strip->height()-9));return image.pixelColor(at);};
+        require(isBlue(sample(0))&&isBlue(sample(1)),"Written tiles are not filled with the accent blue");
+        require(!isBlue(sample(3))&&!isBlue(sample(4)),"Waiting tiles are filled");
+        // The surface behind the controls is opaque.
+        require(image.pixelColor(QPoint(3,dialog.height()/2)).alpha()==255,"The progress window is not opaque");
+        cancel->click();cancel->click();
+        require(cancelled==1&&!cancel->isEnabled()&&cancel->text()=="Cancelling…","Cancel did not ask for a stop exactly once");
+    });
+    test("export_progress_dialog_bar",[]{
+        MainWindow window(true);
+        ui::ExportProgressDialog dialog(&window,"Export Image","Saving image",1);
+        dialog.show();dialog.setProgress(0,"Photo.png");settle(400);
+        auto* heading=dialog.findChild<QLabel*>("exportProgressHeading");auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");
+        require(heading&&strip&&heading->isVisible()&&heading->text()=="Saving image"&&dialog.findChild<QLabel*>("exportProgressCurrent")->text()=="Photo.png","Single export texts are wrong");
+        // The sliding capsule is 35% of the bar wide, so a row through the bar always crosses some of it.
+        const auto image=dialog.grab().toImage();bool capsule=false;const auto row=strip->height()/2;
+        for(int x=0;x<strip->width();++x)capsule=capsule||isBlue(image.pixelColor(inDialog(&dialog,strip,QPoint(x,row))));
+        require(capsule,"The sliding capsule is not drawn");
+        dialog.finish(1);require(!dialog.isVisible(),"A single export did not close at once");
+    });
+    test("export_progress_dialog_skipped",[]{
+        MainWindow window(true);
+        ui::ExportProgressDialog dialog(&window,"Export Layers as PNGs","Saving layer",4);
+        dialog.show();dialog.setProgress(0,"One.png");dialog.markSkipped(1);dialog.setProgress(3,"Four.png");settle(1000);
+        auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");require(strip,"The strip is missing");
+        const auto image=dialog.grab().toImage();
+        const auto sample=[&](int tile){return image.pixelColor(inDialog(&dialog,strip,QPoint(tile*52+7,strip->height()-9)));};
+        // Tiles 0 and 2 were written; tile 1 was handled without a file and must not look like a success.
+        require(isBlue(sample(0))&&isBlue(sample(2)),"Written tiles are not filled with the accent blue");
+        require(!isBlue(sample(1)),"A tile for a layer that wrote nothing is filled like a success");
+    });
+    test("export_progress_dialog_long",[]{
+        MainWindow window(true);
+        // More files than tiles can show: the strip fills like a bar, in proportion to the files written.
+        ui::ExportProgressDialog dialog(&window,"Export Layers as PNGs","Saving layer",200);
+        dialog.show();dialog.setProgress(100,"Layer 101.png");settle(300);
+        auto* strip=dialog.findChild<QWidget*>("exportProgressStrip");require(strip,"The strip is missing");
+        const auto image=dialog.grab().toImage();const auto row=strip->height()/2;
+        const auto at=[&](double share){return image.pixelColor(inDialog(&dialog,strip,QPoint(int(strip->width()*share),row)));};
+        require(isBlue(at(0.2))&&isBlue(at(0.45)),"The first half of a long export is not filled");
+        require(!isBlue(at(0.6))&&!isBlue(at(0.95)),"A long export is filled beyond the files written");
+    });
+    test("layer_export_names",[]{
+        const auto stem=[](const QString& name){return ui::layerExportStem(name);};
+        require(stem("Logo / Dark: v2")=="Logo - Dark- v2","Invalid characters are not replaced");
+        require(stem("name. . ")=="name"&&stem("...")=="Layer"&&stem("   ")=="Layer"&&stem("")=="Layer","Trailing dots and spaces, or an empty name, are not handled");
+        require(stem(".hidden")=="Layer .hidden","A leading dot is kept");
+        require(stem("con")=="Layer con"&&stem("CON.txt")=="Layer CON.txt"&&stem("Lpt9")=="Layer Lpt9"&&stem("COM10")=="COM10"&&stem("Console")=="Console","Reserved device names are not prefixed exactly");
+        require(stem(QString("a\tb\nc"))=="a-b-c","Control characters are kept");
+        const auto longest=stem(QString(300,QLatin1Char('x')));require(longest.size()==120,"A long name is not cut to 120 characters");
+        require(stem(QString(119,QLatin1Char('x'))+" tail")==QString(119,QLatin1Char('x')),"The cut does not drop the space it leaves at the end");
+        // 119 characters then a surrogate pair: cutting at 120 would keep half of the pair.
+        const auto pair=stem(QString(119,QLatin1Char('x'))+QString(QChar(0xD83D))+QChar(0xDE00));
+        require(pair==QString(119,QLatin1Char('x')),"A surrogate pair is cut in half");
     });
     std::cout<<"Export UI "<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

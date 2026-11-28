@@ -125,6 +125,7 @@ void MainWindow::layerCommand(int command){
             applyLayerEdit(layers::erase(d,selection,mode));break;}
         case 7:applyLayerEdit(layers::toggleClipping(d,selection,p->active));break;
         case 8:mergeLayers();break;
+        case 15:exportLayers();break;
         case 9:{
             QStringList titles{"New Project"};std::vector<QPointer<QObject>> identities{nullptr};
             for(int i=0;i<int(projects_.size());++i)if(projects_[i].get()!=p&&!projects_[i]->importing&&!projects_[i]->projectBusy){identities.push_back(projects_[i]->canvas);titles.append(tabs_->tabText(i));}
