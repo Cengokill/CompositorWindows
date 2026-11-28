@@ -6,9 +6,11 @@
 #include <QSignalBlocker>
 #include <QGuiApplication>
 #include <QLabel>
+#include <QPainter>
 #include <QPushButton>
 #include <QScreen>
 #include <QStatusBar>
+#include <QStyle>
 #include <QTimer>
 #include <QHBoxLayout>
 #include <QToolBar>
@@ -20,6 +22,20 @@ namespace {
 effects_tools::PaletteColor asPalette(QColor c){return {c.redF(),c.greenF(),c.blueF()};}
 QColor color(effects_tools::PaletteColor c){return QColor::fromRgbF(c.red,c.green,c.blue);}
 Pixel bytes(QColor c){return {uint8_t(c.red()),uint8_t(c.green()),uint8_t(c.blue()),255};}
+// Gives up width before the labels beside it: draws what fits with an ellipsis and offers the whole text in a tooltip.
+class ElidedLabel final:public QLabel {
+public:
+    QSize minimumSizeHint() const override {return {0,QLabel::minimumSizeHint().height()};}
+protected:
+    bool event(QEvent* value) override {
+        if(value->type()==QEvent::ToolTip)setToolTip(fontMetrics().horizontalAdvance(text())>contentsRect().width()?text():QString());
+        return QLabel::event(value);
+    }
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        style()->drawItemText(&painter,contentsRect(),int(alignment()),palette(),isEnabled(),fontMetrics().elidedText(text(),Qt::ElideRight,contentsRect().width()),foregroundRole());
+    }
+};
 }
 void MainWindow::setupPaletteControls(QWidget* tools){
     std::array<QAction*,4> actions{};
@@ -53,8 +69,8 @@ void MainWindow::setupStatusInfo(){
     auto* host=new QWidget;host->setObjectName("statusInfo");
     auto* row=new QHBoxLayout(host);row->setContentsMargins(18,0,18,0);row->setSpacing(16);
     const auto add=[&](const char* name){auto* label=new QLabel;label->setObjectName(name);row->addWidget(label);return label;};
-    add("statusZoom")->setFixedWidth(62);add("statusDimensions");add("statusProfile");
-    row->addStretch();add("statusHint");
+    add("statusZoom")->setFixedWidth(62);add("statusDimensions");add("statusSelection");add("statusProfile");
+    auto* hint=new ElidedLabel;hint->setObjectName("statusHint");row->addStretch();row->addWidget(hint);
     host->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
     bar->addPermanentWidget(host,1);
     // A transient message takes the place of the hint until it clears.
@@ -72,6 +88,20 @@ void MainWindow::refreshStatusInfo(){
     zoom->setVisible(document);dimensions->setVisible(document);
     zoom->setText(document?QString("%1 %").arg(std::lround(canvas()->zoom*100)):QString());
     dimensions->setText(document?QString::fromUtf8("%1 × %2 px").arg(p->document->width).arg(p->document->height):QString());
+    if(auto* selection=text("statusSelection")){
+        std::optional<editing::SelectionStatusSize> size;
+        if(document&&selectionOwner_==p)size=editing::marqueeDraftSize(selectionGesture_.draft());
+        if(document&&!size&&p->document->selection){
+            const auto& current=*p->document->selection;auto& cache=selectionSizeCache_;
+            const int width=p->document->width,height=p->document->height;
+            const auto same=[](const auto& weak,const auto& shared){return !weak.owner_before(shared)&&!shared.owner_before(weak);};
+            if(!same(cache.coverage,current.coverage)||!same(cache.outline,current.outline)||cache.width!=width||cache.height!=height)
+                cache={current.coverage,current.outline,width,height,editing::committedSelectionSize(current,width,height)};
+            size=cache.size;
+        }
+        selection->setVisible(size.has_value());
+        selection->setText(size?QString::fromUtf8("Selection %1 × %2 px").arg(size->width).arg(size->height):QString());
+    }
     profile->setText(document?"sRGB · Transparent":"Ready when you are");
     const auto message=statusBar()->currentMessage();
     hint->setText(!message.isEmpty()?message:document?toolHint():QString());

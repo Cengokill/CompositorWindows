@@ -77,4 +77,15 @@ Point selectionMoveOffset(Point start, Point current, bool shift);
 // Source autoscroll: 12-point margin, 2+0.4*overshoot, cap40 points/frame.
 // Host calls at60Hz, pans, then re-maps its stationary VIEW pointer to document.
 Point selectionAutoscrollDelta(Rect visibleView, Point pointerInView);
+struct SelectionStatusSize {
+    int width{}, height{};
+    bool operator==(const SelectionStatusSize&) const = default;
+};
+// The two halves of Source EditorSession.selectionSize; the draft's size wins when it has one.
+// A dragged Marquee's rounded size, not clipped. Nothing for any other draft.
+std::optional<SelectionStatusSize> marqueeDraftSize(const std::optional<LassoDraft>&);
+// The selection's bounds within the canvas, expanded to whole pixels.
+// Nothing for no selection, an empty one, or one wholly off the canvas.
+std::optional<SelectionStatusSize> committedSelectionSize(const std::optional<Selection>&,
+    int canvasWidth, int canvasHeight);
 }

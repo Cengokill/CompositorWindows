@@ -289,6 +289,10 @@ void tool_bars_show_their_own_controls(){
      tool("tool.marquee");REQUIRE(text("statusHint").startsWith("Drag a rectangle")&&text("statusHint").contains("Alt subtract"));
      // A message left on the status bar does not stay in place of the next tool's hint.
      w.statusBar()->showMessage("Object selection");tool("tool.zoom");REQUIRE(text("statusHint").startsWith("Click to zoom in"));}
+    // A hint too long for the row gives up its own width and offers the whole text in a tooltip; one that fits has none.
+    {auto* hint=w.findChild<QLabel*>("statusHint");const auto tip=[&]{QHelpEvent help(QEvent::ToolTip,QPoint(),QPoint());QApplication::sendEvent(hint,&help);return hint->toolTip();};
+     w.statusBar()->showMessage(QString(2000,'x'));QApplication::processEvents();REQUIRE(hint->minimumSizeHint().width()==0&&hint->width()<hint->sizeHint().width()&&tip()==hint->text());
+     w.statusBar()->showMessage("Ok");QApplication::processEvents();REQUIRE(hint->width()>=hint->sizeHint().width()&&tip().isEmpty());w.statusBar()->clearMessage();}
     REQUIRE(shown("zoomOptions","zoomPercent")&&title("zoomTitle")=="Zoom"&&w.findChild<QToolBar*>("eyedropperOptions")->isHidden());
     {auto* field=w.findChild<QDoubleSpinBox*>("zoomPercent");auto* canvas=mainProject.canvas;REQUIRE(field&&canvas);
      field->setValue(200);emit field->editingFinished();QApplication::processEvents();REQUIRE(std::abs(canvas->zoom-2)<1e-9);

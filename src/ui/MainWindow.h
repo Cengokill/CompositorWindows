@@ -231,6 +231,14 @@ private:
     Qt::KeyboardModifiers selectionModifiers_{};
     // Bounds of the selection when a move began; the snapped move reads them each event.
     std::optional<editing::Rect> selectionMoveBox_;
+    // The status bar's selection size is read on every hover; a committed selection never
+    // changes in place, so its pointers and the canvas size identify the cached result.
+    struct SelectionSizeCache {
+        std::weak_ptr<const GrayRaster> coverage;
+        std::weak_ptr<const editing::SelectionOutline> outline;
+        int width{}, height{};
+        std::optional<editing::SelectionStatusSize> size;
+    } selectionSizeCache_;
     graphics::BrushSessionSettings brushSettings_;
     struct BrushTipDrag {QPointF start;double radius{},hardness{};bool hardnessShown{};};
     std::optional<BrushTipDrag> brushTipDrag_;

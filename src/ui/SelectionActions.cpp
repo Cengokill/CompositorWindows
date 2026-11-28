@@ -207,6 +207,7 @@ void MainWindow::refreshSelectionGesture(){
             }
         }
     }
+    refreshStatusInfo();
 }
 void MainWindow::hoverSelection(QPointF view,Qt::KeyboardModifiers flags){
     selectionModifiers_=flags;
