@@ -37,9 +37,9 @@ void extras_hidden(){
     auto owner=std::make_unique<NativeCanvas>(true);owner->resize(400,300);owner->setRaster(Raster::filled(32,32));owner->show();QApplication::processEvents();
     auto* timer=owner->findChild<QTimer*>("selectionAntsTimer");require(timer!=nullptr,"Ants timer missing");
     auto outline=std::make_shared<editing::SelectionOutline>(editing::SelectionOutline::rectangle({5,5,10,10}));const auto coverage=outline->rasterize(32,32);
-    owner->showGuides=true;owner->setExtrasShown(false);require(!owner->extrasShown()&&!owner->guidesVisible()&&owner->layoutGridHeld()&&owner->showGuides,"Hiding without a selection holds guides and grid only");
+    owner->showGuides=true;owner->setExtrasShown(false);require(!owner->extrasShown()&&!owner->guidesVisible()&&!owner->layoutGridHeld()&&owner->showGuides,"Hiding without a selection holds the shown guides only");
     owner->setSelection(coverage,outline);require(timer->isActive(),"A new selection shows its edges");
-    require(!owner->extrasShown(),"Guides and grid are still held");owner->revealGuides();owner->revealLayoutGrid();require(owner->extrasShown()&&owner->guidesVisible(),"Revealing the rest ends the hold");
+    require(!owner->extrasShown(),"Guides are still held");owner->revealGuides();owner->revealLayoutGrid();require(owner->extrasShown()&&owner->guidesVisible(),"Revealing the rest ends the hold");
     owner->setExtrasShown(false);require(!timer->isActive(),"Hidden edges stop animating");
     owner->setSelection(coverage,outline);require(!timer->isActive(),"Republishing the same selection keeps it hidden");
     owner->hide();QApplication::processEvents();owner->show();QApplication::processEvents();require(!timer->isActive(),"Showing the window keeps hidden edges still");
@@ -47,6 +47,10 @@ void extras_hidden(){
     owner->setSelection(coverage,outline);require(timer->isActive(),"Restoring the same selection after a deselect shows it");
     owner->setExtrasShown(false);owner->setExtrasShown(true);require(timer->isActive()&&owner->extrasShown()&&owner->guidesVisible()&&!owner->layoutGridHeld(),"Showing extras restores all of them");
     owner->showGuides=false;owner->setExtrasShown(false);owner->setExtrasShown(true);require(!owner->showGuides&&!owner->guidesVisible(),"Disabled guides stay disabled");
+    auto grid=owner->layoutGrid();grid.visible=true;owner->setLayoutGrid(grid);owner->setExtrasShown(false);require(owner->layoutGridHeld()&&!owner->guidesVisible(),"A shown layout grid is held");
+    owner->setExtrasShown(true);grid.visible=false;owner->setLayoutGrid(grid);owner->setSelection({});
+    owner->setExtrasShown(false);require(owner->extrasShown()&&!owner->layoutGridHeld(),"Nothing on screen leaves nothing held");
+    owner->setSelection(coverage,outline);owner->setExtrasShown(!owner->extrasShown());require(!timer->isActive()&&!owner->extrasShown(),"The next press hides a new selection");
 }
 }
 int main(int argc,char** argv){QApplication app(argc,argv);const std::map<std::string,void(*)()> cases{{"geometry_transform",transform},{"geometry_curves",curves},{"geometry_holes",holes},{"geometry_invalid",invalid},{"timer_lifecycle",timer},{"extras_hidden",extras_hidden}};int failed=0;if(argc>1&&!cases.contains(argv[1]))return 2;for(const auto& [name,run]:cases)if(argc==1||name==argv[1])try{run();std::cout<<"PASS "<<name<<'\n';}catch(const std::exception& error){++failed;std::cerr<<"FAIL "<<name<<": "<<error.what()<<'\n';}return failed?1:0;}

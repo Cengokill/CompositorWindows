@@ -354,6 +354,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         auto& project=window.addProject(starting);window.resize(1100,700);window.show();window.activateWindow();QApplication::processEvents();
         auto* canvas=project.canvas;auto* extras=command(window,"view.show_extras");auto* guides=control<QAction>(window,"viewGuides");auto* grid=control<QAction>(window,"viewLayoutGrid");
         auto* ants=canvas->findChild<QTimer*>("selectionAntsTimer");require(ants!=nullptr,"Ants timer missing");
+        grid->trigger();require(grid->isChecked(),"Layout Grid did not turn on");
         require(extras->shortcut()==QKeySequence("Ctrl+H")&&extras->isEnabled()&&extras->isCheckable()&&extras->isChecked(),"Show Extras is not an enabled, checked Ctrl+H command");
         const auto before=*project.document;const auto history=project.history.undoCount();
         canvas->setFocus();QTest::keyClick(canvas,Qt::Key_H,Qt::ControlModifier);
@@ -377,6 +378,7 @@ int main(int argc,char** argv){const auto apartment=CoInitializeEx(nullptr,COINI
         guides->trigger();require(!canvas->showGuides,"Guides did not turn off");
         extras->trigger();extras->trigger();require(!canvas->showGuides&&!guides->isChecked(),"Show Extras turned disabled guides on");
         extras->trigger();guides->trigger();require(canvas->guidesVisible()&&guides->isChecked()&&canvas->layoutGridHeld()&&!extras->isChecked(),"Turning Guides on did not reveal the guides alone");
+        grid->trigger();require(!grid->isChecked(),"Layout Grid did not turn off");
         grid->trigger();require(grid->isChecked()&&!canvas->layoutGridHeld(),"Turning Layout Grid on did not reveal it");
         extras->trigger();require(extras->isChecked()&&ants->isActive(),"Hidden selection was not restored");
 

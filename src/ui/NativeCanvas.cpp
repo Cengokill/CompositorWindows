@@ -653,9 +653,10 @@ void NativeCanvas::updateSelectionAnimation(){
         if(active&&!selectionTimer_->isActive())selectionTimer_->start();else if(!active)selectionTimer_->stop();}
 }
 void NativeCanvas::setExtrasShown(bool shown){
-    // Edges are held only for a selection that is there to hide; guides and the grid are held either way.
+    // Only what is on screen is held, so the check mark and the next press follow what the user sees.
     selectionEdgesHeld_=!shown&&selectionOutline_&&!selectionOutline_->empty();
-    guidesHeld_=layoutGridHeld_=!shown;
+    guidesHeld_=!shown&&showGuides;
+    layoutGridHeld_=!shown&&layoutGrid_.visible;
     updateSelectionAnimation();update();
 }
 void NativeCanvas::drawSelection(){
